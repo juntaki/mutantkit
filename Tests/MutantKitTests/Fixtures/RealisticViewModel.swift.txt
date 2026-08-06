@@ -1,0 +1,79 @@
+import Foundation
+
+/// A deliberately ordinary view model: nested types, extensions, closures,
+/// computed properties, default arguments and an `#if` block. It exists so the
+/// operator contract tests run against something shaped like real application
+/// code rather than a hand-tuned snippet.
+struct CartViewModel {
+    struct Item: Equatable {
+        let id: String
+        let price: Double
+        let quantity: Int
+        var isGift = false
+
+        var isFree: Bool { price == 0 }
+    }
+
+    enum State {
+        case loading
+        case loaded(items: [Item])
+        case failed
+    }
+
+    private(set) var items: [Item] = []
+    var isCheckoutEnabled = false
+    var showsFreeShippingBanner = true
+
+    var isEmpty: Bool { items.count == 0 }
+
+    var subtotal: Double {
+        items.reduce(0) { total, item in
+            total + item.price * Double(item.quantity)
+        }
+    }
+
+    func qualifiesForFreeShipping(threshold: Double = 50) -> Bool {
+        subtotal >= threshold
+    }
+
+    func canAdd(_ item: Item, limit: Int = 10) -> Bool {
+        if items.count >= limit {
+            return false
+        }
+        if item.quantity <= 0 {
+            return false
+        }
+        return true
+    }
+
+    func discount(for quantity: Int) -> Double {
+        if quantity > 20 {
+            return 0.25
+        } else if quantity > 10 {
+            return 0.15
+        } else if quantity != 0 {
+            return 0.05
+        }
+        return 0
+    }
+
+    mutating func add(_ item: Item) {
+        guard canAdd(item) else { return }
+        items.append(item)
+        isCheckoutEnabled = true
+    }
+
+    func giftItems() -> [Item] {
+        items.filter { candidate in
+            candidate.isGift == true
+        }
+    }
+}
+
+extension CartViewModel {
+    var hasSingleItem: Bool { items.count == 1 }
+
+    func isBelowBudget(_ budget: Double) -> Bool {
+        subtotal < budget
+    }
+}

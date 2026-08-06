@@ -1,0 +1,93 @@
+# SwiftFormat configuration for MutantKit.
+#
+# Chosen over Apple's toolchain `swift format`: that tool's default style
+# (2-space indent) reformats essentially every indented line in this
+# codebase, which already uses 4-space indent consistently. SwiftFormat's
+# defaults, by contrast, left all but one of a representative sample of
+# large files (MutationRunner.swift, XcodeBuildAdapter.swift,
+# CISummaryReporter.swift, ConsoleReporter.swift, HistoryCommand.swift,
+# ConfigurationValidation.swift) untouched or near-untouched — the house
+# style already matches its defaults far more closely, so adopting it is a
+# small, low-risk diff instead of a full-codebase reindent.
+#
+# The rules disabled below are ones whose *default* behavior fights a
+# pattern this codebase uses on purpose, discovered by diffing SwiftFormat's
+# output against the existing source rather than guessing:
+--swiftversion 6.0
+--exclude .build,Fixtures,Research,reference
+
+--disable wrapIfStatementBodies,wrapLoopBodies,wrapFunctionBodies,wrapPropertyBodies,wrapIfExpressionBodies
+# Concise one-liners (`if x { return y }`, `func bold(_ t: String) -> String { wrap(t, "1") }`,
+# `for x in xs { f(x) }`) are used deliberately for small guard/wrapper
+# functions (see Sources/Reporting/ConsoleReporter.swift). The default
+# would expand every one of these onto 3+ lines.
+
+--disable unusedArguments
+# Rewrites unused named parameters to `_` (e.g. `artifact: BuildArtifact` ->
+# `artifact _: BuildArtifact`). Semantically inert, but it's a signature
+# edit with no formatting content, and not worth the diff noise on first
+# adoption.
+
+--disable preferKeyPath
+# Rewrites `.map { $0.foo }` to `.map(\.foo)`. A style preference, not a
+# formatting fix; left for the team to opt into deliberately rather than
+# have a formatter silently switch idioms.
+
+--disable hoistAwait, hoistTry
+# Reorders `try`/`await` to the front of an expression (e.g.
+# `((try await x) ?? y)` -> `try await (x ?? y)`). Behavior-preserving but
+# a real token-order rewrite, not whitespace; left alone.
+
+--disable redundantSelf
+# The codebase intentionally keeps explicit `self.` in some async/Task
+# contexts for capture clarity; the default ("remove") would strip it
+# everywhere it's not strictly required, which is a much bigger and more
+# opinionated diff than this adoption should make in one pass.
+
+--disable wrapMultilineStatementBraces
+# Diffing showed this codebase's dominant convention (measured: only 8
+# lone-brace lines out of 18.5k) is to keep the opening brace attached to
+# the last line of a wrapped condition, e.g.:
+#   if let x = a,
+#      let y = b {
+# Leaving this rule off lets the plain (non-Allman) `braces` rule do that
+# — and it also normalizes the 8 outlier spots that already had the brace
+# on its own line, which is a legitimate consistency fix.
+
+--disable conditionalAssignment
+# Rewrites `if/else` assignment blocks into `let x = if ... { } else { }`
+# expressions. A structural modernization, not a formatting fix.
+
+--disable redundantThrows
+# Would strip `throws` from test functions the tool can prove never throw.
+# Changes a declared signature; left for the team to do deliberately.
+
+--disable noForceUnwrapInTests
+# Would rewrite `foo!` in test files into `try #require(foo)` / `try
+# XCTUnwrap(foo)`, which also adds `throws` to the enclosing test function.
+# Too structural for an automated first pass.
+
+--disable redundantReturn
+# Would remove `return` from switch-statement branches that are a
+# function's sole statement (implicit-return-from-switch, SE-0380). The
+# codebase doesn't use that idiom anywhere yet, so applying it only in the
+# ~8 spots the tool happens to touch would introduce a brand-new pattern
+# inconsistently rather than fix one.
+
+--disable swiftTestingTestCaseNames
+# Would rename `@Test`/`@Suite` function identifiers themselves (not just
+# their display strings). Left alone; a naming choice, not formatting.
+
+--disable docComments
+# Would convert `//` rationale comments into `///` doc comments (and vice
+# versa) purely because they sit directly above a declaration. This
+# codebase deliberately keeps that line: `///` documents the public
+# contract, `//` explains internal reasoning, even when both happen to
+# precede a declaration (e.g. Sources/MutationModel/MutationResult.swift's
+# legacy-decoding notes). Converting on proximity alone would blur that
+# distinction.
+
+--trailing-commas never
+# Measured: 2101 multi-line collection/argument closings have no trailing
+# comma vs. 34 that do. "Never" matches the dominant convention and
+# normalizes the 34 outliers.

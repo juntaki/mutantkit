@@ -1,0 +1,26 @@
+# Acceptance fixture config. The scheme and destination are pinned rather than
+# detected so the fixture is reproducible on any machine with a matching runtime.
+version: 1
+
+project:
+  kind: xcodeProject
+  scheme: Checkout
+  destination: platform=iOS Simulator,name=iPhone 17 Pro
+
+sources:
+  include:
+    - Sources/**
+
+tests:
+  targets:
+    - CheckoutTests
+
+operators:
+  profile: default
+
+execution:
+  strategy: isolated
+  workers: 2
+
+reports:
+  - console

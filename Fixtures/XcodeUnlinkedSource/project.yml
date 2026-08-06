@@ -1,0 +1,50 @@
+# Acceptance fixture: a source file that `sources.include` discovers but that
+# no Xcode target ever compiles.
+#
+# The generated .xcodeproj is committed alongside this manifest so the fixture
+# works without xcodegen installed. Regenerate with:
+#   cd Fixtures/XcodeUnlinkedSource && xcodegen generate
+#
+# `UnlinkedSource`'s Compile Sources phase only covers `Sources/Linked` (see
+# `sources:` below) — `Sources/Unlinked` is never added to any target, so it
+# sits on disk beside the project, invisible to Xcode, but still matched by
+# this fixture's mutantkit.yml `sources.include: [Sources/**]`. Mutating a file
+# there is the True Negative case: the source changes, the build succeeds,
+# every test still passes, and the built product is byte-identical to the
+# baseline's because the mutated file was never fed to the compiler.
+# Activation evidence has to catch that and refuse a score, not report the
+# mutant as an ordinary survivor.
+name: UnlinkedSource
+options:
+  bundleIdPrefix: dev.mutantkit.fixture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  UnlinkedSource:
+    type: framework
+    platform: iOS
+    sources: [Sources/Linked]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  UnlinkedSourceTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: UnlinkedSource
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  UnlinkedSource:
+    build:
+      targets:
+        UnlinkedSource: all
+        UnlinkedSourceTests: [test]
+    test:
+      targets: [UnlinkedSourceTests]

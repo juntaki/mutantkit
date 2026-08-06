@@ -1,0 +1,19 @@
+{
+  "completionStatus": "incomplete",
+  "currentLaneStatus": "completed",
+  "compatibilityLaneStatus": "incomplete",
+  "compatibilityLaneNote": "No longer blockedMissingToolchain: a compatible toolchain (Xcode 15.2 / Swift 5.9.2, GitHub Actions macos-14, manual dispatch only) passed the minimal fixture gate -- see Benchmarks/results/compatibility/xcode-15.2-swift-5.9-macos-14/gate-result.json. Still 'incomplete', not 'completed': the minimum-3-project side-by-side cold/warm/incremental comparison has not run yet.",
+  "unrecoverableRuns": [
+    {
+      "taskIdentifier": "bpyg8pp2r",
+      "previousPID": 98113,
+      "expectedLogPath": "/tmp/mb-corpus/numerics-mk-run.log",
+      "taskFound": false,
+      "processRunning": false,
+      "logPathPresent": false,
+      "parentDirectoryPresent": false,
+      "classification": "unrecoverableInterruptedRun",
+      "includedInPerformanceAggregation": false
+    }
+  ]
+}

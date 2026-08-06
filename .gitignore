@@ -1,0 +1,80 @@
+# Note what is deliberately NOT here:
+#
+#   Package.resolved      tracked on purpose — see "Dependency lock" below
+#   Fixtures/**/*.xcodeproj  tracked on purpose, so acceptance fixtures build
+#                            without xcodegen installed
+#
+# Rule of thumb for anything added later: ignore what a build or a run produces,
+# track what a build or a run needs.
+
+# ── Swift / SwiftPM ───────────────────────────────────────────────────────────
+.build/
+.swiftpm/
+*.o
+*.dylib
+
+# ── Dependency lock ───────────────────────────────────────────────────────────
+# Package.resolved is intentionally NOT ignored. Do not add it.
+#
+# This package's product is an executable, so SwiftPM's convention is to commit
+# the lock — but there is a sharper reason here. SwiftSyntax decides where a
+# node's trivia ends, which decides the UTF-8 byte range a mutation is anchored
+# to, which is an input to its Mutation ID. A floating dependency therefore means
+# two machines can derive different IDs from identical source, and every promise
+# this tool makes about reproducing a plan quietly stops holding. The pinned
+# version is recorded in each plan's ToolchainFingerprint; the lock is what makes
+# that recording mean something.
+
+# ── Xcode ─────────────────────────────────────────────────────────────────────
+DerivedData/
+build/
+*.xcresult
+# Per-user editor state that lives inside an otherwise-tracked .xcodeproj.
+# Shared schemes (xcshareddata/) are tracked — the fixtures need them.
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.moved-aside
+
+# ── Coverage / profiling ──────────────────────────────────────────────────────
+*.profraw
+*.profdata
+
+# ── MutantKit's own output ────────────────────────────────────────────────────
+# Sandboxes, run locks, coverage/result caches, checkpoints, artifacts and
+# rendered reports. Both names are ignored: `.mutantkit` is current and
+# `.mutare` is the prior tool name kept for any mixed-version transition.
+# (RunContextProbe.gitState also strips these from its digest independently,
+# so the digest does not rely on a project having these rules — but ignoring
+# them here keeps `git status` clean too.)
+.mutantkit/
+.mutare/
+# Artifacts from the default output paths of `plan`, `shard`, `run` and `merge`,
+# anchored to the repository root so a plan.json committed as a test fixture is
+# not swallowed by the same rule.
+/plan.json
+/plan.*.json
+/report.json
+/report.html
+/stryker-report.json
+/summary.md
+/results*.json
+
+# ── Reference clones ──────────────────────────────────────────────────────────
+# Independent git repositories cloned for investigation. They are not part of the
+# build, are not distributed, and cannot be committed here without vendoring
+# someone else's history. Each keeps its own licence — see THIRD_PARTY_NOTICES
+# section 4.
+#
+# To restore them in a fresh clone:
+#   mkdir -p reference && cd reference
+#   git clone https://github.com/muter-mutation-testing/muter.git
+#   git clone https://github.com/ericodx/swift-mutation-testing.git
+reference/
+
+# ── Editors / OS ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store

@@ -1,0 +1,8 @@
+{
+  "operatorFamily": "swift.core.relational-operator-replacement",
+  "muterOperatorId": "RelationalOperatorReplacement",
+  "original": "==",
+  "replacement": "!=",
+  "minimumCount": 1,
+  "note": "Chosen because it is the smallest mutation family confirmed registered by BOTH tools at once. A bool-literal fixture was tried first and produced zero mutations from Muter -- Muter's own operator registry (Sources/muterCore/MutationOperators/MutationOperator.swift at commit 95bf2096d096ac66ab7c279b7e58fae0a4a77dac) is exactly [RelationalOperatorReplacement, RemoveSideEffects, ChangeLogicalConnector, SwapTernary] -- no bool-literal-inversion, no unary-not-removal, no return-value-replacement. Never assume operator-family overlap; verify it per fixture before spending Actions minutes."
+}

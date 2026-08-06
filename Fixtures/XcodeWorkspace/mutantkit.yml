@@ -1,0 +1,26 @@
+# Acceptance fixture config. Scheme and destination are pinned so the fixture is
+# reproducible on any machine with a matching simulator runtime.
+version: 1
+
+project:
+  kind: xcodeWorkspace
+  scheme: Billing
+  destination: platform=iOS Simulator,name=iPhone 17 Pro
+
+sources:
+  include:
+    - Sources/**
+
+tests:
+  targets:
+    - BillingTests
+
+operators:
+  profile: default
+
+execution:
+  strategy: isolated
+  workers: 2
+
+reports:
+  - console

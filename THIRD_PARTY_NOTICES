@@ -1,0 +1,105 @@
+THIRD PARTY NOTICES
+===================
+
+MutantKit is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This file records third-party material that MutantKit uses, derives from, or
+distributes, together with the licences that govern it.
+
+
+-------------------------------------------------------------------------------
+1. Muter — https://github.com/muter-mutation-testing/muter
+-------------------------------------------------------------------------------
+
+Licence: MIT
+Status:  Referenced. No Muter source code is vendored into this repository at
+         this time.
+
+MutantKit is an independent implementation, not a fork of Muter. Muter is used as
+a reference asset in the ways its authors' licence permits:
+
+  * `Sources/MuterCompatibility` implements an importer for Muter's
+    `muter.conf.yml` configuration format. The field names and semantics of that
+    format were determined by reading Muter's own
+    `Sources/muterCore/Configuration/MuterConfiguration.swift`. The importer
+    code itself is original.
+
+  * Muter's issue history and its behaviour under known failure modes informed
+    the regression tests in `Tests/MutantKitTests/Regression`. The tests are
+    original; the failure modes they encode are observations about Muter.
+
+MutantKit does not aim for behavioural compatibility with Muter, and specifically
+does not reproduce Muter's misclassifications or phantom mutants. See ADR-0001.
+
+If Muter source is vendored in future, this notice must be updated to name the
+specific files, and the MIT notice below must additionally be reproduced at the
+head of each such file.
+
+    MIT License
+
+    Copyright (c) 2020 Muter
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+
+-------------------------------------------------------------------------------
+2. mutation-testing-elements — https://github.com/stryker-mutator/mutation-testing-elements
+-------------------------------------------------------------------------------
+
+Licence: Apache-2.0
+Status:  Schema referenced. No code vendored.
+
+`Sources/Reporting/StrykerReporter.swift` emits JSON conforming to the Mutation
+Testing Elements report schema so that MutantKit reports can be consumed by the
+existing cross-language HTML renderer and dashboard. The schema is referenced by
+URL in the emitted documents; no schema file or renderer code is distributed
+here.
+
+
+-------------------------------------------------------------------------------
+3. Swift package dependencies
+-------------------------------------------------------------------------------
+
+Resolved at build time by SwiftPM and not vendored in this repository. Each
+remains under its own licence.
+
+  swift-syntax          Apache-2.0 with Runtime Library Exception
+                        https://github.com/swiftlang/swift-syntax
+
+  swift-argument-parser Apache-2.0 with Runtime Library Exception
+                        https://github.com/apple/swift-argument-parser
+
+  Yams                  MIT
+                        https://github.com/jpsim/Yams
+                        (Yams bundles libfyaml/LibYAML — MIT)
+
+
+-------------------------------------------------------------------------------
+4. Reference clones
+-------------------------------------------------------------------------------
+
+The `reference/` directory contains clones of third-party repositories kept for
+investigation. They are NOT part of the MutantKit build, are NOT distributed with
+it, and each remains under its own licence:
+
+  reference/muter                    MIT      (c) 2020 Muter
+  reference/swift-mutation-testing   MIT      (c) 2026 Érico Perez Neto
+
+`reference/` is excluded from the package via `.gitignore` and is not referenced
+by `Package.swift`.

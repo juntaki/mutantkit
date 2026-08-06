@@ -1,0 +1,131 @@
+# SwiftLint configuration for MutantKit.
+#
+# Tuned against the codebase as it already reads, not against a stock
+# ruleset: thresholds below were derived by running a config-less
+# `swiftlint lint` over Sources/ and Tests/ and looking at what actually
+# fired, then deciding per rule whether the violation was a real defect
+# (fixed), a deliberate house pattern (rule adjusted or disabled), or
+# unavoidable-without-a-refactor complexity debt (threshold raised enough
+# to stop erroring, left as a warning, documented here).
+#
+# CI runs `swiftlint lint --strict --baseline .swiftlint-baseline.json`:
+# the baseline freezes 32 pre-existing violations by identity (rule + file +
+# line) so `--strict` still catches every new violation, including a new one
+# in an already-baselined file, without forcing a refactor of any of them
+# just to silence the linter. It is not only a handful of large orchestration
+# files: `function_body_length`/`type_body_length`/`file_length` concentrate
+# there (MutationRunner.swift, XcodeBuildAdapter.swift and similar), but
+# `cyclomatic_complexity` also covers CLI command handlers
+# (InspectCommand.run() at complexity 23, RunCommand.run() at 19,
+# ConfigurationValidation's validate() at 14, DeclarationIdentityResolver's
+# resolve() at 15) and `large_tuple` is spread across several test files.
+# InspectCommand.run() in particular is worth a real refactor, not just a
+# baseline entry, the next time that file is touched substantively.
+#
+# Baseline entries key on line number, so an unrelated edit earlier in a
+# baselined file shifts every violation below it and makes CI fail on an
+# "unrecognized" (but not actually new) violation — regenerate with
+# `swiftlint lint --write-baseline .swiftlint-baseline.json` when that
+# happens, and diff the regenerated file against the old one to confirm only
+# line numbers moved, not that a genuinely new violation got swept in
+# unnoticed. The baseline format is also SwiftLint-version-specific; CI pins
+# an exact version (see ci.yml) so a SwiftLint upgrade can't silently change
+# which violations the baseline recognizes.
+
+excluded:
+  - .build
+  - Fixtures          # sample Xcode/SPM projects used as acceptance-test fixtures, not project code
+  - Research          # research notes / one-off operator-catalog samples, not shipped code
+  - reference         # gitignored third-party clones kept locally for investigation, not shipped code
+
+# Long lines are ignored in three shapes that are common and deliberate here:
+# doc/rationale comments, `\(...)`-interpolated diagnostic strings, and
+# multi-line `"""` JSON fixtures. Actual code is still capped, just at 140
+# instead of the 120 default, since a handful of genuine code lines
+# (mostly argument lists) sit in the 121-140 range across an 18.5k-line
+# codebase where 99%+ of lines are already under 100.
+line_length:
+  warning: 140
+  error: 220
+  ignores_urls: true
+  ignores_comments: true
+  ignores_interpolated_strings: true
+  ignores_multiline_strings: true
+
+# MutationRunner.swift (2817 lines after ADR-0006 Stage 1 routed every
+# result-producing path through one shared MutationObservations ->
+# MutationVerdictVerifier -> ResultLedger finalization choke point) and
+# XcodeBuildAdapter.swift (1314 lines) are deliberate single-responsibility
+# orchestrators (run loop / xcodebuild adapter); splitting them is a real
+# refactor, not a lint fix, so the ceiling is raised to keep today's
+# codebase clean while still catching a file that grows well past that.
+file_length:
+  warning: 1000
+  error: 2900
+
+# MutationRunner's main type crosses the stock 350-line error threshold by
+# well over 3x; same reasoning as file_length above.
+type_body_length:
+  warning: 300
+  error: 1600
+
+# A few orchestration methods (MutationRunner's batch/incremental paths,
+# PrioritizingTestAdapter) run 60-90 lines because they're a single linear
+# sequence of "do this, then this" steps, not deeply nested logic. Raised
+# past today's max (91) rather than disabled, so a function that balloons
+# further still gets flagged.
+function_body_length:
+  warning: 80
+  error: 220
+
+# CLI command `run`/`validate` bodies and a few config-validation functions
+# sit at 11-16 branches from enumerating independent flag/config checks.
+# Left as warnings (not disabled) so genuinely tangled logic still gets
+# caught; ceiling raised past today's max (23, InspectCommand) so it isn't
+# an error today.
+cyclomatic_complexity:
+  warning: 12
+  error: 25
+
+# A couple of adapters nest a small result/error type one level deeper
+# than the default allows; harmless scoping, not a smell.
+nesting:
+  type_level:
+    warning: 2
+
+# Test helpers occasionally return a 3-4 member tuple (report/build/test/log)
+# instead of a named struct. Left as a warning either way.
+large_tuple:
+  warning: 2
+  error: 5
+
+# ProcessSupervisor/MutationRunner/MutationID all have one call site with a
+# 6th parameter; not worth a parameter-object refactor for one extra arg.
+function_parameter_count:
+  warning: 6
+  error: 8
+
+# Deliberate short names are the norm here: `fm` (FileManager), `fd` (file
+# descriptor), `l` (line), `a`/`b` (tuple destructuring), `z`, `ok` (enum
+# case). These are standard, well-understood abbreviations in systems code
+# and renaming them adds nothing; the length floor is effectively removed
+# rather than special-cased name by name.
+identifier_name:
+  min_length:
+    warning: 1
+
+# XCTest/Swift Testing suite names are long and descriptive on purpose
+# (e.g. `XcodeIncrementalBatchTestingAcceptanceTests`, 44 chars) so they
+# read as a sentence describing what's under test.
+type_name:
+  max_length:
+    warning: 60
+
+disabled_rules:
+  # The codebase deliberately uses `String(decoding:as:)` (never-fails,
+  # replaces invalid bytes) instead of the failable `String(bytes:encoding:)`
+  # this rule wants, specifically for output it knows is always valid UTF-8
+  # (its own JSON encoder's output). That's a considered choice, not an
+  # oversight — forcing the failable initializer here would just add an
+  # unwrap for a case that can't happen.
+  - optional_data_string_conversion

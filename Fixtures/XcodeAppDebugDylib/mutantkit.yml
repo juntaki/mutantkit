@@ -1,0 +1,33 @@
+# Acceptance fixture config. The scheme and destination are pinned rather than
+# detected so the fixture is reproducible on any machine with a matching runtime.
+version: 1
+
+project:
+  kind: xcodeProject
+  scheme: DebugDylibDemo
+  destination: platform=iOS Simulator,name=iPhone 17 Pro
+
+sources:
+  include:
+    - Sources/**
+
+tests:
+  targets:
+    - DebugDylibDemoTests
+
+operators:
+  profile: default
+
+execution:
+  strategy: isolated
+  workers: 2
+  # This fixture is also what found a real, reproducible source of wrong
+  # verdicts under a shared leased simulator: xcodebuild's default sysdiagnose
+  # collection on test failure racing mutantkit's own timeout, and CoreSimulator
+  # occasionally serving a stale install from the mutant tested moments
+  # before. Both are fixed in XcodeBuildAdapter itself
+  # (`-collect-test-diagnostics never`, `uninstallStaleApp`), confirmed by
+  # running this exact fixture repeatedly — no config flag masks it here.
+
+reports:
+  - console

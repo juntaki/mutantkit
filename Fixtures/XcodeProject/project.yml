@@ -1,0 +1,43 @@
+# Acceptance fixture: a real .xcodeproj driven by xcodebuild.
+#
+# The generated .xcodeproj is committed alongside this manifest so the fixture
+# works without xcodegen installed. Regenerate with:
+#   cd Fixtures/XcodeProject && xcodegen generate
+#
+# This fixture is what proves the xcodebuild path end to end: build-for-testing
+# into a sandbox-local DerivedData, locate the .xctestrun by searching for it,
+# then test-without-building against a simulator destination.
+name: Checkout
+options:
+  bundleIdPrefix: dev.mutantkit.fixture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  Checkout:
+    type: framework
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  CheckoutTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: Checkout
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Checkout:
+    build:
+      targets:
+        Checkout: all
+        CheckoutTests: [test]
+    test:
+      targets: [CheckoutTests]
