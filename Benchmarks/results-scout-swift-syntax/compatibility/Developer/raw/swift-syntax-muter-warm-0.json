@@ -1,0 +1,26 @@
+{
+  "globalMutationScore" : 100,
+  "timeElapsed" : "00:02:03.669",
+  "totalAppliedMutationOperators" : 1,
+  "numberOfKilledMutants" : 1,
+  "fileReports" : [
+    {
+      "appliedOperators" : [
+        {
+          "mutationPoint" : {
+            "position" : {
+              "column" : 27,
+              "line" : 25,
+              "utf8Offset" : 1032
+            },
+            "filePath" : "\/private\/var\/folders\/g3\/pffjr_y96bq06blnkf72x_hw0000gn\/T\/mutantbench-swift-syntax-muter-warm-shared_mutated\/Sources\/SwiftSyntax\/AbsolutePosition.swift",
+            "mutationOperatorId" : "RelationalOperatorReplacement"
+          },
+          "testSuiteOutcome" : "runtimeError"
+        }
+      ],
+      "fileName" : "AbsolutePosition.swift",
+      "mutationScore" : 100
+    }
+  ]
+}
