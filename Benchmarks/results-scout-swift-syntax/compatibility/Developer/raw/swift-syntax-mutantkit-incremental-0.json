@@ -1,0 +1,450 @@
+{
+  "baseline" : {
+    "buildCommand" : {
+      "arguments" : [
+        "swift",
+        "build",
+        "--build-tests"
+      ],
+      "durationSeconds" : 65.49394595623016,
+      "environmentOverrides" : {
+
+      },
+      "executable" : "/usr/bin/xcrun",
+      "exitCode" : 0,
+      "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_8ba8496a2525ae171ffd"
+    },
+    "buildDurationSeconds" : 65.69597399234772,
+    "buildProductHash" : "sha256:ad6793600598e95a5ffc894e541817483c65bbc93ac1fcadd20d4e733c642570",
+    "durationSeconds" : 127.42024099826813,
+    "passed" : true,
+    "testCommand" : {
+      "arguments" : [
+        "swift",
+        "test",
+        "--skip-build",
+        "--xunit-output",
+        "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_8ba8496a2525ae171ffd/mutantkit-xunit.xml"
+      ],
+      "durationSeconds" : 61.72328591346741,
+      "environmentOverrides" : {
+
+      },
+      "executable" : "/usr/bin/xcrun",
+      "exitCode" : 0,
+      "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_8ba8496a2525ae171ffd"
+    },
+    "testDurationSeconds" : 61.72426104545593
+  },
+  "executionStrategy" : {
+    "degradationReason" : "no mutation in this plan was embeddable under the currently registered schemata lowerers",
+    "effectiveCount" : 0,
+    "fallbackCount" : 4,
+    "requested" : "schemata"
+  },
+  "finishedAt" : "2026-08-06T10:29:46Z",
+  "integrity" : {
+    "buildFailures" : 0,
+    "buildObserved" : 4,
+    "classified" : 4,
+    "discovered" : 4,
+    "executed" : 4,
+    "explicitlySkipped" : 0,
+    "planned" : 4,
+    "reported" : 4,
+    "skippedByReason" : [
+
+    ],
+    "sourceApplied" : 4,
+    "violations" : [
+
+    ]
+  },
+  "operationalIssues" : [
+
+  ],
+  "planID" : "plan_29c97becd96a8f5f",
+  "projectRoot" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared",
+  "results" : [
+    {
+      "buildDurationSeconds" : 63.02103006839752,
+      "diagnosis" : "A test assertion failed on this mutant, so it was caught. The runner reported no per-test breakdown, so which test caught it is unknown.",
+      "durationSeconds" : 125.97717607021332,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ad6793600598e95a5ffc894e541817483c65bbc93ac1fcadd20d4e733c642570",
+                "mutantHash" : "sha256:7807920d3e9e2b9bcd6e0ca1f749eea749b546584ba0a446aba14d526df3fb7a"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 62.96405589580536,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_72bf59c09fe4372eaf4e"
+        },
+        "buildProductHash" : "sha256:7807920d3e9e2b9bcd6e0ca1f749eea749b546584ba0a446aba14d526df3fb7a",
+        "sourceAfterHash" : "sha256:e04a55bb271cb2ae0305f5627fbbe0b811cec0c55c888b4c973a69b589970483",
+        "sourceBeforeHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "sourceDiff" : "--- a/Sources/SwiftSyntax/AbsolutePosition.swift\n+++ b/Sources/SwiftSyntax/AbsolutePosition.swift\n@@ -27,7 +27,7 @@\n \n   /// Whether this position comes before `other` in the source file.\n   public func isBefore(_ other: AbsolutePosition) -> Bool {\n-    self < other\n+    self >= other\n   }\n }\n \n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_72bf59c09fe4372eaf4e/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 62.78273296356201,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 1,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_72bf59c09fe4372eaf4e"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_1ea1d0973209ce11",
+        "planID" : "plan_29c97becd96a8f5f",
+        "pointDigest" : "sha256:27c2145b261684601f0097692db757c4c326058e02a21cbd2d7389a120e368e7",
+        "workUnitID" : "a64efdd5e6bc2db1"
+      },
+      "origin" : "fresh",
+      "outcome" : "killedByAssertion",
+      "point" : {
+        "column" : 10,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "AbsolutePosition",
+            "isBefore(_:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/SwiftSyntax/AbsolutePosition.swift",
+        "id" : "mut_1ea1d0973209ce11",
+        "line" : 30,
+        "occurrenceIndex" : 1,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "<",
+        "prefixTokenFingerprint" : "779d1f9e6916",
+        "replacementText" : ">=",
+        "sourceFileHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "suffixTokenFingerprint" : "c0e921c93b36",
+        "utf8Range" : {
+          "end" : 1121,
+          "start" : 1120
+        }
+      },
+      "testDurationSeconds" : 62.78387200832367,
+      "verificationVersion" : 11
+    },
+    {
+      "buildDurationSeconds" : 61.23310101032257,
+      "diagnosis" : "A test assertion failed on this mutant, so it was caught. The runner reported no per-test breakdown, so which test caught it is unknown.",
+      "durationSeconds" : 65.61165702342987,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ad6793600598e95a5ffc894e541817483c65bbc93ac1fcadd20d4e733c642570",
+                "mutantHash" : "sha256:c65c15ac29b79ce04272ca85c477e8c6baa1b117460f4d34b83eb5913e75c7c6"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 61.16097700595856,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_d7132f007e46e7874e85"
+        },
+        "buildProductHash" : "sha256:c65c15ac29b79ce04272ca85c477e8c6baa1b117460f4d34b83eb5913e75c7c6",
+        "sourceAfterHash" : "sha256:f3cbf50d24eb331cf2769a57eab61a52dd56d995fb230cc51676894da280000c",
+        "sourceBeforeHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "sourceDiff" : "--- a/Sources/SwiftSyntax/AbsolutePosition.swift\n+++ b/Sources/SwiftSyntax/AbsolutePosition.swift\n@@ -22,7 +22,7 @@\n   }\n \n   public static func < (lhs: AbsolutePosition, rhs: AbsolutePosition) -> Bool {\n-    return lhs.utf8Offset < rhs.utf8Offset\n+    return lhs.utf8Offset <= rhs.utf8Offset\n   }\n \n   /// Whether this position comes before `other` in the source file.\n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_d7132f007e46e7874e85/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 4.215582966804504,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 1,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_d7132f007e46e7874e85"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_6a63885439c4b56f",
+        "planID" : "plan_29c97becd96a8f5f",
+        "pointDigest" : "sha256:c48f52910d17e10341e4d43d42c9db2012603e3f24868b0a3ffb9ea24faa7779",
+        "workUnitID" : "a64efdd5e6bc2db1"
+      },
+      "origin" : "fresh",
+      "outcome" : "killedByAssertion",
+      "point" : {
+        "column" : 27,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "AbsolutePosition",
+            "<(lhs:rhs:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/SwiftSyntax/AbsolutePosition.swift",
+        "id" : "mut_6a63885439c4b56f",
+        "line" : 25,
+        "occurrenceIndex" : 0,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "<",
+        "prefixTokenFingerprint" : "2d8c335195ab",
+        "replacementText" : "<=",
+        "sourceFileHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "suffixTokenFingerprint" : "055c83b8782f",
+        "utf8Range" : {
+          "end" : 961,
+          "start" : 960
+        }
+      },
+      "testDurationSeconds" : 4.216513991355896,
+      "verificationVersion" : 11
+    },
+    {
+      "buildDurationSeconds" : 77.95547997951508,
+      "diagnosis" : "A test assertion failed on this mutant, so it was caught. The runner reported no per-test breakdown, so which test caught it is unknown.",
+      "durationSeconds" : 82.15282905101776,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ad6793600598e95a5ffc894e541817483c65bbc93ac1fcadd20d4e733c642570",
+                "mutantHash" : "sha256:4eba8679990f7b79a9de99918c6ded180ebcfdf6b0b557d8e617bb9b24df1a44"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 77.89156401157379,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_c21f1360b748f2e4e6d1"
+        },
+        "buildProductHash" : "sha256:4eba8679990f7b79a9de99918c6ded180ebcfdf6b0b557d8e617bb9b24df1a44",
+        "sourceAfterHash" : "sha256:b9508c30df65576834d76f1b0984fdb0a0b3b89aa635170841abd84cbf7df90a",
+        "sourceBeforeHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "sourceDiff" : "--- a/Sources/SwiftSyntax/AbsolutePosition.swift\n+++ b/Sources/SwiftSyntax/AbsolutePosition.swift\n@@ -22,7 +22,7 @@\n   }\n \n   public static func < (lhs: AbsolutePosition, rhs: AbsolutePosition) -> Bool {\n-    return lhs.utf8Offset < rhs.utf8Offset\n+    return lhs.utf8Offset >= rhs.utf8Offset\n   }\n \n   /// Whether this position comes before `other` in the source file.\n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_c21f1360b748f2e4e6d1/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 3.964953064918518,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 1,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_c21f1360b748f2e4e6d1"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_ada5d345931756ae",
+        "planID" : "plan_29c97becd96a8f5f",
+        "pointDigest" : "sha256:758bed0ea21bd20f97697e0ea3a936623314d5fce372e090d70cf9020fd791f6",
+        "workUnitID" : "a64efdd5e6bc2db1"
+      },
+      "origin" : "fresh",
+      "outcome" : "killedByAssertion",
+      "point" : {
+        "column" : 27,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "AbsolutePosition",
+            "<(lhs:rhs:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/SwiftSyntax/AbsolutePosition.swift",
+        "id" : "mut_ada5d345931756ae",
+        "line" : 25,
+        "occurrenceIndex" : 1,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "<",
+        "prefixTokenFingerprint" : "2d8c335195ab",
+        "replacementText" : ">=",
+        "sourceFileHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "suffixTokenFingerprint" : "055c83b8782f",
+        "utf8Range" : {
+          "end" : 961,
+          "start" : 960
+        }
+      },
+      "testDurationSeconds" : 3.965820074081421,
+      "verificationVersion" : 11
+    },
+    {
+      "buildDurationSeconds" : 61.9044109582901,
+      "diagnosis" : "A test assertion failed on this mutant, so it was caught. The runner reported no per-test breakdown, so which test caught it is unknown.",
+      "durationSeconds" : 131.29989004135132,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ad6793600598e95a5ffc894e541817483c65bbc93ac1fcadd20d4e733c642570",
+                "mutantHash" : "sha256:07203e8ae312462a454eacb5eb0f9bf9c42ca7435fc784b264cd30c6b0472688"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 61.83863294124603,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_650944c45e8855bca12c"
+        },
+        "buildProductHash" : "sha256:07203e8ae312462a454eacb5eb0f9bf9c42ca7435fc784b264cd30c6b0472688",
+        "sourceAfterHash" : "sha256:7dc8c6c22eab1a9fb7a9fbb745fdd7e7734c5f57216c063d644c0a76a2c5562b",
+        "sourceBeforeHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "sourceDiff" : "--- a/Sources/SwiftSyntax/AbsolutePosition.swift\n+++ b/Sources/SwiftSyntax/AbsolutePosition.swift\n@@ -27,7 +27,7 @@\n \n   /// Whether this position comes before `other` in the source file.\n   public func isBefore(_ other: AbsolutePosition) -> Bool {\n-    self < other\n+    self <= other\n   }\n }\n \n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_650944c45e8855bca12c/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 69.20683991909027,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 1,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-syntax-mutantkit-incremental-shared/.mutantkit/sandboxes/sbx_650944c45e8855bca12c"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_bfa4beff1c468b02",
+        "planID" : "plan_29c97becd96a8f5f",
+        "pointDigest" : "sha256:0ce44b8e1ceafac65555a6125955a72bc41d9a609b8aa38fb3ff3ac3db295b3e",
+        "workUnitID" : "a64efdd5e6bc2db1"
+      },
+      "origin" : "fresh",
+      "outcome" : "killedByAssertion",
+      "point" : {
+        "column" : 10,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "AbsolutePosition",
+            "isBefore(_:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/SwiftSyntax/AbsolutePosition.swift",
+        "id" : "mut_bfa4beff1c468b02",
+        "line" : 30,
+        "occurrenceIndex" : 0,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "<",
+        "prefixTokenFingerprint" : "779d1f9e6916",
+        "replacementText" : "<=",
+        "sourceFileHash" : "sha256:a0136aec239eb40d8bc7fada845605778ae1a53a6e610a20e9f3970b349632d7",
+        "suffixTokenFingerprint" : "c0e921c93b36",
+        "utf8Range" : {
+          "end" : 1121,
+          "start" : 1120
+        }
+      },
+      "testDurationSeconds" : 69.20821404457092,
+      "verificationVersion" : 11
+    }
+  ],
+  "schemaVersion" : 1,
+  "score" : {
+    "excluded" : {
+
+    },
+    "killed" : 4,
+    "noCoverage" : 0,
+    "survived" : 0
+  },
+  "startedAt" : "2026-08-06T10:20:51Z",
+  "toolchain" : {
+    "swiftSyntaxVersion" : "603.0.0",
+    "swiftVersion" : "Apple Swift version 5.9.2 (swiftlang-5.9.2.2.56 clang-1500.1.0.2.5)",
+    "toolVersion" : "0.1.0-dev",
+    "xcodeVersion" : "Xcode 15.2"
+  }
+}
