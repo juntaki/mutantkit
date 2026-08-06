@@ -1,0 +1,429 @@
+name: MutantBench Stage 1 Calibration
+
+# Manual-only, on purpose, and deliberately low-cost:
+#   - single project (swift-numerics, already clean-preflighted, smallest
+#     real XCTest corpus entry)
+#   - both tools scoped to ONE small module (Sources/IntegerUtilities/**,
+#     ~40 lines) and ONE shared operator (RelationalOperatorReplacement) --
+#     Muter has no per-operator config and already runs with
+#     --skip-coverage, so without this scoping it would mutate the whole
+#     project across all 4 of its own operators, a real risk of a
+#     multi-hour run (see BenchmarkRunnerCLI's --mutantkit-source-include/
+#     --muter-files-to-mutate/--muter-operator flags)
+#   - exactly 1 repetition per mode -- this is a pathway/wiring check, not
+#     a performance measurement; the resulting numbers are calibration
+#     evidence only, never a speed conclusion
+#
+# Two jobs, on purpose: `setup-tools` builds MutantKit/BenchmarkRunner
+# (Xcode 16.2) and clones+builds Muter (Xcode 15.2) exactly once and
+# uploads them as one verified artifact; `calibrate` downloads that
+# artifact, re-verifies its SHA-256 and toolchain identity, then runs the
+# real BenchmarkOrchestrator. This is what lets a future project-matrix
+# reuse one tool build instead of repeating the ~16-minute fixed setup
+# cost per project. A real, pre-dispatch budget-check (BenchmarkRunner
+# budget-check) runs between MutantKit's own `plan` step and Muter's
+# build/run — it fails closed, before the expensive part, if the
+# estimated cost or either tool's candidate count exceeds the given
+# budget (the exact failure mode Stage 1 itself hit once already).
+
+on:
+  workflow_dispatch:
+    inputs:
+      muter_commit_sha:
+        description: Muter's full 40-char commit SHA to build — never a branch or tag
+        required: true
+        default: 95bf2096d096ac66ab7c279b7e58fae0a4a77dac
+        type: string
+      max_estimated_minutes:
+        description: Fail closed before Muter is built/run if the pre-run estimate exceeds this many minutes.
+        required: true
+        default: "45"
+        type: string
+      max_mutations_per_tool:
+        description: Fail closed before Muter is built/run if MutantKit's own real candidate count exceeds this.
+        required: true
+        default: "20"
+        type: string
+      allow_budget_override:
+        description: Bypass both budget checks. Must be explicitly set true — never a silent default.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutantbench-stage1-calibration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup-tools:
+    runs-on: macos-14
+    timeout-minutes: 30
+    outputs:
+      bundle-sha256: ${{ steps.bundle.outputs.sha256 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record and verify MutantKit's own build toolchain (Xcode 16.2, swift-tools-version:6.0)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 16.2"
+
+      - name: Build MutantKit and BenchmarkRunner (release)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+        run: |
+          swift build -c release --product mutantkit
+          swift build -c release --product BenchmarkRunner
+
+      - name: Record and verify the compatibility-lane toolchain (Xcode 15.2, Swift 5.9)
+        id: identity
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun --find swift
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 15.2"
+          swift --version | grep -F "Swift version 5.9"
+          echo "swift_version=$(swift --version | head -n 1)" >> "$GITHUB_OUTPUT"
+          echo "xcodebuild_version=$(xcodebuild -version | tail -n 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Clone and build Muter at the pinned commit (never patched)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+          MUTER_COMMIT_SHA: ${{ inputs.muter_commit_sha }}
+        run: |
+          set -euo pipefail
+          echo "$MUTER_COMMIT_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "muter_commit_sha must be a full 40-char lowercase hex SHA, not a branch or tag"; exit 1; }
+          git clone https://github.com/muter-mutation-testing/muter.git /tmp/muter-src
+          cd /tmp/muter-src
+          git checkout "$MUTER_COMMIT_SHA"
+          test "$(git rev-parse HEAD)" = "$MUTER_COMMIT_SHA"
+          swift build -c release --product muter
+          .build/release/muter --version
+
+      - name: Bundle both tools + a verified manifest (real resource bundles, not just bare binaries)
+        id: bundle
+        env:
+          MUTER_COMMIT_SHA: ${{ inputs.muter_commit_sha }}
+          SWIFT_VERSION: ${{ steps.identity.outputs.swift_version }}
+          XCODEBUILD_VERSION: ${{ steps.identity.outputs.xcodebuild_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p tool-bundle
+          # `swift build`'s own release directory can contain resource
+          # bundles alongside the executable (e.g. *.resources /
+          # *.bundle) that the binary needs at runtime — copying the
+          # whole directory's relevant contents, not just the bare
+          # executable, so a resource-dependent build is never silently
+          # broken by this bundling step.
+          cp .build/release/mutantkit tool-bundle/
+          cp .build/release/BenchmarkRunner tool-bundle/
+          cp /tmp/muter-src/.build/release/muter tool-bundle/
+          find .build/release -maxdepth 1 -name "*.bundle" -exec cp -R {} tool-bundle/ \; || true
+          find /tmp/muter-src/.build/release -maxdepth 1 -name "*.bundle" -exec cp -R {} tool-bundle/ \; || true
+
+          MUTANTKIT_REPO_SHA="$(git rev-parse HEAD)"
+          MUTANTKIT_SHA256="$(shasum -a 256 tool-bundle/mutantkit | awk '{print $1}')"
+          MUTER_SHA256="$(shasum -a 256 tool-bundle/muter | awk '{print $1}')"
+          BENCHMARKRUNNER_SHA256="$(shasum -a 256 tool-bundle/BenchmarkRunner | awk '{print $1}')"
+
+          cat > tool-bundle/manifest.json <<EOF
+          {
+            "toolchainProfile": {
+              "purpose": "crossToolCompatibility",
+              "developerDirectory": "/Applications/Xcode_15.2.app/Contents/Developer",
+              "swiftVersion": "${SWIFT_VERSION}",
+              "xcodeBuildVersion": "${XCODEBUILD_VERSION}"
+            },
+            "mutantKitRepoCommitSHA": "${MUTANTKIT_REPO_SHA}",
+            "muterCommitSHA": "${MUTER_COMMIT_SHA}",
+            "buildConfiguration": "release",
+            "architecture": "arm64",
+            "sha256": {
+              "mutantkit": "${MUTANTKIT_SHA256}",
+              "muter": "${MUTER_SHA256}",
+              "BenchmarkRunner": "${BENCHMARKRUNNER_SHA256}"
+            }
+          }
+          EOF
+          cat tool-bundle/manifest.json
+          echo "sha256=${MUTANTKIT_SHA256}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified tool bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutantbench-tool-bundle
+          path: tool-bundle
+          retention-days: 1
+
+  calibrate:
+    needs: setup-tools
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the verified tool bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: mutantbench-tool-bundle
+          path: tool-bundle
+
+      - name: Verify the tool bundle's SHA-256 and revisions before trusting it
+        env:
+          EXPECTED_MUTER_COMMIT_SHA: ${{ inputs.muter_commit_sha }}
+        run: |
+          set -euo pipefail
+          chmod +x tool-bundle/mutantkit tool-bundle/BenchmarkRunner tool-bundle/muter
+          cat tool-bundle/manifest.json
+          python3 - <<'PY'
+          import json, hashlib, sys
+
+          manifest = json.load(open("tool-bundle/manifest.json"))
+          for name, expected in manifest["sha256"].items():
+              with open(f"tool-bundle/{name}", "rb") as f:
+                  actual = hashlib.sha256(f.read()).hexdigest()
+              if actual != expected:
+                  print(f"SHA-256 mismatch for {name}: expected {expected}, got {actual}")
+                  sys.exit(1)
+              print(f"{name}: sha256 verified ({actual})")
+          PY
+          test "$(python3 -c 'import json; print(json.load(open("tool-bundle/manifest.json"))["muterCommitSHA"])')" = "$EXPECTED_MUTER_COMMIT_SHA"
+
+      - name: Record and verify the compatibility-lane toolchain (Xcode 15.2, Swift 5.9)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 15.2"
+          swift --version | grep -F "Swift version 5.9"
+
+      - name: MutantKit plan against the fixture (no mutation run yet, real candidate count for the budget check)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          cat > mutantkit.yml <<'EOF'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: ["Sources/IntegerUtilities/GCD.swift"]
+          operators:
+            profile: default
+            disable: ["swift.core.bool-literal-inversion", "swift.core.logical-connector-replacement", "swift.core.return-value-replacement", "swift.core.ternary-branch-swap", "swift.core.unary-not-removal"]
+          execution:
+            strategy: schemata
+          reports: [json]
+          EOF
+          "$GITHUB_WORKSPACE/tool-bundle/mutantkit" plan --output plan-precheck.json
+
+      - name: Pre-dispatch budget check — fails closed before Muter is ever touched
+        env:
+          MAX_ESTIMATED_MINUTES: ${{ inputs.max_estimated_minutes }}
+          MAX_MUTATIONS_PER_TOOL: ${{ inputs.max_mutations_per_tool }}
+          ALLOW_BUDGET_OVERRIDE: ${{ inputs.allow_budget_override }}
+        run: |
+          set -euo pipefail
+          OVERRIDE_FLAG=""
+          if [ "$ALLOW_BUDGET_OVERRIDE" = "true" ]; then OVERRIDE_FLAG="--allow-budget-override"; fi
+          tool-bundle/BenchmarkRunner budget-check \
+            --plan-path plan-precheck.json \
+            --project-id swift-numerics \
+            --source-scope "Sources/IntegerUtilities/GCD.swift" \
+            --muter-candidates 3 \
+            --max-estimated-minutes "$MAX_ESTIMATED_MINUTES" \
+            --max-mutantkit-candidates "$MAX_MUTATIONS_PER_TOOL" \
+            --max-muter-candidates "$MAX_MUTATIONS_PER_TOOL" \
+            $OVERRIDE_FLAG
+          rm -f plan-precheck.json mutantkit.yml
+
+      - name: Stage 1 calibration run (real BenchmarkOrchestrator, both tools, cold/warm/incremental, 1 repetition each)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+          MUTANTKIT_BENCHMARK: "1"
+        run: |
+          set -euo pipefail
+          tool-bundle/BenchmarkRunner run \
+            --manifest Benchmarks/manifest-stage1-numerics.json \
+            --output Benchmarks/results \
+            --mutantkit-binary "$GITHUB_WORKSPACE/tool-bundle/mutantkit" \
+            --muter-binary "$GITHUB_WORKSPACE/tool-bundle/muter" \
+            --runs-per-mode 1 \
+            --timeout-seconds 900 \
+            --lane crossToolCompatibility \
+            --developer-directory /Applications/Xcode_15.2.app/Contents/Developer \
+            --tool-order cold:mutantKitFirst --tool-order warm:muterFirst --tool-order incremental:mutantKitFirst \
+            --mutantkit-source-include "Sources/IntegerUtilities/GCD.swift" \
+            --mutantkit-disable-operator swift.core.bool-literal-inversion \
+            --mutantkit-disable-operator swift.core.logical-connector-replacement \
+            --mutantkit-disable-operator swift.core.return-value-replacement \
+            --mutantkit-disable-operator swift.core.ternary-branch-swap \
+            --mutantkit-disable-operator swift.core.unary-not-removal \
+            --muter-files-to-mutate Sources/IntegerUtilities/GCD.swift \
+            --muter-operator RelationalOperatorReplacement
+
+      - name: Re-observe the compatibility-lane toolchain identity — reject if it drifted mid-run
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 15.2"
+          swift --version | grep -F "Swift version 5.9"
+
+      - name: Upload calibration results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutantbench-stage1-calibration
+          path: Benchmarks/results/compatibility
+          if-no-files-found: warn
+          retention-days: 30
+
+  scout-swift-syntax:
+    needs: setup-tools
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the verified tool bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: mutantbench-tool-bundle
+          path: tool-bundle
+
+      - name: Verify the tool bundle's SHA-256 and revisions before trusting it
+        env:
+          EXPECTED_MUTER_COMMIT_SHA: ${{ inputs.muter_commit_sha }}
+        run: |
+          set -euo pipefail
+          chmod +x tool-bundle/mutantkit tool-bundle/BenchmarkRunner tool-bundle/muter
+          cat tool-bundle/manifest.json
+          python3 - <<'PY'
+          import json, hashlib, sys
+
+          manifest = json.load(open("tool-bundle/manifest.json"))
+          for name, expected in manifest["sha256"].items():
+              with open(f"tool-bundle/{name}", "rb") as f:
+                  actual = hashlib.sha256(f.read()).hexdigest()
+              if actual != expected:
+                  print(f"SHA-256 mismatch for {name}: expected {expected}, got {actual}")
+                  sys.exit(1)
+              print(f"{name}: sha256 verified ({actual})")
+          PY
+          test "$(python3 -c 'import json; print(json.load(open("tool-bundle/manifest.json"))["muterCommitSHA"])')" = "$EXPECTED_MUTER_COMMIT_SHA"
+
+      - name: Record and verify the compatibility-lane toolchain (Xcode 15.2, Swift 5.9)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 15.2"
+          swift --version | grep -F "Swift version 5.9"
+
+      - name: MutantKit plan against swift-syntax's scoped file (no mutation run yet, real candidate count for the budget check)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          cat > mutantkit.yml <<'EOF'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: ["Sources/SwiftSyntax/AbsolutePosition.swift"]
+          operators:
+            profile: default
+            disable: ["swift.core.bool-literal-inversion", "swift.core.logical-connector-replacement", "swift.core.return-value-replacement", "swift.core.ternary-branch-swap", "swift.core.unary-not-removal"]
+          execution:
+            strategy: schemata
+          reports: [json]
+          EOF
+          "$GITHUB_WORKSPACE/tool-bundle/mutantkit" plan --output plan-precheck.json
+
+      - name: Pre-dispatch budget check — fails closed before Muter is ever touched
+        env:
+          MAX_ESTIMATED_MINUTES: ${{ inputs.max_estimated_minutes }}
+          MAX_MUTATIONS_PER_TOOL: ${{ inputs.max_mutations_per_tool }}
+          ALLOW_BUDGET_OVERRIDE: ${{ inputs.allow_budget_override }}
+        run: |
+          set -euo pipefail
+          OVERRIDE_FLAG=""
+          if [ "$ALLOW_BUDGET_OVERRIDE" = "true" ]; then OVERRIDE_FLAG="--allow-budget-override"; fi
+          tool-bundle/BenchmarkRunner budget-check \
+            --plan-path plan-precheck.json \
+            --project-id swift-syntax \
+            --source-scope "Sources/SwiftSyntax/AbsolutePosition.swift" \
+            --muter-candidates 2 \
+            --max-estimated-minutes "$MAX_ESTIMATED_MINUTES" \
+            --max-mutantkit-candidates "$MAX_MUTATIONS_PER_TOOL" \
+            --max-muter-candidates "$MAX_MUTATIONS_PER_TOOL" \
+            $OVERRIDE_FLAG
+          rm -f plan-precheck.json mutantkit.yml
+
+      - name: swift-syntax scouting run (real BenchmarkOrchestrator, both tools, cold/warm/incremental, 1 repetition each)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+          MUTANTKIT_BENCHMARK: "1"
+        run: |
+          set -euo pipefail
+          tool-bundle/BenchmarkRunner run \
+            --manifest Benchmarks/manifest-scout-swift-syntax.json \
+            --output Benchmarks/results-scout-swift-syntax \
+            --mutantkit-binary "$GITHUB_WORKSPACE/tool-bundle/mutantkit" \
+            --muter-binary "$GITHUB_WORKSPACE/tool-bundle/muter" \
+            --runs-per-mode 1 \
+            --timeout-seconds 900 \
+            --lane crossToolCompatibility \
+            --developer-directory /Applications/Xcode_15.2.app/Contents/Developer \
+            --tool-order cold:mutantKitFirst --tool-order warm:muterFirst --tool-order incremental:mutantKitFirst \
+            --mutantkit-source-include "Sources/SwiftSyntax/AbsolutePosition.swift" \
+            --mutantkit-disable-operator swift.core.bool-literal-inversion \
+            --mutantkit-disable-operator swift.core.logical-connector-replacement \
+            --mutantkit-disable-operator swift.core.return-value-replacement \
+            --mutantkit-disable-operator swift.core.ternary-branch-swap \
+            --mutantkit-disable-operator swift.core.unary-not-removal \
+            --muter-files-to-mutate Sources/SwiftSyntax/AbsolutePosition.swift \
+            --muter-operator RelationalOperatorReplacement
+
+      - name: Re-observe the compatibility-lane toolchain identity — reject if it drifted mid-run
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 15.2"
+          swift --version | grep -F "Swift version 5.9"
+
+      - name: Upload scouting results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutantbench-scout-swift-syntax
+          path: Benchmarks/results-scout-swift-syntax/compatibility
+          if-no-files-found: warn
+          retention-days: 30
