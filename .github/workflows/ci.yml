@@ -206,6 +206,7 @@ jobs:
         env:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
+          MUTANTKIT_DIAG_ISSUE3: "1"
         run: |
           set -o pipefail
           swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log

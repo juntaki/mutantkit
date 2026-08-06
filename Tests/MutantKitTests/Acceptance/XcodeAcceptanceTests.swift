@@ -96,6 +96,29 @@ struct XcodeProjectAcceptanceTests {
         let activation = try #require(dataMutant.evidence?.applicationEvidence?.isolatedActivation)
         #expect(activation.provesActivation)
     }
+
+    /// TEMPORARY diagnostic for issue #3 — dumps the full raw
+    /// `MutationResult` for every `canApplyCoupon` mutant, plus the
+    /// baseline's own build product hash for direct comparison. Not a
+    /// real acceptance assertion; remove before merging.
+    @Test("DIAGNOSTIC: dump canApplyCoupon mutants + baseline for issue #3")
+    func diagnosticDumpBoundaryMutant() throws {
+        let run = try self.run()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+        print("=== DIAGNOSTIC baseline testSummary/passed/buildProductHash ===")
+        print("baseline.passed=\(run.report.baseline.passed) buildProductHash=\(run.report.baseline.buildProductHash ?? "nil") testSummary=\(String(describing: run.report.baseline.testSummary))")
+
+        for result in run.report.results
+        where result.point.enclosingDeclaration.path.last == "canApplyCoupon(subtotal:)" {
+            let data = try encoder.encode(result)
+            print("=== DIAGNOSTIC canApplyCoupon result (\(result.point.originalText) -> \(result.point.replacementText)) ===")
+            print(String(decoding: data, as: UTF8.self))
+        }
+        print("=== DIAGNOSTIC raw mutantkit run output ===")
+        print(run.runOutput)
+    }
 }
 
 /// An `.xcworkspace` wrapping its own `.xcodeproj`.

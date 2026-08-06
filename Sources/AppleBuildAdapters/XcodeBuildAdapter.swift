@@ -432,6 +432,20 @@ extension XcodeBuildAdapter: BuildAdapter {
             throw BuildClassifier.failure(from: result, command: command)
         }
 
+        // TEMPORARY diagnostic for issue #3 — never intended to merge.
+        if ProcessInfo.processInfo.environment["MUTANTKIT_DIAG_ISSUE3"] == "1" {
+            let out = String(decoding: result.standardOutput, as: UTF8.self)
+            let hits = out.split(separator: "\n").filter {
+                $0.localizedCaseInsensitiveContains("compileswift") && $0.contains("Checkout.swift")
+            }
+            FileHandle.standardError.write(Data("DIAG3[\(workspace.path)] CompileSwift(Checkout.swift) lines: \(hits.count)\n".utf8))
+            for line in hits {
+                FileHandle.standardError.write(Data("DIAG3   \(line)\n".utf8))
+            }
+            let sawAnyCompileSwift = out.localizedCaseInsensitiveContains("compileswift")
+            FileHandle.standardError.write(Data("DIAG3   sawAnyCompileSwift=\(sawAnyCompileSwift) stdoutBytes=\(result.standardOutput.count)\n".utf8))
+        }
+
         let products = productsDirectory(in: workspace)
         let xctestrun = try XCTestRunLocator.locate(in: products, command: command)
 
