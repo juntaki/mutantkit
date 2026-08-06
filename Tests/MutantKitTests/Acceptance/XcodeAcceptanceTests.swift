@@ -96,6 +96,26 @@ struct XcodeProjectAcceptanceTests {
         let activation = try #require(dataMutant.evidence?.applicationEvidence?.isolatedActivation)
         #expect(activation.provesActivation)
     }
+
+    /// TEMPORARY diagnostic for issue #3 — dumps the full raw
+    /// `MutationResult` for the `>=` -> `>` mutant that this CI runner
+    /// (but not the maintainer's local machine) reports as not killed.
+    /// Not a real acceptance assertion; remove before merging.
+    @Test("DIAGNOSTIC: dump the >= -> > mutant's full raw result")
+    func diagnosticDumpBoundaryMutant() throws {
+        let run = try self.run()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+        for result in run.report.results
+        where result.point.enclosingDeclaration.path.last == "canApplyCoupon(subtotal:)" {
+            let data = try encoder.encode(result)
+            print("=== DIAGNOSTIC canApplyCoupon result (\(result.point.originalText) -> \(result.point.replacementText)) ===")
+            print(String(decoding: data, as: UTF8.self))
+        }
+        print("=== DIAGNOSTIC raw mutantkit run output ===")
+        print(run.runOutput)
+    }
 }
 
 /// An `.xcworkspace` wrapping its own `.xcodeproj`.
