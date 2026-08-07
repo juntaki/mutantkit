@@ -404,10 +404,30 @@ extension RelationalOperatorReplacementSchemataLowerer {
             // invalid outside of a func", "closure expression is unused")
             // — confirmed by a real compile failure in this lowerer's own
             // acceptance fixture before this was added, not assumed safe.
+            //
+            // `lhs`/`rhs` are bound via a local *generic* function
+            // (`__mkPair<__MKPairT>(_ lhs: __MKPairT, _ rhs: __MKPairT) -> (__MKPairT, __MKPairT)`), not two
+            // independent `let`s — real compile failure found via this
+            // lowerer's own differential acceptance test: two independent
+            // `let __mkLHS = (\(lhsText)); let __mkRHS = (\(rhsText))`
+            // declarations each infer their own type in isolation, so a
+            // comparison like `value >= 10` where `value: Decimal` and `10`
+            // is only `Decimal` by *contextual* inference against `value`
+            // loses that context — the untyped `let __mkRHS = (10)` defaults
+            // to `Int`, and the mutated source no longer compiles ("`Decimal`
+            // does not conform to `BinaryInteger`"). Passing both operands as
+            // a single generic call forces Swift to unify `T` from the first
+            // (already-concretely-typed) argument and coerce the second into
+            // that same `T` — the same bidirectional inference a real binary
+            // operator call itself uses — so `__mkRHS` ends up `Decimal` here
+            // exactly as `10` would in the original, unmutated expression.
+            // Each operand is still evaluated exactly once: function call
+            // arguments evaluate once each, same guarantee as before.
             let replacement = """
             (\
-            { \
-            let __mkLHS = (\(lhsText)); let __mkRHS = (\(rhsText)); \
+            { () -> Bool in \
+            func __mkPair<__MKPairT>(_ lhs: __MKPairT, _ rhs: __MKPairT) -> (__MKPairT, __MKPairT) { (lhs, rhs) }; \
+            let (__mkLHS, __mkRHS) = __mkPair(\(lhsText), \(rhsText)); \
             return __mutantkitIsActiveV3(__mutantkitUnitDescriptor_\(unit.suffix), \(token.namespace), \(token.localIndex)) \
             ? (__mkLHS \(point.replacementText) __mkRHS) : (__mkLHS \(point.originalText) __mkRHS) \
             }()\
