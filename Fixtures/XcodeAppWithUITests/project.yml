@@ -1,0 +1,57 @@
+# Acceptance fixture: an application target with BOTH a unit test target and
+# a UI test target in the same scheme — the shape that exposed a real batch-
+# testing bug (see BatchXCTestRunBuilderTests and
+# XcodeBatchTestingUITargetAcceptanceTests). `Fixtures/XcodeProject` and
+# `Fixtures/XcodeAppDebugDylib` both carry exactly one test target, so neither
+# can exercise per-target narrowing across a merged batch xctestrun.
+#
+# The generated .xcodeproj is committed alongside this manifest so the fixture
+# works without xcodegen installed. Regenerate with:
+#   cd Fixtures/XcodeAppWithUITests && xcodegen generate
+name: BatchUIDemo
+options:
+  bundleIdPrefix: dev.mutantkit.fixture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  BatchUIDemo:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.mutantkit.fixture.BatchUIDemo
+
+  BatchUIDemoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: BatchUIDemo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  BatchUIDemoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: BatchUIDemo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: BatchUIDemo
+
+schemes:
+  BatchUIDemo:
+    build:
+      targets:
+        BatchUIDemo: all
+        BatchUIDemoTests: [test]
+        BatchUIDemoUITests: [test]
+    test:
+      targets: [BatchUIDemoTests, BatchUIDemoUITests]

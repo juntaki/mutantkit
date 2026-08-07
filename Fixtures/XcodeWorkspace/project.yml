@@ -1,0 +1,48 @@
+# Acceptance fixture: an .xcworkspace wrapping its own .xcodeproj.
+#
+# Self-contained on purpose. An earlier version of this fixture referenced the
+# project in ../XcodeProject to avoid duplicating it, which made the fixture
+# unusable: sandboxing copies the project root, so sources living outside it are
+# never copied and never mutated. Discovery found nothing and the run was
+# vacuous. A fixture's sources must live under the root the tool is pointed at —
+# which is also true of every real workspace worth testing.
+#
+# It cannot live inside the XcodeProject fixture either: detection prefers a
+# workspace over a project beside it, so one directory cannot exercise both
+# branches.
+#
+# Regenerate with:  cd Fixtures/XcodeWorkspace && xcodegen generate
+name: Billing
+options:
+  bundleIdPrefix: dev.mutantkit.fixture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  Billing:
+    type: framework
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  BillingTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: Billing
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Billing:
+    build:
+      targets:
+        Billing: all
+        BillingTests: [test]
+    test:
+      targets: [BillingTests]

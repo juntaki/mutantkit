@@ -1,0 +1,2849 @@
+import Dispatch
+import Foundation
+import MutationModel
+import SwiftFrontend
+
+/// Executes a plan in isolated mode and reports what it can prove.
+///
+/// The shape of a run is: establish a baseline, then for each planned mutation
+/// build a sandbox, apply exactly one edit, build it, test it, classify it,
+/// checkpoint it, and throw the sandbox away.
+///
+/// Two things are load-bearing:
+///
+/// 1. **The baseline is a gate, not a data point.** If the unmutated suite does
+///    not build and pass, every mutant outcome measured against it is noise —
+///    a "survived" mutant in a red suite means nothing at all. The run stops and
+///    reports no score rather than producing numbers it cannot stand behind.
+///
+/// 2. **Order is a property of the plan, not of the schedule.** Mutants run
+///    concurrently and finish in whatever order the machine decides, so results
+///    are sorted back into `MutationID` order before anything reads them. Two
+///    runs of the same plan produce the same report.
+///
+/// The adapters are injected: this type knows about building and testing, and
+/// nothing about `xcodebuild`, `swift test`, or simulators.
+public struct MutationRunner: Sendable {
+    private let plan: MutationPlan
+    private let configuration: Configuration
+    private let projectRoot: URL
+    private let toolchain: ToolchainFingerprint
+    private let build: any BuildAdapter
+    private let test: any TestAdapter
+    private let workspaces: WorkspaceManager
+    private let checkpoints: CheckpointStore?
+    private let artifactsRoot: URL?
+    private let coverageCache: CoverageProfileCache?
+    private let coverageCacheKey: CoverageProfileCache.Key?
+    private let resultCache: MutationResultCache?
+    private let resultCacheDigest: String?
+    private let priorityStore: TestPriorityStore?
+    private let monotonicNow: @Sendable () -> TimeInterval
+    private let operationalIssues = OperationalIssueLog()
+
+    /// Cannot collide with a mutant's sandbox: every mutation ID starts `mut_`.
+    private static let baselineSandboxID = "baseline"
+
+    /// The confirmation policy this run is actually gated on — passed to
+    /// `MutationVerdictVerifier.verify` so it can require the confirmation
+    /// `finishAfterTest`'s own `configuration.execution.retestKilledMutants`/
+    /// `confirmCrashKills` checks promise, rather than trusting whatever
+    /// `confirmations` a reverified `MutationObservations` happens to carry.
+    private var verificationPolicy: MutationVerdictVerifier.VerdictVerificationPolicy {
+        MutationVerdictVerifier.VerdictVerificationPolicy(
+            retestKilledMutants: configuration.execution.retestKilledMutants,
+            confirmCrashKills: configuration.execution.confirmCrashKills,
+            confirmTimedOutMutants: configuration.execution.confirmTimedOutMutants
+        )
+    }
+
+    /// - Parameters:
+    ///   - checkpoints: when supplied, results are persisted as they land and
+    ///     mutations already recorded there are not re-run.
+    ///   - artifactsRoot: where to keep result bundles once their sandbox is
+    ///     gone. Without it there is nowhere for an `.xcresult` to survive, and
+    ///     the evidence records no path rather than a dangling one.
+    ///   - toolchain: the toolchain doing the running, which is not necessarily
+    ///     the one that did the planning. Defaults to the plan's.
+    ///   - coverageCache: when supplied with `coverageCacheKey`, the baseline
+    ///     pass's per-test coverage attribution is loaded from this cache
+    ///     instead of re-measured when the key matches a prior run, and a
+    ///     fresh measurement is stored back into it for the next run. The
+    ///     baseline build and test still always run — coverage is the only
+    ///     thing skipped, because every other responsibility of the baseline
+    ///     (the suite-must-pass gate, the timeout calibration, the activation
+    ///     hash) still has to be earned on every run.
+    ///   - resultCache: when supplied with `resultCacheDigest`, a mutant whose
+    ///     `MutationID` was already evaluated against an identical execution
+    ///     context (same source, test suite, toolchain, configuration —
+    ///     captured in the digest) is reused without rebuilding or retesting.
+    ///     The baseline still always runs: the cache carries mutant verdicts,
+    ///     not the suite-must-pass gate or timeout calibration those verdicts
+    ///     were measured against. Checkpoint hits take priority over cache
+    ///     hits — a checkpoint is always-trusted state from the same run,
+    ///     while a cache entry is a cross-run inference.
+    ///   - priorityStore: when supplied alongside `earlyAbortSelectedTests`
+    ///     and `testBatchSize`, the test phase uses wave-based early kill
+    ///     instead of ordinary batching: each wave batch-tests one
+    ///     prioritised covering test per surviving mutant, and a mutant
+    ///     that fails its wave's test is killed and drops out rather than
+    ///     running its remaining covering tests — see `testInWaves`. Without
+    ///     a store, batched testing runs every mutant's full selection in
+    ///     one shot per `testAndFinish`, unchanged; early abort is then only
+    ///     available through the CLI's per-invocation `PrioritizingTestAdapter`
+    ///     wrapping, which does not require batching at all.
+    ///   - monotonicNow: what the wave loop's cumulative-budget measurement
+    ///     (`testWaveChunk`/`standaloneVerify`) reads elapsed time from.
+    ///     Defaults to a monotonic uptime clock — never `Date`/wall-clock
+    ///     time, which can jump backward or forward under a clock
+    ///     correction or manual change mid-run, corrupting a budget that
+    ///     must only ever measure elapsed time. Tests substitute a manually-
+    ///     advanced fake clock so a wave's simulated duration is an exact,
+    ///     deterministic quantity instead of `Task.sleep`'s real elapsed
+    ///     time, which CPU contention from unrelated concurrently-running
+    ///     tests can inflate past a budget boundary the test never intended
+    ///     to cross.
+    public init(
+        plan: MutationPlan,
+        configuration: Configuration,
+        projectRoot: URL,
+        build: any BuildAdapter,
+        test: any TestAdapter,
+        workspaces: WorkspaceManager,
+        checkpoints: CheckpointStore? = nil,
+        artifactsRoot: URL? = nil,
+        toolchain: ToolchainFingerprint? = nil,
+        coverageCache: CoverageProfileCache? = nil,
+        coverageCacheKey: CoverageProfileCache.Key? = nil,
+        resultCache: MutationResultCache? = nil,
+        resultCacheDigest: String? = nil,
+        priorityStore: TestPriorityStore? = nil,
+        monotonicNow: @escaping @Sendable () -> TimeInterval = {
+            Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+        }
+    ) {
+        self.plan = plan
+        self.configuration = configuration
+        self.projectRoot = projectRoot
+        self.build = build
+        self.test = test
+        self.workspaces = workspaces
+        self.checkpoints = checkpoints
+        self.artifactsRoot = artifactsRoot
+        self.toolchain = toolchain ?? plan.toolchain
+        self.coverageCache = coverageCache
+        self.coverageCacheKey = coverageCacheKey
+        self.resultCache = resultCache
+        self.resultCacheDigest = resultCacheDigest
+        self.priorityStore = priorityStore
+        self.monotonicNow = monotonicNow
+    }
+
+    // MARK: - Run
+
+    public func run() async throws -> RunReport {
+        let startedAt = Date()
+
+        let baseline: BaselineContext
+        switch await establishBaseline() {
+        case let .failed(record, diagnosis):
+            return failClosedReport(startedAt: startedAt, baseline: record, diagnosis: diagnosis)
+        case let .established(context):
+            baseline = context
+        }
+
+        // Checkpoint hits first: same-run resume is always-trusted, so it
+        // takes priority over the cross-run cache. A mutant already
+        // recorded in a checkpoint is removed from the pool the cache is
+        // consulted against, so the two stores cannot double-count.
+        let resumed = ((try await checkpoints?.loadAll(plan: plan)) ?? []).map { $0.markedAsCheckpointResume() }
+        let checkpointedIDs = Set(resumed.map(\.id))
+
+        // Cross-run result cache: a mutant whose MutationID was evaluated
+        // against an identical execution context (same source, tests,
+        // toolchain, configuration) is reused without rebuilding or
+        // retesting. The cache stores only reportable, integrity-safe
+        // verdicts — infrastructure failures and other environmental state
+        // are never cached (see `MutationResultCache.store`).
+        var cacheHits: [MutationResult] = []
+        var pending: [MutationPoint] = []
+        for point in plan.mutations where !checkpointedIDs.contains(point.id) {
+            if let digest = resultCacheDigest,
+               let cached = await resultCache?.load(
+                   MutationResultCache.Key(mutationID: point.id, contextDigest: digest),
+                   point: point, planID: plan.planID, workUnitID: plan.workUnitID
+               ) {
+                cacheHits.append(cached)
+            } else {
+                pending.append(point)
+            }
+        }
+
+        var results = resumed + cacheHits
+        // Every freshly-evaluated mutant's own `finalize` call already wrote
+        // it to the checkpoint and (when cacheable) the cross-run cache,
+        // right next to the raw `MutationObservations` that produced it —
+        // no separate store pass is needed here (ADR-0006 Stage 1, second
+        // review round: `finalize`'s own doc comment explains why the write
+        // moved there).
+        let (evaluated, batchExecution) = try await evaluate(pending, baseline: baseline)
+
+        results.append(contentsOf: evaluated)
+        results.sort { $0.id < $1.id }
+
+        // ADR-0006 Stage 1: the ledger, not the plain array, is this run's
+        // authoritative result state — `results` above is retired to a
+        // display-ordering convenience the moment every result has been
+        // gathered. A duplicate insert here (the identical `MutationID`
+        // reaching both a checkpoint/cache hit and a freshly-evaluated
+        // result, say) is a real bug this construction surfaces
+        // immediately, not a `Set`-based count mismatch `IntegrityChecker`
+        // would have had to notice after the fact.
+        var ledger = ResultLedger<MutationResult>()
+        for result in results {
+            try ledger.insert(result)
+        }
+
+        return RunReport(
+            planID: plan.planID,
+            startedAt: startedAt,
+            finishedAt: Date(),
+            projectRoot: projectRoot.path,
+            toolchain: toolchain,
+            baseline: baseline.record,
+            ledger: ledger,
+            integrity: IntegrityChecker.check(plan: plan, ledger: ledger, baselinePassed: true),
+            batchExecution: batchExecution,
+            operationalIssues: await operationalIssues.snapshot()
+        )
+    }
+
+    /// Runs the pending mutations, at most `resolvedWorkerCount()` at a time.
+    private func evaluate(
+        _ pending: [MutationPoint], baseline: BaselineContext
+    ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary?) {
+        if let batchSize = configuration.execution.testBatchSize, batchSize > 0,
+           test is any BatchTestable {
+            if configuration.execution.incrementalBuild {
+                // Wave-based early kill (`testInWaves`, dispatched from
+                // `testAndFinish`) has no pipelined equivalent: it tests one
+                // mutant's ONE next prioritised test per wave and carries
+                // survivors forward across rounds, which has no
+                // correspondence in the pipelined test lane's model of "a
+                // clone arrives once, is tested once, is done." Routing a
+                // wave-mode configuration through pipelining would silently
+                // disable early abort — every mutant would run its whole
+                // selected-test list, and priority history would never be
+                // read or updated — so it keeps using the sequential
+                // (non-pipelined) build-then-test path instead, which still
+                // reaches `testAndFinish` and therefore `testInWaves`. Only
+                // when wave mode is NOT requested does pipelining apply.
+                if configuration.execution.earlyAbortSelectedTests, priorityStore != nil {
+                    return try await evaluateIncrementallyInBatchesSequential(pending, baseline: baseline, batchSize: batchSize)
+                }
+                return try await evaluateIncrementallyInBatches(pending, baseline: baseline, batchSize: batchSize)
+            }
+            return try await evaluateInBatches(pending, baseline: baseline, batchSize: batchSize)
+        }
+
+        if configuration.execution.incrementalBuild {
+            return (try await evaluateIncrementally(pending, baseline: baseline), nil)
+        }
+
+        let workers = max(1, configuration.execution.resolvedWorkerCount())
+        var collected: [MutationResult] = []
+
+        try await withThrowingTaskGroup(of: MutationResult.self) { group in
+            var remaining = pending.makeIterator()
+
+            for _ in 0 ..< workers {
+                guard let point = remaining.next() else { break }
+                group.addTask { await evaluate(point, baseline: baseline) }
+            }
+
+            // One in, one out: builds are the most expensive thing this tool
+            // does and running more of them than the machine has workers for
+            // buys contention, not throughput.
+            while let result = try await group.next() {
+                collected.append(result)
+                if let point = remaining.next() {
+                    group.addTask { await evaluate(point, baseline: baseline) }
+                }
+            }
+        }
+
+        return (collected, nil)
+    }
+
+    /// `evaluate(_:baseline:)`'s counterpart for
+    /// `Configuration.execution.incrementalBuild`: `resolvedWorkerCount()`
+    /// persistent sandboxes, each pulling mutants from a shared queue and
+    /// evaluating them one at a time, reverting the one file it touched
+    /// before moving to the next — see `runIncrementalWorker`.
+    ///
+    /// The per-mutant evaluation itself (`evaluate(_:in:baseline:startedAt:)`)
+    /// is unchanged and shared with the non-incremental path: everything
+    /// about *what* proves a verdict — activation hash against baseline,
+    /// crash/timeout confirmation in their own fresh sandboxes — stays
+    /// exactly as it is there. Only *which* sandbox a mutant's own first
+    /// build and test run in changes.
+    private func evaluateIncrementally(_ pending: [MutationPoint], baseline: BaselineContext) async throws -> [MutationResult] {
+        let workers = max(1, configuration.execution.resolvedWorkerCount())
+        let queue = MutationQueue(pending)
+
+        return try await withThrowingTaskGroup(of: [MutationResult].self) { group in
+            for workerIndex in 0 ..< workers {
+                group.addTask {
+                    await runIncrementalWorker(id: "incr-worker-\(workerIndex)", queue: queue, baseline: baseline)
+                }
+            }
+
+            var collected: [MutationResult] = []
+            for try await workerResults in group {
+                collected.append(contentsOf: workerResults)
+            }
+            return collected
+        }
+    }
+
+    /// One persistent sandbox's lifetime: created once, handed every mutant
+    /// this worker dequeues in turn, reverted to pristine after each one,
+    /// destroyed once the queue is empty.
+    ///
+    /// A worker that cannot even create its sandbox does not silently drop
+    /// its share of the plan: it drains the queue reporting
+    /// `.infrastructureFailure` for each mutant it would have taken, the
+    /// same fate a per-mutant sandbox failure has on the non-incremental
+    /// path, so every planned mutation still owes the integrity check a
+    /// result.
+    private func runIncrementalWorker(
+        id: String, queue: MutationQueue, baseline: BaselineContext
+    ) async -> [MutationResult] {
+        var results: [MutationResult] = []
+
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: id)
+        } catch {
+            while let point = await queue.next() {
+                let result = await infrastructureFailureResult(
+                    point: point,
+                    diagnosis: "No persistent incremental-build sandbox could be created for this worker: \(error)",
+                    durationSeconds: 0
+                )
+                results.append(result)
+            }
+            return results
+        }
+
+        while let point = await queue.next(forWorker: id) {
+            let started = Date()
+            let result = await evaluate(point, in: sandbox, baseline: baseline, startedAt: started)
+            // Always attempted, regardless of how the mutant's own
+            // evaluation went: the next mutant on this worker must start
+            // from a pristine file no matter what happened to this one — a
+            // build failure, a crash, an anchor rejection that never wrote
+            // anything. `restoreFile` re-clones from `projectRoot`, which
+            // is read-only and untouched, so this can only ever put the
+            // sandbox back to a known-good state, never compound an error.
+            try? await workspaces.restoreFile(relativePath: point.file, in: sandbox)
+            results.append(result)
+        }
+
+        try? await workspaces.destroySandbox(at: sandbox)
+        return results
+    }
+
+    /// `evaluate(_:baseline:)`'s counterpart for `Configuration.execution
+    /// .incrementalBuild` and `Configuration.execution.testBatchSize`
+    /// together: `resolvedWorkerCount()` persistent sandboxes build mutants
+    /// incrementally and in place, exactly like `evaluateIncrementally` —
+    /// but **pipelined** with a single test lane that tests a batch the
+    /// moment it fills up, instead of waiting for every worker's build
+    /// queue to drain first. A prepared mutant's build is cloned out to its
+    /// own independent location (see `WorkspaceManager.cloneProducts`) the
+    /// moment it is ready, handed to `PipelineCoordinator`, and the worker
+    /// moves straight on to its next mutant's build — the same clone-and-go
+    /// shape the previous two-phase design used, except the clone is
+    /// consumed concurrently rather than only after every worker finishes.
+    /// This overlaps the two dominant costs of a run — Swift compilation
+    /// (CPU-bound, inside the worker sandboxes) and `xcodebuild test`
+    /// (simulator-bound, inside the test lane) — which the strict two-phase
+    /// design left serialized: the test lane sat idle for the whole build
+    /// phase, and every build worker sat idle for the whole test phase.
+    ///
+    /// **Sandbox lifetime, and why it needs a live reference count, not a
+    /// single barrier.** A cloned products directory only carries the
+    /// mutant's *build products* (see `WorkspaceManager.cloneProducts`); a
+    /// test that resolves a fixture through a source-relative path baked in
+    /// at compile time (an ordinary, idiomatic pattern: `URL(fileURLWithPath:
+    /// #filePath)` walked up to the project root) still resolves against the
+    /// worker sandbox the source was compiled in, not the clone — so a
+    /// worker's own sandbox must outlive every clone it produced, not just
+    /// its own build loop (this is the same fact `PipelineCoordinator`'s doc
+    /// comment, and the non-pipelined fix this generalizes, explain in more
+    /// detail). With build and test now running concurrently instead of in
+    /// two strict phases, there is no single point in time — no "every
+    /// build is done" barrier — after which it is safe to destroy every
+    /// worker's sandbox: a fast worker can finish its whole build queue
+    /// while its own most recent clones are still sitting in the test
+    /// lane's forming batch, not yet tested. `PipelineCoordinator` tracks,
+    /// per worker, an outstanding-clone count (incremented the instant a
+    /// clone is handed to the coordinator, decremented the instant the test
+    /// lane finishes testing it — success, failure, or infrastructure
+    /// error, every path decrements) and destroys that worker's sandbox
+    /// exactly when its build loop has ended *and* its outstanding count has
+    /// reached zero, whichever of those two events happens last, for that
+    /// worker specifically. See `PipelineCoordinator` below for the actor
+    /// that makes both halves of that check atomic.
+    private func evaluateIncrementallyInBatches(
+        _ pending: [MutationPoint], baseline: BaselineContext, batchSize: Int
+    ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary?) {
+        let workers = max(1, configuration.execution.resolvedWorkerCount())
+        let queue = MutationQueue(pending)
+        let collector = PipelineCollector()
+        let coordinator = PipelineCoordinator(workspaces: workspaces, workerCount: workers)
+
+        // The test lane and the build workers are siblings in one task
+        // group, not nested — nesting the build workers inside the lane (or
+        // vice versa) would make one wait structurally for the other to be
+        // spawned/joined, which is exactly the coupling pipelining exists to
+        // remove. They coordinate only through `coordinator`: build workers
+        // call `send`/`workerBuildFinished`, the test lane calls `receive`,
+        // and `receive` returns `nil` on its own once every worker has
+        // finished and every buffered clone has been drained — no outer
+        // "finish" signal needs to be sent from here.
+        // Neither side ever throws (see `runPipelinedBuildWorker`'s and
+        // `runPipelinedTestLane`'s doc comments: both are fail-closed —
+        // every failure becomes an `.infrastructureFailure` result rather
+        // than a thrown error), so a plain, non-throwing task group is
+        // enough; `evaluateIncrementallyInBatches` stays `throws` only for
+        // signature parity with its sibling evaluation paths.
+        await withTaskGroup(of: Void.self) { outer in
+            outer.addTask { [self] in
+                await runPipelinedTestLane(
+                    coordinator: coordinator, collector: collector, baseline: baseline, batchSize: batchSize
+                )
+            }
+            outer.addTask { [self] in
+                await withTaskGroup(of: Void.self) { buildGroup in
+                    for workerIndex in 0 ..< workers {
+                        buildGroup.addTask {
+                            await self.runPipelinedBuildWorker(
+                                id: "incr-worker-\(workerIndex)", queue: queue, baseline: baseline,
+                                collector: collector, coordinator: coordinator
+                            )
+                        }
+                    }
+                }
+            }
+            await outer.waitForAll()
+        }
+
+        let snapshot = await collector.snapshot()
+        return (snapshot.results, snapshot.summary)
+    }
+
+    /// The pre-pipelining incremental-plus-batching path, kept only for
+    /// wave-based early kill (see `evaluate(_:baseline:)`'s dispatch):
+    /// build every mutant first (bounded by `resolvedWorkerCount()`), THEN
+    /// test the ones that need it, through `testAndFinish` — which is what
+    /// gives `testInWaves` a chance to dispatch at all. The pipelined
+    /// `evaluateIncrementallyInBatches` above interleaves building and
+    /// testing instead, which is strictly faster but has no way to run
+    /// wave-based early kill's multi-round, one-test-per-wave protocol.
+    private func evaluateIncrementallyInBatchesSequential(
+        _ pending: [MutationPoint], baseline: BaselineContext, batchSize: Int
+    ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary?) {
+        let workers = max(1, configuration.execution.resolvedWorkerCount())
+        let queue = MutationQueue(pending)
+
+        var collected: [MutationResult] = []
+        var readyToTest: [PreparedMutant] = []
+        var workerSandboxes: [URL] = []
+
+        try await withThrowingTaskGroup(
+            of: (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: URL?).self
+        ) { group in
+            for workerIndex in 0 ..< workers {
+                group.addTask {
+                    await self.runIncrementalBuildWorkerSequential(
+                        id: "incr-worker-\(workerIndex)", queue: queue, baseline: baseline
+                    )
+                }
+            }
+
+            for try await worker in group {
+                collected.append(contentsOf: worker.results)
+                readyToTest.append(contentsOf: worker.readyToTest)
+                if let sandbox = worker.sandbox {
+                    workerSandboxes.append(sandbox)
+                }
+            }
+        }
+
+        let (testResults, summary) = try await testAndFinish(readyToTest: readyToTest, baseline: baseline, batchSize: batchSize)
+        collected.append(contentsOf: testResults)
+
+        // Only now — every clone any worker produced has been tested and
+        // its own result recorded — is it safe to tear down the sandboxes
+        // that built them.
+        for sandbox in workerSandboxes {
+            try? await workspaces.destroySandbox(at: sandbox)
+        }
+
+        return (collected, summary)
+    }
+
+    /// One persistent sandbox's lifetime for
+    /// `evaluateIncrementallyInBatchesSequential`: same build shape as
+    /// `runIncrementalWorker`, but calls only `prepare(...)` per mutant
+    /// (never tests in place), clones a `.readyToTest` mutant's artifact out
+    /// before moving on instead of holding the worker's own sandbox open
+    /// until it is tested, and returns its own sandbox to the caller instead
+    /// of destroying it — the caller destroys it once every clone this
+    /// worker produced has actually been tested by the shared `testAndFinish`
+    /// barrier.
+    ///
+    /// A worker that cannot even create its sandbox fails exactly like
+    /// `runIncrementalWorker`'s does: it drains the queue reporting
+    /// `.infrastructureFailure` for every mutant it would have taken, rather
+    /// than silently dropping its share of the plan. It returns `sandbox:
+    /// nil` in that case — there is nothing for the caller to keep alive or
+    /// destroy.
+    private func runIncrementalBuildWorkerSequential(
+        id: String, queue: MutationQueue, baseline: BaselineContext
+    ) async -> (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: URL?) {
+        var results: [MutationResult] = []
+        var readyToTest: [PreparedMutant] = []
+
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: id)
+        } catch {
+            while let point = await queue.next() {
+                let result = await infrastructureFailureResult(
+                    point: point,
+                    diagnosis: "No persistent incremental-build sandbox could be created for this worker: \(error)",
+                    durationSeconds: 0
+                )
+                results.append(result)
+            }
+            return (results, readyToTest, nil)
+        }
+
+        while let point = await queue.next(forWorker: id) {
+            let started = Date()
+            switch await prepare(point, in: sandbox, baseline: baseline, startedAt: started) {
+            case let .finished(result):
+                results.append(result)
+            case let .readyToTest(prepared):
+                do {
+                    let clone = try await workspaces.cloneProducts(
+                        from: prepared.artifact.productsDirectory, id: point.id.rawValue
+                    )
+                    readyToTest.append(Self.relocating(prepared, to: clone))
+                } catch {
+                    let result = await infrastructureFailureResult(
+                        point: point,
+                        diagnosis: "This mutant's build could not be cloned out for batched testing: \(error)",
+                        evidence: evidence(
+                            prepared.applied, artifact: prepared.artifact, activation: prepared.activation
+                        ),
+                        durationSeconds: Date().timeIntervalSince(started)
+                    )
+                    results.append(result)
+                }
+            }
+            // Always attempted, same reasoning as `runIncrementalWorker`: the
+            // next mutant on this worker must start from a pristine file
+            // regardless of how this one went — and by this point this
+            // mutant's build artifact, if it produced one, has already
+            // either been cloned out or given up on, so nothing here still
+            // depends on the sandbox's current contents.
+            try? await workspaces.restoreFile(relativePath: point.file, in: sandbox)
+        }
+
+        return (results, readyToTest, sandbox)
+    }
+
+    /// One persistent sandbox's lifetime for the pipelined
+    /// incremental-plus-batching path: same build shape as
+    /// `runIncrementalWorker`, but calls only `prepare(...)` per mutant
+    /// (never tests in place), and instead of collecting `.readyToTest`
+    /// mutants into a return value, clones each one out and immediately
+    /// hands it to `coordinator.send`, which both queues it for the test
+    /// lane and records it against this worker's outstanding-clone count.
+    /// A result that finishes during the build itself (`.noCoverage`, a
+    /// build failure, a clone failure) goes straight to `collector` — it
+    /// never touches the coordinator's count, because it never produced a
+    /// clone for the test lane to owe a decrement for.
+    ///
+    /// A worker that cannot even create its sandbox fails exactly like
+    /// `runIncrementalWorker`'s does: it drains the queue reporting
+    /// `.infrastructureFailure` for every mutant it would have taken,
+    /// rather than silently dropping its share of the plan. Either way,
+    /// `coordinator.registerWorker` and `coordinator.workerBuildFinished`
+    /// are called on every exit path — including this one — because the
+    /// test lane's `receive` loop only ends once every worker has reported
+    /// itself finished; a worker that returned early without reporting in
+    /// would leave the test lane, and the whole pipeline, waiting forever.
+    private func runPipelinedBuildWorker(
+        id: String, queue: MutationQueue, baseline: BaselineContext,
+        collector: PipelineCollector, coordinator: PipelineCoordinator
+    ) async {
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: id)
+        } catch {
+            await coordinator.registerWorker(id, sandbox: nil)
+            while let point = await queue.next() {
+                let result = await infrastructureFailureResult(
+                    point: point,
+                    diagnosis: "No persistent incremental-build sandbox could be created for this worker: \(error)",
+                    durationSeconds: 0
+                )
+                await collector.add(result)
+            }
+            await coordinator.workerBuildFinished(id)
+            return
+        }
+
+        await coordinator.registerWorker(id, sandbox: sandbox)
+
+        while let point = await queue.next(forWorker: id) {
+            let started = Date()
+            switch await prepare(point, in: sandbox, baseline: baseline, startedAt: started) {
+            case let .finished(result):
+                await collector.add(result)
+            case let .readyToTest(prepared):
+                do {
+                    let clone = try await workspaces.cloneProducts(
+                        from: prepared.artifact.productsDirectory, id: point.id.rawValue
+                    )
+                    await coordinator.send(Self.relocating(prepared, to: clone), workerID: id)
+                } catch {
+                    let result = await infrastructureFailureResult(
+                        point: point,
+                        diagnosis: "This mutant's build could not be cloned out for batched testing: \(error)",
+                        evidence: evidence(
+                            prepared.applied, artifact: prepared.artifact, activation: prepared.activation
+                        ),
+                        durationSeconds: Date().timeIntervalSince(started)
+                    )
+                    await collector.add(result)
+                }
+            }
+            // Always attempted, same reasoning as `runIncrementalWorker`: the
+            // next mutant on this worker must start from a pristine file
+            // regardless of how this one went — and by this point this
+            // mutant's build artifact, if it produced one, has already
+            // either been handed to the coordinator or given up on, so
+            // nothing here still depends on the sandbox's current contents.
+            try? await workspaces.restoreFile(relativePath: point.file, in: sandbox)
+        }
+
+        // Not a destroy call: this worker's build loop is done, but clones
+        // it produced may still be sitting in the test lane's forming batch
+        // or mid-test right now. `workerBuildFinished` only destroys the
+        // sandbox if the outstanding-clone count is already zero — see
+        // `PipelineCoordinator`.
+        await coordinator.workerBuildFinished(id)
+    }
+
+    /// The test lane's whole lifetime for the pipelined incremental-plus-
+    /// batching path: pulls clones from `coordinator.receive()` as they
+    /// arrive from every build worker, accumulates them into a batch, and
+    /// tests a batch the moment it reaches `batchSize` — not waiting for
+    /// every worker to finish first. `receive()` returns `nil` on its own
+    /// once every worker has reported itself finished and every buffered
+    /// clone has been drained, which is this loop's only exit condition; a
+    /// final partial batch (fewer than `batchSize` clones, however many
+    /// were left when the last worker finished) is still flushed after the
+    /// loop ends, same as the non-pipelined path's last chunk.
+    ///
+    /// Runs as a single task: there is exactly one test lane regardless of
+    /// worker count, so `batchIndex` (used only for the batch sandbox's
+    /// name) is a plain local counter, not a shared actor — nothing else
+    /// touches it concurrently.
+    private func runPipelinedTestLane(
+        coordinator: PipelineCoordinator, collector: PipelineCollector,
+        baseline: BaselineContext, batchSize: Int
+    ) async {
+        // `evaluate(_:baseline:)` only dispatches here when `test is any
+        // BatchTestable` already held true, so this cannot actually fail —
+        // but the fallback below costs nothing, and unlike
+        // `testAndFinish`'s equivalent fallback it MUST keep draining and
+        // reporting into the coordinator: a build worker's `send` is only
+        // balanced by a matching `finishedTesting`, and this lane is the
+        // only place that call is made. Abandoning the drain here would
+        // leave every worker's outstanding count stuck above zero forever,
+        // and their sandboxes never destroyed.
+        guard let batchable = test as? any BatchTestable else {
+            while let next = await coordinator.receive() {
+                let result = await finishAfterTest(
+                    next.item, baseline: baseline,
+                    run: TestRunResult(
+                        status: .infrastructureFailure, summary: nil, command: next.item.artifact.command,
+                        resultArtifactPath: nil,
+                        diagnosis: "The batch test adapter no longer conforms to BatchTestable."
+                    )
+                )
+                try? await workspaces.destroySandbox(at: next.item.sandbox)
+                await collector.add(result)
+                await coordinator.finishedTesting(workerID: next.workerID)
+            }
+            return
+        }
+
+        var batch: [PreparedMutant] = []
+        var batchOwners: [MutationID: String] = [:]
+        var batchIndex = 0
+
+        func flush() async {
+            guard !batch.isEmpty else { return }
+            let (results, configurations, duration) = await testOneBatch(
+                batch, batchIndex: batchIndex, baseline: baseline, batchable: batchable
+            )
+            batchIndex += 1
+            await collector.addAll(results)
+            await collector.recordBatch(configurations: configurations, duration: duration)
+            // Every result `testOneBatch` produced owes exactly one
+            // decrement to the worker whose build produced its clone —
+            // looked up by mutation ID (not by array position) so this
+            // stays correct regardless of any future reordering inside
+            // `testOneBatch`.
+            for result in results {
+                if let workerID = batchOwners[result.point.id] {
+                    await coordinator.finishedTesting(workerID: workerID)
+                }
+            }
+            batch.removeAll(keepingCapacity: true)
+            batchOwners.removeAll(keepingCapacity: true)
+        }
+
+        while let next = await coordinator.receive() {
+            // An unattributed mutant (no covering-test attribution) runs its
+            // own full configured test list — bundling it into a shared
+            // batch, with narrowly-attributed mutants or with another
+            // unattributed mutant, would let its cost multiply rather than
+            // share: the same bug `Self.chunked` exists to prevent on the
+            // non-pipelined path (see its doc comment). Tested alone,
+            // immediately, rather than accumulated into `batch` — nothing is
+            // gained by waiting for `batchSize` here, since this mutant
+            // never shares an invocation with anything else regardless.
+            guard next.item.selectedTests != nil else {
+                let (results, configurations, duration) = await testOneBatch(
+                    [next.item], batchIndex: batchIndex, baseline: baseline, batchable: batchable
+                )
+                batchIndex += 1
+                await collector.addAll(results)
+                await collector.recordBatch(configurations: configurations, duration: duration)
+                await coordinator.finishedTesting(workerID: next.workerID)
+                continue
+            }
+            batch.append(next.item)
+            batchOwners[next.item.point.id] = next.workerID
+            if batch.count >= batchSize {
+                await flush()
+            }
+        }
+        await flush()
+    }
+
+    /// Rebuilds a `PreparedMutant` to point at a cloned products directory
+    /// instead of the (still-alive, about-to-be-rebuilt) sandbox that built
+    /// it. `productHash`/`command` describe the build itself, not where it
+    /// happens to be stored, so they carry over unchanged — only the paths
+    /// move. Reassigning `sandbox` alongside `artifact` (never one without
+    /// the other) is what keeps `confirmKill`'s same-sandbox retest
+    /// (see `confirmKill` below) testing the actual mutant it is
+    /// confirming, rather than whatever the worker has since rebuilt.
+    private static func relocating(_ prepared: PreparedMutant, to clone: URL) -> PreparedMutant {
+        let artifact = BuildArtifact(
+            productsDirectory: clone,
+            productHash: prepared.artifact.productHash,
+            xctestrunPath: prepared.artifact.xctestrunPath.map { clone.appendingPathComponent($0.lastPathComponent) },
+            command: prepared.artifact.command
+        )
+        return PreparedMutant(
+            point: prepared.point,
+            sandbox: clone,
+            applied: prepared.applied,
+            artifact: artifact,
+            activation: prepared.activation,
+            observation: prepared.observation,
+            selectedTests: prepared.selectedTests,
+            startedAt: prepared.startedAt,
+            buildDurationSeconds: prepared.buildDurationSeconds
+        )
+    }
+
+    /// `evaluate(_:baseline:)`'s counterpart for
+    /// `Configuration.execution.testBatchSize`: builds every mutant the
+    /// ordinary, isolated way — its own fresh sandbox, its own build, its
+    /// own activation hash — then tests up to `batchSize` of them per
+    /// `xcodebuild` invocation instead of one invocation per mutant.
+    ///
+    /// Two phases, not interleaved: every mutant is built first (bounded by
+    /// `resolvedWorkerCount()`, same parallelism the unbatched path uses),
+    /// then the ones that need testing are grouped and tested in batches.
+    /// A mutant whose build alone already produced a verdict — an anchor
+    /// that no longer matches, `.noCoverage`, a build failure — never
+    /// reaches the test phase at all, exactly as it never would on the
+    /// unbatched path. `finishAfterTest` and every confirmation path are
+    /// shared unchanged with `evaluate(_:in:baseline:startedAt:)`: a
+    /// batched mutant's crash or timeout confirmation still gets its own
+    /// fresh, independent, unbatched sandbox.
+    private func evaluateInBatches(
+        _ pending: [MutationPoint], baseline: BaselineContext, batchSize: Int
+    ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary?) {
+        var collected: [MutationResult] = []
+        var readyToTest: [PreparedMutant] = []
+
+        let workers = max(1, configuration.execution.resolvedWorkerCount())
+        try await withThrowingTaskGroup(of: (URL, PrepareOutcome).self) { group in
+            var remaining = pending.makeIterator()
+
+            func addTask(for point: MutationPoint) throws {
+                group.addTask {
+                    let started = Date()
+                    let sandbox: URL
+                    do {
+                        sandbox = try await self.workspaces.createSandbox(id: point.id.rawValue)
+                    } catch {
+                        return (
+                            URL(fileURLWithPath: "/"),
+                            .finished(await self.infrastructureFailureResult(
+                                point: point,
+                                diagnosis: "No sandbox could be created for this mutant: \(error)",
+                                durationSeconds: Date().timeIntervalSince(started)
+                            ))
+                        )
+                    }
+                    let outcome = await self.prepare(point, in: sandbox, baseline: baseline, startedAt: started)
+                    return (sandbox, outcome)
+                }
+            }
+
+            for _ in 0 ..< workers {
+                guard let point = remaining.next() else { break }
+                try addTask(for: point)
+            }
+
+            while let (sandbox, outcome) = try await group.next() {
+                switch outcome {
+                case let .finished(result):
+                    try? await workspaces.destroySandbox(at: sandbox)
+                    collected.append(result)
+                case let .readyToTest(prepared):
+                    readyToTest.append(prepared)
+                }
+                if let point = remaining.next() {
+                    try addTask(for: point)
+                }
+            }
+        }
+
+        let (testResults, summary) = try await testAndFinish(readyToTest: readyToTest, baseline: baseline, batchSize: batchSize)
+        collected.append(contentsOf: testResults)
+        return (collected, summary)
+    }
+
+    /// Groups `readyToTest` into the chunks `testAndFinish` will each hand to
+    /// one `runBatch` call.
+    ///
+    /// A mutant with no attributed covering test (`selectedTests == nil`)
+    /// runs the full configured test list, not a narrow one — batching
+    /// exists to amortize one xcodebuild invocation's fixed overhead across
+    /// many *small* runs, and several full-suite mutants sharing a batch
+    /// does the opposite: their costs simply add, multiplying rather than
+    /// sharing. A batch composed this way can exceed even `batchTimeout`'s
+    /// generous per-mutant-count sizing, which then makes every mutant in
+    /// it — including perfectly good, fast, narrowly-attributed ones that
+    /// happened to land in the same batch — unprovable and `.flaky`, not
+    /// because anything about them individually is unstable.
+    ///
+    /// Chunked separately, at size 1: this costs nothing relative to running
+    /// them outside batching at all (there was no sharable overhead to
+    /// lose), and keeps them from inflating a shared batch's cumulative test
+    /// time past its budget.
+    private static func chunked(_ readyToTest: [PreparedMutant], batchSize: Int) -> [[PreparedMutant]] {
+        let narrow = readyToTest.filter { $0.selectedTests != nil }
+        let unrestricted = readyToTest.filter { $0.selectedTests == nil }
+        return stride(from: 0, to: narrow.count, by: batchSize)
+            .map { Array(narrow[$0 ..< min($0 + batchSize, narrow.count)]) }
+            + unrestricted.map { [$0] }
+    }
+
+    /// The test phase shared by every path that builds a batch of mutants
+    /// ahead of testing them: batches `readyToTest` and tests each batch in
+    /// one `xcodebuild` invocation, then classifies and destroys each
+    /// mutant's own sandbox plus the batch sandbox once its results are in
+    /// hand.
+    ///
+    /// Deliberately agnostic to *how* `prepared.sandbox` came to hold its
+    /// artifact — `evaluateInBatches` hands it a mutant's own fresh,
+    /// isolated sandbox; `evaluateIncrementallyInBatches` hands it a cloned
+    /// products directory, independent of the persistent worker sandbox
+    /// that built it (see `WorkspaceManager.cloneProducts`). Both are just
+    /// "a directory to test from and destroy afterward" as far as this
+    /// function is concerned, which is what makes sharing it safe.
+    private func testAndFinish(
+        readyToTest: [PreparedMutant], baseline: BaselineContext, batchSize: Int
+    ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary) {
+        // Wave-based early kill: when a priority store is available and
+        // early abort is requested, test one prioritised covering test per
+        // mutant per wave instead of a mutant's whole selection in one
+        // batch. Killed mutants stop immediately; survivors advance to
+        // their next test in the next wave. Each wave is still one batched
+        // `xcodebuild` invocation, not one per test — this is the fix for
+        // `PrioritizingTestAdapter`'s per-test-per-mutant fixed cost, not a
+        // parallel test-running mechanism: it hands its batches to the same
+        // `batchable.runBatch` (and therefore the same, already-fixed batch
+        // attribution path) every other batched path here uses.
+        if configuration.execution.earlyAbortSelectedTests,
+           let store = priorityStore,
+           let batchable = test as? any BatchTestable,
+           !readyToTest.isEmpty {
+            return await testInWaves(
+                readyToTest: readyToTest, baseline: baseline, store: store, batchable: batchable, batchSize: batchSize
+            )
+        }
+
+        var collected: [MutationResult] = []
+
+        guard let batchable = test as? any BatchTestable, !readyToTest.isEmpty else {
+            // Nothing built successfully, or the adapter stopped conforming
+            // between the dispatch check and here (it cannot, but the
+            // fallback costs nothing): destroy any leftover sandboxes and
+            // fall back to testing them one at a time rather than losing them.
+            // This is NOT genuine batching, so it does not contribute to the
+            // batch execution summary.
+            for prepared in readyToTest {
+                let testStarted = Date()
+                let run = try? await runMutantTests(
+                    prepared.point, artifact: prepared.artifact, in: prepared.sandbox,
+                    timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: prepared.selectedTests
+                )
+                let testDurationSeconds = Date().timeIntervalSince(testStarted)
+                let result = await finishAfterTest(
+                    prepared, baseline: baseline,
+                    run: run ?? TestRunResult(
+                        status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
+                        resultArtifactPath: nil, diagnosis: "The mutant's tests could not be run."
+                    ),
+                    testDurationSeconds: testDurationSeconds
+                )
+                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                collected.append(result)
+            }
+            return (collected, BatchExecutionSummary(batchCount: 0, totalConfigurations: 0))
+        }
+
+        var batchCount = 0
+        var totalConfigurations = 0
+        var batchDurations: [Double] = []
+
+        // `Self.chunked` (not a plain stride slice): keeps unattributed
+        // mutants out of a shared batch with each other — see its doc
+        // comment — while `testOneBatch` (shared with the pipelined test
+        // lane, see `runPipelinedTestLane`) does the actual per-chunk
+        // sandbox/build/test/classify work.
+        for chunk in Self.chunked(readyToTest, batchSize: batchSize) {
+            let (results, configurations, duration) = await testOneBatch(
+                chunk, batchIndex: batchCount, baseline: baseline, batchable: batchable
+            )
+            collected.append(contentsOf: results)
+            batchCount += 1
+            totalConfigurations += configurations
+            if let duration { batchDurations.append(duration) }
+        }
+
+        return (
+            collected,
+            BatchExecutionSummary(
+                batchCount: batchCount, totalConfigurations: totalConfigurations, batchDurations: batchDurations
+            )
+        )
+    }
+
+    /// Tests every unattributed mutant's full configured test list, one per
+    /// chunk — never several bundled into the same batch.
+    ///
+    /// Bundling more than one into a shared batch was tried first and found
+    /// wrong the same way `testAndFinish`'s equivalent fix was: several
+    /// full-suite reruns bundled together simply add their costs rather than
+    /// sharing them, which can exceed even a batch sized generously per
+    /// mutant count and mark every mutant in it — not just the slow one —
+    /// unprovable. One mutant per chunk costs nothing relative to not
+    /// batching them at all, since there was no sharable overhead to lose.
+    private func testUnattributed(
+        _ unattributed: [PreparedMutant], baseline: BaselineContext, batchable: any BatchTestable
+    ) async -> (results: [MutationResult], batchCount: Int, batchDurations: [Double]) {
+        var results: [MutationResult] = []
+        var batchDurations: [Double] = []
+        for prepared in unattributed {
+            do {
+                let batchSandbox = try await workspaces.createSandbox(id: "wave-unattributed-\(prepared.point.id.rawValue)")
+                let items = [BatchMutantItem(id: prepared.point.id, artifact: prepared.artifact, selectedTests: nil)]
+                let batchTimeout = baseline.timeouts.mutantLimitSeconds
+                let batchStarted = Date()
+                let runs = await batchable.runBatch(items, in: batchSandbox, timeoutSeconds: batchTimeout)
+                let duration = Date().timeIntervalSince(batchStarted)
+                batchDurations.append(duration)
+
+                let run = runs[prepared.point.id] ?? TestRunResult(
+                    status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
+                    resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its batch."
+                )
+                let result = await finishAfterTest(prepared, baseline: baseline, run: run, testDurationSeconds: duration)
+                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                results.append(result)
+                try? await workspaces.destroySandbox(at: batchSandbox)
+            } catch {
+                let result = await finishAfterTest(
+                    prepared, baseline: baseline,
+                    run: TestRunResult(
+                        status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
+                        resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
+                    )
+                )
+                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                results.append(result)
+            }
+        }
+        return (results, unattributed.count, batchDurations)
+    }
+
+    /// Wave-based early kill: the batched replacement for
+    /// `PrioritizingTestAdapter`'s one-test-per-invocation strategy.
+    ///
+    /// Each wave creates one batch invocation where every surviving mutant
+    /// runs exactly ONE covering test — the next in its priority-ordered
+    /// list. Mutants whose test fails this wave are killed and stop.
+    /// Mutants whose test passes advance to their next test in the next
+    /// wave. A mutant that exhausts its covering tests without ever failing
+    /// one is `.survived`.
+    ///
+    /// The fixed per-invocation cost (~30s of simulator install/launch) is
+    /// paid once per wave, not once per (mutant × covering-test) pair: a run
+    /// with 50 mutants and 5 covering tests each pays it 5 times (one per
+    /// wave) instead of 250 times (one per test per mutant, as wrapping the
+    /// adapter one test at a time would). Killed mutants also drop out of
+    /// later waves, so wave 2 onward tests strictly fewer mutants than the
+    /// wave before it.
+    ///
+    /// Mutants without covering-test attribution (coverage was not
+    /// measured, or the map has nothing to say about their line) are tested
+    /// with their full configured test list before the wave loop starts —
+    /// each in its own chunk, never bundled together (see
+    /// `testUnattributed`) — and do not participate in subsequent waves,
+    /// the same safe fallback every other selected-tests path in this file
+    /// uses for `selectedTests ==
+    /// nil`.
+    ///
+    /// `readyToTest` entries reach here exactly as `testAndFinish`'s other
+    /// callers hand them off — a mutant's own fresh sandbox from
+    /// `evaluateInBatches`, or a cloned products directory from
+    /// `evaluateIncrementallyInBatches` — so this needs no sandbox-lifetime
+    /// handling of its own: the worker sandbox that built a clone is kept
+    /// alive by the caller until `testAndFinish` (and therefore every wave
+    /// here) has returned, exactly as it is for the non-wave batch path.
+    private func testInWaves(
+        readyToTest: [PreparedMutant],
+        baseline: BaselineContext,
+        store: TestPriorityStore,
+        batchable: any BatchTestable,
+        batchSize: Int
+    ) async -> (results: [MutationResult], batchExecution: BatchExecutionSummary) {
+        var results: [MutationResult] = []
+        var batchCount = 0
+        var totalConfigurations = 0
+        var batchDurations: [Double] = []
+
+        // Partition: mutants with a known, non-empty covering-test
+        // selection go into the wave loop, ordered by historical kill
+        // usefulness; everything else (no attribution at all) runs its
+        // full test list and is done after wave 1.
+        var waveSurvivors: [WaveSurvivor] = []
+        var unattributed: [PreparedMutant] = []
+        // Sorted by `MutationID` before partitioning, not left in whatever
+        // order builds happened to finish in — wave 1's batch composition
+        // (and therefore which mutants share timing ambiguity with which)
+        // must be reproducible the same way `testOneWave` makes every later
+        // wave's composition reproducible.
+        for prepared in readyToTest.sorted(by: { $0.point.id < $1.point.id }) {
+            if let tests = prepared.selectedTests, !tests.isEmpty {
+                let ordered = await store.order(tests)
+                waveSurvivors.append(WaveSurvivor(prepared: prepared, remainingTests: ordered))
+            } else {
+                unattributed.append(prepared)
+            }
+        }
+
+        if !unattributed.isEmpty {
+            let (unattributedResults, count, durations) = await testUnattributed(
+                unattributed, baseline: baseline, batchable: batchable
+            )
+            results.append(contentsOf: unattributedResults)
+            batchCount += count
+            totalConfigurations += unattributed.count
+            batchDurations.append(contentsOf: durations)
+        }
+
+        // Wave loop for attributed mutants. `waveIndex` is part of every
+        // sandbox ID this wave creates (see `testOneWave`) — without it,
+        // wave 2's first chunk would reuse wave 1's first chunk's sandbox ID
+        // verbatim (`chunkStart` alone resets to 0 every call), and a
+        // creation racing a not-yet-finished destroy of the same path fails
+        // closed as an infrastructure failure instead of testing at all.
+        // Caught for real on a live Xcode project: a mutant that should have
+        // been `killedByAssertion` in wave 2 came back `infrastructureFailure`
+        // because its chunk's sandbox ID collided with wave 1's.
+        var waveIndex = 0
+        while !waveSurvivors.isEmpty {
+            let (waveResults, nextSurvivors, waveBatchCount, waveConfigurations, waveDurations) = await testOneWave(
+                waveSurvivors, waveIndex: waveIndex, baseline: baseline, store: store, batchable: batchable, batchSize: batchSize
+            )
+            results.append(contentsOf: waveResults)
+            batchCount += waveBatchCount
+            totalConfigurations += waveConfigurations
+            batchDurations.append(contentsOf: waveDurations)
+            waveSurvivors = nextSurvivors
+            waveIndex += 1
+        }
+
+        return (
+            results,
+            BatchExecutionSummary(batchCount: batchCount, totalConfigurations: totalConfigurations, batchDurations: batchDurations)
+        )
+    }
+
+    private struct WaveSurvivor: Sendable {
+        let prepared: PreparedMutant
+        let remainingTests: [TestIdentifier]
+        /// Real test time this mutant has consumed across every wave so
+        /// far — never wall clock since `prepared.startedAt`, which also
+        /// counts build time and time spent waiting behind every other
+        /// mutant's build/chunk and would keep accumulating even while this
+        /// mutant is not being tested at all.
+        var cumulativeTestSeconds: Double = 0
+        /// The most recent wave's real `TestRunResult` — carried forward so
+        /// a mutant that later exhausts its list or expires its budget
+        /// reports its actual last test command and result artifact, not a
+        /// synthetic placeholder. `nil` only before this survivor's first
+        /// wave has run at all.
+        var lastRun: TestRunResult?
+        /// Every earlier wave this survivor passed, each with its own
+        /// preserved result artifact — see `TestAttemptEvidence`. Without
+        /// this, only the mutant's LAST wave's evidence would survive to the
+        /// final report, silently dropping every earlier wave's.
+        var attempts: [TestAttemptEvidence] = []
+    }
+
+    /// One iteration of the wave loop: classifies exhausted and
+    /// budget-expired survivors, then chunks whoever is left into batches of
+    /// at most `batchSize` (see `MutationRunnerBatchTestingTests` and
+    /// codex's review of this branch — an earlier version ignored
+    /// `batchSize` entirely and put every survivor in one batch, defeating
+    /// the resource bound it exists to enforce) and tests each chunk's next
+    /// prioritised test.
+    private func testOneWave(
+        _ waveSurvivors: [WaveSurvivor],
+        waveIndex: Int,
+        baseline: BaselineContext,
+        store: TestPriorityStore,
+        batchable: any BatchTestable,
+        batchSize: Int
+    ) async -> (
+        results: [MutationResult], nextSurvivors: [WaveSurvivor], batchCount: Int, totalConfigurations: Int,
+        batchDurations: [Double]
+    ) {
+        var results: [MutationResult] = []
+
+        // Survivors that have run out of covering tests without ever
+        // failing one → survived. Checked at the top of every wave, not
+        // just once, because a mutant can only reach this state after
+        // advancing past its last test in a previous wave.
+        //
+        // Checked ahead of the budget-expiry filter below on purpose: a
+        // mutant that finished every one of its covering tests has a
+        // complete, definitive answer, even if the wave that produced it
+        // pushed cumulative time slightly past the budget. The budget
+        // exists to bound how long an *unresolved* mutant gets waited on,
+        // not to discard a result that did resolve.
+        let exhausted = waveSurvivors.filter { $0.remainingTests.isEmpty }
+        for survivor in exhausted {
+            // command/resultArtifactPath come from the actual last wave's
+            // test run, not the build artifact — this mutant was tested,
+            // repeatedly, and the evidence should point at that, not at how
+            // it was built. Falls back to the build command only in the
+            // unreachable-in-practice case of a survivor with no prior wave
+            // at all (remainingTests starts non-empty, so exhausting it
+            // requires at least one).
+            let lastRun = survivor.lastRun
+            // `appendCurrentAttempt` stays false: this synthetic "all waves
+            // passed" run only restates the last real wave's own result,
+            // which `survivor.attempts` already recorded when that wave's
+            // advance branch ran — appending it again here would duplicate
+            // it rather than add anything new.
+            let result = await finishAfterTest(
+                survivor.prepared, baseline: baseline,
+                run: TestRunResult(
+                    status: .passed, summary: lastRun?.summary,
+                    command: lastRun?.command ?? survivor.prepared.artifact.command,
+                    resultArtifactPath: lastRun?.resultArtifactPath,
+                    diagnosis: "All \(survivor.prepared.selectedTests?.count ?? 0) covering test(s) passed across every wave."
+                ),
+                testDurationSeconds: survivor.cumulativeTestSeconds,
+                priorTestAttempts: survivor.attempts
+            )
+            try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+            results.append(result)
+        }
+
+        // A survivor's total *test* time across every wave it has been
+        // through is bounded by the same mutantLimitSeconds a single-
+        // invocation test would have gotten — otherwise a mutant with many
+        // covering tests could accumulate coveringTests × mutantLimitSeconds
+        // of wall clock, and the setting would no longer bound what it
+        // promises to. Measured against `cumulativeTestSeconds`, not wall
+        // clock since `prepared.startedAt`: that also counts build time and
+        // time spent waiting behind every other mutant's build/chunk, so a
+        // mutant could be timed out before its first test ever ran.
+        let mutantLimitSeconds = baseline.timeouts.mutantLimitSeconds
+        let (budgetExpired, stillAlive) = waveSurvivors
+            .filter { !$0.remainingTests.isEmpty }
+            .reduce(into: (expired: [WaveSurvivor](), alive: [WaveSurvivor]())) { partial, survivor in
+                if survivor.cumulativeTestSeconds >= mutantLimitSeconds {
+                    partial.expired.append(survivor)
+                } else {
+                    partial.alive.append(survivor)
+                }
+            }
+        // `cumulativeTestSeconds` crossing the limit is a trigger, not a
+        // verdict — it is built from fair-share division of shared batch
+        // wall clock (see `testWaveChunk`), which is an estimate, never a
+        // per-configuration measurement. Reaching a `.timedOut` classification
+        // from that estimate alone would mean the product's headline
+        // trustworthiness claim rests on a number nobody actually measured.
+        // So budget exhaustion only ever earns this survivor one real,
+        // standalone, individually-timed test of its whole remaining list —
+        // through the same trusted unbatched path ordinary execution already
+        // uses — and only *that* result decides the final classification.
+        for survivor in budgetExpired {
+            let (standaloneRun, standaloneDuration) = await standaloneVerify(
+                survivor.prepared, selectedTests: survivor.remainingTests, baseline: baseline
+            )
+            let result = await finishAfterTest(
+                survivor.prepared, baseline: baseline, run: standaloneRun,
+                testDurationSeconds: survivor.cumulativeTestSeconds + standaloneDuration,
+                priorTestAttempts: survivor.attempts, appendCurrentAttempt: true
+            )
+            try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+            results.append(result)
+        }
+
+        guard !stillAlive.isEmpty else { return (results, [], 0, 0, []) }
+
+        // Deterministic batch composition: which mutants land in the same
+        // chunk (and therefore share timing ambiguity) must not depend on
+        // whichever order builds happened to complete in. Sorted by
+        // `MutationID` — an arbitrary but fixed, reproducible order — same
+        // as `Self.chunked` relies on for `testAndFinish`'s non-wave path.
+        let orderedAlive = stillAlive.sorted { $0.prepared.point.id < $1.prepared.point.id }
+
+        var nextSurvivors: [WaveSurvivor] = []
+        var batchCount = 0
+        var totalConfigurations = 0
+        var batchDurations: [Double] = []
+        for chunkStart in stride(from: 0, to: orderedAlive.count, by: batchSize) {
+            let chunk = Array(orderedAlive[chunkStart ..< min(chunkStart + batchSize, orderedAlive.count)])
+            batchCount += 1
+            totalConfigurations += chunk.count
+            let (chunkResults, chunkSurvivors, duration) = await testWaveChunk(
+                chunk, id: "wave-\(waveIndex)-chunk-\(chunkStart)", waveIndex: waveIndex,
+                baseline: baseline, store: store, batchable: batchable
+            )
+            results.append(contentsOf: chunkResults)
+            nextSurvivors.append(contentsOf: chunkSurvivors)
+            if let duration { batchDurations.append(duration) }
+        }
+
+        return (results, nextSurvivors, batchCount, totalConfigurations, batchDurations)
+    }
+
+    /// Tests one chunk's worth of survivors — each contributing its next
+    /// prioritised covering test — in a single batch, and splits them into
+    /// this wave's kills (finished) and advances (returned to keep waving).
+    private func testWaveChunk(
+        _ chunk: [WaveSurvivor], id: String, waveIndex: Int,
+        baseline: BaselineContext, store: TestPriorityStore, batchable: any BatchTestable
+    ) async -> (results: [MutationResult], nextSurvivors: [WaveSurvivor], duration: Double?) {
+        do {
+            let batchSandbox = try await workspaces.createSandbox(id: id)
+            let items = chunk.map { survivor in
+                BatchMutantItem(
+                    id: survivor.prepared.point.id,
+                    artifact: survivor.prepared.artifact,
+                    selectedTests: [survivor.remainingTests[0]]
+                )
+            }
+            // Sized from what each survivor has *left*, not a fresh
+            // mutantLimitSeconds per mutant — a survivor already close to
+            // its cumulative budget must not still be granted a batch that
+            // could run it for another full mutantLimitSeconds regardless
+            // of what it already spent, which would let this wave alone
+            // blow well past the cumulative budget the pre-wave check above
+            // exists to enforce.
+            let batchTimeout = chunk.reduce(0.0) { partial, survivor in
+                partial + max(0, baseline.timeouts.mutantLimitSeconds - survivor.cumulativeTestSeconds)
+            }
+            let batchStarted = monotonicNow()
+            let runs = await batchable.runBatch(items, in: batchSandbox, timeoutSeconds: batchTimeout)
+            let duration = monotonicNow() - batchStarted
+            // What THIS mutant's own budget is charged for its share of the
+            // batch — configurations in a shared invocation run
+            // sequentially, not concurrently, so charging every one of them
+            // the *whole* batch's wall clock (as `testDurationSeconds`
+            // already does elsewhere, for reporting) would let a batch of
+            // several slow-to-fail mutants exhaust every survivor's
+            // cumulative budget at once, well before any of them
+            // individually used that much time. An even split is an
+            // approximation — real per-configuration timing isn't
+            // available from the adapter — but a far more honest one than
+            // charging the total to everyone.
+            let perMutantShare = duration / Double(chunk.count)
+
+            var results: [MutationResult] = []
+            var nextSurvivors: [WaveSurvivor] = []
+            for survivor in chunk {
+                let test = survivor.remainingTests[0]
+                var run = runs[survivor.prepared.point.id] ?? TestRunResult(
+                    status: .infrastructureFailure, summary: nil, command: survivor.prepared.artifact.command,
+                    resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its wave batch."
+                )
+                // Real, individually-timed duration for THIS mutant, once
+                // ground-truth verification below has actually measured one —
+                // as opposed to `perMutantShare`, the estimate everyone in
+                // this chunk gets by default.
+                var verifiedDurationSeconds: Double?
+
+                // None of `.timedOut`, `.infrastructureFailure`, or missing
+                // from the batch's results at all is a definitive signal
+                // about THIS mutant — every one of them is exactly what a
+                // shared invocation running out of its combined timeout, or
+                // failing to report back cleanly, looks like from the
+                // outside, with no way to tell whether this mutant caused it
+                // or merely shared the invocation with whatever did. Found
+                // for real on a live Xcode project: a chunk of exactly one
+                // survivor still reported `infrastructureFailure` for a
+                // mutant that a plain standalone rerun immediately confirmed
+                // was `killedByAssertion` — so this is not only a multi-
+                // mutant sharing problem, and the check does not gate on
+                // `chunk.count`. `.failed`/`.crashed` are left alone: the
+                // batch xctestrun's own attribution of an assertion failure
+                // or crash to a specific configuration is a solid,
+                // independent mechanism this is not second-guessing — only
+                // the batch's non-answers are.
+                if run.status == .timedOut || run.status == .infrastructureFailure
+                    || runs[survivor.prepared.point.id] == nil {
+                    let (standaloneRun, standaloneDuration) = await standaloneVerify(
+                        survivor.prepared, selectedTests: [test], baseline: baseline
+                    )
+                    run = standaloneRun
+                    verifiedDurationSeconds = standaloneDuration
+                }
+
+                if run.status != .passed {
+                    // Confirmation (retestKilledMutants/confirmCrashKills/
+                    // confirmTimedOutMutants) reruns using `selectedTests` —
+                    // narrowed here to just the one test that actually
+                    // produced this wave's detection, not the mutant's whole
+                    // original covering-test set, so a confirmation rerun
+                    // reproduces the same single witness rather than a
+                    // broader run that could reach a different result.
+                    //
+                    // testDurationSeconds is this mutant's *total* test time
+                    // across every wave, not just this final one — otherwise
+                    // a mutant killed on wave 3 would report only wave 3's
+                    // duration, silently dropping waves 1 and 2's.
+                    let result = await finishAfterTest(
+                        survivor.prepared.narrowed(to: test), baseline: baseline, run: run,
+                        testDurationSeconds: survivor.cumulativeTestSeconds + (verifiedDurationSeconds ?? perMutantShare),
+                        priorTestAttempts: survivor.attempts, appendCurrentAttempt: true, currentAttemptWaveIndex: waveIndex
+                    )
+                    // Only a confirmed kill credits this test's priority
+                    // history — checked against the *final* outcome, not the
+                    // raw wave `run.status`: confirmation may have just
+                    // downgraded it to `.flaky` or an unconfirmed `.timedOut`,
+                    // and crediting a result that did not hold up would
+                    // corrupt the learned ordering. Mirrors
+                    // `PrioritizingTestAdapter.runMutant`'s identical
+                    // distinction on the per-invocation path.
+                    if result.outcome.isKilled {
+                        await store.recordDetection(by: test)
+                    }
+                    try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+                    results.append(result)
+                } else {
+                    // Passed this test → advance to the next one, carrying
+                    // this wave's (per-mutant share of the, or — once ground-
+                    // truth verified above — the real) duration into the
+                    // running total, and this run itself forward so a later
+                    // exhausted/budget-expired result can report its real
+                    // command/artifact instead of a placeholder.
+                    //
+                    // This wave's own artifact is preserved now, before
+                    // `batchSandbox` is destroyed below — otherwise a later
+                    // wave/confirmation could never recover it once this
+                    // survivor eventually reaches a final verdict.
+                    // `survivor.prepared.sandbox` (not `batchSandbox`) is
+                    // passed deliberately, the same way the single-attempt
+                    // path below does for its own preserve call: several
+                    // survivors in this chunk share the SAME batch-wide
+                    // result bundle, and passing the sandbox it actually
+                    // lives in would let the first survivor's preserve MOVE
+                    // it away, leaving nothing for the rest. Passing a
+                    // sandbox the artifact is never inside forces a copy.
+                    let preservedArtifact = preserve(
+                        run.resultArtifactPath, for: survivor.prepared.point, in: survivor.prepared.sandbox,
+                        label: "wave-\(waveIndex)"
+                    )
+                    let attempt = TestAttemptEvidence(
+                        selectedTests: [test.onlyTestingArgument],
+                        status: run.status.rawValue,
+                        summary: run.summary,
+                        command: run.command,
+                        resultArtifact: preservedArtifact,
+                        waveIndex: waveIndex
+                    )
+                    let advanced = Array(survivor.remainingTests.dropFirst())
+                    nextSurvivors.append(WaveSurvivor(
+                        prepared: survivor.prepared, remainingTests: advanced,
+                        cumulativeTestSeconds: survivor.cumulativeTestSeconds + (verifiedDurationSeconds ?? perMutantShare),
+                        lastRun: run,
+                        attempts: survivor.attempts + [attempt]
+                    ))
+                }
+            }
+
+            try? await workspaces.destroySandbox(at: batchSandbox)
+            return (results, nextSurvivors, duration)
+        } catch {
+            // No place to write this wave's batch xctestrun/result bundle:
+            // every mutant in this chunk is unproven, not silently dropped,
+            // and does not advance to a wave that will never run. No test
+            // time was spent on this failed attempt, so the reported
+            // duration is whatever this mutant had already accumulated.
+            var results: [MutationResult] = []
+            for survivor in chunk {
+                let result = await finishAfterTest(
+                    survivor.prepared, baseline: baseline,
+                    run: TestRunResult(
+                        status: .infrastructureFailure, summary: nil, command: survivor.prepared.artifact.command,
+                        resultArtifactPath: nil, diagnosis: "No wave sandbox could be created: \(error)"
+                    ),
+                    testDurationSeconds: survivor.cumulativeTestSeconds
+                )
+                try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+                results.append(result)
+            }
+            return (results, [], nil)
+        }
+    }
+
+    /// Ground-truth verification for a mutant whose classification would
+    /// otherwise rest on shared-batch estimated timing — fair-share division
+    /// of a batch's wall clock, or an ambiguous `.timedOut`/missing-from-batch
+    /// result from an invocation shared with other mutants. Runs this ONE
+    /// mutant standalone, through `runMutantTests` — the same trusted,
+    /// individually-timed path ordinary (non-batch, non-wave) execution
+    /// already uses, with nobody else's time to borrow from or be blamed for.
+    ///
+    /// The wave loop's own bookkeeping (fair-share division, the cumulative-
+    /// budget estimate) exists only to decide *when* to reach for this check
+    /// — it must never stand in for it. A caller whose `run` genuinely could
+    /// not be launched here reports `.infrastructureFailure`, exactly like
+    /// every other unbatched test call in this file.
+    private func standaloneVerify(
+        _ prepared: PreparedMutant, selectedTests: [TestIdentifier], baseline: BaselineContext
+    ) async -> (run: TestRunResult, duration: Double) {
+        let testStarted = monotonicNow()
+        let run = try? await runMutantTests(
+            prepared.point, artifact: prepared.artifact, in: prepared.sandbox,
+            timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: Set(selectedTests)
+        )
+        let duration = monotonicNow() - testStarted
+        return (
+            run ?? TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
+                resultArtifactPath: nil, diagnosis: "The mutant's standalone verification test could not be run."
+            ),
+            duration
+        )
+    }
+
+    /// Tests one already-batchable group of prepared mutants through a
+    /// single `runBatch` call, classifies each result, records checkpoints,
+    /// and destroys each mutant's own sandbox (its clone, for the pipelined
+    /// path) plus the batch sandbox. Extracted out of `testAndFinish`'s loop
+    /// body so it can be shared with `runPipelinedTestLane`, which calls it
+    /// once per batch as clones arrive live instead of once per pre-sliced
+    /// chunk of a complete `readyToTest` array.
+    ///
+    /// Never throws: a batch sandbox creation failure, a missing result, or
+    /// any other error is recorded as `.infrastructureFailure` for the
+    /// affected mutants, same fail-closed contract every other path in this
+    /// file has. Checkpoint failures are swallowed here (`try?`, not
+    /// `try`) rather than propagated the way `testAndFinish`'s own
+    /// non-batched fallback loop still does above — a deliberate
+    /// harmonization with the build-worker paths, which have always
+    /// swallowed checkpoint failures rather than aborting the run over
+    /// them, and a practical necessity here: this function is called from
+    /// `runPipelinedTestLane`, a non-throwing task running concurrently
+    /// alongside the build workers, so a checkpoint write failure cannot be
+    /// allowed to unwind through it.
+    private func testOneBatch(
+        _ chunk: [PreparedMutant], batchIndex: Int, baseline: BaselineContext, batchable: any BatchTestable
+    ) async -> (results: [MutationResult], configurations: Int, duration: Double?) {
+        var collected: [MutationResult] = []
+
+        let batchSandbox: URL
+        do {
+            batchSandbox = try await workspaces.createSandbox(id: "batch-\(batchIndex)")
+        } catch {
+            // No place to write the batch xctestrun/result bundle: every
+            // mutant in this chunk is unproven, not silently dropped. No
+            // test time was spent on this failed attempt, so there is no
+            // duration to report — matches `BatchExecutionSummary.
+            // batchDurations`'s documented "one entry per chunk that
+            // actually reached `BatchTestable.runBatch`" contract.
+            for prepared in chunk {
+                let result = await finishAfterTest(
+                    prepared, baseline: baseline,
+                    run: TestRunResult(
+                        status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
+                        resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
+                    )
+                )
+                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                collected.append(result)
+            }
+            return (collected, chunk.count, nil)
+        }
+
+        let items = chunk.map {
+            BatchMutantItem(id: $0.point.id, artifact: $0.artifact, selectedTests: $0.selectedTests)
+        }
+        let batchTimeout = baseline.timeouts.mutantLimitSeconds * Double(chunk.count)
+        let batchStarted = Date()
+        let runs = await batchable.runBatch(items, in: batchSandbox, timeoutSeconds: batchTimeout)
+        let batchTestDuration = Date().timeIntervalSince(batchStarted)
+
+        for prepared in chunk {
+            let run = runs[prepared.point.id] ?? TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
+                resultArtifactPath: nil,
+                diagnosis: "This mutant's outcome was not reported back from its batch."
+            )
+            let result = await finishAfterTest(
+                prepared, baseline: baseline, run: run, testDurationSeconds: batchTestDuration
+            )
+            try? await workspaces.destroySandbox(at: prepared.sandbox)
+            collected.append(result)
+        }
+
+        try? await workspaces.destroySandbox(at: batchSandbox)
+        return (collected, chunk.count, batchTestDuration)
+    }
+
+    // MARK: - Baseline
+
+    private struct BaselineContext: Sendable {
+        let record: BaselineRecord
+        let productHash: String?
+        let timeouts: TimeoutController
+        /// Lines the baseline suite executed. `nil` means coverage was not
+        /// measured; an empty-but-present map means every line was unreached.
+        /// Either way the runner does not fabricate `noCoverage` from absence.
+        let coverage: CoverageMap?
+        /// Which tests covered which lines, when `selectCoveringTests` asked
+        /// for the attribution and the adapter could produce one. `nil`
+        /// means every mutant runs the full configured test list — the same
+        /// safe fallback `coverage == nil` is for the `.noCoverage` check.
+        let perTestCoverage: PerTestCoverageMap?
+    }
+
+    private enum BaselineAttempt {
+        case established(BaselineContext)
+        case failed(record: BaselineRecord, diagnosis: String)
+    }
+
+    /// Builds and tests the project unmutated.
+    ///
+    /// This happens in a sandbox like everything else, and not only to leave the
+    /// working tree alone: the baseline's build product hash is what every
+    /// mutant's is compared against, and a hash taken from a differently-shaped
+    /// tree would not be comparable to one taken from a sandbox.
+    private func establishBaseline() async -> BaselineAttempt {
+        let started = Date()
+
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: Self.baselineSandboxID)
+        } catch {
+            return .failed(
+                record: unusableBaseline(startedAt: started),
+                diagnosis: "The baseline sandbox could not be created: \(error)"
+            )
+        }
+
+        let attempt = await establishBaseline(in: sandbox, startedAt: started)
+        try? await workspaces.destroySandbox(at: sandbox)
+        return attempt
+    }
+
+    private func establishBaseline(in sandbox: URL, startedAt: Date) async -> BaselineAttempt {
+        let timeouts = TimeoutController(settings: configuration.timeouts)
+
+        let artifact: BuildArtifact
+        do {
+            artifact = try await build.buildBaseline(in: sandbox)
+        } catch let failure as BuildFailure {
+            return .failed(
+                record: unusableBaseline(startedAt: startedAt),
+                diagnosis: "The project does not build unmutated: \(failure.diagnosis)"
+            )
+        } catch {
+            return .failed(
+                record: unusableBaseline(startedAt: startedAt),
+                diagnosis: "The baseline build could not be run: \(error)"
+            )
+        }
+
+        let testStarted = Date()
+        let run: TestRunResult
+        do {
+            run = try await test.runBaseline(
+                artifact,
+                in: sandbox,
+                timeoutSeconds: timeouts.baselineLimitSeconds
+            )
+        } catch {
+            return .failed(
+                record: unusableBaseline(startedAt: startedAt, buildCommand: artifact.command),
+                diagnosis: "The baseline test run could not be completed: \(error)"
+            )
+        }
+
+        // The mutant limit scales the *test* duration, not build-plus-test: it is
+        // handed to the test adapter, and a build that dominates the wall clock
+        // would inflate every mutant's limit into uselessness.
+        //
+        // Measured wall clock, never the reported test duration. The limit bounds
+        // a process, so it has to be derived from what that process actually
+        // costs. A result bundle reports how long the assertions took — about a
+        // tenth of a second for a small suite — while the command around them
+        // spends half a minute booting, installing and launching a simulator.
+        // Budgeting from the former gave killed mutants less time than the run
+        // needs, so under load they were reported `timedOut` and dropped from the
+        // score, and the same plan produced different numbers on consecutive runs.
+        let testDuration = Date().timeIntervalSince(testStarted)
+
+        let record = BaselineRecord(
+            passed: run.status == .passed,
+            testSummary: run.summary,
+            durationSeconds: Date().timeIntervalSince(startedAt),
+            buildProductHash: artifact.productHash,
+            buildCommand: artifact.command,
+            testCommand: run.command,
+            buildDurationSeconds: testStarted.timeIntervalSince(startedAt),
+            testDurationSeconds: testDuration
+        )
+
+        guard run.status == .passed else {
+            return .failed(
+                record: record,
+                diagnosis: """
+                The unmutated suite did not pass (\(run.status.rawValue)): \(run.diagnosis) Every \
+                mutant is measured against this run, so nothing can be concluded until it is green.
+                """
+            )
+        }
+
+        // Coverage is read *before* the sandbox is destroyed — the codecov
+        // files (or, for xcodebuild, the result bundle) live inside it. The
+        // config flags are the source of truth: an adapter that *can*
+        // measure coverage but was not asked to should not produce a map,
+        // because the user has not been told the baseline would be
+        // instrumented. A failed or partial read yields `nil`, which means
+        // every mutant will be built and tested rather than guessed at.
+        //
+        // `selectCoveringTests` is tried first and, when it succeeds, its
+        // union *is* the whole-suite coverage map — reading a separate
+        // whole-run report would be a second, redundant read of the same
+        // fact. `measureCoverage` on its own remains the lighter-weight
+        // option: the `.noCoverage` fast path without paying for per-test
+        // attribution.
+        //
+        // The per-test attribution pass is the most expensive thing the
+        // baseline does on a real project (~85 minutes on the project this
+        // tool was benchmarked against), and it is also the most stable:
+        // it only changes when the source tree, test suite, toolchain, or
+        // coverage configuration changes. So a `CoverageProfileCache` with
+        // a context digest key is consulted *before* the adapter is asked
+        // to re-measure. A hit skips the measurement entirely; a miss
+        // measures as usual and stores the result back for the next run.
+        // The baseline build and test above have already run either way —
+        // the suite-must-pass gate and the timeout calibration cannot be
+        // served from a cache.
+        var perTestCoverage: PerTestCoverageMap?
+        var coverage: CoverageMap?
+        var profilingDurationSeconds: Double?
+        if configuration.execution.selectCoveringTests {
+            if let key = coverageCacheKey, let cached = await coverageCache?.load(key) {
+                perTestCoverage = cached
+                coverage = cached.aggregate()
+            } else if let selecting = test as? any TestSelecting {
+                let profilingStarted = Date()
+                perTestCoverage = await selecting.measurePerTestCoverage(
+                    artifact: artifact, in: sandbox, timeoutSeconds: timeouts.baselineLimitSeconds
+                )
+                coverage = perTestCoverage?.aggregate()
+                profilingDurationSeconds = (profilingDurationSeconds ?? 0) + Date().timeIntervalSince(profilingStarted)
+                if let measured = perTestCoverage, let key = coverageCacheKey {
+                    await coverageCache?.store(measured, for: key)
+                }
+            }
+        }
+        if coverage == nil, configuration.execution.measureCoverage, let measuring = test as? any CoverageMeasuring {
+            let profilingStarted = Date()
+            coverage = await measuring.readCoverage(in: sandbox, projectRoot: projectRoot)
+            profilingDurationSeconds = (profilingDurationSeconds ?? 0) + Date().timeIntervalSince(profilingStarted)
+        }
+
+        // `record` above already carries everything but `profilingDurationSeconds`
+        // — needed for the failure-path `guard` above, before coverage
+        // measurement has happened at all. This second record is identical
+        // except for that one field, built only once the baseline is known to
+        // have passed and coverage measurement has been attempted.
+        let recordWithProfiling = BaselineRecord(
+            passed: record.passed,
+            testSummary: record.testSummary,
+            durationSeconds: record.durationSeconds,
+            buildProductHash: record.buildProductHash,
+            buildCommand: record.buildCommand,
+            testCommand: record.testCommand,
+            buildDurationSeconds: record.buildDurationSeconds,
+            testDurationSeconds: record.testDurationSeconds,
+            profilingDurationSeconds: profilingDurationSeconds
+        )
+
+        return .established(BaselineContext(
+            record: recordWithProfiling,
+            productHash: artifact.productHash,
+            timeouts: timeouts.recordingBaseline(durationSeconds: testDuration),
+            coverage: coverage,
+            perTestCoverage: perTestCoverage
+        ))
+    }
+
+    private func unusableBaseline(startedAt: Date, buildCommand: CommandRecord? = nil) -> BaselineRecord {
+        BaselineRecord(
+            passed: false,
+            // A baseline that never ran has no counts. Zeroes here would claim it
+            // ran a suite of no tests, which is a different — and much less
+            // alarming — statement than "we never got a baseline at all".
+            testSummary: nil,
+            durationSeconds: Date().timeIntervalSince(startedAt),
+            buildProductHash: nil,
+            buildCommand: buildCommand,
+            testCommand: nil
+        )
+    }
+
+    /// The report for a run that never legitimately started.
+    ///
+    /// Reconciling against the plan here would bury the one fact that matters
+    /// under a `plannedMutationWithoutResult` for every mutation in the file. The
+    /// baseline failed; nothing else was attempted, and the report says exactly
+    /// that. `RunReport` withholds the score on its own once integrity fails.
+    private func failClosedReport(startedAt: Date, baseline: BaselineRecord, diagnosis: String) -> RunReport {
+        RunReport(
+            planID: plan.planID,
+            startedAt: startedAt,
+            finishedAt: Date(),
+            projectRoot: projectRoot.path,
+            toolchain: toolchain,
+            baseline: baseline,
+            ledger: ResultLedger<MutationResult>(),
+            integrity: IntegrityReport(
+                discovered: plan.discoveredCount,
+                planned: plan.mutations.count,
+                sourceApplied: 0,
+                buildObserved: 0,
+                buildFailures: 0,
+                executed: 0,
+                classified: 0,
+                reported: 0,
+                explicitlySkipped: plan.skipped.count,
+                skippedByReason: SkipReasonCount.tally(plan.skipped),
+                violations: [IntegrityViolation(kind: .baselineMismatch, detail: diagnosis)]
+            )
+        )
+    }
+
+    // MARK: - One mutant
+
+    /// A mutant that finished everything up through its build and is ready
+    /// for a test run — shared shape between the per-mutant path and
+    /// `evaluateInBatches`.
+    fileprivate struct PreparedMutant: Sendable {
+        let point: MutationPoint
+        let sandbox: URL
+        let applied: AppliedMutation
+        let artifact: BuildArtifact
+        let activation: ActivationEvidence?
+        let observation: CoverageObservation?
+        let selectedTests: Set<TestIdentifier>?
+        let startedAt: Date
+        /// Every `PreparedMutant` by construction came from a successful
+        /// `build.buildMutant` call, so this is never `nil`.
+        let buildDurationSeconds: Double
+
+        /// A copy narrowed to exactly one test — used when a wave's
+        /// detection came from a single covering test, so a confirmation
+        /// rerun (`retestKilledMutants`/`confirmCrashKills`/
+        /// `confirmTimedOutMutants`) reproduces that same witness instead of
+        /// the mutant's whole original covering-test set.
+        func narrowed(to test: TestIdentifier) -> PreparedMutant {
+            PreparedMutant(
+                point: point, sandbox: sandbox, applied: applied, artifact: artifact,
+                activation: activation, observation: observation, selectedTests: [test],
+                startedAt: startedAt, buildDurationSeconds: buildDurationSeconds
+            )
+        }
+    }
+
+    private enum PrepareOutcome {
+        case finished(MutationResult)
+        case readyToTest(PreparedMutant)
+    }
+
+    /// Evaluates one mutation. Never throws: every planned mutation owes the
+    /// integrity check a result, and a thrown error would silently become a
+    /// missing one.
+    private func evaluate(_ point: MutationPoint, baseline: BaselineContext) async -> MutationResult {
+        let started = Date()
+
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: point.id.rawValue)
+        } catch {
+            return await infrastructureFailureResult(
+                point: point,
+                diagnosis: "No sandbox could be created for this mutant: \(error)",
+                durationSeconds: Date().timeIntervalSince(started)
+            )
+        }
+
+        let result = await evaluate(point, in: sandbox, baseline: baseline, startedAt: started)
+        try? await workspaces.destroySandbox(at: sandbox)
+        return result
+    }
+
+    private func evaluate(
+        _ point: MutationPoint,
+        in sandbox: URL,
+        baseline: BaselineContext,
+        startedAt: Date
+    ) async -> MutationResult {
+        switch await prepare(point, in: sandbox, baseline: baseline, startedAt: startedAt) {
+        case let .finished(result):
+            return result
+        case let .readyToTest(prepared):
+            let testStarted = Date()
+            let run: TestRunResult
+            do {
+                run = try await runMutantTests(
+                    point,
+                    artifact: prepared.artifact,
+                    in: sandbox,
+                    timeoutSeconds: baseline.timeouts.mutantLimitSeconds,
+                    selectedTests: prepared.selectedTests
+                )
+            } catch {
+                return await infrastructureFailureResult(
+                    point: point,
+                    diagnosis: "The mutant's tests could not be run: \(error)",
+                    evidence: evidence(
+                        prepared.applied, artifact: prepared.artifact, activation: prepared.activation
+                    ),
+                    durationSeconds: Date().timeIntervalSince(startedAt),
+                    buildDurationSeconds: prepared.buildDurationSeconds,
+                    testDurationSeconds: Date().timeIntervalSince(testStarted)
+                )
+            }
+            let testDurationSeconds = Date().timeIntervalSince(testStarted)
+            return await finishAfterTest(prepared, baseline: baseline, run: run, testDurationSeconds: testDurationSeconds)
+        }
+    }
+
+    /// One mutant, up through the build — everything about its evaluation
+    /// that does not need a test run. Shared by the per-mutant path above
+    /// and `evaluateInBatches`, so a mutant is prepared identically no
+    /// matter which path is about to test it: `.finished` for a verdict
+    /// that needed no test at all (an anchor that no longer matches,
+    /// `.noCoverage`, a build that failed to produce a testable artifact),
+    /// `.readyToTest` for one whose build succeeded and needs running.
+    private func prepare(
+        _ point: MutationPoint,
+        in sandbox: URL,
+        baseline: BaselineContext,
+        startedAt: Date
+    ) async -> PrepareOutcome {
+        func finished(
+            sourceApplication: SourceApplicationOutcome? = nil,
+            build: BuildObservation? = nil,
+            coverage: CoverageObservation? = nil,
+            infrastructureFailureDiagnosis: String? = nil,
+            buildDurationSeconds: Double? = nil
+        ) async -> PrepareOutcome {
+            .finished(await finalize(
+                point: point,
+                sourceApplication: sourceApplication,
+                build: build,
+                coverage: coverage,
+                infrastructureFailureDiagnosis: infrastructureFailureDiagnosis,
+                durationSeconds: Date().timeIntervalSince(startedAt),
+                buildDurationSeconds: buildDurationSeconds
+            ))
+        }
+
+        func infrastructureFailure(
+            _ diagnosis: String, evidence: MutationEvidence? = nil, buildDurationSeconds: Double? = nil
+        ) async -> PrepareOutcome {
+            await finished(
+                sourceApplication: evidence.map { .applied($0) },
+                infrastructureFailureDiagnosis: diagnosis,
+                buildDurationSeconds: buildDurationSeconds
+            )
+        }
+
+        let sourceURL: URL
+        do {
+            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
+        } catch {
+            return await infrastructureFailure("\(point.file) could not be located inside the sandbox: \(error)")
+        }
+
+        let applied: AppliedMutation
+        do {
+            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
+        } catch let error as ApplicationError {
+            // No evidence is attached on purpose: for a mutation that was never
+            // written, the absence of a diff is the honest record, and
+            // `notApplied` is exempt from the phantom check for that reason.
+            switch error {
+            case let .anchorRejected(verification):
+                return await finished(sourceApplication: .notApplied(diagnosis: verification.diagnosis))
+            case let .unreadableFile(path, underlying):
+                return await infrastructureFailure("The sandboxed copy of \(path) could not be read: \(underlying)")
+            case let .unwritableFile(path, underlying):
+                return await infrastructureFailure("The mutation could not be written to \(path): \(underlying)")
+            }
+        } catch {
+            return await infrastructureFailure("The mutation could not be applied: \(error)")
+        }
+
+        // Fast path: a baseline coverage map that knows this line was never
+        // executed lets us classify the mutant without building or testing it.
+        // The mutation is on a line the suite does not reach, so the verdict is
+        // `noCoverage` regardless of what a run would say — and skipping the
+        // build is a large fraction of the speedup the design promises.
+        //
+        // The mutation was applied to the source, so the evidence carries a real
+        // diff. The build product hash is left `nil` and the activation evidence
+        // is `nil`, which is exactly the honest record for a mutant that was
+        // never built. `isReportable` is satisfied by the source diff alone, and
+        // `noCoverage` is not flagged by the activation check, so this result
+        // enters the score without a phantom or unproven-activation violation.
+        if let coverage = baseline.coverage, coverage.isKnownUncovered(point) {
+            let observation = coverage.observation(forFile: point.file, line: point.line)
+            return await finished(
+                sourceApplication: .applied(evidence(applied)),
+                coverage: CoverageObservation(mutatedLineWasExecuted: false, source: observation?.source ?? "baseline coverage")
+            )
+        }
+
+        let observation = baseline.coverage?.observation(forFile: point.file, line: point.line)
+
+        // An empty result is never used: it would mean "run nothing", which
+        // a coverage-blind run can't tell apart from a test that legitimately
+        // has none. `nil` — unknown attribution, or none configured — always
+        // falls back to the full configured test list inside the adapter.
+        let selectedTests = baseline.perTestCoverage
+            .flatMap { $0.testsCovering(file: point.file, line: point.line) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+
+        let artifact: BuildArtifact
+        let buildStarted = Date()
+        do {
+            artifact = try await build.buildMutant(applied, in: sandbox)
+        } catch let failure as BuildFailure {
+            return await finished(
+                sourceApplication: .applied(evidence(applied, buildCommand: failure.command)),
+                build: BuildObservation(outcome: .failed(kind: failure.kind, diagnosis: failure.diagnosis, command: failure.command)),
+                buildDurationSeconds: Date().timeIntervalSince(buildStarted)
+            )
+        } catch {
+            return await infrastructureFailure(
+                "The mutant's build could not be run: \(error)",
+                evidence: evidence(applied),
+                buildDurationSeconds: Date().timeIntervalSince(buildStarted)
+            )
+        }
+        let buildDurationSeconds = Date().timeIntervalSince(buildStarted)
+
+        let activation = Self.activationEvidence(
+            mutantHash: artifact.productHash,
+            baselineHash: baseline.productHash
+        )
+
+        return .readyToTest(PreparedMutant(
+            point: point,
+            sandbox: sandbox,
+            applied: applied,
+            artifact: artifact,
+            activation: activation,
+            observation: observation,
+            selectedTests: selectedTests,
+            startedAt: startedAt,
+            buildDurationSeconds: buildDurationSeconds
+        ))
+    }
+
+    /// The other half of a prepared mutant's evaluation: gather whatever
+    /// confirmation observations `Configuration.execution` calls for, then
+    /// hand the complete `MutationObservations` to `finalize` exactly
+    /// once. `run` may have come from `runMutantTests` (the per-mutant
+    /// path) or from a batch (`evaluateInBatches`) — this function does
+    /// not know or care which, so a batched and an unbatched mutant with
+    /// the same test outcome are classified identically.
+    ///
+    /// ADR-0006 Stage 1: whether to gather a confirmation is decided from
+    /// `run`'s own raw `status` and `prepared.activation`'s own
+    /// `provesActivation` — never from a classification computed ahead of
+    /// the verifier, which is the whole point of this stage. The verifier
+    /// (inside `finalize`) is the only place that turns the resulting
+    /// observation set into an outcome.
+    /// - Parameters:
+    ///   - priorTestAttempts: earlier waves' evidence this mutant already
+    ///     went through (see `WaveSurvivor.attempts`) — empty outside
+    ///     wave-based early kill.
+    ///   - appendCurrentAttempt: whether `run` itself is a NEW attempt to
+    ///     record (true for a real invocation: a wave's own test, or a
+    ///     standalone ground-truth verification) as opposed to a synthetic
+    ///     repackaging of a survivor's already-recorded last wave (the
+    ///     `exhausted` case in `testOneWave`, where `run` merely restates
+    ///     `priorTestAttempts`'s own last entry and appending it again would
+    ///     duplicate it).
+    ///   - currentAttemptWaveIndex: which wave `run` belongs to, when
+    ///     `appendCurrentAttempt` is true and it came from a specific wave —
+    ///     `nil` for a standalone verification, which is not itself a wave.
+    private func finishAfterTest(
+        _ prepared: PreparedMutant,
+        baseline: BaselineContext,
+        run: TestRunResult,
+        testDurationSeconds: Double? = nil,
+        priorTestAttempts: [TestAttemptEvidence] = [],
+        appendCurrentAttempt: Bool = false,
+        currentAttemptWaveIndex: Int? = nil
+    ) async -> MutationResult {
+        var confirmations: [ConfirmationObservation] = []
+        var crashConfirmation: CrashConfirmation?
+        var timeoutConfirmation: TimeoutConfirmation?
+        var confirmationDurationSeconds: Double?
+        let activationProven = prepared.activation?.provesActivation ?? false
+
+        // Retesting only ever moves a verdict *out* of a kill, never into
+        // one — a mutant that survived or crashed is not re-run, because
+        // the failure mode this guards against is a flake being mistaken
+        // for a kill, not the reverse. See `Configuration.execution
+        // .retestKilledMutants`.
+        if configuration.execution.retestKilledMutants, run.status == .failed, activationProven {
+            let confirmationStarted = Date()
+            confirmations.append(await confirmKill(
+                prepared.point, artifact: prepared.artifact, in: prepared.sandbox, baseline: baseline,
+                selectedTests: prepared.selectedTests, originalFailingTests: run.summary?.failingTests
+            ))
+            confirmationDurationSeconds = (confirmationDurationSeconds ?? 0) + Date().timeIntervalSince(confirmationStarted)
+        }
+
+        // A crash gets a fresh, independent rebuild rather than a same-sandbox
+        // retest — see `Configuration.execution.confirmCrashKills`'s doc comment
+        // for why the same-artifact retest `retestKilledMutants` uses for
+        // assertion kills is not enough here.
+        if configuration.execution.confirmCrashKills, run.status == .crashed, activationProven {
+            let confirmationStarted = Date()
+            let (observation, crashEvidence) = await confirmCrashKill(
+                prepared.point, baseline: baseline, selectedTests: prepared.selectedTests, originalDiagnosis: run.diagnosis
+            )
+            confirmations.append(observation)
+            crashConfirmation = crashEvidence
+            confirmationDurationSeconds = (confirmationDurationSeconds ?? 0) + Date().timeIntervalSince(confirmationStarted)
+        }
+
+        // Same shape as the crash confirmation above, for the same reason: a
+        // hang has no diff to check against, so it gets a fresh, independent
+        // rebuild rather than a same-sandbox retest. See
+        // `Configuration.execution.confirmTimedOutMutants`. Unlike the other
+        // two gates, this one does not also require `activationProven`: a
+        // `.timedOut` mutant's own activation is often unknown (the build
+        // may never have produced a comparable hash under a hung test), and
+        // the whole point of the confirming rebuild is to establish that
+        // proof, not require it up front.
+        if configuration.execution.confirmTimedOutMutants, run.status == .timedOut {
+            let confirmationStarted = Date()
+            let confirmed = await confirmTimeout(
+                prepared.point, baseline: baseline, selectedTests: prepared.selectedTests,
+                wasBatchAttributed: run.isBatchAttributedTimeout
+            )
+            confirmations.append(contentsOf: confirmed.observations)
+            timeoutConfirmation = confirmed.timeoutConfirmation
+            crashConfirmation = confirmed.crashConfirmation
+            confirmationDurationSeconds = (confirmationDurationSeconds ?? 0) + Date().timeIntervalSince(confirmationStarted)
+        }
+
+        let resultArtifact = preserve(run.resultArtifactPath, for: prepared.point, in: prepared.sandbox)
+        var testAttempts = priorTestAttempts
+        if appendCurrentAttempt {
+            testAttempts.append(TestAttemptEvidence(
+                selectedTests: prepared.selectedTests?.map(\.onlyTestingArgument),
+                status: run.status.rawValue,
+                summary: run.summary,
+                command: run.command,
+                resultArtifact: resultArtifact,
+                waveIndex: currentAttemptWaveIndex
+            ))
+        }
+
+        return await finalize(
+            point: prepared.point,
+            sourceApplication: .applied(evidence(
+                prepared.applied,
+                artifact: prepared.artifact,
+                activation: prepared.activation,
+                testCommand: run.command,
+                resultArtifact: resultArtifact,
+                crashConfirmation: crashConfirmation,
+                timeoutConfirmation: timeoutConfirmation,
+                testAttempts: testAttempts
+            )),
+            build: BuildObservation(outcome: .succeeded(buildProductHash: prepared.artifact.productHash, command: prepared.artifact.command)),
+            coverage: prepared.observation,
+            test: SingleTestObservation(run: run, applicationEvidence: prepared.activation.map { .isolated($0) }),
+            confirmations: confirmations,
+            durationSeconds: Date().timeIntervalSince(prepared.startedAt),
+            buildDurationSeconds: prepared.buildDurationSeconds,
+            testDurationSeconds: testDurationSeconds,
+            confirmationDurationSeconds: confirmationDurationSeconds
+        )
+    }
+
+    /// A synthetic run standing in for "a confirmation attempt could not
+    /// even launch" (no sandbox, no build, no process) — represented as an
+    /// ordinary `TestRunResult` with `.infrastructureFailure` status so it
+    /// flows through `ConfirmationObservation` like any other confirming
+    /// run, rather than needing a separate short-circuit path. The verifier
+    /// treats an `.infrastructureFailure`-status confirmation uniformly,
+    /// regardless of kind — see `MutationVerdictVerifier.confirm`.
+    private func infrastructureFailureRun(_ diagnosis: String) -> TestRunResult {
+        TestRunResult(
+            status: .infrastructureFailure, summary: nil,
+            command: CommandRecord(executable: "", arguments: [], workingDirectory: ""),
+            resultArtifactPath: nil, diagnosis: diagnosis
+        )
+    }
+
+    /// Runs a mutant's tests a second time, on the artifact already built for it.
+    ///
+    /// A confirmation that could not even run — a launch failure, an
+    /// adapter/simulator/process problem — is represented as an
+    /// `.infrastructureFailure`-status run (see `infrastructureFailureRun`),
+    /// which the verifier always treats as unconfirmed regardless of kind —
+    /// `killedByAssertion` is not proven until a retest reproduces it, so a
+    /// confirmation that never got that far is excluded from the score, the
+    /// same as any other mutant this tool could not reach a verdict on.
+    private func confirmKill(
+        _ point: MutationPoint,
+        artifact: BuildArtifact,
+        in sandbox: URL,
+        baseline: BaselineContext,
+        selectedTests: Set<TestIdentifier>?,
+        originalFailingTests: [String]?
+    ) async -> ConfirmationObservation {
+        let confirmingRun: TestRunResult
+        do {
+            confirmingRun = try await runMutantTests(
+                point, artifact: artifact, in: sandbox,
+                timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: selectedTests
+            )
+        } catch {
+            confirmingRun = infrastructureFailureRun("a confirmation run could not be started: \(error)")
+        }
+        return ConfirmationObservation(kind: .kill, run: confirmingRun, originalFailingTests: originalFailingTests)
+    }
+
+    /// Rebuilds a mutant from scratch in an independent sandbox and re-tests
+    /// it, to confirm a `killedByCrash` verdict before trusting it.
+    ///
+    /// Unlike `confirmKill`, this does not reuse the artifact or sandbox the
+    /// first attempt built. Found necessary on a real project: a
+    /// `killedByCrash` verdict whose crash was attributed to test methods
+    /// with no connection to the mutated file did not reproduce when the
+    /// identical mutant was rebuilt independently and tested by hand — a
+    /// same-sandbox retest, still holding onto whatever state produced that
+    /// crash, would have had no chance of ruling it out.
+    ///
+    /// Returns both the raw `ConfirmationObservation` (what the verifier
+    /// actually judges) and the `CrashConfirmation` display evidence
+    /// (`crashedAgain` computed the identical way the verifier's own
+    /// `confirmCrash` derives it — a real crash, with the identical,
+    /// normalized diagnosis text) — kept in sync deliberately, not by
+    /// sharing code across the module boundary between `MutationExecution`
+    /// and `MutationModel`.
+    private func confirmCrashKill(
+        _ point: MutationPoint,
+        baseline: BaselineContext,
+        selectedTests: Set<TestIdentifier>?,
+        originalDiagnosis: String
+    ) async -> (observation: ConfirmationObservation, evidence: CrashConfirmation) {
+        func unconfirmed(_ diagnosis: String) -> (ConfirmationObservation, CrashConfirmation) {
+            (
+                ConfirmationObservation(kind: .crash, run: infrastructureFailureRun(diagnosis), originalDiagnosis: originalDiagnosis),
+                CrashConfirmation(confirmingBuildCommand: nil, confirmingTestCommand: nil, crashedAgain: false, diagnosis: diagnosis)
+            )
+        }
+
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-crash-confirm")
+        } catch {
+            return unconfirmed("No confirmation sandbox could be created: \(error)")
+        }
+
+        let sourceURL: URL
+        do {
+            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
+        }
+
+        let applied: AppliedMutation
+        do {
+            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
+        }
+
+        let artifact: BuildArtifact
+        do {
+            artifact = try await build.buildMutant(applied, in: sandbox)
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The confirmation rebuild did not build: \(error)")
+        }
+
+        let confirmingRun: TestRunResult
+        do {
+            confirmingRun = try await runMutantTests(
+                point, artifact: artifact, in: sandbox,
+                timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: selectedTests
+            )
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
+        }
+
+        try? await workspaces.destroySandbox(at: sandbox)
+
+        let normalizedOriginal = originalDiagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedConfirming = confirmingRun.diagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
+        let crashedAgain = confirmingRun.status == .crashed && normalizedOriginal == normalizedConfirming
+
+        return (
+            ConfirmationObservation(kind: .crash, run: confirmingRun, originalDiagnosis: originalDiagnosis),
+            CrashConfirmation(
+                confirmingBuildCommand: artifact.command,
+                confirmingTestCommand: confirmingRun.command,
+                crashedAgain: crashedAgain,
+                diagnosis: confirmingRun.diagnosis
+            )
+        )
+    }
+
+    /// Rebuilds a `.timedOut` mutant from scratch, in a sandbox independent
+    /// of the one the original timeout was observed in.
+    ///
+    /// Same shape as `confirmCrashKill`, same reasoning: a hang has no diff
+    /// to check against, and was found — empirically, on a real project — to
+    /// sometimes be a fact about *this* evaluation's execution context (a
+    /// concurrent worker pool vs. running alone, or even just which machine
+    /// ran it) rather than a fact about the mutant. Runs under the *same*
+    /// timeout limit as the original attempt.
+    ///
+    /// A confirming rebuild that turns out to be a kill or a crash (a
+    /// batch-attributed `.timedOut` carries no real information about this
+    /// specific mutant, so the confirming rebuild is that mutant's first
+    /// real observation) is routed through the *same* confirmation gates
+    /// any other first-observed kill/crash would go through —
+    /// `retestKilledMutants`/`confirmCrashKills` — gated on the confirming
+    /// run's own raw status and activation, exactly as `finishAfterTest`
+    /// gates its own first-pass confirmations, never on a classification.
+    /// Returns every observation gathered, in order (the timeout attempt,
+    /// then whichever cascade fired) — `MutationVerdictVerifier` folds them
+    /// in that same order.
+    private struct TimeoutConfirmationResult {
+        let observations: [ConfirmationObservation]
+        let timeoutConfirmation: TimeoutConfirmation
+        let crashConfirmation: CrashConfirmation?
+    }
+
+    private func confirmTimeout(
+        _ point: MutationPoint,
+        baseline: BaselineContext,
+        selectedTests: Set<TestIdentifier>?,
+        wasBatchAttributed: Bool
+    ) async -> TimeoutConfirmationResult {
+        func unconfirmed(_ diagnosis: String) -> TimeoutConfirmationResult {
+            TimeoutConfirmationResult(
+                observations: [ConfirmationObservation(
+                    kind: .timeout, run: infrastructureFailureRun(diagnosis), wasBatchAttributed: wasBatchAttributed
+                )],
+                timeoutConfirmation: TimeoutConfirmation(
+                    confirmingBuildCommand: nil, confirmingTestCommand: nil, timedOutAgain: false, diagnosis: diagnosis
+                ),
+                crashConfirmation: nil
+            )
+        }
+
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-timeout-confirm")
+        } catch {
+            return unconfirmed("No confirmation sandbox could be created: \(error)")
+        }
+
+        let sourceURL: URL
+        do {
+            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
+        }
+
+        let applied: AppliedMutation
+        do {
+            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
+        }
+
+        let artifact: BuildArtifact
+        do {
+            artifact = try await build.buildMutant(applied, in: sandbox)
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The confirmation rebuild did not build: \(error)")
+        }
+
+        let confirmingRun: TestRunResult
+        do {
+            confirmingRun = try await runMutantTests(
+                point, artifact: artifact, in: sandbox,
+                timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: selectedTests
+            )
+        } catch {
+            try? await workspaces.destroySandbox(at: sandbox)
+            return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
+        }
+
+        let confirmingActivation = Self.activationEvidence(mutantHash: artifact.productHash, baselineHash: baseline.productHash)
+        let confirmingActivationProven = confirmingActivation?.provesActivation ?? false
+        var observations: [ConfirmationObservation] = [
+            ConfirmationObservation(
+                kind: .timeout, run: confirmingRun, activation: confirmingActivation,
+                confirmingBuildProductHash: artifact.productHash, wasBatchAttributed: wasBatchAttributed
+            )
+        ]
+
+        // Same-artifact retest, on the confirming rebuild's own sandbox —
+        // still alive at this point precisely so this can reuse it, the
+        // same way a normal assertion kill's retest reuses its own
+        // artifact rather than rebuilding again.
+        if configuration.execution.retestKilledMutants, wasBatchAttributed,
+           confirmingRun.status == .failed, confirmingActivationProven {
+            observations.append(await confirmKill(
+                point, artifact: artifact, in: sandbox, baseline: baseline, selectedTests: selectedTests,
+                originalFailingTests: confirmingRun.summary?.failingTests
+            ))
+        }
+
+        try? await workspaces.destroySandbox(at: sandbox)
+
+        // A crash, unlike an assertion kill, is never confirmed on the same
+        // artifact (see `confirmCrashKill`'s doc comment) — its own fresh,
+        // independent rebuild, same as any other first-observed crash.
+        var crashConfirmationEvidence: CrashConfirmation?
+        if configuration.execution.confirmCrashKills, wasBatchAttributed,
+           confirmingRun.status == .crashed, confirmingActivationProven {
+            let (crashObservation, crashEvidence) = await confirmCrashKill(
+                point, baseline: baseline, selectedTests: selectedTests, originalDiagnosis: confirmingRun.diagnosis
+            )
+            observations.append(crashObservation)
+            crashConfirmationEvidence = crashEvidence
+        }
+
+        let timeoutConfirmation = TimeoutConfirmation(
+            confirmingBuildCommand: artifact.command,
+            confirmingTestCommand: confirmingRun.command,
+            timedOutAgain: confirmingRun.status == .timedOut && confirmingActivationProven,
+            diagnosis: confirmingRun.diagnosis
+        )
+
+        return TimeoutConfirmationResult(
+            observations: observations, timeoutConfirmation: timeoutConfirmation, crashConfirmation: crashConfirmationEvidence
+        )
+    }
+
+    /// Runs a mutant's tests, narrowed to `selectedTests` when the adapter
+    /// can honour that (`TestSelecting`) and a set was supplied, and
+    /// running the full configured test list otherwise — the same fallback
+    /// `TestSelecting.runMutant` itself applies for `selectedTests == nil`,
+    /// mirrored here so a coverage-blind adapter (no `TestSelecting`
+    /// conformance at all) behaves identically.
+    ///
+    /// Used for a mutant's first test run and for every confirmation rerun
+    /// of it: a confirmation is meant to reproduce the original observation,
+    /// not test a different, wider or narrower, slice of the suite than the
+    /// one that produced the verdict being confirmed.
+    private func runMutantTests(
+        _ point: MutationPoint,
+        artifact: BuildArtifact,
+        in sandbox: URL,
+        timeoutSeconds: Double,
+        selectedTests: Set<TestIdentifier>?
+    ) async throws -> TestRunResult {
+        if let selecting = test as? any TestSelecting {
+            return try await selecting.runMutant(
+                point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
+            )
+        }
+        return try await test.runMutant(point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds)
+    }
+
+    // MARK: - Evidence
+
+    /// Whether the mutation reached the binary the tests ran against.
+    ///
+    /// In isolated mode the edit is compiled in, so a mutant product identical
+    /// to the baseline's is proof the mutation did *not* run — whatever the
+    /// source diff says. `nil` means the adapter could not tell us, which is not
+    /// the same as either answer.
+    private static func activationEvidence(mutantHash: String?, baselineHash: String?) -> ActivationEvidence? {
+        guard let mutantHash, let baselineHash else { return nil }
+        return mutantHash == baselineHash
+            ? .buildProductIdenticalToBaseline(hash: mutantHash)
+            : .buildProductDiffersFromBaseline(mutantHash: mutantHash, baselineHash: baselineHash)
+    }
+
+    /// ADR-0006 Stage 1: the single path from raw observations to a
+    /// reportable result — `MutationObservations -> MutationVerdictVerifier
+    /// -> MutationResult` projection. There is no other way for this file
+    /// to produce a `MutationResult`: `prepare`'s `finished` closure,
+    /// `finishAfterTest`, and every pre-classification infrastructure-
+    /// failure early exit (sandbox creation, a build/test launch failure)
+    /// all route through here — including the early exits, which PR B
+    /// (ADR-0005) deliberately left outside the verifier because there was
+    /// "no classification decision to sit in front of." That reasoning
+    /// under-weighted the actual goal: the point was never "re-check a
+    /// classifier's judgment," it is "nothing constructs a `MutationResult`
+    /// outside this one path." An infrastructure failure has an outcome
+    /// (`.infrastructureFailure`) and a diagnosis; that is enough for
+    /// `MutationObservations.infrastructureFailureDiagnosis` today.
+    ///
+    /// `workUnitID` is `plan.workUnitID` (a real shard identity, not
+    /// `plan.planID`, which stays constant across every shard of the same
+    /// plan and so cannot distinguish them) — `plan.planID` was used here
+    /// before Stage 1; that was a real bug this stage fixes, not a
+    /// simplification.
+    /// The single choke point from raw observations to a persisted,
+    /// reportable result — every result-producing path in this file ends
+    /// here, directly or through `finishAfterTest`/`infrastructureFailureResult`.
+    ///
+    /// ADR-0006 Stage 1 (second review round): persistence now happens
+    /// *here*, not at each of this function's ~20 call sites. Previously
+    /// every call site did its own `checkpoints?.record(result)` right
+    /// after obtaining `result` — one call per finalized mutant, but
+    /// scattered, so a future new call site could forget it. Centralizing
+    /// the write next to the one place `observations` (the thing that
+    /// actually gets persisted, not `result`) is already in scope removes
+    /// that possibility structurally, and is what makes storing raw
+    /// `MutationObservations` — rather than the already-decided
+    /// `MutationResult` — for the cache/checkpoint to later re-verify
+    /// practical without threading a second return value through every
+    /// caller and task-group element type in this file.
+    private func finalize(
+        point: MutationPoint,
+        sourceApplication: SourceApplicationOutcome? = nil,
+        build: BuildObservation? = nil,
+        coverage: CoverageObservation? = nil,
+        test: SingleTestObservation? = nil,
+        confirmations: [ConfirmationObservation] = [],
+        infrastructureFailureDiagnosis: String? = nil,
+        durationSeconds: Double,
+        buildDurationSeconds: Double? = nil,
+        testDurationSeconds: Double? = nil,
+        confirmationDurationSeconds: Double? = nil
+    ) async -> MutationResult {
+        let ref = PlannedMutationRef.forPoint(point, planID: plan.planID, workUnitID: plan.workUnitID)
+        let observations = MutationObservations(
+            plannedMutation: ref,
+            sourceApplication: sourceApplication,
+            build: build,
+            coverage: coverage,
+            test: test,
+            confirmations: confirmations,
+            infrastructureFailureDiagnosis: infrastructureFailureDiagnosis
+        )
+        let record = MutationVerdictVerifier.verify(observations, policy: verificationPolicy)
+        let result: MutationResult
+        do {
+            result = try MutationResult.projected(
+                from: record, point: point, planID: plan.planID, workUnitID: plan.workUnitID,
+                durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
+                testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds
+            )
+        } catch {
+            // Unreachable in practice: `ref` above was computed from `point`
+            // via the identical call `projected` uses to check it, so they
+            // can never disagree — but `projected` is intentionally not
+            // `try!`-callable from outside `MutationModel`, and duplicating
+            // its guarantee here as a crash would be worse than a loud,
+            // honest infrastructure failure if some future change ever did
+            // make this reachable.
+            preconditionFailure("finalize's own ref must always match projected's recomputation: \(error)")
+        }
+
+        do {
+            try await checkpoints?.record(
+                observations, durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
+                testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds
+            )
+        } catch {
+            // Best-effort by design (score integrity never depends on a
+            // checkpoint), but silent failure here quietly breaks the
+            // "resume after interruption" contract without anyone noticing
+            // until the machine actually goes down mid-run — surfacing it
+            // both to stderr (for a human watching the run live) and to
+            // `RunReport.operationalIssues` (for a reader of `report.json`
+            // afterward) is worth more than either alone.
+            let diagnosis = "checkpoint write failed for \(point.id): \(error)"
+            FileHandle.standardError.write(Data("warning: \(diagnosis)\n".utf8))
+            await operationalIssues.append(
+                OperationalIssue(severity: .warning, kind: .checkpointWriteFailed, mutationID: point.id, diagnosis: diagnosis)
+            )
+        }
+        if let resultCache, let resultCacheDigest {
+            await resultCache.store(
+                observations, durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
+                testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds,
+                for: MutationResultCache.Key(mutationID: point.id, contextDigest: resultCacheDigest)
+            )
+        }
+        return result
+    }
+
+    /// `finalize` for the pre-classification infrastructure-failure early
+    /// exits: no build/test observation exists yet, only a diagnosis (and,
+    /// when the mutation was at least applied, its source evidence).
+    private func infrastructureFailureResult(
+        point: MutationPoint,
+        diagnosis: String,
+        evidence: MutationEvidence? = nil,
+        durationSeconds: Double,
+        buildDurationSeconds: Double? = nil,
+        testDurationSeconds: Double? = nil
+    ) async -> MutationResult {
+        await finalize(
+            point: point,
+            sourceApplication: evidence.map { .applied($0) },
+            infrastructureFailureDiagnosis: diagnosis,
+            durationSeconds: durationSeconds,
+            buildDurationSeconds: buildDurationSeconds,
+            testDurationSeconds: testDurationSeconds
+        )
+    }
+
+    /// The source-level proof from the application, plus whatever the build and
+    /// test stages added to it.
+    private func evidence(
+        _ applied: AppliedMutation,
+        artifact: BuildArtifact? = nil,
+        activation: ActivationEvidence? = nil,
+        buildCommand: CommandRecord? = nil,
+        testCommand: CommandRecord? = nil,
+        resultArtifact: String? = nil,
+        crashConfirmation: CrashConfirmation? = nil,
+        timeoutConfirmation: TimeoutConfirmation? = nil,
+        testAttempts: [TestAttemptEvidence] = []
+    ) -> MutationEvidence {
+        MutationEvidence(
+            sourceBeforeHash: applied.evidence.sourceBeforeHash,
+            sourceAfterHash: applied.evidence.sourceAfterHash,
+            sourceDiff: applied.evidence.sourceDiff,
+            buildProductHash: artifact?.productHash,
+            applicationEvidence: activation.map(MutationApplicationEvidence.isolated),
+            buildCommand: artifact?.command ?? buildCommand,
+            testCommand: testCommand,
+            resultArtifact: resultArtifact,
+            crashConfirmation: crashConfirmation,
+            timeoutConfirmation: timeoutConfirmation,
+            testAttempts: testAttempts
+        )
+    }
+
+    /// Moves a result bundle somewhere it will outlive its sandbox.
+    ///
+    /// Recording a path under a directory this run is about to delete would be
+    /// worse than recording nothing: `inspect` would offer evidence that is not
+    /// there.
+    ///
+    /// `label`, when supplied, is folded into the destination filename —
+    /// needed when a mutant is preserved more than once (wave-based early
+    /// kill preserves one artifact per wave it survived, plus its final
+    /// one): without a distinguishing label, a later wave's identically-named
+    /// bundle would land at the same destination path as an earlier one.
+    private func preserve(_ url: URL?, for point: MutationPoint, in sandbox: URL, label: String? = nil) -> String? {
+        guard let url, let artifactsRoot, FileManager.default.fileExists(atPath: url.path) else { return nil }
+
+        let filename = label.map { "\($0)-\(url.lastPathComponent)" } ?? url.lastPathComponent
+        let relative = point.id.rawValue + "/" + filename
+        let destination = artifactsRoot.appendingPathComponent(relative)
+
+        do {
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? FileManager.default.removeItem(at: destination)
+
+            // Copy rather than move when the bundle lives outside the sandbox:
+            // there it may be a directory the adapter still owns.
+            if url.resolvingSymlinksInPath().path.hasPrefix(sandbox.path + "/") {
+                try FileManager.default.moveItem(at: url, to: destination)
+            } else {
+                try FileManager.default.copyItem(at: url, to: destination)
+            }
+        } catch {
+            return nil
+        }
+
+        return relative
+    }
+}
+
+/// Thread-safe result and batch-stat accumulator for the pipelined
+/// incremental+batch path, where build workers and the test lane produce
+/// results concurrently from separate tasks. Both sides `add`/`addAll` as
+/// they go; `evaluateIncrementallyInBatches` takes a single `snapshot` once
+/// every task has finished.
+private actor PipelineCollector {
+    private(set) var results: [MutationResult] = []
+    private(set) var batchCount = 0
+    private(set) var totalConfigurations = 0
+    private(set) var batchDurations: [Double] = []
+
+    func add(_ result: MutationResult) {
+        results.append(result)
+    }
+
+    func addAll(_ newResults: [MutationResult]) {
+        results.append(contentsOf: newResults)
+    }
+
+    func recordBatch(configurations: Int, duration: Double?) {
+        batchCount += 1
+        totalConfigurations += configurations
+        if let duration { batchDurations.append(duration) }
+    }
+
+    func snapshot() -> (results: [MutationResult], summary: BatchExecutionSummary) {
+        (
+            results,
+            BatchExecutionSummary(
+                batchCount: batchCount, totalConfigurations: totalConfigurations, batchDurations: batchDurations
+            )
+        )
+    }
+}
+
+/// The single point of coordination between the pipelined incremental+batch
+/// path's build workers and its one test lane: a many-producer,
+/// one-consumer channel of cloned, ready-to-test mutants, *and* the
+/// per-worker sandbox-lifetime tracker, combined into one actor on purpose.
+///
+/// **Why combined.** A worker's own persistent sandbox must stay alive
+/// until every clone it produced has been tested — see
+/// `evaluateIncrementallyInBatches`'s doc comment for why a single "all
+/// builds are done" barrier (which is what the non-pipelined design could
+/// rely on) no longer exists once build and test overlap. The natural fix
+/// is a per-worker outstanding-clone reference count: incremented when a
+/// clone is hand-off to the test lane, decremented when the test lane
+/// finishes testing it, and the sandbox destroyed the instant a worker's
+/// build loop has ended *and* that count is zero. That increment has to
+/// happen atomically with the clone actually becoming visible to the test
+/// lane — if `send` returned and only *then*, in a separate actor hop, bumped
+/// the count, a test lane fast enough to receive and finish that clone in
+/// between could call `finishedTesting` before the increment ever ran,
+/// under-counting the outstanding total and destroying the sandbox while a
+/// sibling clone from the same worker is still being tested. Making `send`
+/// and the increment one isolated method on one actor removes that window
+/// entirely: nothing can observe the state between "queued" and "counted".
+///
+/// **Channel half.** `send` delivers a clone to a waiting `receive` call
+/// directly when the test lane is already waiting, or buffers it otherwise.
+/// `receive` drains the buffer first, then waits, and returns `nil` once
+/// every worker has called `workerBuildFinished` and the buffer is empty —
+/// the only shutdown signal it needs, requiring no separate "close" call
+/// from the runner.
+///
+/// **Lifetime half.** `registerWorker` records a worker's sandbox (or `nil`,
+/// for a worker whose sandbox never got created); `send` bumps that
+/// worker's outstanding count; `finishedTesting` decrements it;
+/// `workerBuildFinished` marks the worker's build loop as ended. A worker's
+/// sandbox is destroyed by `destroyIfEligible`, called after every state
+/// change that could make a worker newly eligible (`workerBuildFinished`
+/// and `finishedTesting`), exactly once — `destroyed` guards against a
+/// worker whose build ends after its outstanding count is already zero
+/// (the common case) *and* a worker whose last clone finishes testing after
+/// its build has already ended (the concurrent case) both trying to tear
+/// down the same sandbox.
+private actor PipelineCoordinator {
+    /// One clone, still tagged with the worker whose build produced it —
+    /// the test lane needs the tag to know which worker's outstanding count
+    /// to decrement once this clone's test result is in hand.
+    struct Delivery: Sendable {
+        let workerID: String
+        let item: MutationRunner.PreparedMutant
+    }
+
+    private struct WorkerState {
+        var sandbox: URL?
+        var buildFinished = false
+        var outstandingClones = 0
+        var destroyed = false
+    }
+
+    private let workspaces: WorkspaceManager
+    private var workers: [String: WorkerState] = [:]
+    private var unfinishedWorkers: Int
+    private var buffered: [Delivery] = []
+    private var waiters: [CheckedContinuation<Delivery?, Never>] = []
+
+    init(workspaces: WorkspaceManager, workerCount: Int) {
+        self.workspaces = workspaces
+        unfinishedWorkers = workerCount
+    }
+
+    /// Records a worker's own persistent sandbox — or `nil`, when that
+    /// worker never managed to create one — before it starts (or, for the
+    /// `nil` case, instead of) building. Must be called once per worker
+    /// before that worker's first `send`, so `destroyIfEligible` always has
+    /// a `WorkerState` to look up.
+    func registerWorker(_ id: String, sandbox: URL?) {
+        workers[id] = WorkerState(sandbox: sandbox)
+    }
+
+    /// Hands a clone to the test lane and, atomically with that handoff,
+    /// records it against `workerID`'s outstanding count. See the type's
+    /// doc comment for why this has to be one call, not two.
+    func send(_ item: MutationRunner.PreparedMutant, workerID: String) {
+        workers[workerID, default: WorkerState()].outstandingClones += 1
+        let delivery = Delivery(workerID: workerID, item: item)
+        if let waiter = waiters.first {
+            waiters.removeFirst()
+            waiter.resume(returning: delivery)
+        } else {
+            buffered.append(delivery)
+        }
+    }
+
+    /// The test lane's pull side. Drains anything already buffered first;
+    /// once nothing is buffered and every worker has finished building,
+    /// returns `nil` — there is nothing left this channel will ever
+    /// deliver. Otherwise suspends until the next `send` or the last
+    /// `workerBuildFinished`.
+    func receive() async -> Delivery? {
+        if !buffered.isEmpty {
+            return buffered.removeFirst()
+        }
+        if unfinishedWorkers == 0 {
+            return nil
+        }
+        return await withCheckedContinuation { waiters.append($0) }
+    }
+
+    /// Marks `id`'s build loop as ended — it will never `send` again — and,
+    /// if that was the last unfinished worker, wakes every still-waiting
+    /// `receive` call with `nil`. (Safe to do unconditionally at that point:
+    /// `send` only ever buffers when no one is waiting, so if a waiter
+    /// exists here, the buffer is necessarily empty and there is truly
+    /// nothing left to deliver.) Also re-checks whether `id`'s own sandbox
+    /// is now eligible for destruction.
+    func workerBuildFinished(_ id: String) async {
+        workers[id, default: WorkerState()].buildFinished = true
+        unfinishedWorkers -= 1
+        if unfinishedWorkers == 0 {
+            for waiter in waiters {
+                waiter.resume(returning: nil)
+            }
+            waiters.removeAll()
+        }
+        await destroyIfEligible(id)
+    }
+
+    /// The test lane's report that it has finished testing one clone —
+    /// called exactly once per clone, on every path that finishes with one
+    /// (a genuine result, a missing-from-batch fallback, a batch
+    /// infrastructure failure): decrements `workerID`'s outstanding count
+    /// and re-checks eligibility.
+    func finishedTesting(workerID: String) async {
+        if workers[workerID]?.outstandingClones ?? 0 > 0 {
+            workers[workerID]?.outstandingClones -= 1
+        }
+        await destroyIfEligible(workerID)
+    }
+
+    /// A worker's sandbox is destroyed the instant both halves of its
+    /// lifetime are done: its build loop has ended, and every clone it ever
+    /// produced has been accounted for by the test lane. `destroyed` makes
+    /// this idempotent — `workerBuildFinished` and `finishedTesting` can
+    /// both land on the same worker becoming eligible from either side of
+    /// an adversarial race, and only one of them may actually destroy it.
+    private func destroyIfEligible(_ id: String) async {
+        guard var state = workers[id],
+              state.buildFinished, state.outstandingClones == 0, !state.destroyed,
+              let sandbox = state.sandbox
+        else { return }
+        state.destroyed = true
+        workers[id] = state
+        try? await workspaces.destroySandbox(at: sandbox)
+    }
+}

@@ -1,0 +1,213 @@
+name: MutantBench Compatibility Gate
+
+# Manual-only, on purpose: this exercises a real Muter install/build/run,
+# which is slow and consumes real Actions minutes. It never runs on push,
+# PR, or a schedule — only an explicit `workflow_dispatch` from someone who
+# means to spend that budget right now. Runs the minimal fixture gate only
+# (Benchmarks/Fixtures/CompatibilityGate) — never the full 10-project
+# corpus — for the same reason.
+#
+# Two toolchains are deliberately in play, never conflated:
+#   - MutantKit's OWN build needs swift-tools-version:6.0 (its Package.swift
+#     says so) — built under Xcode 16.2, pinned explicitly rather than
+#     relying on the runner image's own "default" Xcode.
+#   - The fixture project, Muter's own build, and everything MutantKit
+#     spawns as a subprocess against the fixture run under Xcode 15.2 /
+#     Swift 5.9 — the toolchain actually being tested for compatibility.
+# DEVELOPER_DIR is therefore set per-step, never once at job level.
+#
+# A static operator-intersection gate (Benchmarks/Fixtures/CompatibilityGate/
+# expected-mutation.json) runs BEFORE Muter is ever cloned or built — a
+# bool-literal fixture was tried first and burned a full run because
+# Muter's own operator registry doesn't include bool-literal-inversion at
+# all. The gate now targets relational-operator-replacement, confirmed
+# registered by both tools, and fails fast (before the ~15-minute Muter
+# build) if that intersection ever stops holding.
+
+on:
+  workflow_dispatch:
+    inputs:
+      muter_commit_sha:
+        description: Muter's full 40-char commit SHA to build — never a branch or tag, per this project's own pinning rule
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutantbench-compatibility-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record and verify MutantKit's own build toolchain (Xcode 16.2, swift-tools-version:6.0)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 16.2"
+
+      - name: Build MutantKit (release)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+        run: swift build -c release --product mutantkit
+
+      - name: Run BenchmarkRunner unit tests under MutantKit's own build toolchain
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+        run: swift test --filter BenchmarkRunnerTests
+
+      - name: Record and verify the compatibility-lane toolchain (Xcode 15.2, Swift 5.9)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          mkdir -p Benchmarks/Fixtures/CompatibilityGate/logs
+          {
+            echo "=== compatibility-lane toolchain ==="
+            sw_vers
+            uname -m
+            xcodebuild -version
+            xcrun --find swift
+            swift --version
+            xcrun --sdk macosx --show-sdk-version
+          } | tee Benchmarks/Fixtures/CompatibilityGate/logs/diagnostics.txt
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 15.2"
+          swift --version | grep -F "Swift version 5.9"
+
+      - name: Compatibility-gate fixture baseline (both tools, no mutation yet)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        working-directory: Benchmarks/Fixtures/CompatibilityGate
+        run: |
+          set -euo pipefail
+          swift build --build-tests
+          swift test --skip-build
+
+      - name: MutantKit plan against the fixture (no mutation run yet)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        working-directory: Benchmarks/Fixtures/CompatibilityGate
+        run: |
+          set -euo pipefail
+          cat > mutantkit.yml <<'EOF'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: ["Sources/**"]
+          operators:
+            profile: default
+          execution:
+            strategy: schemata
+          reports: [json]
+          EOF
+          "$GITHUB_WORKSPACE/.build/release/mutantkit" plan
+
+      - name: Static operator-intersection gate (stops here, before Muter is ever built, on mismatch)
+        working-directory: Benchmarks/Fixtures/CompatibilityGate
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, sys
+
+          expected = json.load(open("expected-mutation.json"))
+          plan = json.load(open("plan.json"))
+
+          matches = [
+              m for m in plan["mutations"]
+              if m["operatorID"] == expected["operatorFamily"]
+              and m["originalText"] == expected["original"]
+              and m["replacementText"] == expected["replacement"]
+          ]
+
+          print(f"MutantKit planned operator IDs: {sorted({m['operatorID'] for m in plan['mutations']})}")
+          print(f"Matching {expected['operatorFamily']} mutations: {len(matches)}")
+
+          with open("logs/diagnostics.txt", "a") as log:
+              log.write(f"MutantKit planned operator IDs: {sorted({m['operatorID'] for m in plan['mutations']})}\n")
+              log.write(f"Matching {expected['operatorFamily']} mutations: {len(matches)}\n")
+
+          if len(matches) < expected["minimumCount"]:
+              print(
+                  f"GATE FAILED: expected >= {expected['minimumCount']} "
+                  f"{expected['operatorFamily']} mutation(s), found {len(matches)}. "
+                  "Stopping before Muter is cloned or built.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          PY
+
+      - name: Clone and build Muter at the pinned commit (never patched)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+          MUTER_COMMIT_SHA: ${{ inputs.muter_commit_sha }}
+        run: |
+          set -euo pipefail
+          echo "$MUTER_COMMIT_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "muter_commit_sha must be a full 40-char lowercase hex SHA, not a branch or tag"; exit 1; }
+          git clone https://github.com/muter-mutation-testing/muter.git /tmp/muter-src
+          cd /tmp/muter-src
+          git checkout "$MUTER_COMMIT_SHA"
+          test "$(git rev-parse HEAD)" = "$MUTER_COMMIT_SHA"
+          swift build -c release --product muter
+          .build/release/muter --version
+          echo "Requested Muter SHA: $MUTER_COMMIT_SHA" >> "$GITHUB_WORKSPACE/Benchmarks/Fixtures/CompatibilityGate/logs/diagnostics.txt"
+          echo "Actual Muter HEAD after checkout: $(git rev-parse HEAD)" >> "$GITHUB_WORKSPACE/Benchmarks/Fixtures/CompatibilityGate/logs/diagnostics.txt"
+
+      - name: MutantKit run against the fixture (already planned above)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        working-directory: Benchmarks/Fixtures/CompatibilityGate
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.build/release/mutantkit" run
+
+      - name: Muter run against the fixture (its own real config schema)
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        working-directory: Benchmarks/Fixtures/CompatibilityGate
+        run: |
+          set -euo pipefail
+          cat > muter.conf.yml <<'EOF'
+          arguments:
+          - test
+          executable: /usr/bin/swift
+          exclude:
+          - Package.swift
+          excludeCalls: []
+          EOF
+          /tmp/muter-src/.build/release/muter run 2>&1 | tee logs/muter-run.txt
+
+      - name: Re-observe the compatibility-lane toolchain identity — reject if it drifted mid-run
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          test "$(xcodebuild -version | head -n 1)" = "Xcode 15.2"
+          swift --version | grep -F "Swift version 5.9"
+
+      - name: Upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutantbench-compatibility-gate
+          path: |
+            Benchmarks/Fixtures/CompatibilityGate/mutantkit.yml
+            Benchmarks/Fixtures/CompatibilityGate/muter.conf.yml
+            Benchmarks/Fixtures/CompatibilityGate/plan.json
+            Benchmarks/Fixtures/CompatibilityGate/.mutantkit
+            Benchmarks/Fixtures/CompatibilityGate/logs
+          if-no-files-found: warn
+          retention-days: 14

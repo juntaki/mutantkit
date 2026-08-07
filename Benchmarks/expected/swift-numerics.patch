@@ -1,0 +1,36 @@
+diff --git a/Sources/IntegerUtilities/GCD.swift b/Sources/IntegerUtilities/GCD.swift
+index 28e09bd..ba3cfad 100644
+--- a/Sources/IntegerUtilities/GCD.swift
++++ b/Sources/IntegerUtilities/GCD.swift
+@@ -38,3 +38,15 @@ public func gcd<T: BinaryInteger>(_ a: T, _ b: T) -> T {
+   // If that fails, produce a diagnostic.
+   fatalError("GCD (\(x)) is not representable as \(T.self).")
+ }
++
++/// The [least common multiple][lcm] of `a` and `b`.
++///
++/// If either input is zero, the result is zero.
++///
++/// [lcm]: https://en.wikipedia.org/wiki/Least_common_multiple
++@inlinable
++public func lcm<T: BinaryInteger>(_ a: T, _ b: T) -> T {
++  if a == 0 || b == 0 { return 0 }
++  return (a / gcd(a, b)) * b
++}
++
+diff --git a/Tests/IntegerUtilitiesTests/GCDTests.swift b/Tests/IntegerUtilitiesTests/GCDTests.swift
+index 6400732..29d3121 100644
+--- a/Tests/IntegerUtilitiesTests/GCDTests.swift
++++ b/Tests/IntegerUtilitiesTests/GCDTests.swift
+@@ -41,4 +41,11 @@ final class IntegerUtilitiesGCDTests: XCTestCase {
+     // XCTExpectFailure{ gcd(Int.min, 0) }
+     // XCTExpectFailure{ gcd(Int.min, Int.min) }
+   }
++
++  func testLCMInt() {
++    XCTAssertEqual(lcm(0, 0), 0)
++    XCTAssertEqual(lcm(0, 5), 0)
++    XCTAssertEqual(lcm(4, 6), 12)
++    XCTAssertEqual(lcm(21, 6), 42)
++  }
+ }

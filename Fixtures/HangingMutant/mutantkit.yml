@@ -1,0 +1,40 @@
+# Acceptance fixture config.
+#
+# A short, fixed mutant timeout: this fixture exists to hit that timeout, and the
+# adaptive strategy would derive a limit from the baseline and add the overhead
+# allowance, making the suite wait a minute to learn something a few seconds
+# proves.
+version: 1
+
+project:
+  kind: swiftPackageMacOS
+
+sources:
+  include:
+    - Sources/**
+
+operators:
+  profile: default
+
+execution:
+  strategy: isolated
+  workers: 2
+  # This fixture tests the raw hang → timeout → process-group kill mechanism
+  # in isolation. Confirmation is a separate feature (a hang that reproduces
+  # twice is promoted to `.verifiedTimeout`) and is on by default — leaving it
+  # on here would mean the fixture's one hanging mutant gets rebuilt and
+  # re-hung a second time before being classified, doubling the wait for a
+  # fact this suite already establishes on the first attempt.
+  confirmTimedOutMutants: false
+
+timeouts:
+  mutant:
+    strategy: fixed
+    maximum: 20s
+  # Short, because the whole point is to check what happens after SIGTERM is
+  # ignored: a spinning loop will not handle it, so the escalation to SIGKILL is
+  # what actually reclaims the process.
+  terminationGracePeriod: 2
+
+reports:
+  - console

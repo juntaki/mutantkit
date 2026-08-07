@@ -1,0 +1,141 @@
+import Foundation
+
+/// Edges the operators have to survive: bool literals and comparisons in every
+/// syntactic position the compiler accepts them. Adding a new expression form
+/// (macro, result builder) without a fixture for it means the operator may
+/// silently skip it — and the missing-site bug is invisible until a real
+/// project happens to use that form on a line no test reaches.
+
+// MARK: - Default arguments (the surviving mutant the acceptance suite found)
+struct EdgeDefaults {
+    func ready(name: String = "default", enabled: Bool = true, count: Int = 0) -> Bool {
+        count > 0
+    }
+}
+
+// MARK: - Ternary
+struct EdgeTernary {
+    func label(for value: Int) -> String { value >= 10 ? "high" : "low" }
+    var flag: Bool { true }
+}
+
+// MARK: - Collection literals
+struct EdgeCollections {
+    let flags: [Bool] = [true, false, true]
+    let lookup: [String: Bool] = ["a": true, "b": false]
+    let rangeChecks: [(Int, Bool)] = [(1, true), (2, false)]
+}
+
+// MARK: - Guard
+struct EdgeGuard {
+    func process(_ items: [Int]) -> Bool {
+        guard !items.isEmpty, items.count < 100 else { return false }
+        return items.first! == 0
+    }
+}
+
+// MARK: - While
+struct EdgeWhile {
+    func scan(_ values: [Int]) -> Int {
+        var index = 0
+        while index < values.count, values[index] != 0 {
+            index += 1
+        }
+        return index
+    }
+}
+
+// MARK: - If-let
+struct EdgeBinding {
+    func parse(_ raw: String?) -> Bool {
+        if let text = raw, text == "yes" { return true }
+        return false
+    }
+}
+
+// MARK: - Switch
+struct EdgeSwitch {
+    func describe(_ x: Int) -> String {
+        switch x {
+        case ..<0: return "negative"
+        case 0: return "zero"
+        case 1...10: return "small"
+        default: return "large"
+        }
+    }
+}
+
+// MARK: - Closure contexts
+struct EdgeClosures {
+    let predicates: [(Int) -> Bool] = [
+        { $0 > 5 },
+        { val in val <= 10 },
+    ]
+
+    func all(_ items: [Int]) -> Bool {
+        items.allSatisfy { $0 != 0 }
+    }
+}
+
+// MARK: - Unicode identifiers (operator-compatible)
+struct エッジケース {
+    var フラグ = true
+    var しきい値 = 50
+
+    func 判定する(_ 値: Int) -> Bool {
+        値 >= しきい値
+    }
+}
+
+// MARK: - Nested types
+struct EdgeOuter {
+    struct Inner {
+        var enabled = true
+        var min = 0
+        var max: Int { min + 10 }
+    }
+
+    enum State {
+        case idle, active(Bool)
+    }
+
+    var inner: Inner = Inner()
+    var state: State = .idle
+    var isActive: Bool { if case .active(let v) = state { return v }; return false }
+}
+
+// MARK: - Extension
+extension EdgeOuter {
+    var isReady: Bool { inner.enabled && isActive }
+    func reset() -> Bool { state = .idle; return true }
+}
+
+// MARK: - Computed property
+struct EdgeComputed {
+    var items: [Int] = []
+
+    var isEmpty: Bool { items.isEmpty }
+
+    var count: Int { items.count }
+
+    var needsTrim: Bool {
+        items.count > 1000 || items.isEmpty
+    }
+}
+
+// MARK: - Property wrapper
+@propertyWrapper
+struct EdgeWrapper<T> {
+    private var value: T
+    var wrappedValue: T {
+        get { value }
+        set { value = newValue }
+    }
+    init(wrappedValue: T) { self.value = wrappedValue }
+}
+
+struct EdgeWrapped {
+    @EdgeWrapper var enabled = true
+    @EdgeWrapper var threshold = 10
+    var isEnabled: Bool { enabled }
+}

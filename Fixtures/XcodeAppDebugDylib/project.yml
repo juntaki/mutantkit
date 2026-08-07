@@ -1,0 +1,49 @@
+# Acceptance fixture: an `application` target, not a framework.
+#
+# The generated .xcodeproj is committed alongside this manifest so the fixture
+# works without xcodegen installed. Regenerate with:
+#   cd Fixtures/XcodeAppDebugDylib && xcodegen generate
+#
+# Recent Xcode toolchains build a Debug/simulator `application` target's own
+# code into a loose `<Target>.debug.dylib` sitting inside the `.app`, leaving a
+# near-empty host executable behind — confirmed empirically: a `framework`
+# target (see Fixtures/XcodeProject) does not exhibit this, only `application`
+# does. This is the exact shape that made every mutant on a real project
+# report `mutationNotActivated`: activation evidence hashed only the
+# stub, never the dylib carrying the mutated code. This fixture exists so that
+# regression is driven by a real `xcodebuild`, not by hand-built directories.
+name: DebugDylibDemo
+options:
+  bundleIdPrefix: dev.mutantkit.fixture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  DebugDylibDemo:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.mutantkit.fixture.DebugDylibDemo
+
+  DebugDylibDemoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: DebugDylibDemo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  DebugDylibDemo:
+    build:
+      targets:
+        DebugDylibDemo: all
+        DebugDylibDemoTests: [test]
+    test:
+      targets: [DebugDylibDemoTests]

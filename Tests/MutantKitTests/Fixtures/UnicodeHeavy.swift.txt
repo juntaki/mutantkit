@@ -1,0 +1,39 @@
+// 日本語のコメント — このファイルはマルチバイト文字を含みます 🎌🍣🍜
+// Emoji and CJK text sit *before* every mutation site on purpose: a tool that
+// confuses UTF-8 byte offsets with Character offsets will splice at the wrong
+// place here and corrupt the file, while looking correct on ASCII input.
+
+import Foundation
+
+/// 注文 (order) — 名前もコメントも多バイト。
+struct 注文 {
+    let 商品名 = "🍣 寿司セット"
+    let メモ = "特盛り！🍜🍱🎌"
+
+    var isPaid = false
+    var isShipped = true
+
+    /// 支払い済みかどうかを返す。
+    func canShip(stock: Int) -> Bool {
+        // 🎌 コメントの後ろに比較演算子がある。
+        if stock > 0 && isPaid == true {
+            return true
+        }
+        return false
+    }
+
+    func 割引率(quantity: Int) -> Double {
+        // 数量が閾値以上なら割引 — 🍣🍣🍣
+        if quantity >= 10 {
+            return 0.2
+        } else if quantity < 3 {
+            return 0.0
+        }
+        return 0.1
+    }
+
+    func summary() -> String {
+        let prefix = isShipped ? "発送済み 📦" : "未発送 ⏳"
+        return "\(prefix) \(商品名) \(メモ)"
+    }
+}

@@ -1,0 +1,221 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fastest feedback of all: static analysis needs no build. SwiftLint and
+  # SwiftFormat run against the whole tree using the repo's own configs
+  # (.swiftlint.yml / .swiftformat), which were tuned against this
+  # codebase's actual style rather than stock defaults.
+  #
+  # `swiftlint lint` runs `--strict --baseline .swiftlint-baseline.json`:
+  # a handful of complexity/length rules (function_body_length,
+  # type_body_length, cyclomatic_complexity, file_length, large_tuple) fire
+  # against pre-existing debt — concentrated in, but not limited to, a few
+  # deliberately large orchestration files (see .swiftlint.yml's comments
+  # for the full breakdown, including which CLI command handlers are
+  # baselined too) — that aren't worth a risky structural refactor just to
+  # silence a linter. The baseline freezes exactly those pre-existing
+  # violations by identity (rule + file + line), so `--strict` still fails
+  # the build on any *new* violation anywhere, including a new one in an
+  # already-baselined file. Shrink the baseline over time by fixing an
+  # entry and regenerating with
+  # `swiftlint lint --write-baseline .swiftlint-baseline.json`; never grow
+  # it to paper over new debt.
+  #
+  # SwiftLint is pinned to an exact version (matching the version the
+  # baseline was generated with) rather than `brew install`'s floating
+  # latest: baseline identity and violation detection are both
+  # SwiftLint-version-sensitive, so an unpinned upgrade could silently
+  # change what the baseline recognizes, in either direction. Bump
+  # SWIFTLINT_VERSION and regenerate .swiftlint-baseline.json together, as
+  # one deliberate change, not independently.
+  lint:
+    name: Lint & format check
+    runs-on: macos-15
+    env:
+      SWIFTLINT_VERSION: "0.63.2"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SwiftFormat
+        run: brew install swiftformat
+      - name: Install pinned SwiftLint
+        run: |
+          curl -fsSL -o portable_swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/portable_swiftlint.zip"
+          unzip -o portable_swiftlint.zip swiftlint
+          chmod +x swiftlint
+          sudo mv swiftlint /usr/local/bin/swiftlint
+          rm portable_swiftlint.zip
+          installed_version="$(swiftlint version)"
+          if [ "$installed_version" != "$SWIFTLINT_VERSION" ]; then
+            echo "::error::Installed SwiftLint $installed_version does not match pinned SWIFTLINT_VERSION $SWIFTLINT_VERSION"
+            exit 1
+          fi
+      - name: SwiftLint
+        run: swiftlint lint --strict --config .swiftlint.yml --baseline .swiftlint-baseline.json Sources Tests
+      - name: SwiftFormat (check only)
+        run: swiftformat --lint --config .swiftformat .
+
+  # Fast feedback: everything that does not build another project.
+  unit:
+    name: Unit tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log
+      - name: Upload unit failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            test.log
+      - name: Publish unit failure excerpt
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- mutantkit-ci-unit-failure -->';
+            const readTail = (path) => {
+              if (!fs.existsSync(path)) return '';
+              const lines = fs.readFileSync(path, 'utf8').split('\n');
+              return lines.slice(-180).join('\n');
+            };
+            const build = readTail('build.log');
+            const test = readTail('test.log');
+            const excerpt = (test || build || 'No captured build/test log was available.').slice(-30000);
+            const body = `${marker}\n### Latest unit CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  # The suites that build and mutate real projects. Slow, and the only thing that
+  # proves the tool works rather than merely compiles: every wiring bug this
+  # project has had — a sandbox handed the wrong excludes, xcodebuild pointed at
+  # unmutated sources, concurrent mutants fighting over one simulator — was
+  # invisible to the unit tests and produced a confident, wrong score.
+  acceptance:
+    name: Acceptance (${{ matrix.fixture }})
+    runs-on: macos-15
+    needs: unit
+    strategy:
+      # Never cancel siblings: which fixtures fail together is a diagnosis.
+      fail-fast: false
+      matrix:
+        include:
+          - fixture: swift-package
+            filter: SwiftPackageMacOSAcceptanceTests
+            simulator: "0"
+          - fixture: swift-package-coverage
+            filter: SwiftPackageMacOSCoverageAcceptanceTests
+            simulator: "0"
+          - fixture: shard-merge
+            filter: ShardMergeAcceptanceTests
+            simulator: "0"
+          - fixture: swift-package-ios
+            filter: SwiftPackageIOSAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-project
+            filter: XcodeProjectAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-workspace
+            filter: XcodeWorkspaceAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-app-debug-dylib
+            filter: XcodeAppDebugDylibAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-unlinked-source
+            filter: XcodeUnlinkedSourceAcceptanceTests
+            simulator: "1"
+          - fixture: cli-commands
+            filter: CLICommandsAcceptanceTests
+            simulator: "0"
+          - fixture: process-supervision
+            filter: ProcessSupervisionAcceptanceTests
+            simulator: "0"
+          # The four below all build the same real .xcodeproj through the
+          # batching/incremental/coverage-selection paths that a 100-mutant
+          # benchmark against a real external project found broken while
+          # every unit test (all fakes, no real xcodebuild invocation or
+          # .xctestrun) stayed green. They are the whole reason this job
+          # exists rather than trusting `unit` alone.
+          - fixture: xcode-batch-testing
+            filter: XcodeBatchTestingAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-batch-testing-ui-target
+            filter: XcodeBatchTestingUITargetAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-coverage-selection
+            filter: XcodeCoverageSelectionAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-incremental-batch-testing
+            filter: XcodeIncrementalBatchTestingAcceptanceTests
+            simulator: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      # The suites pick whichever iPhone this machine actually has rather than
+      # pinning a model, so this is context for a failure, not a gate.
+      - name: Available simulators
+        if: matrix.simulator == '1'
+        run: xcrun simctl list devices available | grep -i iphone || true
+
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+
+      - name: Acceptance
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
+        run: |
+          set -o pipefail
+          swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
+
+      - name: Upload acceptance failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ matrix.fixture }}-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance.log

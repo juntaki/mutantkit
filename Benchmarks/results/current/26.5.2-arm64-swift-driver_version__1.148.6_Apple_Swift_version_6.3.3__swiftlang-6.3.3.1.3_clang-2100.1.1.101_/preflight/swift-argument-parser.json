@@ -1,0 +1,36 @@
+{
+  "projectID": "swift-argument-parser",
+  "toolchainProfileID": "26.5.2-arm64-swift-driver_version__1.148.6_Apple_Swift_version_6.3.3__swiftlang-6.3.3.1.3_clang-2100.1.1.101_",
+  "environment": {
+    "macOSVersion": "26.5.2",
+    "architecture": "arm64",
+    "swiftVersion": "swift-driver version: 1.148.6 Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)",
+    "xcodeVersion": "26.6",
+    "xcodeBuildVersion": "17F113",
+    "sdkVersions": {
+      "macosx": "26.0"
+    }
+  },
+  "projectBaseline": {
+    "succeeded": false,
+    "failure": "projectBaselineInconsistent",
+    "command": "swift build --build-tests && swift test --skip-build",
+    "exitCode": 1,
+    "outputExcerpt": "swift test --skip-build exits 1 while its own Swift Testing summary reports 'Test run with 146 tests in 9 suites passed'. Root-caused: a separate XCTest target, ArgumentParserGenerateManualTests, genuinely fails (testXMultiPageManual/testXSinglePageManual: 'Actual output does not match the expected output', a real man-page/groff formatting difference on this machine) and never surfaces in the Swift Testing summary MutantKit's adapter reads. MutantKit's fail-closed refusal to trust the mismatched exit code is correct, load-bearing behavior, not a bug -- it was not weakened."
+  },
+  "mutantKit": {
+    "succeeded": false,
+    "failure": null,
+    "command": null,
+    "exitCode": null,
+    "outputExcerpt": "not attempted (an earlier stage already failed, or the tool stage was not exercised this session)"
+  },
+  "muter": {
+    "succeeded": false,
+    "failure": "toolCompilationFailed",
+    "command": "muter run (muter.conf.yml: arguments:[test], executable:/usr/bin/swift)",
+    "exitCode": null,
+    "outputExcerpt": "error: ambiguous implicit access level for import of 'Foundation'; it is imported as 'internal' elsewhere, across multiple Muter-mutated files, ending in 'error: fatalError'. Real, reproduced via an actual `muter run` invocation against commit 2f77f2fccb6e84fecff338c37b199e33e7dfd119."
+  },
+  "comparable": false
+}

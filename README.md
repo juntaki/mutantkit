@@ -1,0 +1,358 @@
+# MutantKit
+
+Trustworthy mutation testing for Swift and Apple platforms.
+
+MutantKit introduces small faults into your code and checks whether your tests
+notice. Tests that pass against broken code are not testing anything, and
+coverage cannot tell you which ones those are.
+
+> **Status: v0.1, in development.** Isolated execution, with incremental builds,
+> batched testing, coverage-based test selection, and cross-run caching to keep
+> it fast at real-project scale. Eleven core operators (three experimental-only
+> on compile-safety grounds — arithmetic and assignment, both with
+> fixture-confirmed compile risk, plus arithmetic's own 2 confirmed
+> reproducible runtime hangs found in corpus validation; nil-coalescing
+> experimental-only for a different reason, demoted for low signal density
+> against a real-project corpus; ternary/unary-not/return-value are
+> corpus-measured on two real projects so far, assignment on one, neither
+> yet the additional project shapes this catalog's own promotion bar calls
+> for; two further operators — else-clause-deletion and
+> range-boundary-replacement — are new and not yet corpus-measured on any
+> project — see [Operators](#operators)).
+> See [Roadmap](#roadmap) for what is and is not implemented.
+
+## What makes this one different
+
+Not the operator count. The claim is narrower and, unusually for this category,
+falsifiable:
+
+> **Every mutant MutantKit reports can be proven to have been applied to your
+> source and executed. If it cannot be proven, MutantKit reports no score.**
+
+That is a strange thing to have to promise. It exists because the failure mode it
+rules out is real and it is silent: a mutation testing tool can complete
+successfully, print a confident score, and have applied no mutations at all. The
+number looks fine. It is measuring nothing.
+
+So MutantKit fails closed. A run that cannot reconcile its own invariants produces
+integrity violations and **no score** — not a zero, not a partial number, no
+score. A mutant with no source diff behind it is a phantom, and a phantom fails
+the whole run rather than quietly joining the denominator.
+
+Concretely:
+
+- **Activation is measured, not assumed.** A mutant's compiled code is compared
+  against the baseline's, so a mutation that reached the source but not the
+  binary is caught rather than scored. This is why every sandbox path is the same
+  length: the build path leaks into codegen, and unequal paths would make every
+  mutant look activated for reasons having nothing to do with the mutation.
+- **A mutation is a value, not a syntax node.** The Mutation Plan is plain JSON
+  and is the only source of truth. Mutations are anchored to UTF-8 byte ranges
+  and content hashes, never to SwiftSyntax node identity — so re-parsing is
+  harmless, discovery can drop every AST it reads, and plans survive sharding,
+  resuming and reproduction. ([ADR-0002](ADR/0002-the-mutation-plan-is-the-source-of-truth.md))
+- **A stale anchor is a diagnosis, not a corruption.** If the file changed,
+  you get `notApplied` with a precise reason. MutantKit never relocates an edit to
+  a nearby offset by guesswork, and never lets an unknown become `survived`.
+- **Test results come from `.xcresult`**, not from regexes over stdout. Output
+  formats change; structured results do not lie about whether a test failed.
+- **MutantKit owns the timeout, and reclaims what it starts.** A mutant that deletes
+  a `continuation.resume()` hangs forever. MutantKit kills the process group *and*
+  every descendant it can find by PID — because killing the group is not enough
+  on its own: SwiftPM's test helper moves itself into a new group, and the one
+  process that escapes is the one running your tests. It survives, spins, and
+  holds the output pipe open. This is covered by a fixture that hangs on purpose.
+- **Two scores, never one.** `Tested` and `Effective` answer different
+  questions, and quietly reporting only the flattering one is how a suite with
+  poor coverage comes to look excellent.
+
+## Install
+
+Requires macOS 14+, Swift 6.0+, Xcode 16+.
+
+```bash
+git clone <this repo> && cd mutantkit
+swift build -c release
+```
+
+## Use
+
+```bash
+mutantkit doctor    # check the environment BEFORE writing any config
+mutantkit init      # generate mutantkit.yml
+mutantkit plan --output plan.json
+mutantkit run --plan plan.json
+```
+
+Start with `doctor`. It tells you what kind of project you have, which schemes
+and test targets it found, whether `build-for-testing` actually succeeds, and
+whether the `.xctestrun` really exists — before you spend an hour finding out
+otherwise.
+
+### Inspecting a mutant
+
+A score is not actionable; a diff is. For any mutant:
+
+```bash
+mutantkit inspect mut_a1b2c3d4e5f6a7b8
+```
+
+shows the original and mutated source, the operator's reasoning, which tests ran,
+the outcome, the exact build and test commands, the evidence, and a command to
+reproduce it on its own:
+
+```bash
+mutantkit reproduce mut_a1b2c3d4e5f6a7b8
+```
+
+### CI
+
+```bash
+mutantkit plan --output plan.json
+mutantkit shard plan.json --count 8       # deterministic: a mutant always lands in the same shard
+mutantkit run --plan plan.3.json --output results.3.json
+mutantkit merge results/*.json
+```
+
+Plans are machine-independent JSON and every mutant checkpoints on completion, so
+an interrupted run resumes rather than restarting.
+
+Run profiles follow what large-scale practice has settled on — surface a few
+actionable mutants in review rather than a full report nobody reads:
+
+| Profile   | Scope                              | Operators             |
+| --------- | ---------------------------------- | --------------------- |
+| PR        | changed declarations, under budget | high confidence only  |
+| Nightly   | affected modules                   | default               |
+| Weekly    | whole project                      | including experimental |
+
+Diff-scoped PR runs do not replace full runs: mutants relevant to a change
+routinely live outside the changed lines, which is what nightly and weekly are
+for.
+
+## Configuration
+
+```yaml
+version: 1
+
+project:
+  kind: auto                 # or swiftPackageMacOS | swiftPackageApple | xcodeProject | xcodeWorkspace
+  scheme: App
+  destination: platform=iOS Simulator,name=iPhone 16
+
+sources:
+  include: [Sources/**]
+  exclude: ["**/Generated/**", "**/*Mock.swift"]
+
+tests:
+  targets: [AppTests]
+  # Swift packages only. Off by default: SwiftPM writes the XCTest half of its
+  # structured report only when tests run in parallel, so leaving this off costs
+  # per-test counts (`inspect` cannot name which test caught a mutant). Outcomes
+  # stay correct either way. Turning it on is a real trade: a suite that is not
+  # parallel-safe flakes, and a flaky failure during a mutant's run is recorded
+  # as that mutant being killed — silently inflating the score. Only enable it if
+  # `swift test --parallel` already passes reliably.
+  parallel: false
+
+operators:
+  profile: default           # conservative | default | experimental
+
+execution:
+  strategy: isolated
+  workers: auto
+  budget:
+    maxMutants: 50
+  # Off by default. When on, a mutant that looks killed is re-run once before
+  # the verdict is trusted; if the second run does not fail the same way, it is
+  # reported `flaky` and excluded from the score instead of silently inflating
+  # it. Doubles the test invocation for every mutant that looks killed, which is
+  # the common case in a well-tested project — real cost for a suite you already
+  # suspect of flaking under `tests.parallel`.
+  retestKilledMutants: false
+  # Narrows each mutant's test run to only the tests that cover its mutated
+  # line, measured once against the unmutated baseline. A mutant on a line no
+  # test reaches is `noCoverage` without ever being built. The single largest
+  # speedup available before touching incrementalBuild/testBatchSize below —
+  # cached across runs against an unchanged source tree and test suite.
+  selectCoveringTests: true
+  # Reuses one persistent, incrementally-recompiled sandbox per worker across
+  # its mutants instead of a fresh build for each — real Swift incremental
+  # compilation savings on a project with more than a handful of mutants.
+  incrementalBuild: true
+  # Merges several mutants' test runs into one xcodebuild invocation instead
+  # of one per mutant, amortizing the fixed simulator install/launch cost.
+  # Requires selectCoveringTests (a batch narrows every configuration to its
+  # own selection) and an Xcode project or workspace destination.
+  testBatchSize: 10
+
+timeouts:
+  mutant:
+    strategy: adaptive      # baseline × multiplier + overheadAllowance
+    multiplier: 3
+    overheadAllowance: 60s
+    minimum: 30s
+    maximum: 5m
+
+reports: [console, xcode, stryker-json, html]
+```
+
+`overheadAllowance` is additive for a reason. The baseline measures a suite that
+*passes*; a mutant that gets killed makes it *fail*, and failing costs extra
+fixed time — xcodebuild collects diagnostics and finishes writing the result
+bundle. That cost does not shrink with the suite, so on a small suite a pure
+multiplier under-budgets exactly the mutants that were about to be killed,
+reporting them as `timedOut` and dropping them from the score entirely. Budget
+generously: a `timedOut` should mean "this mutant hangs", not "the limit was
+tight", because the result cannot tell you which.
+
+Precedence: CLI > project config > environment > defaults.
+
+### Coming from Muter
+
+```bash
+mutantkit migrate --from-muter muter.conf.yml
+```
+
+The importer reports every field it translated, every field it dropped, and why.
+It does not silently discard settings it cannot carry.
+
+**MutantKit does not aim for behavioural compatibility with Muter, and will not
+reproduce its mutation scores.** The two tools measure differently — notably,
+MutantKit excludes mutants it cannot prove were applied, where Muter's score
+has counted them — so expect different, and typically lower, numbers. That
+difference is deliberate: see [What makes this one different](#what-makes-this-one-different).
+
+## Reports
+
+MutantKit emits the [Mutation Testing Elements](https://github.com/stryker-mutator/mutation-testing-elements)
+schema, so its output works with the same HTML renderer and dashboards used by
+Stryker, PIT and others. Its own JSON is richer than that schema — Stryker has no
+vocabulary for `notApplied` or `baselineMismatch` — and the mapping documents
+where information is lost rather than flattening the distinction.
+
+Also available: console, Xcode warnings (they appear in the issue navigator),
+self-contained HTML, and a markdown CI summary.
+
+## Architecture
+
+```
+CLI
+Core          MutationModel · MutationPlanner · Integrity · Configuration
+SwiftFrontend Discovery · Application · SourceAnchorVerifier   (SwiftSyntax)
+Execution     Workspace · ProcessSupervisor · Timeout · Checkpoint · Classifier ·
+              CoverageProfileCache · MutationResultCache
+AppleAdapters SwiftPM · xcodebuild · XCResult · SimulatorPool
+Operators     SwiftCoreOperators · ApplePlatformOperators
+Reporting     Console · Xcode · JSON · Stryker · HTML
+```
+
+Modules talk through protocols and immutable value types. There is no shared
+mutable state. Operators are pure functions from syntax to candidates — they
+cannot save files, build, or run tests, so an operator can never be the reason a
+result is wrong.
+
+## Roadmap
+
+| Phase | Status | Contents |
+| ----- | ------ | -------- |
+| 1 · Correctness core | in progress | Plan, stable IDs, eleven core operators (see [Operators](#operators): bool literal, logical connector, relational, ternary, unary-not, return-value default-enabled; arithmetic/assignment experimental-only, 0 unviable in a real-project corpus but arithmetic showed 2 confirmed reproducible runtime hangs there; nil-coalescing experimental-only, demoted for low signal density against a real-project corpus; else-clause-deletion/range-boundary-replacement experimental-only, brand new and not yet corpus-measured), isolated execution, baseline, timeout, evidence, JSON/text reports |
+| 2 · Apple integration | in progress | `.xcodeproj`, `.xcworkspace`, iOS packages, `.xcresult`, XCTest, Swift Testing, `doctor` |
+| 3 · Scale | in progress | coverage-based test selection, incremental build, batched testing, historical test prioritization with early abort (wave-based batched kill on a batchable adapter, serial per-invocation otherwise), cross-run coverage and result caches, diff mode, budget, checkpoint/resume, shard/merge, warm simulator pool, APFS clone sandboxes |
+| 4 · Schemata | in progress | one shared build embeds every mutation; a verifier-only trust chain (per-image build receipts, binary runtime protocol, confirmation parity with isolated mode) decides every verdict; per-operator, gated by a lowerer registry — `swift.core.bool-literal-inversion` is embeddable today, every other operator automatically falls back to isolated mode |
+| 5 · Apple operators | **blocked on research** | lifecycle, cancellation, continuation, persistence, SwiftUI, accessibility |
+
+Phase 5 is blocked deliberately. Apple-specific operators must be derived from a
+classified corpus of real bug-fix commits in shipping open-source apps — the
+method MDroid+ used for Android — not from plausible-sounding guesses. Until that
+study exists, `ApplePlatformOperators` contains one operator,
+`LifecycleSuperCallRemovalOperator`, purely as a demonstration of the
+extension point — it is not registered, has no RED tests, and is not
+reachable from the CLI by any profile or `operators.enable` entry. See
+`Research/fault-taxonomy/` and the operator's own doc comment.
+
+### Not in v0.1
+
+UI tests · on-device runs · external binary plugins · LLVM IR mutation · LLM
+generated mutations · automatic equivalent mutant detection · exhaustive Swift
+syntax coverage · Muter score parity · arbitrary runners (Fastlane, Buck).
+
+## Contributing
+
+### Tests
+
+```bash
+swift test                            # unit, regression, integrity — under a second
+MUTANTKIT_ACCEPTANCE=1 swift test        # + the fixtures, built and mutated for real
+```
+
+The acceptance suites plan and run the real binary against the projects in
+`Fixtures/`, and assert the exact mutants expected to live and die rather than a
+score — a score is one number that many different wrong runs can agree on. They
+are off by default because they take minutes; CI runs them on every push.
+
+They are not optional rigour. Every wiring bug this project has had was invisible
+to the unit tests and produced a confident, wrong number: a sandbox handed
+source-file globs where it wanted workspace excludes, `xcodebuild` pointed at the
+original sources while the mutated copy sat unread beside it, concurrent mutants
+fighting over one simulator. If you touch the execution path, run them.
+
+Add `MUTANTKIT_ACCEPTANCE_SIMULATOR=0` to skip the suites needing a simulator.
+
+### Operators
+
+An operator earns `defaultEnabled` by evidence, not by being interesting:
+
+- it corresponds to a documented real fault pattern
+- it has positive **and** negative syntax fixtures
+- ≥99% compile success rate
+- zero phantom mutants
+- few trivial or duplicate mutants
+- isolated and schemata execution agree
+- validated on multiple real projects
+- its diff is understandable to the developer who has to act on it
+
+| Operator | Profile | Confidence | Notes |
+| --- | --- | --- | --- |
+| `swift.core.bool-literal-inversion` | conservative | high | `true` ↔ `false` |
+| `swift.core.relational-operator-replacement` | conservative | high | boundary shift + negation, e.g. `<` → `<=`, `>=` |
+| `swift.core.logical-connector-replacement` | conservative | high | `&&` ↔ `\|\|` |
+| `swift.core.ternary-branch-swap` | conservative — **provisional** | high | `a ? b : c` → `a ? c : b`; preserves comments/trivia around the condition and both branches. Always compile-viable, but a targeted single-operator corpus run against a real project (50 mutants, 0 unviable) measured only a **13.3%** kill rate on buildable mutants — in the same low range that got nil-coalescing-fallback demoted. Not yet demoted here because this is one project's data, not a confirmed pattern; see the operator catalog for the open question |
+| `swift.core.unary-not-removal` | default — **provisional** | medium | `!x` → `x`; never assumes a multi-`!` token (`!!x`) is stacked built-in negation, since it could be a user-defined operator. A targeted corpus run against a real project (50 mutants, 0 unviable) measured a healthy **40.0%** kill rate — no signal-density concern found so far |
+| `swift.core.return-value-replacement` | default — **provisional** | medium | restricted to explicit `return`s whose neutral replacement the syntax alone proves safe; excludes equivalent spellings (`0x0`, `nil as T?`, `Optional<T>.none`, an empty raw string, ...) by value/structure, not text comparison. Measured at **29.4%** kill rate in the same real-project corpus run, 0 unviable |
+| `swift.core.nil-coalescing-fallback` | **experimental** | medium | `a ?? b` → `b`; a surviving mutant means the suite never proved a non-nil left-hand value is preferred over the fallback, not that the nil path is untested. Always compile-viable, but a real-project corpus run showed it alone occupying half a 100-mutant sample with **8.3%** kill rate on buildable mutants, mostly re-stating the same low-value "defensive `?? fallback`, never tested against a non-nil value" gap — demoted for signal density, not compile safety |
+| `swift.core.arithmetic-operator-replacement` | **experimental** | medium | `+` ↔ `-`, `*` ↔ `/`; no symbol resolution, and Swift's arithmetic protocols do not guarantee a matched pair (`Numeric` has no `/`) — confirmed to produce real compile failures against representative fixtures. A targeted 50-mutant corpus run against a real project measured 0 unviable (this codebase's arithmetic usage didn't happen to hit those patterns — not evidence the fixture risk is false). The same run originally reported a much larger flaky/infrastructure-failure count than any other operator; most of that turned out to be a batch-timeout attribution bug, since fixed — **2 genuine, reproducible hangs remain**, clustered in loop/index-arithmetic code |
+| `swift.core.assignment-operator-replacement` | **experimental** | medium | `+=` ↔ `-=`, `*=` ↔ `/=`; same compile-viability gap as arithmetic replacement one syntactic level up. A targeted 50-mutant corpus run against a real project measured 0 unviable and a healthy 37.5% kill rate, without arithmetic's instability pattern (1/50 flaky, no timeouts) |
+| `swift.core.else-clause-deletion` | **experimental** | experimental | `if a { X } else { Y }` → `if a { X }`; only the trailing `else`/`else if` clause is ever removed, never the `if` branch or the condition, and discovery skips sites where deleting `else` would break Swift's exhaustiveness rules for an `if`/`switch` expression or the last statement of a non-`Void` body. Brand new — no Muter analogue and no real-project corpus measurement yet |
+| `swift.core.range-boundary-replacement` | **experimental** | experimental | `a..<b` ↔ `a...b`; covers only the binary infix form. Not proven safe to compile (the two forms produce different concrete range types) or safe to run (`..<` → `...` can turn a valid upper-bound-exclusive index into an out-of-bounds access) by default. Brand new — no real-project corpus measurement yet |
+
+"**provisional**" above means: corpus-measured against real projects, but not
+yet against the additional project shapes this catalog's own
+default-promotion bar calls for (see `Research/operator-catalog/README.md`
+§ "Quality gate for every operator"). Ternary-branch-swap, unary-not-removal
+and return-value-replacement have now each been corpus-measured on **two**
+real projects — a second project's run reproduced the first project's
+overall pattern for all three, and ternary-branch-swap's low kill rate in
+particular held up on the second project too, mirroring the pattern that
+got nil-coalescing-fallback demoted; this is flagged as an open decision
+rather than resolved here. Assignment-operator-replacement has been
+corpus-measured on only one real project so far. Else-clause-deletion and
+range-boundary-replacement are new and have not yet been corpus-measured on
+any project. Full methodology and results (internal, not part of this
+public repo): `Research/corpus-validation/`.
+
+Arithmetic, assignment, else-clause-deletion and range-boundary-replacement
+are reachable via the `experimental` profile or an explicit
+`operators.enable` entry, not by default — see
+`Research/operator-catalog/README.md` for the measured compile-viability
+evidence and what promoting them to default would require. Nil-coalescing
+fallback is reachable the same way, for a different reason: see
+`Research/operator-catalog/README.md` for the corpus signal-density
+evidence — a second real project's measurement did not reproduce the first
+project's low kill rate, an unresolved discrepancy, not a reversal of the
+demotion — and what re-promoting it would require.
+
+## Licence
+
+Apache 2.0. See [LICENSE](LICENSE), [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES),
+and [SECURITY.md](SECURITY.md).

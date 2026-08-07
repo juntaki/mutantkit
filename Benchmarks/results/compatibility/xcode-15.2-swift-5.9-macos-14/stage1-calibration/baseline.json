@@ -1,0 +1,97 @@
+{
+  "runID": "31023117878",
+  "runURL": "https://github.com/juntaki/mutantkit-private/actions/runs/31023117878",
+  "recordedAt": "2026-08-05T16:30:00Z",
+  "toolchain": {
+    "xcodeVersion": "15.2",
+    "swiftVersion": "5.9.2",
+    "runner": "github-actions macos-14"
+  },
+  "scope": {
+    "project": "swift-numerics",
+    "commitSHA": "899af71c0256d0ad181e3b7eb3453c1065d928a5",
+    "sourceFile": "Sources/IntegerUtilities/GCD.swift",
+    "muterCommitSHA": "95bf2096d096ac66ab7c279b7e58fae0a4a77dac",
+    "sharedOperator": "RelationalOperatorReplacement / swift.core.relational-operator-replacement"
+  },
+  "mutantKit": {
+    "totalToolWallSeconds": 580.8,
+    "perMode": {
+      "cold": {
+        "wallSeconds": 202.3, "discovered": 4, "isolatedCount": 4, "schemataCount": 0,
+        "baselineBuildSeconds": 23.0, "baselineTestSeconds": 18.1, "baselineTotalSeconds": 41.1,
+        "sumPerMutantBuildSeconds": 86.7, "sumPerMutantTestSeconds": 69.5
+      },
+      "warm": {
+        "wallSeconds": 168.1, "discovered": 4, "isolatedCount": 4, "schemataCount": 0,
+        "baselineBuildSeconds": 15.7, "baselineTestSeconds": 16.9, "baselineTotalSeconds": 32.5,
+        "sumPerMutantBuildSeconds": 65.6, "sumPerMutantTestSeconds": 67.5
+      },
+      "incremental": {
+        "wallSeconds": 210.3, "discoveredBeforePatch": 4, "discoveredAfterPatch": 6, "isolatedCount": 6, "schemataCount": 0,
+        "baselineBuildSeconds": 13.9, "baselineTestSeconds": 15.6, "baselineTotalSeconds": 29.4,
+        "sumPerMutantBuildSeconds": 85.9, "sumPerMutantTestSeconds": 92.4
+      }
+    },
+    "phantom": 0, "falseScored": 0, "backendDisagreements": 0
+  },
+  "muter": {
+    "totalToolWallSeconds": 270.6,
+    "perMode": {
+      "cold": {"wallSeconds": 92.2, "discovered": 3},
+      "warm": {"wallSeconds": 77.3, "discovered": 3},
+      "incremental": {"wallSeconds": 101.1, "discoveredBeforePatch": 3, "discoveredAfterPatch": 5}
+    }
+  },
+  "comparability": {
+    "exactlyComparable": 0,
+    "approximatelyComparable": 0,
+    "mutantKitOnly": 6,
+    "muterOnly": 5,
+    "operatorFamilyDistribution": {
+      "mutantKit": {"swift.core.relational-operator-replacement": 6},
+      "muter": {"RelationalOperatorReplacement": 5}
+    },
+    "sourceSpanDistribution": {
+      "note": "Incremental-mode raw reports show both tools independently landing on the SAME real source lines in GCD.swift: MutantKit line 29 (x2, distinct relational-operator variants of the same '<' site), 31, 35, 49 (x2); Muter line 29, 31, 35, 49 (x2). This is a real, high-confidence line-level overlap neither tool's own report can be used to auto-confirm today (see comparability note above)."
+    },
+    "note": "Both tools independently found the SAME real source lines (29, 31, 35, 49, 49 in the incremental-mode GCD.swift) with the same operator family (RelationalOperatorReplacement) -- a real, high-confidence overlap by line+operator that the current matching key cannot confirm, because Muter's real report.json never includes mutationSnapshot (before/after text), only mutationPoint+testSuiteOutcome (confirmed against Muter's own CodingKeys). Cross-tool matching relies on text hashes, not line/column, by design -- so this is an honest, expected 'not confirmable' result given real data, never a fabricated match."
+  },
+  "job": {
+    "totalWallMinutesApprox": 30,
+    "fixedSetupMinutesApprox": 16
+  },
+  "causalFinding": {
+    "question": "What dominates MutantKit's 580.8s?",
+    "answer": "B: isolated fallback is 100% of the workload in this run -- ALL 14 mutant executions across all 3 modes ran under executionMode=isolated (0 schemata), confirmed directly from MutantKit's own real report.json per-mutant field. RelationalOperatorReplacement is not schemata-eligible today (only bool-literal-inversion is). Baseline cost is a small, consistent fraction (~15-20% of each mode's total: 29-41s of 168-210s); per-mutant build+test sums (~78-80% of total) dominate. Confirmation/differential-validation and report-parsing overhead are comparatively small (external wall vs MutantKit's own internal startedAt/finishedAt differ by only ~2-5s per mode).",
+    "evidence": "Computed directly from each mode's raw report.json: results[].executionMode, results[].buildDurationSeconds, results[].testDurationSeconds, baseline.buildDurationSeconds/testDurationSeconds, startedAt/finishedAt -- never inferred or estimated.",
+    "implication": "Cache-based improvements (schemata build/result cache) would not help here, since isolated mode's own rebuild-per-mutant cost -- not a cache-miss cost -- is what's being paid. Schemata-izing RelationalOperatorReplacement (or another common operator) is the change with real, evidenced leverage on this specific bottleneck."
+  },
+  "explicitCaveats": [
+    "pipeline calibration only, not a performance conclusion",
+    "one repetition per mode",
+    "MutantKit and Muter operator sets are not identical (Muter has no bool-literal-inversion; this run scoped both to their one shared operator, RelationalOperatorReplacement, so operator sets ARE matched for this specific run, but mutation counts still differ slightly: 4-6 for MutantKit vs 3-5 for Muter, a real per-tool discovery difference on the same source, not yet root-caused)",
+    "diskBytesWritten was unavailable in this run (unwired at the time) -- fixed in a follow-up commit, not retroactively backfilled into this baseline",
+    "not a cross-tool performance conclusion -- MutantKit and Muter costs are reported side by side for calibration purposes only"
+  ],
+  "bugsFoundAndFixed": [
+    {
+      "id": 1,
+      "description": "ResultNormalizer.normalizeMuterReport required an applied['mutationSnapshot']['before'/'after'] field. Confirmed against Muter's own source (Sources/muterCore/TestReporting/MuterTestReport.swift AppliedMutationOperator.CodingKeys) that this field is explicitly excluded from JSON encoding, at any version -- it never exists in a real report. Every real Muter mutation was silently dropped as a result (0 discovered/killed/survived reported despite 3 real mutations existing in the raw report).",
+      "fixCommit": "356c9c3 is unrelated; this fix landed on feature/mutantbench-compatibility-lane",
+      "regressionTest": "realMuterReportShapeWithoutSnapshotStillParses (Tests/BenchmarkRunnerTests/ResultNormalizerTests.swift)"
+    },
+    {
+      "id": 2,
+      "description": "The workflow's --mutantkit-source-include \"Sources/IntegerUtilities/**\" matched the whole 6-file module (83 real ROR mutations, confirmed via a local `mutantkit plan`), not just GCD.swift. At isolated-mode cost that is a real 1.5-3 hour run, which blew past the 900-second per-invocation timeout and produced no report at all for MutantKit.",
+      "fix": "Narrowed to the exact file Sources/IntegerUtilities/GCD.swift",
+      "regressionTest": "Confirmed locally (mutantkit plan: 4 mutations, 1 file; a real mutantkit run completing in ~66s) before redispatching"
+    },
+    {
+      "id": 3,
+      "description": "ResultNormalizer read integrity?[\"passed\"] as a JSON key. IntegrityReport.passed (Sources/MutationModel/Integrity.swift) is a computed property (violations.isEmpty), never a stored/serialized field -- the key can never exist in real report.json. Every real MutantKit run was silently marked correctness-FAILED regardless of actual data (0 violations, all counts consistent).",
+      "fix": "Derived integrityPassed as violations.isEmpty, matching MutantKit's own real semantics",
+      "regressionTest": "integrityPassedIsDerivedFromViolationsNotAMissingKey (Tests/BenchmarkRunnerTests/ResultNormalizerTests.swift)"
+    }
+  ]
+}

@@ -1,0 +1,1551 @@
+import Foundation
+import MutationExecution
+import MutationModel
+import SwiftCoreOperators
+import SwiftFrontend
+
+/// Builds and tests anything that needs `xcodebuild`: `.xcodeproj`,
+/// `.xcworkspace`, and Swift packages targeting a non-host Apple platform.
+///
+/// The package case is not an afterthought. A package declaring only iOS has no
+/// host slice, so `swift test` cannot run it at all; routing it here is what lets
+/// it link UIKit and run on a simulator.
+public struct XcodeBuildAdapter: Sendable {
+    let configuration: Configuration
+    public let kind: ProjectKind
+    /// The `.xcodeproj`/`.xcworkspace`, relative to the project root. `nil` for a
+    /// package, where `xcodebuild` reads the manifest from the working directory.
+    ///
+    /// Stored relative rather than absolute so it can be re-resolved against each
+    /// sandbox. Passing the original absolute path would build the user's real,
+    /// unmutated sources while the mutated copy sat unread in the sandbox — every
+    /// mutant would then produce a binary identical to the baseline's and the run
+    /// would report a confident, meaningless score.
+    let projectFileRelativePath: String?
+    let resultReader: XCResultAdapter
+    /// Shared across every mutant, which is the entire point: it is what stops two
+    /// of them being handed the same device.
+    let simulators: SimulatorPool
+    /// The destination resolved once, at run start — see `DestinationResolver`.
+    /// `nil` when no resolution has been performed (a caller that predates
+    /// this, or an intentionally unresolved one-off invocation); every build
+    /// and test call falls back to the previous, per-call resolution in that
+    /// case, so this is purely additive.
+    let resolvedDestination: ResolvedDestination?
+
+    public init(
+        configuration: Configuration,
+        kind: ProjectKind,
+        projectFile: URL?,
+        projectRoot: URL,
+        resolvedDestination: ResolvedDestination? = nil
+    ) {
+        self.configuration = configuration
+        self.kind = kind
+        projectFileRelativePath = projectFile.flatMap { Self.relativePath(of: $0, under: projectRoot) }
+        resultReader = XCResultAdapter()
+        simulators = SimulatorPool(workingDirectory: projectRoot)
+        self.resolvedDestination = resolvedDestination
+    }
+
+    /// Test-only initializer that injects the simulator pool, so
+    /// `prepareSimulatorForRun()`'s outcome mapping can be exercised against
+    /// a scripted pool without a real simulator. Internal to keep it out of
+    /// the public surface.
+    init(
+        configuration: Configuration,
+        kind: ProjectKind,
+        projectFile: URL?,
+        projectRoot: URL,
+        resolvedDestination: ResolvedDestination?,
+        simulators: SimulatorPool
+    ) {
+        self.configuration = configuration
+        self.kind = kind
+        projectFileRelativePath = projectFile.flatMap { Self.relativePath(of: $0, under: projectRoot) }
+        resultReader = XCResultAdapter()
+        self.simulators = simulators
+        self.resolvedDestination = resolvedDestination
+    }
+
+    /// The device name in a destination string, if it names one.
+    ///
+    /// `platform=iOS Simulator,name=iPhone 17 Pro` → `iPhone 17 Pro`.
+    static func deviceName(inDestination destination: String) -> String? {
+        for field in destination.split(separator: ",") {
+            let parts = field.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "name" else { continue }
+            return parts[1].trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    /// Whether this destination runs on a simulator device that must not be shared.
+    ///
+    /// A generic or macOS destination has no device to contend over. Unlike
+    /// the original version of this check, a destination pinned to `id=` is
+    /// *not* exempted: once `resolvedDestination` is set, `destination()`
+    /// itself always returns an `id=` string (see below), and that device
+    /// still needs exactly the same mutual exclusion an unresolved
+    /// `name=` destination would have needed — the resolution changed
+    /// *which* string names the device, not whether concurrent workers can
+    /// still collide on it.
+    var destinationNeedsSimulatorLease: Bool {
+        let target = destination()
+        return target.localizedCaseInsensitiveContains("iOS Simulator")
+            && !target.localizedCaseInsensitiveContains("generic/")
+    }
+
+    /// `nil` when the file lies outside the root — a layout we cannot sandbox, and
+    /// one the caller must not silently paper over.
+    static func relativePath(of file: URL, under root: URL) -> String? {
+        let filePath = file.resolvingSymlinksInPath().standardizedFileURL.path
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        guard filePath.hasPrefix(rootPath + "/") else { return nil }
+        return String(filePath.dropFirst(rootPath.count + 1))
+    }
+
+    /// Boots and verifies readiness of the device this adapter's tests will
+    /// run on, if it has a resolved simulator destination. No-op for macOS
+    /// destinations, packages without a simulator, and adapters that were
+    /// never given a `resolvedDestination`.
+    ///
+    /// Idempotent and cheap on a warm device: `bootstatus` returns
+    /// immediately. The CLI calls this once at run start so the first
+    /// `xcodebuild` test invocation does not pay the cold-boot tax or hit
+    /// the CoreSimulator race a cold first install was found to hit.
+    ///
+    /// Returns a record of what happened — warm, cold, or failed — rather
+    /// than dropping the result: the run logs it, persists it to the
+    /// `RunManifest`, and (per the fail-closed policy in `RunCommand`) stops
+    /// before the baseline if readiness could not be verified.
+    public func prepareSimulatorForRun() async -> SimulatorPreparationRecord {
+        guard let device = resolvedDestination?.device else {
+            return SimulatorPreparationRecord(outcome: .notApplicable)
+        }
+        do {
+            let outcome = try await simulators.prepare(udid: device.udid)
+            return SimulatorPreparationRecord(
+                outcome: outcome == .alreadyBooted ? .alreadyBooted : .prepared,
+                udid: device.udid,
+                name: device.name
+            )
+        } catch {
+            return SimulatorPreparationRecord(
+                outcome: .failed,
+                udid: device.udid,
+                name: device.name,
+                detail: "\(error)"
+            )
+        }
+    }
+
+    // MARK: - Invocation shape
+
+    /// `-workspace`/`-project` resolved inside `workspace`, or nothing for a package.
+    private func projectArguments(in workspace: URL) -> [String] {
+        guard let projectFileRelativePath else { return [] }
+        let path = workspace.appendingPathComponent(projectFileRelativePath).path
+        switch kind {
+        case .xcodeWorkspace: return ["-workspace", path]
+        case .xcodeProject: return ["-project", path]
+        case .swiftPackageApple, .swiftPackageMacOS, .auto: return []
+        }
+    }
+
+    /// Where DerivedData goes for this workspace.
+    ///
+    /// Always explicit, and meant to always stay inside the sandbox. Xcode's
+    /// default is a shared path keyed by project name, so every concurrent
+    /// mutant — each a copy of the same project, and therefore sharing that
+    /// name — would build into one directory and overwrite the binaries the
+    /// others are about to test. Mutants would then be scored against each
+    /// other's products.
+    ///
+    /// The primary guarantee against that is upstream: `ConfigurationValidator`
+    /// rejects an absolute `project.derivedDataPath` before a run ever starts,
+    /// so this function should never actually be asked to resolve one. The
+    /// `hasPrefix("/")` branch below is a defensive fallback, not the
+    /// guarantee itself — kept because this adapter can be constructed
+    /// directly (e.g. in tests) without going through that validation step.
+    ///
+    /// Same story for a symlinked path component that resolves outside the
+    /// workspace (`derivedDataPath: ExternalDD/build` where `ExternalDD` is
+    /// a symlink): `ConfigurationValidator` now rejects that too, by
+    /// resolving symlinks against the real project directory and requiring
+    /// a strict descendant. That check deliberately lives there, not here:
+    /// this function only ever sees `workspace`, a per-worker sandbox
+    /// already copied once the run has started, whereas the validator can
+    /// inspect the original tree before any worker exists — the earliest
+    /// point a symlink on disk can be observed at all. This function does
+    /// not re-resolve and refuse on its own; doing so here would either
+    /// silently coerce the path or crash a run a config-time check should
+    /// already have stopped, and this codebase prefers the latter checked
+    /// loudly up front (see the validator's doc comment).
+    func derivedDataPath(in workspace: URL) -> URL {
+        if let configured = configuration.project.derivedDataPath {
+            // Checked on `configured` itself, not on `URL(fileURLWithPath:
+            // configured).path` — that initializer always yields an absolute
+            // path (resolving a relative input against the current working
+            // directory), so testing the resolved URL's path would always be
+            // true and this fallback would never actually resolve a relative
+            // path against the workspace as intended.
+            guard configured.hasPrefix("/") else {
+                return workspace.appendingPathComponent(configured)
+            }
+            return URL(fileURLWithPath: configured)
+        }
+        return workspace.appendingPathComponent(".mutantkit/DerivedData", isDirectory: true)
+    }
+
+    /// `xcodebuild test-without-building` arguments, extracted so the target
+    /// filter can be pinned without needing a real toolchain to run it against.
+    ///
+    /// An xctestrun built for a scheme with more than one test target (a UI test
+    /// target alongside the unit tests, say) runs all of them unless told
+    /// otherwise. Left unfiltered, `tests.targets` — which the SwiftPM adapter
+    /// honours with `--filter` — would silently do nothing here, and every
+    /// mutant's classification would include targets the user never asked to
+    /// measure against: slower, and liable to fail the baseline on a UI test
+    /// that has nothing to do with the mutation being scored.
+    /// - Parameters:
+    ///   - targets: what to run, as `-only-testing:` selectors. Accepts
+    ///     either granularity the flag itself accepts: a bare test target
+    ///     (`"AppTests"`, the normal case) or a single fully-qualified test
+    ///     (`"AppTests/AddTests/testAdd"`, used to narrow a mutant's run to
+    ///     the tests `TestSelecting` attributed to its line). Both are valid
+    ///     `-only-testing:` selectors, so no separate code path is needed
+    ///     for the narrowed case.
+    ///   - enableCoverage: adds `-enableCodeCoverage YES`. Used for the
+    ///     baseline run — whole-suite or, once per test, individually — that
+    ///     `CoverageMeasuring`/`TestSelecting` read back afterward; never for
+    ///     an ordinary mutant run, which has no use for the instrumentation
+    ///     and would only pay its cost.
+    static func testWithoutBuildingArguments(
+        xctestrunPath: String,
+        destination: String,
+        resultBundlePath: String,
+        targets: [String],
+        extraArguments: [String],
+        enableCoverage: Bool = false
+    ) -> [String] {
+        var arguments = [
+            "test-without-building",
+            "-xctestrun", xctestrunPath,
+            "-destination", destination,
+            // Always requested, so there is always a structured record to classify
+            // from. Without it a failing run leaves only console text, and console
+            // text is not something this tool is willing to decide an outcome from.
+            "-resultBundlePath", resultBundlePath,
+            // xcodebuild's default (`on-failure`) shells out to `simctl diagnose` —
+            // a sysdiagnose-grade log collection with its own internal timeout in
+            // the hundreds of seconds — the moment any mutant's first test fails,
+            // which every survived-vs-killed mutant does by design half the time.
+            // Found the hard way: a mutant can sit for minutes past what its own
+            // test takes while this runs, racing mutantkit's own timeout — and if that
+            // timeout fires first, the result bundle it kills mid-write is exactly
+            // the shape a wrong verdict comes from. This tool builds its own
+            // evidence from the structured result and the build product hash; it
+            // has no use for a sysdiagnose.
+            "-collect-test-diagnostics", "never"
+        ]
+        if enableCoverage {
+            arguments.append(contentsOf: ["-enableCodeCoverage", "YES"])
+        }
+        for target in targets {
+            arguments.append("-only-testing:\(target)")
+        }
+        arguments.append(contentsOf: extraArguments)
+        return arguments
+    }
+
+    func productsDirectory(in workspace: URL) -> URL {
+        derivedDataPath(in: workspace).appendingPathComponent("Build/Products", isDirectory: true)
+    }
+
+    /// The destination to build and test against.
+    ///
+    /// A package for a non-host platform needs a real one; guessing a specific
+    /// simulator here would be the same class of mistake as guessing the
+    /// `.xctestrun` name, so an unconfigured package asks for `generic/platform=iOS`
+    /// at build time and requires a leased device at test time.
+    ///
+    /// `resolvedDestination` — when set — wins over the raw configuration:
+    /// it is what `DestinationResolver` already resolved `name=`/implicit
+    /// `OS:latest` to, once, at run start, and every build and test in the
+    /// run must address that same device, not re-derive its own answer.
+    func destination() -> String {
+        if let resolvedDestination { return resolvedDestination.destinationArgument }
+        if let configured = configuration.project.destination { return configured }
+        return kind == .swiftPackageApple ? "platform=iOS Simulator,name=iPhone 16" : "platform=macOS"
+    }
+
+    // MARK: - Scheme
+
+    /// The scheme to build.
+    ///
+    /// Resolved from configuration when given, otherwise discovered. Never
+    /// derived from the project's name: SwiftPM's generated scheme is
+    /// `<Package>-Package`, and an `.xcodeproj`'s schemes need not mention the
+    /// project at all, so a name built by convention names something that does not
+    /// exist.
+    func resolveScheme(in workspace: URL) async throws -> String {
+        if let configured = configuration.project.scheme { return configured }
+
+        let schemes = await discoverSchemes(in: workspace)
+
+        guard !schemes.isEmpty else {
+            throw BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                No schemes are available here. Open the project in Xcode and mark a \
+                scheme shared, or set project.scheme in mutantkit.yml.
+                """,
+                command: listCommand(in: workspace, result: nil),
+                output: ""
+            )
+        }
+
+        guard schemes.count == 1 else {
+            throw BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                \(schemes.count) schemes are available (\(schemes.joined(separator: ", "))) \
+                and mutantkit will not choose for you. Set project.scheme in mutantkit.yml.
+                """,
+                command: listCommand(in: workspace, result: nil),
+                output: ""
+            )
+        }
+
+        return schemes[0]
+    }
+
+    private func listCommand(in workspace: URL, result: ProcessResult?) -> CommandRecord {
+        CommandRecording.record(
+            executable: ToolPaths.xcodebuild,
+            arguments: projectArguments(in: workspace) + ["-list", "-json"],
+            workingDirectory: workspace,
+            result: result
+        )
+    }
+
+    /// Discovered schemes, or an empty list when discovery itself failed.
+    ///
+    /// Non-throwing because every caller treats "could not ask" and "there are
+    /// none" the same way: both mean no scheme can be resolved, and both are
+    /// reported with the same remedy.
+    func discoverSchemes(in workspace: URL) async -> [String] {
+        let arguments = projectArguments(in: workspace) + ["-list", "-json"]
+        let result = try? await ProcessSupervisor.run(
+            executable: ToolPaths.xcodebuild,
+            arguments: arguments,
+            workingDirectory: workspace,
+            timeoutSeconds: 120
+        )
+
+        guard let result, result.succeeded else { return [] }
+        return SchemeListJSON.schemes(from: result.standardOutput)
+    }
+}
+
+// MARK: - Build
+
+extension XcodeBuildAdapter: BuildAdapter {
+    public func buildBaseline(in workspace: URL) async throws -> BuildArtifact {
+        try await build(in: workspace)
+    }
+
+    public func buildMutant(_ mutation: AppliedMutation, in workspace: URL) async throws -> BuildArtifact {
+        try await build(in: workspace)
+    }
+
+    /// - Parameter enableCoverage: adds `-enableCodeCoverage YES` to
+    ///   `build-for-testing` itself. Confirmed necessary, not just the test
+    ///   invocation's own `-enableCodeCoverage YES`, on a real Xcode
+    ///   project (a hand-authored `.xcodeproj`, not an auto-generated
+    ///   SwiftPM scheme): source-based coverage is compiled in, and a
+    ///   binary `build-for-testing` produced without the flag has no
+    ///   instrumentation for `test-without-building` to retroactively turn
+    ///   on — confirmed by a bundle whose `content-availability` reported
+    ///   `hasCoverage: false` despite the test-time flag. Only ever used
+    ///   for the dedicated coverage rebuild in `readCoverage`/
+    ///   `measurePerTestCoverage`, never for `buildBaseline`/`buildMutant`:
+    ///   an instrumented baseline's product hash would differ from every
+    ///   mutant's uninstrumented one purely from the added profiling
+    ///   counters, making every mutant look "activated" whether or not its
+    ///   own edit actually reached the binary — the same reason
+    ///   `SwiftPackageMacOSAdapter` captures its baseline's hash *before*
+    ///   the coverage-instrumented test rebuild rather than after.
+    private func build(in workspace: URL, enableCoverage: Bool = false, extraArguments: [String] = []) async throws -> BuildArtifact {
+        let scheme = try await resolveScheme(in: workspace)
+        let derivedData = derivedDataPath(in: workspace)
+
+        // `build-for-testing`, not `build`: it produces the test bundles *and* the
+        // `.xctestrun` that `test-without-building` needs, which is what lets the
+        // build and test phases be timed and classified separately.
+        var arguments = projectArguments(in: workspace) + [
+            "build-for-testing",
+            "-scheme", scheme,
+            "-destination", destination(),
+            "-derivedDataPath", derivedData.path
+        ]
+        // Build-setting overrides (e.g. XcodeLinkerInjector's OTHER_LDFLAGS/
+        // LIBRARY_SEARCH_PATHS) go last, matching xcodebuild's own
+        // convention of trailing NAME=value pairs after every flag.
+        arguments.append(contentsOf: extraArguments)
+        if enableCoverage {
+            arguments.append(contentsOf: ["-enableCodeCoverage", "YES"])
+        }
+
+        let result: ProcessResult
+        do {
+            result = try await ProcessSupervisor.run(
+                executable: ToolPaths.xcodebuild,
+                arguments: arguments,
+                workingDirectory: workspace,
+                timeoutSeconds: configuration.timeouts.baselineSeconds,
+                terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
+            )
+        } catch {
+            throw BuildFailure(
+                kind: .infrastructure,
+                diagnosis: "Could not launch xcodebuild: \(error)",
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild,
+                    arguments: arguments,
+                    workingDirectory: workspace,
+                    result: nil
+                ),
+                output: ""
+            )
+        }
+
+        let command = CommandRecording.record(
+            executable: ToolPaths.xcodebuild,
+            arguments: arguments,
+            workingDirectory: workspace,
+            result: result
+        )
+
+        guard result.succeeded else {
+            throw BuildClassifier.failure(from: result, command: command)
+        }
+
+        let products = productsDirectory(in: workspace)
+        let xctestrun = try XCTestRunLocator.locate(in: products, command: command)
+
+        return BuildArtifact(
+            productsDirectory: products,
+            productHash: TestProductHasher.hash(productsDirectory: products),
+            xctestrunPath: xctestrun,
+            command: command
+        )
+    }
+
+    public func diagnose() async throws -> BuildDiagnosis {
+        await Diagnostics.full(adapter: self)
+    }
+}
+
+// MARK: - Test
+
+extension XcodeBuildAdapter: TestAdapter {
+    public func runBaseline(
+        _ artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async throws -> TestRunResult {
+        try await runTests(
+            artifact: artifact,
+            in: workspace,
+            label: "baseline",
+            timeoutSeconds: timeoutSeconds,
+            enableCoverage: configuration.execution.measureCoverage || configuration.execution.selectCoveringTests
+        )
+    }
+
+    public func runMutant(
+        _ point: MutationPoint,
+        artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async throws -> TestRunResult {
+        try await runMutant(point, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, selectedTests: nil)
+    }
+
+    /// Runs the tests, holding a simulator for exactly as long as they need it.
+    ///
+    /// Only the test phase leases. A build never boots the device, so builds still
+    /// run fully in parallel — and they dominate the wall clock, so serializing on
+    /// a scarce device costs much less than it appears to.
+    ///
+    /// Without this, concurrent mutants were handed the same `name=` destination
+    /// and fought over one device. The loser did not fail cleanly: it exceeded its
+    /// timeout, was recorded `timedOut`, and vanished from the score — which is
+    /// excluded from both denominators. Two runs of the same plan then disagreed,
+    /// intermittently and silently, on the tool's primary use case.
+    private func runTests(
+        artifact: BuildArtifact,
+        in workspace: URL,
+        label: String,
+        timeoutSeconds: Double,
+        testFilters: [String]? = nil,
+        enableCoverage: Bool = false
+    ) async throws -> TestRunResult {
+        guard destinationNeedsSimulatorLease else {
+            return try await runTestsOnDestination(
+                destination(), artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
+                testFilters: testFilters, enableCoverage: enableCoverage
+            )
+        }
+
+        do {
+            return try await leaseAndRunTests(
+                artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
+                testFilters: testFilters, enableCoverage: enableCoverage
+            )
+        } catch let error as SimulatorPoolError {
+            return TestRunResult(
+                status: .infrastructureFailure,
+                summary: nil,
+                command: artifact.command,
+                resultArtifactPath: nil,
+                diagnosis: "No simulator could be leased for this mutant: \(error.description)"
+            )
+        }
+    }
+
+    /// Leases the device this run's tests must land on, runs them, and
+    /// releases it — the shape shared by every path below, differing only in
+    /// *which* device is unambiguous enough to lease directly.
+    ///
+    /// Three cases, most to least specific:
+    /// - `resolvedDestination` names a concrete device (the normal path once
+    ///   `DestinationResolver` has run): lease that exact UDID. No name to
+    ///   re-derive, no runtime ambiguity possible.
+    /// - No resolution happened, but the configured destination is already
+    ///   pinned to `id=` (a caller set one explicitly, or an older code path
+    ///   that predates resolution): lease that exact UDID too — `name=`
+    ///   parsing would find nothing in an `id=`-only string and silently
+    ///   fall back to leasing an arbitrary free device, which is not what an
+    ///   explicit `id=` asked for.
+    /// - Otherwise, the original name-hint behavior: narrowed to the device
+    ///   the destination asked for, addressed by whichever UDID
+    ///   `SimulatorPool` matches it to.
+    private func leaseAndRunTests(
+        artifact: BuildArtifact,
+        in workspace: URL,
+        label: String,
+        timeoutSeconds: Double,
+        testFilters: [String]? = nil,
+        enableCoverage: Bool = false
+    ) async throws -> TestRunResult {
+        func run(_ lease: SimulatorLease) async throws -> TestRunResult {
+            await uninstallStaleApp(artifact: artifact, from: lease)
+            return try await runTestsOnDestination(
+                lease.destination, artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
+                testFilters: testFilters, enableCoverage: enableCoverage
+            )
+        }
+
+        if let device = resolvedDestination?.device {
+            return try await simulators.withLease(udid: device.udid, run)
+        }
+        if let udid = Self.udid(inDestination: destination()) {
+            return try await simulators.withLease(udid: udid, run)
+        }
+        let hint = Self.deviceName(inDestination: destination())
+        return try await simulators.withLease(matching: hint, run)
+    }
+
+    /// The device UDID in a destination string, if it names one.
+    ///
+    /// `platform=iOS Simulator,id=8B23...` → `8B23...`.
+    static func udid(inDestination destination: String) -> String? {
+        for field in destination.split(separator: ",") {
+            let parts = field.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "id" else { continue }
+            return parts[1].trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    /// Removes whatever this leased device already has installed under the
+    /// mutant's own bundle identifier before it is tested.
+    ///
+    /// Confirmed necessary, not just suspected, on a real project (the Debug
+    /// Dylib fixture): two mutants sharing one leased simulator device, run
+    /// back to back by the pool exactly as designed, occasionally produced a
+    /// verdict that matched neither binary — a mutation the build product
+    /// proves reached the binary was reported `survived` although the
+    /// identical, already-built sandbox failed deterministically when built
+    /// and tested by hand outside the pool, on the same device, moments
+    /// later. Disabling only this call (with the `-collect-test-diagnostics`
+    /// fix below still active) reproduced the exact same impossible verdict
+    /// on the very first run afterward; re-enabling it made three separate
+    /// runs agree with ground truth. The pool guarantees no two mutants
+    /// install at the same time; it says nothing about what CoreSimulator
+    /// does with an app already registered under the same bundle identifier
+    /// from the mutant before, and an explicit uninstall removes that
+    /// variable outright rather than trusting `test-without-building` to
+    /// notice the difference. Best-effort: a bundle that was never installed
+    /// fails to uninstall, and that is the common case, not an error.
+    private func uninstallStaleApp(artifact: BuildArtifact, from lease: SimulatorLease) async {
+        guard let xctestrun = artifact.xctestrunPath else { return }
+        for bundleID in Self.bundleIdentifiers(inXCTestRun: xctestrun) {
+            _ = try? await ProcessSupervisor.run(
+                executable: ToolPaths.xcrun,
+                arguments: ["simctl", "uninstall", lease.device.udid, bundleID],
+                workingDirectory: FileManager.default.temporaryDirectory,
+                timeoutSeconds: 30
+            )
+        }
+    }
+
+    /// Every `TestHostBundleIdentifier` named in a `.xctestrun` plist — the app
+    /// each test target is hosted inside, and so the app a stale simulator
+    /// install of it could shadow. Same two on-disk shapes as
+    /// `Diagnostics.testTargets(inXCTestRun:)`: format version 2 nests targets
+    /// under `TestConfigurations`, version 1 puts them at the top level next to
+    /// a metadata key.
+    static func bundleIdentifiers(inXCTestRun url: URL) -> [String] {
+        guard let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let root = plist as? [String: Any]
+        else { return [] }
+
+        let targets: [[String: Any]] = if let configurations = root["TestConfigurations"] as? [[String: Any]] {
+            configurations.flatMap { $0["TestTargets"] as? [[String: Any]] ?? [] }
+        } else {
+            root.values.compactMap { $0 as? [String: Any] }
+        }
+
+        return Array(Set(targets.compactMap { $0["TestHostBundleIdentifier"] as? String })).sorted()
+    }
+
+    private func runTestsOnDestination(
+        _ destination: String,
+        artifact: BuildArtifact,
+        in workspace: URL,
+        label: String,
+        timeoutSeconds: Double,
+        testFilters: [String]? = nil,
+        enableCoverage: Bool = false
+    ) async throws -> TestRunResult {
+        guard let xctestrun = artifact.xctestrunPath else {
+            return TestRunResult(
+                status: .infrastructureFailure,
+                summary: nil,
+                command: artifact.command,
+                resultArtifactPath: nil,
+                diagnosis: """
+                The build produced no .xctestrun, so there is nothing for \
+                test-without-building to run.
+                """
+            )
+        }
+
+        let resultBundle = resultBundlePath(in: workspace, label: label)
+        // xcodebuild refuses to overwrite an existing bundle, and a retry must not
+        // fail for that reason alone.
+        try? FileManager.default.removeItem(at: resultBundle)
+        try? FileManager.default.createDirectory(
+            at: resultBundle.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let arguments = Self.testWithoutBuildingArguments(
+            xctestrunPath: xctestrun.path,
+            destination: destination,
+            resultBundlePath: resultBundle.path,
+            targets: testFilters ?? configuration.tests.targets,
+            extraArguments: configuration.tests.extraArguments,
+            enableCoverage: enableCoverage
+        )
+
+        let result: ProcessResult
+        do {
+            result = try await ProcessSupervisor.run(
+                executable: ToolPaths.xcodebuild,
+                arguments: arguments,
+                workingDirectory: workspace,
+                timeoutSeconds: timeoutSeconds,
+                terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
+            )
+        } catch {
+            return TestRunResult(
+                status: .infrastructureFailure,
+                summary: nil,
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild,
+                    arguments: arguments,
+                    workingDirectory: workspace,
+                    result: nil
+                ),
+                resultArtifactPath: nil,
+                diagnosis: "Could not launch xcodebuild: \(error)"
+            )
+        }
+
+        let command = CommandRecording.record(
+            executable: ToolPaths.xcodebuild,
+            arguments: arguments,
+            workingDirectory: workspace,
+            result: result
+        )
+
+        // The timeout is the one outcome the bundle cannot describe: a killed run
+        // leaves a partial bundle, or none. The supervisor's verdict is the fact.
+        if result.timedOut {
+            return TestRunResult(
+                status: .timedOut,
+                summary: nil,
+                command: command,
+                resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path)
+                    ? resultBundle : nil,
+                diagnosis: """
+                The test run exceeded its \(String(format: "%.0f", timeoutSeconds))s limit \
+                and was terminated.
+                """
+            )
+        }
+
+        // Everything else comes from the bundle, including success. xcodebuild's
+        // exit code is deliberately not consulted: it reports 65 both for a failing
+        // test and for a runner that never started, and only the bundle can tell
+        // those apart.
+        let outcome = await resultReader.classify(resultBundle: resultBundle, workingDirectory: workspace)
+
+        return TestRunResult(
+            status: outcome.status,
+            summary: outcome.summary,
+            command: command,
+            resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path)
+                ? resultBundle : nil,
+            diagnosis: outcome.diagnosis
+        )
+    }
+
+    /// A bundle path unique to this run.
+    ///
+    /// Keyed by mutation ID because concurrent workers share a machine, and a
+    /// second `test-without-building` writing to a path a first is still reading
+    /// would corrupt both records.
+    private func resultBundlePath(in workspace: URL, label: String) -> URL {
+        let safe = label.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" }
+        return workspace
+            .appendingPathComponent(".mutantkit/Results", isDirectory: true)
+            .appendingPathComponent("\(String(safe)).xcresult")
+    }
+}
+
+// MARK: - Schemata build
+
+extension XcodeBuildAdapter: SchemataBuildable {
+    public func buildSchemataChunk(loweredSources: [SchemataSourceFile], in workspace: URL) async throws -> BuildArtifact {
+        for source in loweredSources {
+            try SchemataSourceWriter.write(source, in: workspace)
+        }
+
+        let located = try SchemataRuntimeLibraryLocator.locate()
+        let linkerArguments = XcodeLinkerInjector.extraArguments(libraryDirectory: located.libraryDirectory)
+        return try await build(in: workspace, extraArguments: linkerArguments)
+    }
+
+    public func resolveSchemataBuildReceipt(
+        for units: [SchemataCompilationUnitTargetRequest],
+        artifact: BuildArtifact,
+        in workspace: URL,
+        context: SchemataBuildReceiptContext
+    ) async throws -> SchemataBuildReceipt {
+        let buildSettingsContext = XcodeCompilationUnitImageResolver.BuildSettingsContext(
+            projectArguments: projectArguments(in: workspace), scheme: try await resolveScheme(in: workspace), destination: destination(),
+            derivedDataPath: derivedDataPath(in: workspace), workspace: workspace, timeoutSeconds: configuration.timeouts.baselineSeconds
+        )
+        let targetsByName = Dictionary(grouping: units, by: \.buildTarget.targetName)
+
+        var imagesByTarget: [BuildTargetIdentity: BuiltImageReceipt] = [:]
+        for (targetName, requests) in targetsByName {
+            let buildTarget = requests[0].buildTarget
+            let resolved = try await XcodeCompilationUnitImageResolver.resolveArtifactPath(
+                target: targetName, context: buildSettingsContext
+            )
+            let discovered = try SchemataBuiltImageInspection.inspectSingle(at: resolved.path, bundleName: resolved.bundleName)
+            imagesByTarget[buildTarget] = try BuiltImageReceipt(
+                buildTarget: buildTarget, binaryPath: discovered.binaryPath, contentHash: discovered.contentHash, slices: discovered.slices
+            )
+        }
+
+        let compilationUnits = units.map {
+            CompilationUnitReceipt(
+                compilationUnitID: $0.compilationUnitID, sourceEmbeddingID: $0.sourceEmbeddingID, buildTarget: $0.buildTarget
+            )
+        }
+
+        return try SchemataBuildReceipt(
+            planID: context.planID, workUnitID: context.workUnitID, chunkID: context.chunkID,
+            toolchainHash: context.toolchainHash, buildArgumentsHash: context.buildArgumentsHash,
+            runtimeABIVersion: UInt32(BoolLiteralSchemataLowerer.runtimeABIVersion),
+            images: Array(imagesByTarget.values), compilationUnits: compilationUnits
+        )
+    }
+}
+
+// MARK: - Schemata test
+
+extension XcodeBuildAdapter: SchemataTestable {
+    /// Runs the already-built schemata chunk once for one requested token,
+    /// without rebuilding — the Xcode analogue of `SwiftPackageMacOSAdapter
+    /// .runSchemataToken`. Simulator leasing mirrors `runTests`/
+    /// `leaseAndRunTests` exactly (only the test phase leases a device; a
+    /// build never does).
+    public func runSchemataToken(
+        _ artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String]
+    ) async throws -> TestRunResult {
+        guard destinationNeedsSimulatorLease else {
+            return try await runSchemataTokenOnDestination(
+                destination(), artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment
+            )
+        }
+
+        do {
+            return try await leaseAndRunSchemataToken(
+                artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment
+            )
+        } catch let error as SimulatorPoolError {
+            return TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
+                diagnosis: "No simulator could be leased for this schemata token run: \(error.description)"
+            )
+        }
+    }
+
+    private func leaseAndRunSchemataToken(
+        artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String]
+    ) async throws -> TestRunResult {
+        func run(_ lease: SimulatorLease) async throws -> TestRunResult {
+            await uninstallStaleApp(artifact: artifact, from: lease)
+            return try await runSchemataTokenOnDestination(
+                lease.destination, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment
+            )
+        }
+
+        if let device = resolvedDestination?.device {
+            return try await simulators.withLease(udid: device.udid, run)
+        }
+        if let udid = Self.udid(inDestination: destination()) {
+            return try await simulators.withLease(udid: udid, run)
+        }
+        let hint = Self.deviceName(inDestination: destination())
+        return try await simulators.withLease(matching: hint, run)
+    }
+
+    /// A codex-review-caliber finding `SchemataXcodeRuntimeAcceptanceTests`
+    /// already proved by hand: setting `Process.environment` on the
+    /// `xcodebuild test-without-building` invocation itself does not
+    /// reliably reach the actual `xctest` process Xcode's own tooling
+    /// launches — env vars must be injected into the `.xctestrun` plist's
+    /// `EnvironmentVariables` dictionary instead, the same mechanism a
+    /// scheme's own "Environment Variables" editor pane ultimately writes
+    /// to. This writes a fresh variant of `artifact`'s own `.xctestrun`
+    /// with `environment` merged in, per mutant, rather than mutating the
+    /// one shared file every mutant's build produced (which concurrent
+    /// mutants running against the same chunk build would otherwise race
+    /// on).
+    private func runSchemataTokenOnDestination(
+        _ destination: String, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String]
+    ) async throws -> TestRunResult {
+        guard let baseXCTestRun = artifact.xctestrunPath else {
+            return TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
+                diagnosis: "The build produced no .xctestrun, so there is nothing for test-without-building to run."
+            )
+        }
+
+        let variantXCTestRun: URL
+        do {
+            variantXCTestRun = try Self.xctestrunVariant(mergingEnvironment: environment, into: baseXCTestRun)
+        } catch {
+            return TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
+                diagnosis: "Could not write a schemata .xctestrun variant: \(error)"
+            )
+        }
+
+        let resultBundle = resultBundlePath(in: workspace, label: "schemata-\(UUID().uuidString)")
+        try? FileManager.default.removeItem(at: resultBundle)
+        try? FileManager.default.createDirectory(
+            at: resultBundle.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+
+        let arguments = Self.testWithoutBuildingArguments(
+            xctestrunPath: variantXCTestRun.path, destination: destination, resultBundlePath: resultBundle.path,
+            targets: configuration.tests.targets, extraArguments: configuration.tests.extraArguments
+        )
+
+        let result: ProcessResult
+        do {
+            result = try await ProcessSupervisor.run(
+                executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace,
+                timeoutSeconds: timeoutSeconds, terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
+            )
+        } catch {
+            return TestRunResult(
+                status: .infrastructureFailure,
+                summary: nil,
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: nil
+                ),
+                resultArtifactPath: nil,
+                diagnosis: "Could not launch xcodebuild: \(error)"
+            )
+        }
+
+        let command = CommandRecording.record(
+            executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: result
+        )
+
+        if result.timedOut {
+            return TestRunResult(
+                status: .timedOut, summary: nil, command: command,
+                resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path) ? resultBundle : nil,
+                diagnosis: """
+                The schemata test run exceeded its \(String(format: "%.0f", timeoutSeconds))s limit \
+                and was terminated.
+                """
+            )
+        }
+
+        let outcome = await resultReader.classify(resultBundle: resultBundle, workingDirectory: workspace)
+        return TestRunResult(
+            status: outcome.status, summary: outcome.summary, command: command,
+            resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path) ? resultBundle : nil,
+            diagnosis: outcome.diagnosis
+        )
+    }
+
+    private enum XCTestRunVariantError: Error, CustomStringConvertible {
+        case malformed(String)
+        case writeFailed(String)
+
+        var description: String {
+            switch self {
+            case let .malformed(path): "malformed .xctestrun at \(path)"
+            case let .writeFailed(path): "could not write .xctestrun variant at \(path)"
+            }
+        }
+    }
+
+    /// Writes the variant *next to* `base`, in the same directory — not
+    /// under some other convenience location like `.mutantkit/`. An
+    /// `.xctestrun`'s own paths are resolved relative to `__TESTROOT__`,
+    /// which Xcode derives from wherever the `.xctestrun` file itself
+    /// physically sits, not from any field recorded inside it. Confirmed
+    /// the hard way: a variant written to a different directory than the
+    /// original resolved its test bundle path relative to *that*
+    /// directory instead, and `test-without-building` failed with
+    /// "Missing test product" for a bundle that, moments earlier, the
+    /// original (unmoved) `.xctestrun` found without trouble.
+    private static func xctestrunVariant(mergingEnvironment environment: [String: String], into base: URL) throws -> URL {
+        guard var plist = NSDictionary(contentsOf: base) as? [String: Any] else {
+            throw XCTestRunVariantError.malformed(base.path)
+        }
+        for key in plist.keys where key != "__xctestrun_metadata__" {
+            guard var target = plist[key] as? [String: Any] else { continue }
+            var targetEnvironment = target["EnvironmentVariables"] as? [String: String] ?? [:]
+            for (variable, value) in environment { targetEnvironment[variable] = value }
+            target["EnvironmentVariables"] = targetEnvironment
+            plist[key] = target
+        }
+
+        let variant = base.deletingLastPathComponent().appendingPathComponent("variant-\(UUID().uuidString).xctestrun")
+        // `NSDictionary.write(to:atomically:)` is the non-throwing
+        // Objective-C-era API — `try` on it compiles but silently
+        // discards a `false` (failure) return, exactly the kind of quiet
+        // failure this whole proof chain exists to refuse. The `Bool`
+        // result is checked explicitly instead.
+        guard (plist as NSDictionary).write(to: variant, atomically: true) else {
+            throw XCTestRunVariantError.writeFailed(variant.path)
+        }
+        return variant
+    }
+}
+
+// MARK: - Coverage
+
+extension XcodeBuildAdapter: CoverageMeasuring {
+    /// Rebuilds and re-tests the baseline once more, this time with
+    /// coverage instrumentation, and reads back the result. Deliberately a
+    /// second build rather than reusing `runBaseline`'s own bundle: that
+    /// build was never instrumented (see `build(in:enableCoverage:)`), so
+    /// its bundle has no coverage to read regardless of what flag the test
+    /// step is given. `nil` when the rebuild, the retest, or the read
+    /// itself fails — coverage is opt-in evidence; its absence never
+    /// becomes a fabricated claim.
+    public func readCoverage(in workspace: URL, projectRoot: URL) async -> CoverageMap? {
+        guard let artifact = try? await build(in: workspace, enableCoverage: true) else { return nil }
+        guard let run = try? await runTests(
+            artifact: artifact,
+            in: workspace,
+            label: "coverage-baseline",
+            timeoutSeconds: configuration.timeouts.baselineSeconds,
+            enableCoverage: true
+        ), run.status == .passed, let bundle = run.resultArtifactPath else { return nil }
+
+        return await XccovCoverageReader.read(archive: bundle, projectRoot: projectRoot)
+    }
+}
+
+// MARK: - Test selection
+
+extension XcodeBuildAdapter: TestSelecting {
+    public func runMutant(
+        _ point: MutationPoint,
+        artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double,
+        selectedTests: Set<TestIdentifier>?
+    ) async throws -> TestRunResult {
+        // An empty selection is never sent to `-only-testing:` — that would
+        // run nothing, and a run that tested nothing must never be mistaken
+        // for one that passed. Falls back to the full configured list, the
+        // same as `selectedTests == nil`.
+        let filters = selectedTests.flatMap { $0.isEmpty ? nil : $0.map(\.onlyTestingArgument) }
+        return try await runTests(
+            artifact: artifact,
+            in: workspace,
+            label: point.id.description,
+            timeoutSeconds: timeoutSeconds,
+            testFilters: filters
+        )
+    }
+
+    /// Runs every test the baseline bundle reports, one at a time, against
+    /// the artifact already built for the baseline — no rebuild — with
+    /// coverage enabled and its own scratch result bundle, and merges what
+    /// each one touched into a reverse index.
+    ///
+    /// A one-time cost paid once per execution, not per mutant: found worth
+    /// it on a real project, where the fixed cost of re-running an entire
+    /// suite dominated every mutant's wall clock regardless of how few tests
+    /// actually exercised the mutated line. Runs sequentially, one simulator
+    /// lease at a time via `runTests`; spreading this pass across several
+    /// leased devices concurrently is a further optimisation, not attempted
+    /// here.
+    ///
+    /// A test that does not pass in isolation (order-dependent, needs a
+    /// sibling's side effect) contributes no attribution and is silently
+    /// skipped — the mutant it would have covered simply falls back to the
+    /// full configured test list, which is always correct, just slower.
+    /// - Parameter artifact: `runBaseline`'s own, uninstrumented artifact —
+    ///   kept only to enumerate test identifiers from its already-produced
+    ///   bundle; never built or tested against directly. Per-test coverage
+    ///   needs a coverage-instrumented binary (see
+    ///   `build(in:enableCoverage:)`), built once here and reused for
+    ///   every individual test run, exactly the same "instrumented copy is
+    ///   never what activation evidence is measured against" split
+    ///   `readCoverage` makes.
+    public func measurePerTestCoverage(
+        artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async -> PerTestCoverageMap? {
+        let baselineBundle = resultBundlePath(in: workspace, label: "baseline")
+        let tests = await Self.enumerateTestIdentifiers(inBundle: baselineBundle)
+        guard !tests.isEmpty else { return nil }
+
+        guard let coverageArtifact = try? await build(in: workspace, enableCoverage: true) else { return nil }
+
+        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
+        for test in tests {
+            guard let run = try? await runTests(
+                artifact: coverageArtifact,
+                in: workspace,
+                label: "pertest-\(test.onlyTestingArgument)",
+                timeoutSeconds: timeoutSeconds,
+                testFilters: [test.onlyTestingArgument],
+                enableCoverage: true
+            ), run.status == .passed, let bundle = run.resultArtifactPath else { continue }
+
+            guard let map = await XccovCoverageReader.read(archive: bundle, projectRoot: workspace) else { continue }
+            for (file, lines) in map.executedLines {
+                for line in lines {
+                    coveringTests[file, default: [:]][line, default: []].insert(test)
+                }
+            }
+        }
+
+        guard !coveringTests.isEmpty else { return nil }
+        return PerTestCoverageMap(coveringTests: coveringTests, source: "xcodebuild-xccov-per-test")
+    }
+
+    /// Walks `xcresulttool get test-results tests` for one bundle, pulling
+    /// out every `Test Case` leaf and the `Unit test bundle` ancestor that
+    /// names its target — the two things `-only-testing:` needs. A `Test
+    /// Case` node's own `nodeIdentifier` is already shaped `Class/method()`
+    /// (confirmed against a real bundle), so no separate class-name
+    /// tracking is needed; only the trailing `()` is stripped.
+    static func enumerateTestIdentifiers(inBundle bundle: URL) async -> [TestIdentifier] {
+        guard FileManager.default.fileExists(atPath: bundle.path) else { return [] }
+
+        let result = try? await ProcessSupervisor.run(
+            executable: ToolPaths.xcrun,
+            arguments: ["xcresulttool", "get", "test-results", "tests", "--path", bundle.path, "--compact"],
+            workingDirectory: bundle.deletingLastPathComponent(),
+            timeoutSeconds: 120
+        )
+        guard let result, result.succeeded else { return [] }
+        return parseTestIdentifiers(result.standardOutput)
+    }
+
+    /// Parses `xcresulttool get test-results tests --compact` output. Exposed
+    /// for tests so a captured document can drive the walk without a
+    /// toolchain or a real bundle.
+    static func parseTestIdentifiers(_ data: Data) -> [TestIdentifier] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let testNodes = root["testNodes"] as? [[String: Any]]
+        else { return [] }
+
+        var found: [TestIdentifier] = []
+        func walk(_ node: [String: Any], target: String?) {
+            let nodeType = node["nodeType"] as? String
+            let currentTarget = nodeType == "Unit test bundle" ? (node["name"] as? String) : target
+
+            if nodeType == "Test Case", let currentTarget,
+               let identifier = node["nodeIdentifier"] as? String {
+                let qualifiedName = identifier.hasSuffix("()") ? String(identifier.dropLast(2)) : identifier
+                found.append(TestIdentifier(target: currentTarget, qualifiedName: qualifiedName))
+            }
+
+            for child in (node["children"] as? [[String: Any]]) ?? [] {
+                walk(child, target: currentTarget)
+            }
+        }
+        for node in testNodes { walk(node, target: nil) }
+        return found
+    }
+}
+
+// MARK: - Batch testing
+
+extension XcodeBuildAdapter: BatchTestable {
+    public func runBatch(
+        _ items: [BatchMutantItem],
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async -> [MutationID: TestRunResult] {
+        var results: [MutationID: TestRunResult] = [:]
+        var batchable: [BatchTestItem] = []
+        // Only a narrowed selection can be told apart afterward: the batch
+        // bundle's failures are attributed back to a configuration by
+        // matching test identifiers, and a configuration left unnarrowed
+        // (the full target list, `TestSelecting`'s safe fallback for an
+        // unknown attribution) could legitimately run several tests —
+        // there would be no way to tell whether a failure among them was a
+        // plain assertion or a crash without a distinguishable identifier
+        // to match. An item like that runs the ordinary, already-correct
+        // unbatched way instead of joining the batch.
+        var unbatched: [BatchMutantItem] = []
+        // Keyed separately from `BatchTestItem.onlyTestingIdentifiers`
+        // because the two serve different consumers of the same selection:
+        // `BatchXCTestRunBuilder.build` needs each identifier's owning
+        // target so it can narrow (or, when a bundle has none of its own
+        // tests selected, drop) each `.xctestrun` target dict independently
+        // — see its doc comment for why a target-qualified identifier must
+        // never reach a bundle's own bare-`Class/method` `OnlyTestIdentifiers`
+        // list. Failure attribution against `xcresulttool`'s batch-wide
+        // `testFailures` instead needs the fully target-qualified
+        // `TestIdentifier.onlyTestingArgument`, since that is the shape
+        // `TestSummaryJSON.Failure.identifier` itself uses.
+        var configurationTestIdentifiers: [String: [String]] = [:]
+
+        for item in items {
+            if let selectedTests = item.selectedTests, !selectedTests.isEmpty,
+               let xctestrunPath = item.artifact.xctestrunPath {
+                batchable.append(BatchTestItem(
+                    configurationName: item.id.rawValue,
+                    xctestrunPath: xctestrunPath,
+                    onlyTestingIdentifiers: Array(selectedTests)
+                ))
+                configurationTestIdentifiers[item.id.rawValue] = selectedTests.map(\.onlyTestingArgument)
+            } else {
+                unbatched.append(item)
+            }
+        }
+
+        await withTaskGroup(of: (MutationID, TestRunResult).self) { group in
+            for item in unbatched {
+                group.addTask {
+                    let result = try? await self.runTests(
+                        artifact: item.artifact, in: workspace, label: item.id.rawValue,
+                        timeoutSeconds: timeoutSeconds
+                    )
+                    return (item.id, result ?? TestRunResult(
+                        status: .infrastructureFailure, summary: nil, command: item.artifact.command,
+                        resultArtifactPath: nil, diagnosis: "The mutant's tests could not be run."
+                    ))
+                }
+            }
+            for await (id, result) in group {
+                results[id] = result
+            }
+        }
+
+        guard !batchable.isEmpty else { return results }
+
+        let idsByConfigurationName = Dictionary(
+            uniqueKeysWithValues: items.compactMap { item -> (String, MutationID)? in
+                batchable.contains { $0.configurationName == item.id.rawValue } ? (item.id.rawValue, item.id) : nil
+            }
+        )
+
+        func failAllBatchable(_ diagnosis: String) {
+            for item in batchable {
+                guard let id = idsByConfigurationName[item.configurationName] else { continue }
+                results[id] = TestRunResult(
+                    status: .infrastructureFailure, summary: nil,
+                    command: CommandRecording.record(
+                        executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil
+                    ),
+                    resultArtifactPath: nil, diagnosis: diagnosis
+                )
+            }
+        }
+
+        let batchData: Data
+        do {
+            batchData = try BatchXCTestRunBuilder.build(items: batchable)
+        } catch {
+            failAllBatchable("The batch .xctestrun could not be constructed: \(error)")
+            return results
+        }
+
+        let batchDirectory = workspace.appendingPathComponent(".mutantkit/Batches", isDirectory: true)
+        let batchXCTestRunPath = batchDirectory.appendingPathComponent("batch-\(UUID().uuidString).xctestrun")
+        do {
+            try FileManager.default.createDirectory(at: batchDirectory, withIntermediateDirectories: true)
+            try batchData.write(to: batchXCTestRunPath, options: .atomic)
+        } catch {
+            failAllBatchable("The batch .xctestrun could not be written: \(error)")
+            return results
+        }
+
+        let outcomes = await runBatchTests(
+            xctestrunPath: batchXCTestRunPath,
+            in: workspace,
+            timeoutSeconds: timeoutSeconds,
+            configurationTestIdentifiers: configurationTestIdentifiers
+        )
+
+        for item in batchable {
+            guard let id = idsByConfigurationName[item.configurationName] else { continue }
+            // Fail-closed even here: `outcomes` is keyed by every name this
+            // call was asked about (see `XCResultAdapter.classifyBatch`), so
+            // a missing entry only happens if that contract was violated —
+            // still handled rather than trusted blindly.
+            results[id] = outcomes[item.configurationName] ?? TestRunResult(
+                status: .infrastructureFailure, summary: nil,
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil
+                ),
+                resultArtifactPath: nil,
+                diagnosis: "This configuration's outcome went unreported by the batch classifier."
+            )
+        }
+
+        return results
+    }
+
+    /// Leases a device (when the destination needs one) and runs the batch
+    /// `.xctestrun`, the same shape `runTests`/`leaseAndRunTests` use for a
+    /// single mutant.
+    private func runBatchTests(
+        xctestrunPath: URL,
+        in workspace: URL,
+        timeoutSeconds: Double,
+        configurationTestIdentifiers: [String: [String]]
+    ) async -> [String: TestRunResult] {
+        func run(destination: String) async -> [String: TestRunResult] {
+            await runBatchOnDestination(
+                destination, xctestrunPath: xctestrunPath, in: workspace,
+                timeoutSeconds: timeoutSeconds, configurationTestIdentifiers: configurationTestIdentifiers
+            )
+        }
+
+        guard destinationNeedsSimulatorLease else {
+            return await run(destination: destination())
+        }
+
+        do {
+            if let device = resolvedDestination?.device {
+                return try await simulators.withLease(udid: device.udid) { lease in await run(destination: lease.destination) }
+            }
+            if let udid = Self.udid(inDestination: destination()) {
+                return try await simulators.withLease(udid: udid) { lease in await run(destination: lease.destination) }
+            }
+            let hint = Self.deviceName(inDestination: destination())
+            return try await simulators.withLease(matching: hint) { lease in await run(destination: lease.destination) }
+        } catch let error as SimulatorPoolError {
+            let failure = TestRunResult(
+                status: .infrastructureFailure, summary: nil,
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil
+                ),
+                resultArtifactPath: nil,
+                diagnosis: "No simulator could be leased for this batch: \(error.description)"
+            )
+            return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
+        } catch {
+            let failure = TestRunResult(
+                status: .infrastructureFailure, summary: nil,
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil
+                ),
+                resultArtifactPath: nil,
+                diagnosis: "The batch could not be leased or run: \(error)"
+            )
+            return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
+        }
+    }
+
+    private func runBatchOnDestination(
+        _ destination: String,
+        xctestrunPath: URL,
+        in workspace: URL,
+        timeoutSeconds: Double,
+        configurationTestIdentifiers: [String: [String]]
+    ) async -> [String: TestRunResult] {
+        let resultBundle = workspace
+            .appendingPathComponent(".mutantkit/Results", isDirectory: true)
+            .appendingPathComponent("batch-\(UUID().uuidString).xcresult")
+        try? FileManager.default.createDirectory(
+            at: resultBundle.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+
+        var arguments = [
+            "test-without-building",
+            "-xctestrun", xctestrunPath.path,
+            "-destination", destination,
+            "-resultBundlePath", resultBundle.path,
+            "-collect-test-diagnostics", "never"
+        ]
+        arguments.append(contentsOf: configuration.tests.extraArguments)
+
+        let result: ProcessResult
+        do {
+            result = try await ProcessSupervisor.run(
+                executable: ToolPaths.xcodebuild,
+                arguments: arguments,
+                workingDirectory: workspace,
+                timeoutSeconds: timeoutSeconds,
+                terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
+            )
+        } catch {
+            let failure = TestRunResult(
+                status: .infrastructureFailure, summary: nil,
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: nil
+                ),
+                resultArtifactPath: nil,
+                diagnosis: "Could not launch xcodebuild for the batch: \(error)"
+            )
+            return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
+        }
+
+        let command = CommandRecording.record(
+            executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: result
+        )
+
+        // A batch-wide timeout means none of its configurations produced a
+        // trustworthy result — the bundle, if any, reflects an arbitrary
+        // subset that happened to finish before the kill, not a complete
+        // record. Every configuration in the batch is reported timed out
+        // rather than trusting a partial bundle to say which ones did.
+        //
+        // `isBatchAttributedTimeout` is only true when more than one
+        // configuration actually shared this timeout budget: a "batch" of
+        // exactly one (the final remainder chunk, or any batch that ends up
+        // with a single member) has no attribution ambiguity at all — the
+        // timeout unambiguously belongs to that one mutant, the same as a
+        // non-batching adapter's timeout does, so `confirmTimeout` must
+        // still treat a disagreeing confirmation as `.flaky` rather than
+        // trusting it outright.
+        if result.timedOut {
+            let failure = TestRunResult(
+                status: .timedOut, summary: nil, command: command,
+                resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path) ? resultBundle : nil,
+                diagnosis: """
+                The batch exceeded its \(String(format: "%.0f", timeoutSeconds))s limit and was \
+                terminated before every configuration in it could be confirmed to finish.
+                """,
+                isBatchAttributedTimeout: configurationTestIdentifiers.count > 1
+            )
+            return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
+        }
+
+        var outcomes = await resultReader.classifyBatch(
+            resultBundle: resultBundle, workingDirectory: workspace,
+            configurationTestIdentifiers: configurationTestIdentifiers
+        )
+
+        // A batch where *every* configuration came back unaccounted for is
+        // not "several unrelated bundle read failures" — it is almost
+        // always one batch-wide problem (the invocation never really ran).
+        // Exit code alone cannot gate this: a batch with genuine failures
+        // or crashes in it also exits non-zero, which is why it is not
+        // consulted above either. But once every configuration is already
+        // unattributed, there is nothing left an exit code could wrongly
+        // override, so it is safe to fold in here purely to make the
+        // diagnosis legible instead of leaving every mutant blaming a
+        // generic "no record" with no way to tell why.
+        if !result.succeeded, outcomes.values.allSatisfy({ $0.status == .infrastructureFailure }) {
+            let detail = OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 800)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            outcomes = outcomes.mapValues {
+                XCResultAdapter.Outcome(
+                    status: .infrastructureFailure,
+                    summary: $0.summary,
+                    diagnosis: "\($0.diagnosis) xcodebuild exited \(result.exitCode): \(detail)"
+                )
+            }
+        }
+
+        let bundleExists = FileManager.default.fileExists(atPath: resultBundle.path)
+        return outcomes.mapValues { outcome in
+            TestRunResult(
+                status: outcome.status, summary: outcome.summary, command: command,
+                resultArtifactPath: bundleExists ? resultBundle : nil, diagnosis: outcome.diagnosis
+            )
+        }
+    }
+}
+
+// MARK: - .xctestrun
+
+/// Finds the `.xctestrun` that `build-for-testing` produced.
+enum XCTestRunLocator {
+    /// Searches `Build/Products` for the file.
+    ///
+    /// Searched, never constructed. The name encodes the scheme, the platform, the
+    /// SDK version and the architecture — a real one reads
+    /// `Probe-Package_Probe-Package_macosx26.5-arm64.xctestrun` — and every one of
+    /// those varies by machine and by Xcode release. Building that string from a
+    /// template produces a path that does not exist, and the resulting "file not
+    /// found" gets read as a broken project rather than a broken guess.
+    static func locate(in productsDirectory: URL, command: CommandRecord) throws -> URL {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: productsDirectory,
+            includingPropertiesForKeys: nil
+        )) ?? []
+
+        let found = contents.filter { $0.pathExtension == "xctestrun" }.sorted { $0.path < $1.path }
+
+        switch found.count {
+        case 1:
+            return found[0]
+        case 0:
+            let siblings = contents.map(\.lastPathComponent).sorted()
+            throw BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                build-for-testing succeeded but left no .xctestrun in \
+                \(productsDirectory.path). That directory contains \
+                \(siblings.isEmpty ? "nothing" : siblings.joined(separator: ", ")). \
+                The scheme probably has no test target enabled — check its Test action \
+                in Xcode.
+                """,
+                command: command,
+                output: ""
+            )
+        default:
+            let names = found.map(\.lastPathComponent).joined(separator: ", ")
+            throw BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                \(found.count) .xctestrun files are present in \(productsDirectory.path) \
+                (\(names)) and mutantkit will not guess which one to run. This usually \
+                means several test plans or destinations were built; narrow \
+                project.destination or the scheme's test plan in mutantkit.yml.
+                """,
+                command: command,
+                output: ""
+            )
+        }
+    }
+}
+
+// MARK: - JSON
+
+/// `xcodebuild -list -json`, which reports under `workspace` or `project`
+/// depending on what it was pointed at.
+enum SchemeListJSON {
+    private struct Payload: Decodable {
+        struct Container: Decodable {
+            let name: String
+            let schemes: [String]?
+            let targets: [String]?
+        }
+
+        let workspace: Container?
+        let project: Container?
+    }
+
+    static func schemes(from data: Data) -> [String] {
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return [] }
+        return payload.workspace?.schemes ?? payload.project?.schemes ?? []
+    }
+
+    static func targets(from data: Data) -> [String] {
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return [] }
+        return payload.workspace?.targets ?? payload.project?.targets ?? []
+    }
+}
+
+// MARK: - Project adapter
+
+/// Pairs the xcodebuild build and test halves for one project kind.
+public struct XcodeBuildProjectAdapter: ProjectAdapter {
+    public let kind: ProjectKind
+    public let build: any BuildAdapter
+    public let test: any TestAdapter
+    /// The destination resolved once at construction — see
+    /// `DestinationResolver`. Surfaced so a caller building a `RunManifest`
+    /// can record exactly which device this run is bound to, without
+    /// needing to downcast `build`/`test` back to `XcodeBuildAdapter`.
+    public let resolvedDestination: ResolvedDestination?
+    /// Kept so `prepareSimulatorForRun()` can reach the pool the
+    /// underlying adapter owns, without exposing that pool or downcasting
+    /// `build`/`test` back to `XcodeBuildAdapter` from the CLI.
+    private let simulatorBearingAdapter: XcodeBuildAdapter?
+
+    public init(
+        configuration: Configuration,
+        kind: ProjectKind,
+        projectFile: URL?,
+        projectRoot: URL,
+        resolvedDestination: ResolvedDestination? = nil
+    ) {
+        self.kind = kind
+        self.resolvedDestination = resolvedDestination
+        let adapter = XcodeBuildAdapter(
+            configuration: configuration,
+            kind: kind,
+            projectFile: projectFile,
+            projectRoot: projectRoot,
+            resolvedDestination: resolvedDestination
+        )
+        simulatorBearingAdapter = adapter
+        build = adapter
+        test = adapter
+    }
+
+    /// Boots and verifies readiness of the device this run will test on,
+    /// if it has one. See `XcodeBuildAdapter.prepareSimulatorForRun`.
+    public func prepareSimulatorForRun() async -> SimulatorPreparationRecord {
+        if let simulatorBearingAdapter {
+            return await simulatorBearingAdapter.prepareSimulatorForRun()
+        }
+        return SimulatorPreparationRecord(outcome: .notApplicable)
+    }
+}
