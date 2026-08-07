@@ -155,6 +155,93 @@ struct SimulatorPoolLifecycleTests {
         }
     }
 
+    @Test("bootstatus timeout throws bootFailed")
+    func bootstatusTimeoutThrows() async throws {
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("bootstatus") {
+                    return ProcessResult(
+                        exitCode: 0, standardOutput: Data(), standardError: Data(),
+                        durationSeconds: 90, timedOut: true, terminatingSignal: nil
+                    )
+                }
+                return Self.success()
+            }
+        )
+
+        await #expect(throws: SimulatorPoolError.self) {
+            try await pool.prepare(udid: Self.udid)
+        }
+    }
+
+    @Test("A process runner that throws propagates as bootFailed")
+    func processThrowPropagatesAsBootFailed() async throws {
+        struct FakeError: Error {}
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("boot"), !arguments.contains("bootstatus") {
+                    throw FakeError()
+                }
+                return Self.success()
+            }
+        )
+
+        await #expect(throws: SimulatorPoolError.self) {
+            try await pool.prepare(udid: Self.udid)
+        }
+    }
+
+    @Test("An unknown UDID throws noneAvailable before any boot is attempted")
+    func unknownUDIDThrowsBeforeBoot() async throws {
+        let actor = BootCallTracker()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("boot") { await actor.markBootAttempted() }
+                return Self.success()
+            }
+        )
+
+        await #expect(throws: SimulatorPoolError.self) {
+            try await pool.prepare(udid: "nonexistent-udid")
+        }
+        let attempted = await actor.bootAttempted
+        #expect(!attempted, "boot must not be attempted for an unknown UDID")
+    }
+
+    // MARK: - Error descriptions
+
+    @Test("bootFailed includes the underlying detail in its description")
+    func bootFailedDescriptionCarriesDetail() {
+        let error = SimulatorPoolError.bootFailed(detail: "simctl returned exit 1: device vanished")
+
+        #expect(error.description == "Could not boot the simulator: simctl returned exit 1: device vanished")
+    }
+
+    @Test("noneAvailable and simctlFailed descriptions are unchanged alongside bootFailed")
+    func existingDescriptionsUnchanged() {
+        #expect(
+            SimulatorPoolError.noneAvailable(runtimeHint: "iPhone 17").description
+                == "No available simulator matches iPhone 17. Install one in Xcode > Settings > Components."
+        )
+        #expect(
+            SimulatorPoolError.noneAvailable(runtimeHint: nil as String?).description
+                == "No available simulators are installed. Add one in Xcode > Settings > Components."
+        )
+        #expect(
+            SimulatorPoolError.simctlFailed(detail: "timeout").description
+                == "Could not list simulators: timeout"
+        )
+    }
+}
+
+/// Split out of the primary `SimulatorPoolLifecycleTests` body purely to
+/// keep that type's own `type_body_length` reviewable — same suite, same
+/// shared helpers (`udid`/`workingDirectory`/`runner`/`success`/`failure`),
+/// just declared in an extension instead of inline.
+extension SimulatorPoolLifecycleTests {
     // MARK: - Retry (transient CI host contention)
 
     /// The exact shape a real, overloaded CI runner produces: `bootstatus`
@@ -289,6 +376,45 @@ struct SimulatorPoolLifecycleTests {
         #expect(await bootAttempts.count == 1, "cancellation during the retry delay must prevent the second boot attempt")
     }
 
+    /// The gap the retry-delay test above cannot see: cancellation landing
+    /// *while `boot` itself is still running* (not during the delay between
+    /// attempts). `runProcess` blocks on a real subprocess and does not
+    /// observe cancellation on its own, so without an explicit
+    /// `Task.checkCancellation()` after `boot` returns, `attemptBoot` would
+    /// still be free to launch `bootstatus` next once `boot` happened to
+    /// finish.
+    @Test("Cancellation while boot is running prevents bootstatus from ever launching")
+    func cancellationDuringBootPreventsBootstatusLaunch() async throws {
+        let bootstatusAttempts = Counter()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("boot"), !arguments.contains("bootstatus") {
+                    // Long enough that the test below can cancel while this
+                    // is still in flight, short enough not to slow the
+                    // suite down noticeably.
+                    try await Task.sleep(for: .milliseconds(300))
+                    return Self.success()
+                }
+                if arguments.contains("bootstatus") {
+                    await bootstatusAttempts.increment()
+                    return Self.success()
+                }
+                return Self.success()
+            }
+        )
+
+        let task = Task {
+            try await pool.prepare(udid: Self.udid)
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+
+        let result = await task.result
+        #expect(throws: (any Error).self) { try result.get() }
+        #expect(await bootstatusAttempts.count == 0, "cancellation during boot must prevent bootstatus from ever launching")
+    }
+
     /// `boot`/`bootstatus` failing to even *launch* (a structural host
     /// problem — `xcrun` missing, a sandboxing failure) is not the
     /// transient-readiness case retry exists for; it must throw immediately,
@@ -312,87 +438,6 @@ struct SimulatorPoolLifecycleTests {
             try await pool.prepare(udid: Self.udid, bootstatusRetries: 2, retryDelaySeconds: 0)
         }
         #expect(await bootAttempts.count == 1, "a fatal launch failure must not be retried")
-    }
-
-    @Test("bootstatus timeout throws bootFailed")
-    func bootstatusTimeoutThrows() async throws {
-        let pool = SimulatorPool(
-            workingDirectory: Self.workingDirectory,
-            processRunner: Self.runner { _, arguments in
-                if arguments.contains("bootstatus") {
-                    return ProcessResult(
-                        exitCode: 0, standardOutput: Data(), standardError: Data(),
-                        durationSeconds: 90, timedOut: true, terminatingSignal: nil
-                    )
-                }
-                return Self.success()
-            }
-        )
-
-        await #expect(throws: SimulatorPoolError.self) {
-            try await pool.prepare(udid: Self.udid)
-        }
-    }
-
-    @Test("A process runner that throws propagates as bootFailed")
-    func processThrowPropagatesAsBootFailed() async throws {
-        struct FakeError: Error {}
-        let pool = SimulatorPool(
-            workingDirectory: Self.workingDirectory,
-            processRunner: Self.runner { _, arguments in
-                if arguments.contains("boot"), !arguments.contains("bootstatus") {
-                    throw FakeError()
-                }
-                return Self.success()
-            }
-        )
-
-        await #expect(throws: SimulatorPoolError.self) {
-            try await pool.prepare(udid: Self.udid)
-        }
-    }
-
-    @Test("An unknown UDID throws noneAvailable before any boot is attempted")
-    func unknownUDIDThrowsBeforeBoot() async throws {
-        let actor = BootCallTracker()
-        let pool = SimulatorPool(
-            workingDirectory: Self.workingDirectory,
-            processRunner: Self.runner { _, arguments in
-                if arguments.contains("boot") { await actor.markBootAttempted() }
-                return Self.success()
-            }
-        )
-
-        await #expect(throws: SimulatorPoolError.self) {
-            try await pool.prepare(udid: "nonexistent-udid")
-        }
-        let attempted = await actor.bootAttempted
-        #expect(!attempted, "boot must not be attempted for an unknown UDID")
-    }
-
-    // MARK: - Error descriptions
-
-    @Test("bootFailed includes the underlying detail in its description")
-    func bootFailedDescriptionCarriesDetail() {
-        let error = SimulatorPoolError.bootFailed(detail: "simctl returned exit 1: device vanished")
-
-        #expect(error.description == "Could not boot the simulator: simctl returned exit 1: device vanished")
-    }
-
-    @Test("noneAvailable and simctlFailed descriptions are unchanged alongside bootFailed")
-    func existingDescriptionsUnchanged() {
-        #expect(
-            SimulatorPoolError.noneAvailable(runtimeHint: "iPhone 17").description
-                == "No available simulator matches iPhone 17. Install one in Xcode > Settings > Components."
-        )
-        #expect(
-            SimulatorPoolError.noneAvailable(runtimeHint: nil as String?).description
-                == "No available simulators are installed. Add one in Xcode > Settings > Components."
-        )
-        #expect(
-            SimulatorPoolError.simctlFailed(detail: "timeout").description
-                == "Could not list simulators: timeout"
-        )
     }
 }
 

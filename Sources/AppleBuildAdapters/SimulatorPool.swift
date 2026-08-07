@@ -242,7 +242,20 @@ public actor SimulatorPool {
     /// One `simctl boot` + `simctl bootstatus` attempt — the body `prepare`
     /// retries as a unit. Split out purely so retrying means calling this
     /// again, not duplicating the sequence inline per attempt.
+    ///
+    /// `Task.checkCancellation()` before each of the two process launches,
+    /// not just at the top: `runProcess` blocks on a real subprocess and
+    /// does not itself observe cancellation, so a cancellation that lands
+    /// *while* `boot` is running would otherwise still be free to launch
+    /// `bootstatus` next, once `boot` happens to finish — the exact "one
+    /// more process launched after cancellation" `prepare`'s own doc
+    /// promises never happens. A `CancellationError` the injected
+    /// `runProcess` itself throws is rethrown as-is (never folded into
+    /// `.fatalInvocation`), so it keeps propagating as cancellation rather
+    /// than becoming an ordinary, retryable-looking failure.
     private func attemptBoot(udid: String, bootTimeoutSeconds: Double) async throws {
+        try Task.checkCancellation()
+
         // Best-effort boot: the exit code is intentionally not checked.
         // See `prepare`'s own doc for why — the short version is that every
         // already-booted device exits non-zero here, and the string the
@@ -255,9 +268,13 @@ public actor SimulatorPool {
                 ToolPaths.xcrun, ["simctl", "boot", udid],
                 workingDirectory, bootTimeoutSeconds
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw BootAttemptFailure.fatalInvocation(detail: "boot could not be launched: \(error)")
         }
+
+        try Task.checkCancellation()
 
         // bootstatus blocks until the device is past the boot animation and
         // actually usable. On a warm device it returns immediately. This is
@@ -269,9 +286,14 @@ public actor SimulatorPool {
                 ToolPaths.xcrun, ["simctl", "bootstatus", udid],
                 workingDirectory, bootTimeoutSeconds
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw BootAttemptFailure.fatalInvocation(detail: "bootstatus could not be launched: \(error)")
         }
+
+        try Task.checkCancellation()
+
         if !statusResult.succeeded {
             let output = OutputRedactor.redactAndTruncate(statusResult.combinedOutput, limit: 400)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
