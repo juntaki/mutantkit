@@ -435,15 +435,26 @@ extension XcodeBuildAdapter: BuildAdapter {
         // TEMPORARY diagnostic for issue #3 — never intended to merge.
         if ProcessInfo.processInfo.environment["MUTANTKIT_DIAG_ISSUE3"] == "1" {
             let out = String(decoding: result.standardOutput, as: UTF8.self)
-            let hits = out.split(separator: "\n").filter {
-                $0.localizedCaseInsensitiveContains("compileswift") && $0.contains("Checkout.swift")
+            let lines = out.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            let hits = lines.filter {
+                $0.localizedCaseInsensitiveContains("checkout") || $0.localizedCaseInsensitiveContains("compil")
             }
-            FileHandle.standardError.write(Data("DIAG3[\(workspace.path)] CompileSwift(Checkout.swift) lines: \(hits.count)\n".utf8))
+            FileHandle.standardError.write(Data(
+                "DIAG3B[\(workspace.path)] stdoutBytes=\(result.standardOutput.count) totalLines=\(lines.count) hitLines=\(hits.count)\n".utf8
+            ))
             for line in hits {
-                FileHandle.standardError.write(Data("DIAG3   \(line)\n".utf8))
+                FileHandle.standardError.write(Data("DIAG3B   \(line)\n".utf8))
             }
-            let sawAnyCompileSwift = out.localizedCaseInsensitiveContains("compileswift")
-            FileHandle.standardError.write(Data("DIAG3   sawAnyCompileSwift=\(sawAnyCompileSwift) stdoutBytes=\(result.standardOutput.count)\n".utf8))
+            // If broad matching still found nothing, the log's shape itself is the
+            // finding — dump a head/tail sample so the real format is visible.
+            if hits.isEmpty {
+                for line in lines.prefix(60) {
+                    FileHandle.standardError.write(Data("DIAG3H   \(line)\n".utf8))
+                }
+                for line in lines.suffix(60) {
+                    FileHandle.standardError.write(Data("DIAG3T   \(line)\n".utf8))
+                }
+            }
         }
 
         let products = productsDirectory(in: workspace)
