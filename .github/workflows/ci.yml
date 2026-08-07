@@ -136,12 +136,53 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # TEMPORARY for issue #3 diagnosis — matrix trimmed to just the one
-          # fixture under investigation, to cut queueing/simulator contention
-          # from the other ~13 unrelated jobs. Restore the full matrix before
-          # merging anything from this branch.
+          - fixture: swift-package
+            filter: SwiftPackageMacOSAcceptanceTests
+            simulator: "0"
+          - fixture: swift-package-coverage
+            filter: SwiftPackageMacOSCoverageAcceptanceTests
+            simulator: "0"
+          - fixture: shard-merge
+            filter: ShardMergeAcceptanceTests
+            simulator: "0"
+          - fixture: swift-package-ios
+            filter: SwiftPackageIOSAcceptanceTests
+            simulator: "1"
           - fixture: xcode-project
             filter: XcodeProjectAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-workspace
+            filter: XcodeWorkspaceAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-app-debug-dylib
+            filter: XcodeAppDebugDylibAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-unlinked-source
+            filter: XcodeUnlinkedSourceAcceptanceTests
+            simulator: "1"
+          - fixture: cli-commands
+            filter: CLICommandsAcceptanceTests
+            simulator: "0"
+          - fixture: process-supervision
+            filter: ProcessSupervisionAcceptanceTests
+            simulator: "0"
+          # The four below all build the same real .xcodeproj through the
+          # batching/incremental/coverage-selection paths that a 100-mutant
+          # benchmark against a real external project found broken while
+          # every unit test (all fakes, no real xcodebuild invocation or
+          # .xctestrun) stayed green. They are the whole reason this job
+          # exists rather than trusting `unit` alone.
+          - fixture: xcode-batch-testing
+            filter: XcodeBatchTestingAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-batch-testing-ui-target
+            filter: XcodeBatchTestingUITargetAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-coverage-selection
+            filter: XcodeCoverageSelectionAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-incremental-batch-testing
+            filter: XcodeIncrementalBatchTestingAcceptanceTests
             simulator: "1"
     steps:
       - uses: actions/checkout@v4
@@ -165,7 +206,6 @@ jobs:
         env:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
-          MUTANTKIT_DIAG_ISSUE3: "1"
         run: |
           set -o pipefail
           swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
