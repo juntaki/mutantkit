@@ -1611,6 +1611,7 @@ public struct MutationRunner: Sendable {
         let artifact: BuildArtifact
         do {
             artifact = try await build.buildBaseline(in: sandbox)
+            Self.diagIssue3Disassemble(label: "baseline", productsDirectory: artifact.productsDirectory)
         } catch let failure as BuildFailure {
             return .failed(
                 record: unusableBaseline(startedAt: startedAt),
@@ -2006,6 +2007,11 @@ public struct MutationRunner: Sendable {
             )
         }
         let buildDurationSeconds = Date().timeIntervalSince(buildStarted)
+
+        Self.diagIssue3Disassemble(
+            label: "mutant \(point.originalText)->\(point.replacementText) \(point.id.rawValue)",
+            productsDirectory: artifact.productsDirectory
+        )
 
         let activation = Self.activationEvidence(
             mutantHash: artifact.productHash,
@@ -2449,6 +2455,60 @@ public struct MutationRunner: Sendable {
     }
 
     // MARK: - Evidence
+
+    /// TEMPORARY diagnostic for issue #3 — never intended to merge. Finds the
+    /// `Checkout` binary under `productsDirectory` and dumps `otool -tV`'s
+    /// disassembly of whatever symbol contains "canApplyCoupon", to see
+    /// directly which Mach-O bytes the `>=`/`>` boundary actually changes.
+    private static func diagIssue3Disassemble(label: String, productsDirectory: URL) {
+        guard ProcessInfo.processInfo.environment["MUTANTKIT_DIAG_ISSUE3"] == "1" else { return }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: productsDirectory, includingPropertiesForKeys: [.isRegularFileKey]
+        ) else { return }
+        var binaryPath: URL?
+        for case let url as URL in enumerator where url.lastPathComponent == "Checkout" {
+            let isRegular = (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile ?? false
+            if isRegular { binaryPath = url; break }
+        }
+        guard let binaryPath else {
+            FileHandle.standardError.write(Data("DIAG4[\(label)] no Checkout binary found under \(productsDirectory.path)\n".utf8))
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/otool")
+        process.arguments = ["-tV", binaryPath.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            FileHandle.standardError.write(Data("DIAG4[\(label)] otool failed to launch: \(error)\n".utf8))
+            return
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(decoding: data, as: UTF8.self)
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        guard let startIndex = lines.firstIndex(where: { $0.localizedCaseInsensitiveContains("canApplyCoupon") }) else {
+            FileHandle.standardError.write(Data("DIAG4[\(label)] no canApplyCoupon symbol found in disassembly (\(lines.count) lines total)\n".utf8))
+            return
+        }
+        // From the matched symbol line up to the next symbol label (a line
+        // ending in ":") or 40 lines, whichever comes first.
+        var endIndex = startIndex + 1
+        while endIndex < lines.count, endIndex < startIndex + 40,
+              !(lines[endIndex].hasSuffix(":") && !lines[endIndex].hasPrefix("\t")) {
+            endIndex += 1
+        }
+        FileHandle.standardError.write(Data("DIAG4[\(label)] canApplyCoupon disassembly (\(binaryPath.path)):\n".utf8))
+        for line in lines[startIndex..<endIndex] {
+            FileHandle.standardError.write(Data("DIAG4   \(line)\n".utf8))
+        }
+    }
 
     /// Whether the mutation reached the binary the tests ran against.
     ///
