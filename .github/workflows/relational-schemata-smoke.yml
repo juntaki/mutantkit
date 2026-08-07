@@ -31,17 +31,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repetition: [1, 2, 3]
         include:
           - projectID: swift-numerics
             repositoryURL: https://github.com/apple/swift-numerics.git
             commitSHA: 899af71c0256d0ad181e3b7eb3453c1065d928a5
             sourceFile: Sources/IntegerUtilities/GCD.swift
+            repetition: 1
+          - projectID: swift-numerics
+            repositoryURL: https://github.com/apple/swift-numerics.git
+            commitSHA: 899af71c0256d0ad181e3b7eb3453c1065d928a5
+            sourceFile: Sources/IntegerUtilities/GCD.swift
+            repetition: 2
+          - projectID: swift-numerics
+            repositoryURL: https://github.com/apple/swift-numerics.git
+            commitSHA: 899af71c0256d0ad181e3b7eb3453c1065d928a5
+            sourceFile: Sources/IntegerUtilities/GCD.swift
+            repetition: 3
 
           - projectID: swift-syntax
             repositoryURL: https://github.com/apple/swift-syntax.git
             commitSHA: 60e8eb850721b5a6eebbd973b39f450a16553bd9
             sourceFile: Sources/SwiftSyntax/AbsolutePosition.swift
+            repetition: 1
+          - projectID: swift-syntax
+            repositoryURL: https://github.com/apple/swift-syntax.git
+            commitSHA: 60e8eb850721b5a6eebbd973b39f450a16553bd9
+            sourceFile: Sources/SwiftSyntax/AbsolutePosition.swift
+            repetition: 2
+          - projectID: swift-syntax
+            repositoryURL: https://github.com/apple/swift-syntax.git
+            commitSHA: 60e8eb850721b5a6eebbd973b39f450a16553bd9
+            sourceFile: Sources/SwiftSyntax/AbsolutePosition.swift
+            repetition: 3
 
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +98,8 @@ jobs:
             disable: ["swift.core.bool-literal-inversion", "swift.core.logical-connector-replacement", "swift.core.return-value-replacement", "swift.core.ternary-branch-swap", "swift.core.unary-not-removal"]
           reports: [json]
           EOF
+          sed 's/^version: 1$/version: 1\nexecution:\n  strategy: isolated/' mutantkit.yml > mutantkit-isolated.yml
+          sed 's/^version: 1$/version: 1\nexecution:\n  strategy: schemata/' mutantkit.yml > mutantkit-schemata.yml
 
       - name: Plan (shared by both strategies — same MutationIDs either way)
         working-directory: /tmp/target-project
@@ -93,7 +116,7 @@ jobs:
           start=$(date +%s)
           "$GITHUB_WORKSPACE/.build/release/mutantkit" run \
             --plan plan.json --output report-isolated.json --no-resume \
-            --config <(sed 's/^version: 1$/version: 1\nexecution:\n  strategy: isolated/' mutantkit.yml)
+            --config mutantkit-isolated.yml
           end=$(date +%s)
           echo "isolated_wall_seconds=$((end - start))" >> "$GITHUB_ENV"
 
@@ -106,7 +129,7 @@ jobs:
           start=$(date +%s)
           "$GITHUB_WORKSPACE/.build/release/mutantkit" run \
             --plan plan.json --output report-schemata.json --no-resume \
-            --config <(sed 's/^version: 1$/version: 1\nexecution:\n  strategy: schemata/' mutantkit.yml)
+            --config mutantkit-schemata.yml
           end=$(date +%s)
           echo "schemata_wall_seconds=$((end - start))" >> "$GITHUB_ENV"
 
