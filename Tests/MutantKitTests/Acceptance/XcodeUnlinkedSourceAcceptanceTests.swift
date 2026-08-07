@@ -88,10 +88,19 @@ struct XcodeUnlinkedSourceAcceptanceTests {
         #expect(unlinked.count == 2)
         for result in unlinked {
             #expect(result.outcome == .infrastructureFailure, "\(result.point.displayLocation): \(result.outcome)")
-            #expect(
-                result.diagnosis.contains("build product is identical to the baseline's"),
-                "\(result.point.displayLocation): \(result.diagnosis)"
-            )
+            // The structural claim this suite exists to prove — unproven
+            // activation, not merely a diagnosis string that happens to
+            // mention it (which the Mach-O linkage-identity work (#76) is
+            // exactly the kind of change that could otherwise reword without
+            // this suite noticing it stopped proving anything).
+            guard case let .isolated(activation)? = result.evidence?.applicationEvidence else {
+                Issue.record("\(result.point.displayLocation): expected isolated application evidence, got \(String(describing: result.evidence?.applicationEvidence))")
+                continue
+            }
+            guard case .buildProductIdenticalToBaseline = activation else {
+                Issue.record("\(result.point.displayLocation): expected buildProductIdenticalToBaseline, got \(activation)")
+                continue
+            }
         }
 
         let score = try #require(run.report.score)

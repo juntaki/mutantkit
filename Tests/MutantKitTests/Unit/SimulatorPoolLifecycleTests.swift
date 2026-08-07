@@ -254,6 +254,66 @@ struct SimulatorPoolLifecycleTests {
         #expect(await bootstatusAttempts.count == 3, "one initial attempt plus two retries, then give up")
     }
 
+    /// A cancelled `prepare` must never launch one more `simctl` process on
+    /// the caller's behalf — a CLI stop or an overall run timeout has to
+    /// actually stop things, not "stop, except for whatever retry was
+    /// already in its delay".
+    @Test("Cancellation during the retry delay aborts prepare without a second boot attempt")
+    func cancellationDuringRetryDelayAbortsWithoutRetrying() async throws {
+        let bootAttempts = Counter()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("boot"), !arguments.contains("bootstatus") {
+                    await bootAttempts.increment()
+                    return Self.success()
+                }
+                if arguments.contains("bootstatus") {
+                    return Self.failure(exitCode: 1, "Device never became ready")
+                }
+                return Self.success()
+            }
+        )
+
+        let task = Task {
+            try await pool.prepare(udid: Self.udid, bootstatusRetries: 2, retryDelaySeconds: 30)
+        }
+        // Long enough for the first attempt's real bootstatus failure to be
+        // scripted and observed, short enough to land well inside the 30s
+        // retry delay rather than racing it.
+        try await Task.sleep(for: .milliseconds(200))
+        task.cancel()
+
+        let result = await task.result
+        #expect(throws: (any Error).self) { try result.get() }
+        #expect(await bootAttempts.count == 1, "cancellation during the retry delay must prevent the second boot attempt")
+    }
+
+    /// `boot`/`bootstatus` failing to even *launch* (a structural host
+    /// problem — `xcrun` missing, a sandboxing failure) is not the
+    /// transient-readiness case retry exists for; it must throw immediately,
+    /// attempted exactly once.
+    @Test("A fatal process-launch error is attempted exactly once, never retried")
+    func fatalInvocationErrorAttemptedOnce() async throws {
+        struct LaunchFailure: Error {}
+        let bootAttempts = Counter()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("boot"), !arguments.contains("bootstatus") {
+                    await bootAttempts.increment()
+                    throw LaunchFailure()
+                }
+                return Self.success()
+            }
+        )
+
+        await #expect(throws: SimulatorPoolError.self) {
+            try await pool.prepare(udid: Self.udid, bootstatusRetries: 2, retryDelaySeconds: 0)
+        }
+        #expect(await bootAttempts.count == 1, "a fatal launch failure must not be retried")
+    }
+
     @Test("bootstatus timeout throws bootFailed")
     func bootstatusTimeoutThrows() async throws {
         let pool = SimulatorPool(

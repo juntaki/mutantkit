@@ -170,24 +170,31 @@ public actor SimulatorPool {
     /// discovery — `simctl boot`'s exit code cannot tell the two apart, since an
     /// already-booted device exits non-zero (see above). Throws on any failure
     /// to launch the process, or on a `bootstatus` that still does not report
-    /// ready after every retry (see `bootstatusRetries`).
+    /// ready after every retry (see `bootstatusRetries`). Propagates
+    /// cancellation immediately — a caller that cancelled `prepare` (a CLI
+    /// stop, an overall run timeout) must never see one more `simctl`
+    /// process launched on its behalf after that.
     ///
-    /// `bootstatusRetries` exists because a `bootstatus` failure under real,
-    /// heavy host contention (many concurrent simulator boots on a shared CI
-    /// runner) is routinely transient, not a genuinely broken device — a
-    /// second attempt on the same UDID, moments later, has repeatedly
-    /// succeeded in exactly that situation. Each retry re-issues *both*
-    /// `boot` and `bootstatus`, since a `bootstatus` that gave up may have
-    /// left the device in a state only a fresh `boot` call resolves. A short
-    /// fixed delay between attempts (`retryDelaySeconds`) gives transient
-    /// host load a moment to actually clear rather than hammering an
+    /// `bootstatusRetries` exists because a `bootstatus` **non-zero exit or
+    /// timeout** under real, heavy host contention (many concurrent
+    /// simulator boots on a shared CI runner) is routinely transient, not a
+    /// genuinely broken device — a second attempt on the same UDID, moments
+    /// later, has repeatedly succeeded in exactly that situation. Only that
+    /// case retries. A `boot`/`bootstatus` process that could not even be
+    /// *launched* (`xcrun` missing, a sandboxing/permission failure) is a
+    /// structural host problem retrying cannot fix, and throws immediately
+    /// — see `BootAttemptFailure`. Each retry re-issues *both* `boot` and
+    /// `bootstatus`, since a `bootstatus` that gave up may have left the
+    /// device in a state only a fresh `boot` call resolves. A short fixed
+    /// delay between attempts (`retryDelaySeconds`) gives transient host
+    /// load a moment to actually clear rather than hammering an
     /// already-overloaded host immediately again.
     @discardableResult
     public func prepare(
         udid: String,
         bootTimeoutSeconds: Double = 90,
         bootstatusRetries: Int = 2,
-        retryDelaySeconds: UInt64 = 5
+        retryDelaySeconds: Double = 5
     ) async throws -> BootOutcome {
         try await loadIfNeeded()
         guard let device = devices.first(where: { $0.udid == udid }) else {
@@ -195,19 +202,41 @@ public actor SimulatorPool {
         }
         let wasBooted = device.isBooted
 
-        var lastFailure: SimulatorPoolError = .bootFailed(detail: "prepare never attempted a boot")
+        var lastRetryableDetail = "prepare never attempted a boot"
         for attempt in 0 ... max(bootstatusRetries, 0) {
             if attempt > 0 {
-                try? await Task.sleep(nanoseconds: retryDelaySeconds * 1_000_000_000)
+                // Not `try?`: a cancellation here must abort `prepare`
+                // outright, not be swallowed into "start the next attempt
+                // anyway".
+                try await Task.sleep(for: .seconds(retryDelaySeconds))
             }
             do {
                 try await attemptBoot(udid: udid, bootTimeoutSeconds: bootTimeoutSeconds)
                 return wasBooted ? .alreadyBooted : .prepared
-            } catch let error as SimulatorPoolError {
-                lastFailure = error
+            } catch let error as BootAttemptFailure {
+                switch error {
+                case let .retryableBootstatus(detail):
+                    lastRetryableDetail = detail
+                case let .fatalInvocation(detail):
+                    throw SimulatorPoolError.bootFailed(detail: detail)
+                }
             }
         }
-        throw lastFailure
+        throw SimulatorPoolError.bootFailed(detail: lastRetryableDetail)
+    }
+
+    /// `attemptBoot`'s own failure classification — kept separate from the
+    /// public `SimulatorPoolError` so `prepare`'s retry loop can tell "worth
+    /// trying again" apart from "a structural problem retrying cannot fix"
+    /// without re-deriving that distinction from a `bootFailed` string.
+    private enum BootAttemptFailure: Error {
+        /// `bootstatus` ran and reported not-ready (non-zero exit or
+        /// timeout) — the one case `prepare` retries.
+        case retryableBootstatus(detail: String)
+        /// `boot` or `bootstatus` itself could not be launched at all — a
+        /// structural host problem, not a device-readiness one; retrying
+        /// would just repeat the same failure.
+        case fatalInvocation(detail: String)
     }
 
     /// One `simctl boot` + `simctl bootstatus` attempt — the body `prepare`
@@ -218,15 +247,16 @@ public actor SimulatorPool {
         // See `prepare`'s own doc for why — the short version is that every
         // already-booted device exits non-zero here, and the string the
         // tool prints varies across toolchain versions, so the only robust
-        // signal is bootstatus below. A throw (process could not be
-        // launched at all) is still fatal.
+        // signal is bootstatus below. A throw here means the process could
+        // not be *launched* at all (not a non-zero exit) — fatal, not
+        // retried.
         do {
             _ = try await runProcess(
                 ToolPaths.xcrun, ["simctl", "boot", udid],
                 workingDirectory, bootTimeoutSeconds
             )
         } catch {
-            throw SimulatorPoolError.bootFailed(detail: "\(error)")
+            throw BootAttemptFailure.fatalInvocation(detail: "boot could not be launched: \(error)")
         }
 
         // bootstatus blocks until the device is past the boot animation and
@@ -240,12 +270,12 @@ public actor SimulatorPool {
                 workingDirectory, bootTimeoutSeconds
             )
         } catch {
-            throw SimulatorPoolError.bootFailed(detail: "bootstatus could not be run: \(error)")
+            throw BootAttemptFailure.fatalInvocation(detail: "bootstatus could not be launched: \(error)")
         }
         if !statusResult.succeeded {
             let output = OutputRedactor.redactAndTruncate(statusResult.combinedOutput, limit: 400)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw SimulatorPoolError.bootFailed(detail: output)
+            throw BootAttemptFailure.retryableBootstatus(detail: output)
         }
     }
 
