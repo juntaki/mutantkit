@@ -169,17 +169,53 @@ public actor SimulatorPool {
     /// booted by this call (`.prepared`), decided from the device's state at
     /// discovery — `simctl boot`'s exit code cannot tell the two apart, since an
     /// already-booted device exits non-zero (see above). Throws on any failure
-    /// to launch the process or on a `bootstatus` that does not report ready.
+    /// to launch the process, or on a `bootstatus` that still does not report
+    /// ready after every retry (see `bootstatusRetries`).
+    ///
+    /// `bootstatusRetries` exists because a `bootstatus` failure under real,
+    /// heavy host contention (many concurrent simulator boots on a shared CI
+    /// runner) is routinely transient, not a genuinely broken device — a
+    /// second attempt on the same UDID, moments later, has repeatedly
+    /// succeeded in exactly that situation. Each retry re-issues *both*
+    /// `boot` and `bootstatus`, since a `bootstatus` that gave up may have
+    /// left the device in a state only a fresh `boot` call resolves. A short
+    /// fixed delay between attempts (`retryDelaySeconds`) gives transient
+    /// host load a moment to actually clear rather than hammering an
+    /// already-overloaded host immediately again.
     @discardableResult
-    public func prepare(udid: String, bootTimeoutSeconds: Double = 90) async throws -> BootOutcome {
+    public func prepare(
+        udid: String,
+        bootTimeoutSeconds: Double = 90,
+        bootstatusRetries: Int = 2,
+        retryDelaySeconds: UInt64 = 5
+    ) async throws -> BootOutcome {
         try await loadIfNeeded()
         guard let device = devices.first(where: { $0.udid == udid }) else {
             throw SimulatorPoolError.noneAvailable(runtimeHint: udid)
         }
         let wasBooted = device.isBooted
 
+        var lastFailure: SimulatorPoolError = .bootFailed(detail: "prepare never attempted a boot")
+        for attempt in 0 ... max(bootstatusRetries, 0) {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: retryDelaySeconds * 1_000_000_000)
+            }
+            do {
+                try await attemptBoot(udid: udid, bootTimeoutSeconds: bootTimeoutSeconds)
+                return wasBooted ? .alreadyBooted : .prepared
+            } catch let error as SimulatorPoolError {
+                lastFailure = error
+            }
+        }
+        throw lastFailure
+    }
+
+    /// One `simctl boot` + `simctl bootstatus` attempt — the body `prepare`
+    /// retries as a unit. Split out purely so retrying means calling this
+    /// again, not duplicating the sequence inline per attempt.
+    private func attemptBoot(udid: String, bootTimeoutSeconds: Double) async throws {
         // Best-effort boot: the exit code is intentionally not checked.
-        // See the method doc for why — the short version is that every
+        // See `prepare`'s own doc for why — the short version is that every
         // already-booted device exits non-zero here, and the string the
         // tool prints varies across toolchain versions, so the only robust
         // signal is bootstatus below. A throw (process could not be
@@ -211,7 +247,6 @@ public actor SimulatorPool {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw SimulatorPoolError.bootFailed(detail: output)
         }
-        return wasBooted ? .alreadyBooted : .prepared
     }
 
     /// Takes exclusive use of a simulator, waiting if every match is busy.

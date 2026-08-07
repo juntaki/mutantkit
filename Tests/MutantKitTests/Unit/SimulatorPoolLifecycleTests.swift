@@ -155,6 +155,105 @@ struct SimulatorPoolLifecycleTests {
         }
     }
 
+    // MARK: - Retry (transient CI host contention)
+
+    /// The exact shape a real, overloaded CI runner produces: `bootstatus`
+    /// fails on the first attempt (the device genuinely was not ready yet
+    /// under host contention) and succeeds moments later with no other
+    /// change. `prepare` must recover on its own rather than surfacing a
+    /// failure a caller could have avoided by simply trying again.
+    @Test("A transient bootstatus failure recovers on retry")
+    func transientBootstatusFailureRecoversOnRetry() async throws {
+        let bootstatusAttempts = Counter()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("bootstatus") {
+                    let attempt = await bootstatusAttempts.increment()
+                    return attempt == 1 ? Self.failure(exitCode: 1, "Device never became ready") : Self.success()
+                }
+                return Self.success()
+            }
+        )
+
+        let outcome = try await pool.prepare(udid: Self.udid, bootstatusRetries: 2, retryDelaySeconds: 0)
+        #expect(outcome == .prepared)
+        #expect(await bootstatusAttempts.count == 2, "one failed attempt, one successful retry")
+    }
+
+    /// Every retry re-issues `boot`, not just `bootstatus` — a device a
+    /// failed `bootstatus` left in a bad state might need a fresh boot
+    /// command to actually recover, not just another status poll.
+    @Test("Each retry re-issues both boot and bootstatus")
+    func retryReissuesBothBootAndBootstatus() async throws {
+        let bootAttempts = Counter()
+        let bootstatusAttempts = Counter()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("boot"), !arguments.contains("bootstatus") {
+                    await bootAttempts.increment()
+                    return Self.success()
+                }
+                if arguments.contains("bootstatus") {
+                    let attempt = await bootstatusAttempts.increment()
+                    return attempt <= 2 ? Self.failure(exitCode: 1, "Device never became ready") : Self.success()
+                }
+                return Self.success()
+            }
+        )
+
+        let outcome = try await pool.prepare(udid: Self.udid, bootstatusRetries: 2, retryDelaySeconds: 0)
+        #expect(outcome == .prepared)
+        #expect(await bootAttempts.count == 3, "one initial attempt plus two retries")
+        #expect(await bootstatusAttempts.count == 3)
+    }
+
+    /// `bootstatusRetries: 0` disables retry entirely — the first failure is
+    /// the only one, and it is what throws.
+    @Test("bootstatusRetries: 0 fails on the first attempt, no retry")
+    func zeroRetriesFailsImmediately() async throws {
+        let bootstatusAttempts = Counter()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("bootstatus") {
+                    await bootstatusAttempts.increment()
+                    return Self.failure(exitCode: 1, "Device never became ready")
+                }
+                return Self.success()
+            }
+        )
+
+        await #expect(throws: SimulatorPoolError.self) {
+            try await pool.prepare(udid: Self.udid, bootstatusRetries: 0, retryDelaySeconds: 0)
+        }
+        #expect(await bootstatusAttempts.count == 1)
+    }
+
+    /// A device that never recovers still eventually throws, after
+    /// exhausting every retry — retrying must never turn a genuinely broken
+    /// device into an infinite wait or a silently-swallowed failure.
+    @Test("A device that never recovers still throws after exhausting every retry")
+    func neverRecoveringDeviceStillThrowsAfterRetries() async throws {
+        let bootstatusAttempts = Counter()
+        let pool = SimulatorPool(
+            workingDirectory: Self.workingDirectory,
+            processRunner: Self.runner { _, arguments in
+                if arguments.contains("bootstatus") {
+                    await bootstatusAttempts.increment()
+                    return Self.failure(exitCode: 1, "Device never became ready")
+                }
+                return Self.success()
+            }
+        )
+
+        await #expect(throws: SimulatorPoolError.self) {
+            try await pool.prepare(udid: Self.udid, bootstatusRetries: 2, retryDelaySeconds: 0)
+        }
+        #expect(await bootstatusAttempts.count == 3, "one initial attempt plus two retries, then give up")
+    }
+
     @Test("bootstatus timeout throws bootFailed")
     func bootstatusTimeoutThrows() async throws {
         let pool = SimulatorPool(
@@ -243,4 +342,15 @@ struct SimulatorPoolLifecycleTests {
 private actor BootCallTracker {
     private(set) var bootAttempted = false
     func markBootAttempted() { bootAttempted = true }
+}
+
+/// Counts scripted-runner calls, for the retry tests — same data-race
+/// concern as `BootCallTracker`, generalized to a count instead of a flag.
+private actor Counter {
+    private(set) var count = 0
+    @discardableResult
+    func increment() -> Int {
+        count += 1
+        return count
+    }
 }

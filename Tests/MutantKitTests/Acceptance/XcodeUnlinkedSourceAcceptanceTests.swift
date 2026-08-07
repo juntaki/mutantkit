@@ -13,7 +13,20 @@ import Testing
 /// closes that gap: `Sources/Unlinked/Unused.swift` sits outside every
 /// target's Compile Sources phase (see the fixture's `project.yml`), so
 /// mutating it changes the source tree, the build succeeds, every test still
-/// passes — and the run still has to refuse a score.
+/// passes — and the two mutants on it still must never be credited as a kill.
+///
+/// ADR-0006 Stage 1 moved this check upstream, into
+/// `MutationVerdictVerifier.classify`'s own `unprovenActivation` gate: an
+/// unproven-activation result is classified `.infrastructureFailure` (and
+/// excluded from the score, never scored as a survivor) the moment the
+/// verdict is produced, rather than reaching `IntegrityChecker.check` as an
+/// ordinary scorable result for a separate pass to flag after the fact as
+/// `.mutationNotActivated`. `IntegrityReport.violations` reports a *broken
+/// invariant* in the run's own bookkeeping (a result that vanished, a count
+/// that does not reconcile) — a correctly-excluded infrastructure failure is
+/// not one of those, so `integrity.passed` and `run.exitCode` are expected to
+/// stay green here; what this suite actually proves is that the exclusion
+/// happened, by name, for both mutants on `Unused.swift`.
 @Suite("Acceptance: source excluded from every built target", .enabled(if: Acceptance.simulatorEnabled))
 struct XcodeUnlinkedSourceAcceptanceTests {
     private static func configuration() throws -> String {
@@ -57,20 +70,32 @@ struct XcodeUnlinkedSourceAcceptanceTests {
     }
 
     /// The whole point of the fixture: a mutation with nowhere to go must
-    /// fail the run closed, by name, rather than being silently scored as an
-    /// ordinary survivor.
-    @Test("A mutation outside every target's Compile Sources fails the run closed")
-    func unlinkedMutationIsCaughtByIntegrity() throws {
+    /// never be credited as a kill, by name, rather than being silently
+    /// scored as an ordinary survivor — see the suite's own doc comment for
+    /// why this is `.infrastructureFailure`/excluded rather than an
+    /// `IntegrityReport` violation under the current (ADR-0006 Stage 1)
+    /// architecture.
+    @Test("A mutation outside every target's Compile Sources is excluded, never credited as a kill")
+    func unlinkedMutationIsExcludedFromTheScore() throws {
         let run = try self.run()
 
-        #expect(!run.report.integrity.passed)
-        #expect(run.exitCode != 0)
-        #expect(run.report.score == nil)
+        #expect(run.report.integrity.passed, "\(run.report.integrity.violations.map(\.detail))")
+        #expect(run.exitCode == 0)
 
-        let violations = run.report.integrity.violations.filter { $0.kind == .mutationNotActivated }
-        #expect(!violations.isEmpty, "\(run.report.integrity.violations.map(\.detail))")
-        #expect(violations.allSatisfy { $0.detail.contains("Unused.swift") })
-        #expect(violations.count == 2, "both mutants on the unlinked function should be flagged")
+        let unlinked = run.report.results.filter {
+            $0.point.enclosingDeclaration.path.last == "isOverLimit(count:)"
+        }
+        #expect(unlinked.count == 2)
+        for result in unlinked {
+            #expect(result.outcome == .infrastructureFailure, "\(result.point.displayLocation): \(result.outcome)")
+            #expect(
+                result.diagnosis.contains("build product is identical to the baseline's"),
+                "\(result.point.displayLocation): \(result.diagnosis)"
+            )
+        }
+
+        let score = try #require(run.report.score)
+        #expect(score.excluded["infrastructureFailure"] == 2)
     }
 
     /// The linked file's mutants are a control group: if activation evidence
