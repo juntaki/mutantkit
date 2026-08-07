@@ -2493,21 +2493,31 @@ public struct MutationRunner: Sendable {
         let output = String(decoding: data, as: UTF8.self)
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
-        guard let startIndex = lines.firstIndex(where: { $0.localizedCaseInsensitiveContains("canApplyCoupon") }) else {
+        let matchIndices = lines.indices.filter { lines[$0].localizedCaseInsensitiveContains("canApplyCoupon") }
+        guard !matchIndices.isEmpty else {
             FileHandle.standardError.write(Data("DIAG4[\(label)] no canApplyCoupon symbol found in disassembly (\(lines.count) lines total)\n".utf8))
             return
         }
-        // From the matched symbol line up to the next symbol label (a line
-        // ending in ":") or 40 lines, whichever comes first.
-        var endIndex = startIndex + 1
-        while endIndex < lines.count, endIndex < startIndex + 40,
-              !(lines[endIndex].hasSuffix(":") && !lines[endIndex].hasPrefix("\t")) {
-            endIndex += 1
+        // `workers: 2` runs mutants concurrently, and stderr writes from
+        // different tasks can interleave line-by-line — every line here
+        // carries its own [label] tag (not just a header) and the whole
+        // block is written in ONE write() call, so a reader can grep by
+        // label and trust the result regardless of what else was writing
+        // concurrently. Every occurrence of the symbol is dumped (a real
+        // function this small can appear more than once via inlining or
+        // specialization), each up to the next label line or 80 lines.
+        var combined = "DIAG4[\(label)] canApplyCoupon disassembly, \(matchIndices.count) occurrence(s) (\(binaryPath.path)):\n"
+        for startIndex in matchIndices {
+            var endIndex = startIndex + 1
+            while endIndex < lines.count, endIndex < startIndex + 80,
+                  !(lines[endIndex].hasSuffix(":") && !lines[endIndex].hasPrefix("\t")) {
+                endIndex += 1
+            }
+            for line in lines[startIndex..<endIndex] {
+                combined += "DIAG4[\(label)]   \(line)\n"
+            }
         }
-        FileHandle.standardError.write(Data("DIAG4[\(label)] canApplyCoupon disassembly (\(binaryPath.path)):\n".utf8))
-        for line in lines[startIndex..<endIndex] {
-            FileHandle.standardError.write(Data("DIAG4   \(line)\n".utf8))
-        }
+        FileHandle.standardError.write(Data(combined.utf8))
     }
 
     /// Whether the mutation reached the binary the tests ran against.
