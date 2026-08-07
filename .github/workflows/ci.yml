@@ -130,59 +130,19 @@ jobs:
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
-    needs: unit
+    # TEMPORARY for issue #3 diagnosis: no `needs: unit` (this job builds its
+    # own test binary directly, so it does not need to wait on a redundant
+    # build+full-suite run first) and a matrix trimmed to just the fixture
+    # under investigation, to cut queueing/simulator contention from the
+    # other ~13 unrelated jobs. Restore both before merging anything from
+    # this branch.
     strategy:
       # Never cancel siblings: which fixtures fail together is a diagnosis.
       fail-fast: false
       matrix:
         include:
-          - fixture: swift-package
-            filter: SwiftPackageMacOSAcceptanceTests
-            simulator: "0"
-          - fixture: swift-package-coverage
-            filter: SwiftPackageMacOSCoverageAcceptanceTests
-            simulator: "0"
-          - fixture: shard-merge
-            filter: ShardMergeAcceptanceTests
-            simulator: "0"
-          - fixture: swift-package-ios
-            filter: SwiftPackageIOSAcceptanceTests
-            simulator: "1"
           - fixture: xcode-project
             filter: XcodeProjectAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-workspace
-            filter: XcodeWorkspaceAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-app-debug-dylib
-            filter: XcodeAppDebugDylibAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-unlinked-source
-            filter: XcodeUnlinkedSourceAcceptanceTests
-            simulator: "1"
-          - fixture: cli-commands
-            filter: CLICommandsAcceptanceTests
-            simulator: "0"
-          - fixture: process-supervision
-            filter: ProcessSupervisionAcceptanceTests
-            simulator: "0"
-          # The four below all build the same real .xcodeproj through the
-          # batching/incremental/coverage-selection paths that a 100-mutant
-          # benchmark against a real external project found broken while
-          # every unit test (all fakes, no real xcodebuild invocation or
-          # .xctestrun) stayed green. They are the whole reason this job
-          # exists rather than trusting `unit` alone.
-          - fixture: xcode-batch-testing
-            filter: XcodeBatchTestingAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-batch-testing-ui-target
-            filter: XcodeBatchTestingUITargetAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-coverage-selection
-            filter: XcodeCoverageSelectionAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-incremental-batch-testing
-            filter: XcodeIncrementalBatchTestingAcceptanceTests
             simulator: "1"
     steps:
       - uses: actions/checkout@v4
