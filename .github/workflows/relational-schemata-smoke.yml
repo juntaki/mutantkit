@@ -1,0 +1,164 @@
+name: Relational-operator schemata smoke (isolated vs schemata)
+
+# TEMPORARY, throwaway workflow living only on
+# smoke/relational-schemata-measurement — never intended to reach main. The
+# scoring gate (SchemataLowererRegistry.builtIn) stays closed on every real
+# branch; this branch alone registers RelationalOperatorReplacementSchemataLowerer
+# so this workflow can run a real execution.strategy: schemata pass and
+# compare it against execution.strategy: isolated on the same real external
+# projects, scoped to one file and one operator each — the "small smoke, one
+# repetition, wiring check" step before any larger real-mutation-count run.
+#
+# MutantKit-only comparison — no Muter here. This measures whether the
+# schemata lowerer (once promoted) would agree with the isolated backend and
+# whether it actually reduces build invocations / wall time, which is the
+# real promotion question; Muter has nothing to do with either.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relational-schemata-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        repetition: [1, 2, 3]
+        include:
+          - projectID: swift-numerics
+            repositoryURL: https://github.com/apple/swift-numerics.git
+            commitSHA: 899af71c0256d0ad181e3b7eb3453c1065d928a5
+            sourceFile: Sources/IntegerUtilities/GCD.swift
+
+          - projectID: swift-syntax
+            repositoryURL: https://github.com/apple/swift-syntax.git
+            commitSHA: 60e8eb850721b5a6eebbd973b39f450a16553bd9
+            sourceFile: Sources/SwiftSyntax/AbsolutePosition.swift
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      - name: Build MutantKit (release, with the schemata lowerer registered on this branch only)
+        run: swift build -c release --product mutantkit
+
+      - name: Build the schemata runtime static library
+        run: swift build -c release --product MutantKitSchemataRuntime
+
+      - name: Clone the target project at its pinned commit
+        run: |
+          set -euo pipefail
+          git clone "${{ matrix.repositoryURL }}" /tmp/target-project
+          cd /tmp/target-project
+          git checkout "${{ matrix.commitSHA }}"
+          test "$(git rev-parse HEAD)" = "${{ matrix.commitSHA }}"
+
+      - name: Write a config scoped to one file and one operator
+        working-directory: /tmp/target-project
+        run: |
+          cat > mutantkit.yml <<'EOF'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: ["${{ matrix.sourceFile }}"]
+          operators:
+            profile: default
+            disable: ["swift.core.bool-literal-inversion", "swift.core.logical-connector-replacement", "swift.core.return-value-replacement", "swift.core.ternary-branch-swap", "swift.core.unary-not-removal"]
+          reports: [json]
+          EOF
+
+      - name: Plan (shared by both strategies — same MutationIDs either way)
+        working-directory: /tmp/target-project
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.build/release/mutantkit" plan --output plan.json
+          echo "planned candidates:"
+          python3 -c "import json; plan = json.load(open('plan.json')); print(len(plan['mutations']))"
+
+      - name: Isolated run
+        working-directory: /tmp/target-project
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          "$GITHUB_WORKSPACE/.build/release/mutantkit" run \
+            --plan plan.json --output report-isolated.json --no-resume \
+            --config <(sed 's/^version: 1$/version: 1\nexecution:\n  strategy: isolated/' mutantkit.yml)
+          end=$(date +%s)
+          echo "isolated_wall_seconds=$((end - start))" >> "$GITHUB_ENV"
+
+      - name: Schemata run
+        working-directory: /tmp/target-project
+        env:
+          MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          "$GITHUB_WORKSPACE/.build/release/mutantkit" run \
+            --plan plan.json --output report-schemata.json --no-resume \
+            --config <(sed 's/^version: 1$/version: 1\nexecution:\n  strategy: schemata/' mutantkit.yml)
+          end=$(date +%s)
+          echo "schemata_wall_seconds=$((end - start))" >> "$GITHUB_ENV"
+
+      - name: Compare isolated vs schemata verdicts
+        working-directory: /tmp/target-project
+        run: |
+          set -euo pipefail
+          python3 - <<PY
+          import json
+
+          isolated = json.load(open("report-isolated.json"))
+          schemata = json.load(open("report-schemata.json"))
+
+          def by_id(report):
+              return {r["point"]["id"]: r for r in report["results"]}
+
+          iso = by_id(isolated)
+          sch = by_id(schemata)
+
+          all_ids = sorted(set(iso) | set(sch))
+          disagreements = []
+          for mid in all_ids:
+              i = iso.get(mid)
+              s = sch.get(mid)
+              if i is None or s is None:
+                  disagreements.append(f"{mid}: missing from one backend (isolated={i is not None} schemata={s is not None})")
+                  continue
+              if i["outcome"] != s["outcome"]:
+                  disagreements.append(f"{mid}: isolated={i['outcome']} schemata={s['outcome']}")
+
+          print(f"=== ${{ matrix.projectID }} / ${{ matrix.sourceFile }} ===")
+          print(f"mutations compared: {len(all_ids)}")
+          print(f"isolated wall: ${isolated_wall_seconds}s  schemata wall: ${schemata_wall_seconds}s")
+          print(f"disagreements: {len(disagreements)}")
+          for d in disagreements:
+              print(f"  {d}")
+
+          if disagreements:
+              raise SystemExit(1)
+          PY
+        env:
+          isolated_wall_seconds: ${{ env.isolated_wall_seconds }}
+          schemata_wall_seconds: ${{ env.schemata_wall_seconds }}
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relational-schemata-smoke-${{ matrix.projectID }}-rep${{ matrix.repetition }}
+          path: |
+            /tmp/target-project/plan.json
+            /tmp/target-project/report-isolated.json
+            /tmp/target-project/report-schemata.json
+          if-no-files-found: warn
+          retention-days: 14
