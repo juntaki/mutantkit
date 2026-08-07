@@ -13,7 +13,14 @@ public struct SchemataLowererRegistry: Sendable {
     /// list is where a future operator's lowerer gets wired in, the same
     /// role `MutationRegistry.builtIn` plays for `MutationOperator`s.
     public static let builtIn: [any SchemataLowerer] = [
-        BoolLiteralSchemataLowerer()
+        BoolLiteralSchemataLowerer(),
+        // TEMPORARY, this branch only — never merged to main. Registered
+        // here purely so `smoke/relational-schemata-measurement`'s CI
+        // workflow can run a real `execution.strategy: schemata` comparison
+        // against real external projects. The real promotion commit (a
+        // separate, small, reviewed change) is what actually adds this line
+        // for good, once real measurement here justifies it.
+        RelationalOperatorReplacementSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {
