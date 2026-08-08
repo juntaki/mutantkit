@@ -336,4 +336,88 @@ struct SchemataChunkPlannerTests {
         let data = try JSONEncoder().encode(result.schemataPlan)
         _ = try SchemataPlan.decodeAndValidate(data, against: mutationPlan)
     }
+
+    // MARK: - Same-site overlapping candidates (RelationalOperatorReplacement)
+
+    /// The real bug this suite exists to pin: `RelationalOperatorReplacementOperator`
+    /// always offers *two* candidates per comparison (boundary and negation)
+    /// anchored at the identical operator token, so they share a byte
+    /// range. Before this test's fix, a naive size-capped `chunked(into:)`
+    /// could place both in the same batch, `lower()` would throw
+    /// `overlappingRewriteEnvelopes`, and — because `SchemataRunOrchestration
+    /// .classify` treats *any* `SchemataChunkPlanner.plan` failure as
+    /// "nothing is embeddable" — every mutation in the *entire* run would
+    /// silently fall back to isolated, not just the two that actually
+    /// conflicted. Confirmed against a real external project
+    /// (swift-numerics) before this fix existed: the console read
+    /// `"Schemata chunk planning failed (... claim overlapping byte
+    /// ranges ...); every mutation will run in isolated mode this run."`
+    @Test("Two same-site candidates (boundary + negation) never share a chunk, and every other point still embeds")
+    func sameSiteOverlappingCandidatesSplitIntoSeparateChunks() throws {
+        let source = "func isAtLeastTen(_ value: Int) -> Bool { value >= 10 }\n"
+        let points = try discoverPoints(
+            source, operatorID: RelationalOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
+        // The exact overlap: both anchor to the same `>=` token.
+        #expect(points.count == 2)
+        #expect(points[0].utf8Range == points[1].utf8Range)
+
+        let mutationPlan = makePlan(mutations: points)
+        let registry = try SchemataLowererRegistry(lowerers: [RelationalOperatorReplacementSchemataLowerer()])
+
+        let result = try SchemataChunkPlanner.plan(
+            mutationPlan: mutationPlan, registry: registry,
+            sources: ["Widget.swift": Data(source.utf8)],
+            targetInfo: ["Widget.swift": [Self.appTarget]],
+            backend: Self.backend
+        )
+
+        #expect(result.programs.count == 2, "same-site candidates must land in two separate builds, not fail to lower at all")
+        let fallenBack = result.schemataPlan.entries.filter { !$0.isEmbedded }
+        #expect(fallenBack.isEmpty, "\(fallenBack.map(\.fallbackReason))")
+        #expect(result.schemataPlan.entries.count == 2)
+
+        let data = try JSONEncoder().encode(result.schemataPlan)
+        _ = try SchemataPlan.decodeAndValidate(data, against: mutationPlan)
+    }
+
+    /// A same-site conflict must stay scoped to the two points that
+    /// actually conflict — every *other*, unrelated point in the same
+    /// group still gets embedded. Regression test for the exact failure
+    /// mode described above: before the fix, one conflicting pair sank the
+    /// entire group (or entire run), not just itself.
+    @Test("A same-site conflict never drags down an unrelated mutation in the same group")
+    func sameSiteConflictDoesNotAffectUnrelatedMutation() throws {
+        let source = """
+        func isAtLeastTen(_ value: Int) -> Bool { value >= 10 }
+        func isPositive() -> Bool { true }
+        """
+        let relationalPoints = try discoverPoints(
+            source, operatorID: RelationalOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
+        let boolPoints = try discoverPoints(
+            source, operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: "Widget.swift"
+        )
+        #expect(relationalPoints.count == 2)
+        #expect(boolPoints.count == 1)
+
+        let mutationPlan = makePlan(mutations: relationalPoints + boolPoints)
+        let registry = try SchemataLowererRegistry(lowerers: [
+            BoolLiteralSchemataLowerer(), RelationalOperatorReplacementSchemataLowerer()
+        ])
+
+        let result = try SchemataChunkPlanner.plan(
+            mutationPlan: mutationPlan, registry: registry,
+            sources: ["Widget.swift": Data(source.utf8)],
+            targetInfo: ["Widget.swift": [Self.appTarget]],
+            backend: Self.backend
+        )
+
+        // All 3 points (the 2 conflicting relational candidates, split
+        // across chunks, plus the 1 unrelated bool-literal point) embed —
+        // nothing falls back.
+        let fallenBack = result.schemataPlan.entries.filter { !$0.isEmbedded }
+        #expect(fallenBack.isEmpty, "\(fallenBack.map(\.fallbackReason))")
+        #expect(result.schemataPlan.entries.count == 3)
+    }
 }

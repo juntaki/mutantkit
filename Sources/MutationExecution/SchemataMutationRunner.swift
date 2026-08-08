@@ -43,6 +43,30 @@ public struct SchemataMutationRunner: Sendable {
         /// evidence is discarded here, unlike ADR-0005 PR F's
         /// `mergeMultiTargetResults`, which this replaces.
         public let multiTargetVerdicts: [MultiTargetVerdict]
+        /// Every mutation this run attempted through schemata but could not
+        /// score from schemata evidence alone (`MutationVerdictVerifier
+        /// .schemataIsolatedFallbackReason` — a passing test with no proof
+        /// the mutation was ever selected/hit) and therefore excluded
+        /// entirely from `results`/`multiTargetVerdicts`: no schemata
+        /// `TargetRecord` for this `MutationID`, for *any* of its target
+        /// placements, was kept (`groupByMutation`'s own all-or-nothing
+        /// rule — see `run()`). `SchemataRunOrchestration` re-runs each of
+        /// these through isolated `MutationRunner` instead; this runner
+        /// never scores them itself.
+        public let isolatedFallbacks: [DynamicFallback]
+    }
+
+    /// One mutation this run could not prove activation for from schemata
+    /// evidence alone, and therefore never scored — see `Outcome
+    /// .isolatedFallbacks`'s own doc comment.
+    public struct DynamicFallback: Sendable, Hashable {
+        public let mutationID: MutationID
+        public let reason: MutationVerdictVerifier.SchemataIsolatedFallbackReason
+
+        public init(mutationID: MutationID, reason: MutationVerdictVerifier.SchemataIsolatedFallbackReason) {
+            self.mutationID = mutationID
+            self.reason = reason
+        }
     }
 
     public enum RunError: Error, CustomStringConvertible {
@@ -124,9 +148,25 @@ public struct SchemataMutationRunner: Sendable {
             throw RunError.baselineDidNotPass(diagnosis: summary ?? "the baseline test run did not pass")
         }
 
-        var perTarget: [TargetRecord] = []
+        var entryOutcomes: [EntryRunOutcome] = []
         for program in programs {
-            perTarget.append(contentsOf: await runChunk(program))
+            entryOutcomes.append(contentsOf: await runChunk(program))
+        }
+
+        // All-or-nothing per MutationID (never per placement): if *any* of
+        // a mutation's target placements lacked runtime activation proof,
+        // every placement's own schemata `TargetRecord` for that
+        // `MutationID` — including one that individually verified fine —
+        // is dropped before grouping. Never merge a schemata result for
+        // one target with an isolated-fallback result for another; that
+        // would double-ledger the same MutationID across two backends.
+        var dynamicFallbackReasons: [MutationID: MutationVerdictVerifier.SchemataIsolatedFallbackReason] = [:]
+        for case let .isolatedFallback(mutationID, reason) in entryOutcomes {
+            dynamicFallbackReasons[mutationID] = reason
+        }
+        let perTarget: [TargetRecord] = entryOutcomes.compactMap {
+            guard case let .verified(record) = $0, dynamicFallbackReasons[record.record.mutationRef.mutationID] == nil else { return nil }
+            return record
         }
 
         let grouped = try Self.groupByMutation(perTarget)
@@ -134,7 +174,22 @@ public struct SchemataMutationRunner: Sendable {
         let results = try grouped.map {
             try Self.projectAggregate($0, points: points, planID: planID, workUnitID: workUnitID)
         }
-        return Outcome(baseline: baseline, results: results, multiTargetVerdicts: verdicts)
+        // Deterministic order (sorted, not orchestration/completion order),
+        // the same discipline `SchemataChunkPlanner`'s own chunk IDs use.
+        let isolatedFallbacks = dynamicFallbackReasons
+            .map { DynamicFallback(mutationID: $0.key, reason: $0.value) }
+            .sorted { $0.mutationID.rawValue < $1.mutationID.rawValue }
+        return Outcome(baseline: baseline, results: results, multiTargetVerdicts: verdicts, isolatedFallbacks: isolatedFallbacks)
+    }
+
+    /// What one embedded entry's own attempt produced — either a fully
+    /// verified schemata result, or a signal that this `MutationID` (every
+    /// target placement, not just this one) needs to be re-run through
+    /// isolated mode instead (see `Outcome.isolatedFallbacks`'s own doc
+    /// comment).
+    private enum EntryRunOutcome {
+        case verified(TargetRecord)
+        case isolatedFallback(mutationID: MutationID, reason: MutationVerdictVerifier.SchemataIsolatedFallbackReason)
     }
 
     /// One target's own verified record, paired with which target
@@ -242,7 +297,7 @@ public struct SchemataMutationRunner: Sendable {
 
     // MARK: - Per chunk
 
-    private func runChunk(_ program: SchemataProgram) async -> [TargetRecord] {
+    private func runChunk(_ program: SchemataProgram) async -> [EntryRunOutcome] {
         let embeddedEntries = program.entries.filter(\.isEmbedded)
         guard !embeddedEntries.isEmpty else { return [] }
 
@@ -252,7 +307,7 @@ public struct SchemataMutationRunner: Sendable {
         } catch {
             return embeddedEntries.compactMap {
                 infrastructureFailureResult(for: $0, reason: "the chunk sandbox could not be created: \(error)")
-            }
+            }.map(EntryRunOutcome.verified)
         }
 
         let results = await runChunk(program, entries: embeddedEntries, in: sandbox)
@@ -262,24 +317,25 @@ public struct SchemataMutationRunner: Sendable {
 
     private func runChunk(
         _ program: SchemataProgram, entries embeddedEntries: [SchemataPlanEntry], in sandbox: URL
-    ) async -> [TargetRecord] {
+    ) async -> [EntryRunOutcome] {
         let artifact: BuildArtifact
         do {
             artifact = try await build.buildSchemataChunk(loweredSources: program.loweredSources, in: sandbox)
         } catch let failure as BuildFailure {
             return embeddedEntries.compactMap { buildFailureResult(for: $0, kind: failure.kind, diagnosis: failure.diagnosis) }
+                .map(EntryRunOutcome.verified)
         } catch {
             return embeddedEntries.compactMap {
                 infrastructureFailureResult(for: $0, reason: "the chunk build could not be run: \(error)")
-            }
+            }.map(EntryRunOutcome.verified)
         }
 
-        guard let productHash = artifact.productHash else {
+        guard artifact.productHash != nil else {
             return embeddedEntries.compactMap {
                 infrastructureFailureResult(
                     for: $0, reason: "the chunk build produced no product hash, so its evidence cannot be trusted"
                 )
-            }
+            }.map(EntryRunOutcome.verified)
         }
 
         // Real per-compilation-unit, per-image LC_UUID identity (ADR-0006
@@ -332,7 +388,7 @@ public struct SchemataMutationRunner: Sendable {
             for: Array(uniqueRequestsByUnit.values), artifact: artifact, in: sandbox, context: receiptContext
         )
 
-        var results: [TargetRecord] = []
+        var results: [EntryRunOutcome] = []
         for entry in embeddedEntries {
             results.append(
                 await runEntry(entry, artifact: artifact, receipt: receipt, in: sandbox)
@@ -417,7 +473,7 @@ public struct SchemataMutationRunner: Sendable {
     /// the only place that chain is ever built or judged.
     private func runEntry(
         _ entry: SchemataPlanEntry, artifact: BuildArtifact, receipt: SchemataBuildReceipt?, in sandbox: URL
-    ) async -> TargetRecord {
+    ) async -> EntryRunOutcome {
         // `token`/`sourceEmbeddingID` are always non-nil here: `entries` was
         // already filtered to `isEmbedded` entries by the caller, and both
         // are only ever `nil` for `.isolatedFallback` placements. `point`
@@ -448,12 +504,12 @@ public struct SchemataMutationRunner: Sendable {
         do {
             run = try await runSchemataToken(artifact, in: sandbox, token: token, transcriptPath: transcriptPath, runID: runID)
         } catch {
-            return TargetRecord(
+            return .verified(TargetRecord(
                 targetIdentity: Self.targetIdentity(for: entry),
                 record: finalize(point: point, infrastructureFailureDiagnosis: "the test process could not be run: \(error)"),
                 durationSeconds: Date().timeIntervalSince(started),
                 testDurationSeconds: nil
-            )
+            ))
         }
 
         let expectation = SchemataRunExpectation(
@@ -497,6 +553,20 @@ public struct SchemataMutationRunner: Sendable {
         let preliminary = preliminaryObservations(
             point: point, sourceApplication: .applied(evidence), build: buildObservation, test: testObservation
         )
+
+        // Checked before `confirmationRequirement` is even asked (Group 2:
+        // no-HIT/no-STARTUP -> isolated fallback): a passing test with no
+        // proof this mutation was ever selected/hit gets no confirmation
+        // gathered and no `finalize` call here at all — `run()` drops
+        // every target placement for this MutationID and
+        // `SchemataRunOrchestration` re-runs it through isolated mode from
+        // scratch, which will build its own, independent proof chain.
+        // Never widen this beyond what `schemataIsolatedFallbackReason`
+        // itself already scopes to (see that function's own doc comment).
+        if let reason = MutationVerdictVerifier.schemataIsolatedFallbackReason(for: preliminary) {
+            return .isolatedFallback(mutationID: entry.mutationID, reason: reason)
+        }
+
         let requirement = MutationVerdictVerifier.confirmationRequirement(for: preliminary, policy: policy)
         var confirmations: [ConfirmationObservation] = []
         if requirement != .none {
@@ -514,12 +584,12 @@ public struct SchemataMutationRunner: Sendable {
             test: testObservation,
             confirmations: confirmations
         )
-        return TargetRecord(
+        return .verified(TargetRecord(
             targetIdentity: Self.targetIdentity(for: entry),
             record: record,
             durationSeconds: Date().timeIntervalSince(started),
             testDurationSeconds: Date().timeIntervalSince(testStarted)
-        )
+        ))
     }
 
     private struct SourceLevelEvidence {
