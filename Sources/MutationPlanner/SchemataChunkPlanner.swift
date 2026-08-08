@@ -364,17 +364,24 @@ public enum SchemataChunkPlanner {
     /// Deterministic: points are sorted by `(file, start offset)` first, so
     /// two independently-produced plans over the identical input always
     /// split into the same waves.
+    private struct WavePoint {
+        let file: String
+        let range: ByteRange
+        let point: MutationPoint
+    }
+
     private static func nonOverlappingWaves(_ points: [MutationPoint]) -> [[MutationPoint]] {
-        var waves: [[(file: String, range: ByteRange, point: MutationPoint)]] = []
+        var waves: [[WavePoint]] = []
         for point in points.sorted(by: { ($0.file, $0.utf8Range.start) < ($1.file, $1.utf8Range.start) }) {
+            let wavePoint = WavePoint(file: point.file, range: point.utf8Range, point: point)
             if let index = waves.firstIndex(where: { wave in
                 wave.allSatisfy {
-                    $0.file != point.file || $0.range.end <= point.utf8Range.start || point.utf8Range.end <= $0.range.start
+                    $0.file != wavePoint.file || $0.range.end <= wavePoint.range.start || wavePoint.range.end <= $0.range.start
                 }
             }) {
-                waves[index].append((point.file, point.utf8Range, point))
+                waves[index].append(wavePoint)
             } else {
-                waves.append([(point.file, point.utf8Range, point)])
+                waves.append([wavePoint])
             }
         }
         return waves.map { $0.map(\.point) }

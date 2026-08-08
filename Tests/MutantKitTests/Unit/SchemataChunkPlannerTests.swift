@@ -13,12 +13,12 @@ import Testing
 /// internally consistent, not just "didn't throw."
 @Suite("SchemataChunkPlanner")
 struct SchemataChunkPlannerTests {
-    private static let backend = SchemataBackendInfo(
+    fileprivate static let backend = SchemataBackendInfo(
         backendID: "swiftpm-process-executor", backendVersion: 1,
         toolchainHash: "sha256:toolchain", buildArgumentsHash: "sha256:args"
     )
 
-    private static let appTarget = SchemataTargetInfo(
+    fileprivate static let appTarget = SchemataTargetInfo(
         projectIdentity: "App.xcodeproj", target: "App", module: "App", product: "App.app"
     )
 
@@ -336,8 +336,21 @@ struct SchemataChunkPlannerTests {
         let data = try JSONEncoder().encode(result.schemataPlan)
         _ = try SchemataPlan.decodeAndValidate(data, against: mutationPlan)
     }
+}
 
-    // MARK: - Same-site overlapping candidates (RelationalOperatorReplacement)
+// Split into its own `@Suite` (rather than continuing
+// `SchemataChunkPlannerTests`'s own body above) purely to keep
+// `type_body_length` reviewable per declaration — still the same
+// planner (`SchemataChunkPlanner.nonOverlappingWaves`) under test, no
+// behavioral split.
+@Suite("SchemataChunkPlanner: same-site overlapping candidates")
+struct SchemataChunkPlannerSameSiteOverlapTests {
+    private static let backend = SchemataChunkPlannerTests.backend
+    private static let appTarget = SchemataChunkPlannerTests.appTarget
+
+    private func discoverPoints(_ source: String, operatorID: String, relativePath: String) throws -> [MutationPoint] {
+        try CoreOperatorExpansionTestSupport.discover(source, operatorID: operatorID, relativePath: relativePath)
+    }
 
     /// The real bug this suite exists to pin: `RelationalOperatorReplacementOperator`
     /// always offers *two* candidates per comparison (boundary and negation)
