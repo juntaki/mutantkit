@@ -33,13 +33,22 @@ struct SchemataLowererRegistryTests {
     /// needs to change, a new operator's schemata scoring is being turned
     /// on — that must never happen silently as a side effect of an
     /// unrelated change to `SchemataLowererRegistry.builtIn`.
+    // TEMPORARY, this branch only (smoke/relational-schemata-measurement-v2)
+    // — never merged to main. `SchemataLowererRegistry.builtIn` here also
+    // registers `RelationalOperatorReplacementSchemataLowerer` (see that
+    // file's own TEMPORARY comment), so this pin is widened to match for
+    // the duration of this measurement branch's real, external-project
+    // comparison. Reverts to the single-operator pin the moment that
+    // registration is removed.
     @Test("Exactly one operator is schemata-eligible: bool-literal-inversion")
     func exactlyOneOperatorIsEligible() throws {
         let registry = try SchemataLowererRegistry()
         let eligible = MutationRegistry.builtIn.filter { registry.lowerer(forOperatorID: $0.descriptor.id) != nil }
         #expect(
-            eligible.map(\.descriptor.id) == [BoolLiteralInversionOperator.descriptor.id],
-            "only bool-literal-inversion may score under schemata mode today"
+            Set(eligible.map(\.descriptor.id)) == [
+                BoolLiteralInversionOperator.descriptor.id, RelationalOperatorReplacementOperator.descriptor.id
+            ],
+            "only bool-literal-inversion and (temporarily, this branch only) relational-operator-replacement may score under schemata mode today"
         )
     }
 
@@ -50,10 +59,15 @@ struct SchemataLowererRegistryTests {
     /// existing `lowererID`'s `supportedOperatorIDs` glob, if one were ever
     /// introduced) would fail this test even if `exactlyOneOperatorIsEligible`
     /// above somehow still passed.
+    // TEMPORARY, this branch only — see `exactlyOneOperatorIsEligible`'s own
+    // comment above.
     @Test("Every operator other than bool-literal-inversion always routes to isolated fallback")
     func everyOtherOperatorRoutesToIsolatedFallback() throws {
         let registry = try SchemataLowererRegistry()
-        let others = MutationRegistry.builtIn.filter { $0.descriptor.id != BoolLiteralInversionOperator.descriptor.id }
+        let others = MutationRegistry.builtIn.filter {
+            $0.descriptor.id != BoolLiteralInversionOperator.descriptor.id
+                && $0.descriptor.id != RelationalOperatorReplacementOperator.descriptor.id
+        }
         #expect(!others.isEmpty, "this test is meaningless if there is nothing else registered to check")
         for other in others {
             #expect(

@@ -30,28 +30,33 @@ public struct RelationalMutationVariant: Codable, Hashable, Sendable {
 /// Unlike `BoolLiteralSchemataLowerer`'s `.literalSelection` shape (replace
 /// one literal with another of the identical type — no risk to operand
 /// evaluation, since there are no operands), a relational comparison's
-/// `lhs`/`rhs` must each be evaluated *exactly once* regardless of which
-/// operator (original or replacement) ends up selected. A naive
-/// `isActive(token) ? lhs <= rhs : lhs < rhs` expansion duplicates `lhs`
-/// and `rhs` textually — if either has a side effect, is a function call,
-/// or is otherwise not idempotent, this would double-evaluate it and
-/// silently change the program's behavior even when the mutant is
-/// *inactive*. This lowerer instead:
+/// `lhs`/`rhs` appear twice in the lowered source text (once per operator
+/// branch). This lowerer restricts eligibility (`analyze`) to operands
+/// syntactically provable to be side-effect-free and idempotent — an
+/// identifier reference, `self`, a simple (non-computed-property-risking)
+/// member access chain, a literal, or a parenthesized safe expression, and
+/// nothing else (no calls, subscripts, `await`, `try`, closures,
+/// autoclosures, optional chaining, force-unwraps, macros, key paths, or
+/// ownership-sensitive bindings — see `isSafeOperand`) — so textual
+/// duplication is never a *behavioral* hazard even before considering
+/// evaluation count.
 ///
-///   1. restricts eligibility (`analyze`) to operands syntactically
-///      provable to be side-effect-free and idempotent — an identifier
-///      reference, `self`, a simple (non-computed-property-risking) member
-///      access chain, a literal, or a parenthesized safe expression, and
-///      nothing else (no calls, subscripts, `await`, `try`, closures,
-///      autoclosures, optional chaining, force-unwraps, macros, key paths,
-///      or ownership-sensitive bindings — see `isSafeOperand`);
-///   2. lowers to an immediately-invoked closure that binds each operand to
-///      a local `let` exactly once, then selects between the two operator
-///      applications against those locals — never against `lhs`/`rhs`
-///      textually a second time.
+/// It then lowers directly to a ternary conditional expression selecting
+/// between the two operator applications, each applied to `lhs`/`rhs`
+/// verbatim — no intermediate closure, no local bindings, no shared generic
+/// type parameter forcing both operands to unify. Swift's `?:` only
+/// evaluates the selected branch, so `lhs`/`rhs` are each evaluated exactly
+/// once at runtime despite appearing twice in the source text (see
+/// `RelationalOperatorReplacementSchemataLowererTests
+/// .ternarySelectsOnlyOneBranchAtRuntime`). Letting the compiler see `lhs
+/// op rhs` directly (rather than through a helper that first binds both
+/// operands to one common type) is what lets `Decimal`-vs-literal
+/// contextual typing, heterogeneous `BinaryInteger` comparisons (`Int >=
+/// UInt32`), and custom/generic `Comparable` overloads all type-check
+/// exactly as the original, unmutated expression does.
 public struct RelationalOperatorReplacementSchemataLowerer: SchemataLowerer {
     public static let lowererID = "swift.core.relational-operator-replacement.schemata"
-    public static let lowererVersion = 1
+    public static let lowererVersion = 2
     /// Same v3 runtime protocol `BoolLiteralSchemataLowerer` already uses —
     /// one shared runtime, not a second one invented for this operator.
     public static let runtimeABIVersion = BoolLiteralSchemataLowerer.runtimeABIVersion
@@ -397,40 +402,29 @@ extension RelationalOperatorReplacementSchemataLowerer {
             let (infix, range) = resolvedByPoint[point.id]!
             let lhsText = infix.leftOperand.trimmedDescription
             let rhsText = infix.rightOperand.trimmedDescription
-            // Parenthesized as a whole `(...)`, not a bare `{ ... }()`: an
-            // un-parenthesized immediately-invoked closure in `if`/`while`/
-            // `guard` condition position parses as Swift's own trailing-
-            // closure grammar instead, which fails to compile ("return
-            // invalid outside of a func", "closure expression is unused")
-            // — confirmed by a real compile failure in this lowerer's own
-            // acceptance fixture before this was added, not assumed safe.
-            //
-            // `lhs`/`rhs` are bound via a local *generic* function
-            // (`__mkPair<__MKPairT>(_ lhs: __MKPairT, _ rhs: __MKPairT) -> (__MKPairT, __MKPairT)`), not two
-            // independent `let`s — real compile failure found via this
-            // lowerer's own differential acceptance test: two independent
-            // `let __mkLHS = (\(lhsText)); let __mkRHS = (\(rhsText))`
-            // declarations each infer their own type in isolation, so a
-            // comparison like `value >= 10` where `value: Decimal` and `10`
-            // is only `Decimal` by *contextual* inference against `value`
-            // loses that context — the untyped `let __mkRHS = (10)` defaults
-            // to `Int`, and the mutated source no longer compiles ("`Decimal`
-            // does not conform to `BinaryInteger`"). Passing both operands as
-            // a single generic call forces Swift to unify `T` from the first
-            // (already-concretely-typed) argument and coerce the second into
-            // that same `T` — the same bidirectional inference a real binary
-            // operator call itself uses — so `__mkRHS` ends up `Decimal` here
-            // exactly as `10` would in the original, unmutated expression.
-            // Each operand is still evaluated exactly once: function call
-            // arguments evaluate once each, same guarantee as before.
+            // A direct ternary, `lhs`/`rhs` applied verbatim on each branch
+            // — no intermediate binding, no shared generic type parameter.
+            // An earlier version of this lowerer bound both operands once
+            // via a local generic `__mkPair<T>(_ lhs: T, _ rhs: T) -> (T,
+            // T)` to avoid re-evaluating a non-idempotent operand; that
+            // turned out to be unnecessary (Swift's `?:` only evaluates its
+            // selected branch, so `lhs`/`rhs` are each evaluated exactly
+            // once at runtime despite appearing twice in this source text —
+            // see `ternarySelectsOnlyOneBranchAtRuntime`) and actively
+            // harmful: forcing both operands to unify to one `T` fails to
+            // compile for a real, common shape found via this lowerer's own
+            // Expansion measurement — `Int >= UInt32`, which `BinaryInteger`
+            // supports as a *heterogeneous* comparison operator with no
+            // shared concrete type (`conflicting arguments to generic
+            // parameter 'T' ('Int' vs. 'UInt32')`). Applying `lhs op rhs`
+            // directly, exactly as the original unmutated expression does,
+            // lets the compiler's own overload resolution and contextual
+            // typing (e.g. `Decimal` vs. an untyped integer literal) work
+            // unmodified.
             let replacement = """
             (\
-            { () -> Bool in \
-            func __mkPair<__MKPairT>(_ lhs: __MKPairT, _ rhs: __MKPairT) -> (__MKPairT, __MKPairT) { (lhs, rhs) }; \
-            let (__mkLHS, __mkRHS) = __mkPair(\(lhsText), \(rhsText)); \
-            return __mutantkitIsActiveV3(__mutantkitUnitDescriptor_\(unit.suffix), \(token.namespace), \(token.localIndex)) \
-            ? (__mkLHS \(point.replacementText) __mkRHS) : (__mkLHS \(point.originalText) __mkRHS) \
-            }()\
+            __mutantkitIsActiveV3(__mutantkitUnitDescriptor_\(unit.suffix), \(token.namespace), \(token.localIndex)) \
+            ? (\(lhsText) \(point.replacementText) \(rhsText)) : (\(lhsText) \(point.originalText) \(rhsText))\
             )
             """
             bytes.replaceSubrange(range.range, with: Array(replacement.utf8))
