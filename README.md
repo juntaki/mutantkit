@@ -2,6 +2,19 @@
 
 Trustworthy mutation testing for Swift and Apple platforms.
 
+```bash
+brew install juntaki/mutantkit/mutantkit
+
+mutantkit doctor
+mutantkit init
+mutantkit plan --output plan.json
+mutantkit run --plan plan.json
+```
+
+> **MutantKit never scores a mutant unless it can prove the mutation was
+> actually applied to your source and executed.** See
+> [What makes this one different](#what-makes-this-one-different).
+
 MutantKit introduces small faults into your code and checks whether your tests
 notice. Tests that pass against broken code are not testing anything, and
 coverage cannot tell you which ones those are.
@@ -68,7 +81,25 @@ Concretely:
 
 ## Install
 
-Requires macOS 14+, Swift 6.0+, Xcode 16+.
+Requires macOS 14+ on Apple Silicon, Xcode 16+.
+
+```bash
+brew install juntaki/mutantkit/mutantkit
+```
+
+Prebuilt binary, no Swift toolchain build required. Verify manually instead:
+
+```bash
+curl -LO https://github.com/juntaki/mutantkit/releases/latest/download/mutantkit-macos-arm64.tar.gz
+curl -LO https://github.com/juntaki/mutantkit/releases/latest/download/SHA256SUMS
+shasum -a 256 -c SHA256SUMS
+tar xzf mutantkit-macos-arm64.tar.gz
+```
+
+### Building from source
+
+For contributors, or platforms the prebuilt binary does not cover yet (Intel
+Macs, CI images without Homebrew). Requires Swift 6.0+.
 
 ```bash
 git clone <this repo> && cd mutantkit
@@ -129,6 +160,26 @@ actionable mutants in review rather than a full report nobody reads:
 Diff-scoped PR runs do not replace full runs: mutants relevant to a change
 routinely live outside the changed lines, which is what nightly and weekly are
 for.
+
+### What to point MutantKit at
+
+Mutation testing is most valuable on deterministic domain/business logic,
+where a test suite is expected to fully pin down behavior. Thin boundaries to
+OS/hardware — CoreAudio/HAL wrappers, `SMAppService`, other hardware or OS
+service adapters, network integration shims, UI glue — are often poor
+mutation targets: a unit suite frequently cannot kill a mutant there even
+when the code is correct, because the behavior it changes only manifests
+through the real OS/hardware, not through anything a unit test observes. A
+surviving mutant in that kind of code is not necessarily "insufficient
+tests" — exclude it, or read its survival as an integration-boundary finding
+rather than a coverage gap:
+
+```yaml
+sources:
+  exclude:
+    - Sources/AudioHAL/**
+    - Sources/SystemIntegration/**
+```
 
 ## Configuration
 
@@ -259,7 +310,7 @@ result is wrong.
 | 1 · Correctness core | in progress | Plan, stable IDs, eleven core operators (see [Operators](#operators): bool literal, logical connector, relational, ternary, unary-not, return-value default-enabled; arithmetic/assignment experimental-only, 0 unviable in a real-project corpus but arithmetic showed 2 confirmed reproducible runtime hangs there; nil-coalescing experimental-only, demoted for low signal density against a real-project corpus; else-clause-deletion/range-boundary-replacement experimental-only, brand new and not yet corpus-measured), isolated execution, baseline, timeout, evidence, JSON/text reports |
 | 2 · Apple integration | in progress | `.xcodeproj`, `.xcworkspace`, iOS packages, `.xcresult`, XCTest, Swift Testing, `doctor` |
 | 3 · Scale | in progress | coverage-based test selection, incremental build, batched testing, historical test prioritization with early abort (wave-based batched kill on a batchable adapter, serial per-invocation otherwise), cross-run coverage and result caches, diff mode, budget, checkpoint/resume, shard/merge, warm simulator pool, APFS clone sandboxes |
-| 4 · Schemata | in progress | one shared build embeds every mutation; a verifier-only trust chain (per-image build receipts, binary runtime protocol, confirmation parity with isolated mode) decides every verdict; per-operator, gated by a lowerer registry — `swift.core.bool-literal-inversion` is embeddable today, every other operator automatically falls back to isolated mode |
+| 4 · Schemata | in progress | one shared build embeds every mutation; a verifier-only trust chain (per-image build receipts, binary runtime protocol, confirmation parity with isolated mode) decides every verdict; per-operator, gated by a lowerer registry — `swift.core.bool-literal-inversion` and `swift.core.relational-operator-replacement` are embeddable today (measured +3–8% wall-time over isolated mode on real projects, zero correctness disagreement — see [Benchmarks](Benchmarks/results/ror-schemata-performance/report.md)), every other operator automatically falls back to isolated mode |
 | 5 · Apple operators | **blocked on research** | lifecycle, cancellation, continuation, persistence, SwiftUI, accessibility |
 
 Phase 5 is blocked deliberately. Apple-specific operators must be derived from a
