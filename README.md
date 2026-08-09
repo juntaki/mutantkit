@@ -161,6 +161,48 @@ Diff-scoped PR runs do not replace full runs: mutants relevant to a change
 routinely live outside the changed lines, which is what nightly and weekly are
 for.
 
+### Quality gate: turning a score into a merge decision
+
+A report is not a merge decision. `mutantkit gate` is:
+
+```bash
+mutantkit gate --report report.json \
+  --baseline main-report.json \
+  --minimum-effective 70 \
+  --regression-maximum-drop 2 \
+  --new-survivors-maximum 0
+```
+
+or the same policy checked into `mutantkit.yml`, so it travels with the repo
+instead of living in a CI YAML file:
+
+```yaml
+qualityGate:
+  effectiveScore:
+    minimum: 70
+  regression:
+    maximumDrop: 2       # percentage points versus --baseline
+  survived:
+    newMaximum: 0         # mutants surviving now that didn't survive in --baseline
+  integrityViolations:
+    maximum: 0             # the only accepted value — this is not configurable higher
+```
+
+`--minimum-tested`/`--minimum-effective`/`--maximum-survivors` are absolute
+thresholds against one report. `regression`/`survived` answer a different,
+usually more useful question in day-to-day CI: **did this PR make things
+worse**, not just "is the number above some fixed bar." A codebase can carry a
+stable, reviewed backlog of survivors and still fail CI the moment a genuinely
+new one shows up — that's what `survived.newMaximum` catches, by diffing
+MutationIDs against `--baseline`, not just comparing counts. Both regression
+checks require `--baseline` (a prior report, typically the target branch's
+last run); the gate fails closed with a clear message if they are configured
+without one, rather than silently skipping the check.
+
+`qualityGate` is checked only by `gate`, never by `plan`/`run` — changing a CI
+threshold does not change what gets mutated, so it does not invalidate a plan
+or a checkpoint.
+
 ### What to point MutantKit at
 
 Mutation testing is most valuable on deterministic domain/business logic,

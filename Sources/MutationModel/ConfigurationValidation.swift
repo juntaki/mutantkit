@@ -426,6 +426,31 @@ public enum ConfigurationJSONSchema {
           "type": "array",
           "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary"] },
           "uniqueItems": true
+        },
+        "qualityGate": {
+          "type": "object",
+          "properties": {
+            "testedScore": {
+              "type": "object",
+              "properties": { "minimum": { "type": ["number", "null"] } }
+            },
+            "effectiveScore": {
+              "type": "object",
+              "properties": { "minimum": { "type": ["number", "null"] } }
+            },
+            "regression": {
+              "type": "object",
+              "properties": { "maximumDrop": { "type": ["number", "null"] } }
+            },
+            "survived": {
+              "type": "object",
+              "properties": { "newMaximum": { "type": ["integer", "null"] } }
+            },
+            "integrityViolations": {
+              "type": "object",
+              "properties": { "maximum": { "type": ["integer", "null"] } }
+            }
+          }
         }
       }
     }

@@ -10,15 +10,30 @@ public struct QualityGateThresholds: Codable, Sendable, Hashable {
     public var minimumEffective: Double?
     /// Fail when the number of surviving mutants exceeds this count.
     public var maximumSurvivors: Int?
+    /// Fail when a score drops by more than this many fractional points
+    /// (0...1) versus the baseline report. Requires `baseline` to be passed
+    /// to `evaluate` — a plain absolute threshold cannot answer "did this
+    /// PR make things worse," which is the question that actually blocks a
+    /// merge in day-to-day CI use.
+    public var regressionMaximumDrop: Double?
+    /// Fail when a MutationID survives now but did not survive in the
+    /// baseline report. Also requires `baseline`. Distinct from
+    /// `maximumSurvivors`: a project can carry a stable, reviewed backlog
+    /// of survivors while still failing CI the moment a *new* one appears.
+    public var newSurvivorsMaximum: Int?
 
     public init(
         minimumTested: Double? = nil,
         minimumEffective: Double? = nil,
-        maximumSurvivors: Int? = nil
+        maximumSurvivors: Int? = nil,
+        regressionMaximumDrop: Double? = nil,
+        newSurvivorsMaximum: Int? = nil
     ) {
         self.minimumTested = minimumTested
         self.minimumEffective = minimumEffective
         self.maximumSurvivors = maximumSurvivors
+        self.regressionMaximumDrop = regressionMaximumDrop
+        self.newSurvivorsMaximum = newSurvivorsMaximum
     }
 }
 
@@ -28,6 +43,9 @@ public struct QualityGateViolation: Codable, Sendable, Hashable, CustomStringCon
         case effectiveScore
         case survivorCount
         case scoreUnavailable
+        case scoreRegression
+        case newSurvivors
+        case baselineUnavailable
     }
 
     public let kind: Kind
@@ -57,7 +75,8 @@ public enum QualityGate {
     /// the missing number as zero or silently passing CI.
     public static func evaluate(
         report: RunReport,
-        thresholds: QualityGateThresholds
+        thresholds: QualityGateThresholds,
+        baseline: RunReport? = nil
     ) -> QualityGateResult {
         guard report.integrity.passed, let score = report.score else {
             return QualityGateResult(
@@ -118,6 +137,53 @@ public enum QualityGate {
                 kind: .survivorCount,
                 detail: "\(score.survived) mutant(s) survived; configured maximum is \(maximum)."
             ))
+        }
+
+        let needsBaseline = thresholds.regressionMaximumDrop != nil || thresholds.newSurvivorsMaximum != nil
+        guard needsBaseline else {
+            return QualityGateResult(passed: violations.isEmpty, violations: violations)
+        }
+
+        guard let baseline, baseline.integrity.passed, let baselineScore = baseline.score else {
+            violations.append(QualityGateViolation(
+                kind: .baselineUnavailable,
+                detail: "regression/newSurvivors thresholds are configured but no trustworthy baseline report was provided."
+            ))
+            return QualityGateResult(passed: violations.isEmpty, violations: violations)
+        }
+
+        if let maximumDrop = thresholds.regressionMaximumDrop {
+            for (label, kindDetail) in [
+                ("Tested", (current: score.tested, prior: baselineScore.tested)),
+                ("Effective", (current: score.effective, prior: baselineScore.effective))
+            ] {
+                if let current = kindDetail.current, let prior = kindDetail.prior {
+                    let drop = prior - current
+                    if drop > maximumDrop {
+                        violations.append(QualityGateViolation(
+                            kind: .scoreRegression,
+                            detail: String(
+                                format: "%@ Mutation Score dropped %.2f%% versus baseline (%.2f%% -> %.2f%%); configured maximum drop is %.2f%%.",
+                                label, drop * 100, prior * 100, current * 100, maximumDrop * 100
+                            )
+                        ))
+                    }
+                }
+            }
+        }
+
+        if let maximum = thresholds.newSurvivorsMaximum {
+            let baselineSurvivors = Set(baseline.results.filter { $0.outcome == .survived }.map(\.id))
+            let currentSurvivors = report.results.filter { $0.outcome == .survived }
+            let newSurvivors = currentSurvivors.filter { !baselineSurvivors.contains($0.id) }
+            if newSurvivors.count > maximum {
+                violations.append(QualityGateViolation(
+                    kind: .newSurvivors,
+                    detail: "\(newSurvivors.count) new surviving mutant(s) not present in the baseline "
+                        + "(configured maximum is \(maximum)): "
+                        + newSurvivors.map(\.id.rawValue).sorted().joined(separator: ", ")
+                ))
+            }
         }
 
         return QualityGateResult(passed: violations.isEmpty, violations: violations)

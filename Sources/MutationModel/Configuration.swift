@@ -15,6 +15,10 @@ public struct Configuration: Codable, Sendable, Hashable {
     public var execution: ExecutionSettings
     public var timeouts: TimeoutSettings
     public var reports: [ReportKind]
+    /// CI merge-decision policy. Not read by `plan`/`run`, only by `gate` —
+    /// see `QualityGateSettings`'s own comment for why it is excluded from
+    /// `configurationHash`.
+    public var qualityGate: QualityGateSettings
 
     public init(
         version: Int = 1,
@@ -24,7 +28,8 @@ public struct Configuration: Codable, Sendable, Hashable {
         operators: OperatorSettings = OperatorSettings(),
         execution: ExecutionSettings = ExecutionSettings(),
         timeouts: TimeoutSettings = TimeoutSettings(),
-        reports: [ReportKind] = [.console, .json]
+        reports: [ReportKind] = [.console, .json],
+        qualityGate: QualityGateSettings = QualityGateSettings()
     ) {
         self.version = version
         self.project = project
@@ -34,6 +39,7 @@ public struct Configuration: Codable, Sendable, Hashable {
         self.execution = execution
         self.timeouts = timeouts
         self.reports = reports
+        self.qualityGate = qualityGate
     }
 
     public init(from decoder: Decoder) throws {
@@ -46,15 +52,21 @@ public struct Configuration: Codable, Sendable, Hashable {
         execution = try container.decodeIfPresent(ExecutionSettings.self, forKey: .execution) ?? ExecutionSettings()
         timeouts = try container.decodeIfPresent(TimeoutSettings.self, forKey: .timeouts) ?? TimeoutSettings()
         reports = try container.decodeIfPresent([ReportKind].self, forKey: .reports) ?? [.console, .json]
+        qualityGate = try container.decodeIfPresent(QualityGateSettings.self, forKey: .qualityGate) ?? QualityGateSettings()
     }
 
     /// Hash of the canonical JSON encoding. Goes into the plan so that a plan
     /// executed under different settings is detectable rather than merely
-    /// surprising.
+    /// surprising. `qualityGate` is deliberately zeroed out first: it is pure
+    /// CI merge policy, checked only at `gate` time, and must not make an
+    /// otherwise-identical plan look different just because a threshold
+    /// changed.
     public var configurationHash: String {
+        var hashed = self
+        hashed.qualityGate = QualityGateSettings()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(self) else { return ContentHash.of("<unencodable>") }
+        guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
         return ContentHash.of(data)
     }
 }
@@ -717,4 +729,101 @@ public enum ReportKind: String, Codable, Sendable, CaseIterable {
     case strykerJSON = "stryker-json"
     case html
     case ciSummary = "ci-summary"
+}
+
+// MARK: - Quality gate
+
+/// CI merge-decision policy, checked out separately at `gate` time — see
+/// `GateCommand` and `QualityGateThresholds`. Deliberately excluded from
+/// `Configuration.configurationHash` (see that property's own comment):
+/// tightening or loosening a CI threshold does not change what gets
+/// mutated, so it must not invalidate an in-progress plan or checkpoint.
+public struct QualityGateSettings: Codable, Sendable, Hashable {
+    public struct ScoreThreshold: Codable, Sendable, Hashable {
+        /// Percent, e.g. `70` for 70%.
+        public var minimum: Double?
+
+        public init(minimum: Double? = nil) {
+            self.minimum = minimum
+        }
+    }
+
+    public struct RegressionThreshold: Codable, Sendable, Hashable {
+        /// Percentage points, e.g. `2` for 2%. Requires `gate --baseline`.
+        public var maximumDrop: Double?
+
+        public init(maximumDrop: Double? = nil) {
+            self.maximumDrop = maximumDrop
+        }
+    }
+
+    public struct SurvivedThreshold: Codable, Sendable, Hashable {
+        public var newMaximum: Int?
+
+        public init(newMaximum: Int? = nil) {
+            self.newMaximum = newMaximum
+        }
+    }
+
+    public struct IntegrityThreshold: Codable, Sendable, Hashable {
+        /// Written for symmetry with the other four keys, not because a
+        /// nonzero tolerance is supported: the gate already fails closed
+        /// on any integrity violation unconditionally (see
+        /// `QualityGate.evaluate`), and `ConfigurationLoader`/`gate` reject
+        /// any value here other than `0` rather than silently accept a
+        /// setting that would weaken that guarantee.
+        public var maximum: Int?
+
+        public init(maximum: Int? = nil) {
+            self.maximum = maximum
+        }
+    }
+
+    public var testedScore: ScoreThreshold?
+    public var effectiveScore: ScoreThreshold?
+    public var regression: RegressionThreshold?
+    public var survived: SurvivedThreshold?
+    public var integrityViolations: IntegrityThreshold?
+
+    public init(
+        testedScore: ScoreThreshold? = nil,
+        effectiveScore: ScoreThreshold? = nil,
+        regression: RegressionThreshold? = nil,
+        survived: SurvivedThreshold? = nil,
+        integrityViolations: IntegrityThreshold? = nil
+    ) {
+        self.testedScore = testedScore
+        self.effectiveScore = effectiveScore
+        self.regression = regression
+        self.survived = survived
+        self.integrityViolations = integrityViolations
+    }
+
+    /// Converts to the fraction/count-based thresholds `QualityGate.evaluate`
+    /// actually checks. Throws if `integrityViolations.maximum` is set to
+    /// anything but `0` (see that field's own comment).
+    public func resolvedThresholds() throws -> QualityGateThresholds {
+        if let maximum = integrityViolations?.maximum, maximum != 0 {
+            throw QualityGateSettingsError.nonzeroIntegrityTolerance(maximum)
+        }
+        return QualityGateThresholds(
+            minimumTested: testedScore?.minimum.map { $0 / 100 },
+            minimumEffective: effectiveScore?.minimum.map { $0 / 100 },
+            maximumSurvivors: nil,
+            regressionMaximumDrop: regression?.maximumDrop.map { $0 / 100 },
+            newSurvivorsMaximum: survived?.newMaximum
+        )
+    }
+}
+
+public enum QualityGateSettingsError: Error, CustomStringConvertible {
+    case nonzeroIntegrityTolerance(Int)
+
+    public var description: String {
+        switch self {
+        case let .nonzeroIntegrityTolerance(value):
+            "qualityGate.integrityViolations.maximum must be 0 (found \(value)): MutantKit always "
+                + "fails closed on an integrity violation, and this cannot be configured to tolerate one."
+        }
+    }
 }

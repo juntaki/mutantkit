@@ -94,6 +94,19 @@ struct ConfigurationSchemaParityTests {
         #expect(try encodedKeys(mutant) == nestedSection(["timeouts", "mutant"], in: schema))
     }
 
+    @Test("qualityGate matches QualityGateSettings")
+    func qualityGateSection() throws {
+        let schema = try schema
+        let settings = QualityGateSettings(
+            testedScore: .init(minimum: 80),
+            effectiveScore: .init(minimum: 70),
+            regression: .init(maximumDrop: 2),
+            survived: .init(newMaximum: 0),
+            integrityViolations: .init(maximum: 0)
+        )
+        #expect(try encodedKeys(settings) == section("qualityGate", in: schema))
+    }
+
     // MARK: - Helpers
 
     /// Keys a fully-populated value encodes to. Sorted to make equality reads
