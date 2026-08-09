@@ -9,11 +9,18 @@ import SwiftFrontend
 /// Deferred at S1 (ADR-0003 addendum 1) until a second lowerer existed to
 /// make a registry meaningful — this is that moment.
 public struct SchemataLowererRegistry: Sendable {
-    /// The lowerers compiled into this build. Only one exists today; the
-    /// list is where a future operator's lowerer gets wired in, the same
-    /// role `MutationRegistry.builtIn` plays for `MutationOperator`s.
+    /// The lowerers compiled into this build — the entire per-operator
+    /// schemata scoring gate (see `SchemataChunkPlanner`'s own doc
+    /// comment): an operator with no lowerer here always falls back to
+    /// isolated mode. `RelationalOperatorReplacementSchemataLowerer`
+    /// promoted here after: the `__mkPair<T>` heterogeneous-operand fix,
+    /// the multi-process proof-chain fix, and the no-HIT/no-STARTUP
+    /// isolated-fallback routing fix, each independently verified against
+    /// a real ~116-mutation Expansion run (swift-numerics/IntegerUtilities,
+    /// swift-syntax) with isolated/schemata disagreement = 0.
     public static let builtIn: [any SchemataLowerer] = [
-        BoolLiteralSchemataLowerer()
+        BoolLiteralSchemataLowerer(),
+        RelationalOperatorReplacementSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {

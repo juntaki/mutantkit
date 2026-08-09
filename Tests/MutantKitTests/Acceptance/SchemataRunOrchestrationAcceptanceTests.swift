@@ -4,14 +4,23 @@ import Testing
 
 /// `mutantkit run` itself, with `execution.strategy: schemata` in the
 /// config, against a fixture with both an embeddable candidate (bool
-/// literal, `killedFlag`/`survivedFlag`) and a non-embeddable one (`>` in
-/// `isPositive`, no `SchemataLowerer` registered for relational operators)
-/// — proving a requested `.schemata` run genuinely mixes both backends:
-/// the bool-literal candidates run through the real
-/// `SchemataMutationRunner`, the relational one falls back to isolated
-/// mode, and both verdicts land in one reconciled report (ADR-0006 Stage
-/// 3: schemata scoring re-enabled, gated by which operators have a
-/// registered lowerer — see `SchemataRunOrchestration`'s own doc comment).
+/// literal, `killedFlag`/`survivedFlag`) and a non-embeddable one (`!` in
+/// `negated`, no `SchemataLowerer` registered for `UnaryNotRemovalOperator`)
+/// — proving a requested `.schemata` run genuinely mixes both backends: the
+/// bool-literal candidates run through the real `SchemataMutationRunner`,
+/// the unary-not one falls back to isolated mode, and both verdicts land
+/// in one reconciled report (ADR-0006 Stage 3: schemata scoring re-enabled,
+/// gated by which operators have a registered lowerer — see
+/// `SchemataRunOrchestration`'s own doc comment).
+///
+/// Deliberately not a relational-operator or arithmetic-operator candidate:
+/// `RelationalOperatorReplacementSchemataLowerer` is registered in
+/// `SchemataLowererRegistry.builtIn` too, so `>`/`<`/etc. no longer
+/// reliably falls back; `ArithmeticOperatorReplacementOperator` is
+/// `defaultEnabled: false` (only under the `experimental` profile), so it
+/// never gets discovered at all under this fixture's `profile: default`
+/// config — `UnaryNotRemovalOperator` is what stays both default-enabled
+/// and genuinely isolated-only today.
 ///
 /// Requires `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` in the environment
 /// (inherited by the spawned `mutantkit` process the same way every other
@@ -56,7 +65,7 @@ struct SchemataRunOrchestrationAcceptanceTests {
         #expect(strategy.requested == .schemata)
         #expect(strategy.effectiveCount == 2, "killedFlag and survivedFlag are the only bool-literal (embeddable) candidates")
         #expect(
-            strategy.fallbackCount > 0, "isPositive's `>` has no registered lowerer, so at least one mutant must fall back to isolated mode"
+            strategy.fallbackCount > 0, "negated's `!` has no registered lowerer, so at least one mutant must fall back to isolated mode"
         )
         #expect(
             strategy.effectiveCount + strategy.fallbackCount == result.report.results.count,
@@ -64,7 +73,7 @@ struct SchemataRunOrchestrationAcceptanceTests {
         )
     }
 
-    @Test("The bool-literal candidates run through the real schemata backend; the relational one runs isolated")
+    @Test("The bool-literal candidates run through the real schemata backend; the unary-not one runs isolated")
     func mixedBackendAttribution() throws {
         let result = try run()
         #expect(!result.report.results.isEmpty)
@@ -80,12 +89,12 @@ struct SchemataRunOrchestrationAcceptanceTests {
             }
         }
 
-        let relationalCandidate = try #require(result.report.results.first {
-            $0.point.enclosingDeclaration.description.contains("isPositive")
+        let unaryNotCandidate = try #require(result.report.results.first {
+            $0.point.enclosingDeclaration.description.contains("negated")
         })
-        guard case .isolated? = relationalCandidate.evidence?.applicationEvidence else {
+        guard case .isolated? = unaryNotCandidate.evidence?.applicationEvidence else {
             Issue.record(
-                "expected isolated evidence for isPositive's mutant, got \(String(describing: relationalCandidate.evidence?.applicationEvidence))"
+                "expected isolated evidence for negated's mutant, got \(String(describing: unaryNotCandidate.evidence?.applicationEvidence))"
             )
             return
         }

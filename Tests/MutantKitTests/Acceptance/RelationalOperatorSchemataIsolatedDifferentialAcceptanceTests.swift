@@ -66,6 +66,15 @@ struct RORSchemataIsolatedDifferentialAcceptanceTests {
         public static func customAtLeastTenMeters(_ value: Meters) -> Bool {
             value >= Meters(10)
         }
+
+        // The real shape found via Expansion against swift-numerics: an old
+        // lowerer version forced both operands into one shared generic type
+        // parameter, which failed to compile for two different (but
+        // directly comparable, via `BinaryInteger`'s own heterogeneous
+        // comparison operator) integer types — never for `Int` alone.
+        public static func mixedWidthAtLeast(_ a: Int, _ b: UInt32) -> Bool {
+            a >= b
+        }
     }
 
     """
@@ -89,6 +98,10 @@ struct RORSchemataIsolatedDifferentialAcceptanceTests {
 
         func testCustomComparableBoundary() {
             XCTAssertTrue(RelationalFixture.customAtLeastTenMeters(RelationalFixture.Meters(10)))
+        }
+
+        func testMixedWidthBoundary() {
+            XCTAssertTrue(RelationalFixture.mixedWidthAtLeast(10, 10))
         }
     }
 
@@ -207,10 +220,10 @@ struct RORSchemataIsolatedDifferentialAcceptanceTests {
             Self.librarySource, operatorID: RelationalOperatorReplacementOperator.descriptor.id, relativePath: Self.relativePath
         )
         // Two candidates (boundary `>`, negation `<`) per `>=` call site
-        // across the four functions (8), plus two more from `Meters`'s own
+        // across the five functions (10), plus two more from `Meters`'s own
         // `<` operator implementation (`<` -> `<=`/`>`) — a real relational
         // operator inside the fixture too, not just a call site using one.
-        #expect(points.count == 10, "expected 8 candidates from the 4 >= call sites plus 2 from Meters.<, got \(points.count)")
+        #expect(points.count == 12, "expected 10 candidates from the 5 >= call sites plus 2 from Meters.<, got \(points.count)")
         return points
     }
 

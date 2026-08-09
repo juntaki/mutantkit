@@ -147,7 +147,8 @@ struct BoolLiteralSchemataLowererTests {
         // registration, and the call site referencing that same
         // descriptor by name.
         #expect(lowered.contents.contains(BoolLiteralSchemataLowerer.sharedDeclarationPreamble))
-        #expect(lowered.contents.contains("private let __mutantkitUnitDescriptor_"))
+        #expect(lowered.contents.contains("@usableFromInline"))
+        #expect(lowered.contents.contains("let __mutantkitUnitDescriptor_"))
         #expect(lowered.contents.contains("__mutantkitRegisterUnitV3(source, unit)"))
         let expectedCallSitePattern = #/__mutantkitIsActiveV3\(__mutantkitUnitDescriptor_[0-9a-f]{12}, \d+, 1\) \? false : true/#
         #expect(lowered.contents.contains(expectedCallSitePattern))
@@ -208,7 +209,7 @@ struct BoolLiteralSchemataLowererTests {
         let lowered = try #require(program.loweredSources.first { $0.relativePath == "Sample.swift" })
         // Both points are in the same file, so they share one descriptor
         // registration (one compilation unit) -- exactly one, not two.
-        let descriptorCount = lowered.contents.components(separatedBy: "private let __mutantkitUnitDescriptor_").count - 1
+        let descriptorCount = lowered.contents.components(separatedBy: "let __mutantkitUnitDescriptor_").count - 1
         #expect(descriptorCount == 1, "two points in the same file share one compilation-unit descriptor")
         #expect(lowered.contents.contains(#/__mutantkitIsActiveV3\(__mutantkitUnitDescriptor_[0-9a-f]{12}, \d+, 1\) \? false : true/#))
         #expect(lowered.contents.contains(#/__mutantkitIsActiveV3\(__mutantkitUnitDescriptor_[0-9a-f]{12}, \d+, 2\) \? true : false/#))

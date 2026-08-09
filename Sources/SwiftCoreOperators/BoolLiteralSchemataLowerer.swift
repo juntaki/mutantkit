@@ -126,12 +126,14 @@ public struct BoolLiteralSchemataLowerer: SchemataLowerer {
     /// the subset a given chunk happens to touch.
     public static let sharedDeclarationPreamble = """
     @_silgen_name("mutantkit_register_unit_v3")
+    @usableFromInline
     func __mutantkitRegisterUnitV3(
         _ sourceEmbeddingHex: UnsafePointer<CChar>,
         _ compilationUnitHex: UnsafePointer<CChar>
     ) -> OpaquePointer?
 
     @_silgen_name("mutantkit_is_active_v3")
+    @usableFromInline
     func __mutantkitIsActiveV3(
         _ descriptor: OpaquePointer?,
         _ namespaceValue: UInt64,
@@ -167,7 +169,8 @@ public struct BoolLiteralSchemataLowerer: SchemataLowerer {
     /// against, only the type system's inability to see that on its own.
     static func descriptorPreamble(suffix: String, sourceEmbeddingID: String, compilationUnitID: String) -> String {
         """
-        nonisolated(unsafe) private let __mutantkitUnitDescriptor_\(suffix): OpaquePointer? = {
+        @usableFromInline
+        nonisolated(unsafe) let __mutantkitUnitDescriptor_\(suffix): OpaquePointer? = {
             "\(sourceEmbeddingID)".withCString { source in
                 "\(compilationUnitID)".withCString { unit in
                     __mutantkitRegisterUnitV3(source, unit)
