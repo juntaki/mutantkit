@@ -186,7 +186,7 @@ jobs:
               "mutationsPerSecond": len(results) / ${wall_seconds} if ${wall_seconds} > 0 else None,
               "schemataEffectiveCount": strategy["effectiveCount"] if strategy else None,
               "schemataFallbackCount": strategy["fallbackCount"] if strategy else None,
-              "integrityPassed": report["integrity"]["passed"],
+              "integrityPassed": len(report["integrity"]["violations"]) == 0,
               "scoreSurvived": report.get("score", {}).get("survived") if report.get("score") else None,
               "scoreKilled": report.get("score", {}).get("killed") if report.get("score") else None,
           }
