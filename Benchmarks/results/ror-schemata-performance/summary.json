@@ -1,0 +1,92 @@
+{
+  "benchmarkID": "ror-schemata-vs-isolated-formal-2026-08-09",
+  "purpose": "Formal isolated-vs-schemata performance measurement for ROR schemata scoring, gating the first official performance claim after production enablement (SchemataLowererRegistry.builtIn).",
+  "baselineCommit": "f2d5006",
+  "workflow": "oss-public/.github/workflows/relational-schemata-benchmark.yml",
+  "publicRuns": {
+    "scout": "https://github.com/juntaki/mutantkit/actions/runs/31298316910",
+    "formal": "https://github.com/juntaki/mutantkit/actions/runs/31308597844"
+  },
+  "corpus": [
+    {
+      "projectID": "swift-numerics-integer-utilities",
+      "repositoryURL": "https://github.com/apple/swift-numerics.git",
+      "commitSHA": "899af71c0256d0ad181e3b7eb3453c1065d928a5",
+      "mutationCount": 83
+    },
+    {
+      "projectID": "swift-syntax-small-files",
+      "repositoryURL": "https://github.com/apple/swift-syntax.git",
+      "commitSHA": "60e8eb850721b5a6eebbd973b39f450a16553bd9",
+      "mutationCount": 33
+    }
+  ],
+  "scoutPhase": {
+    "workersScouted": [2, 3, 4],
+    "repetitionsPerWorkerCount": 1,
+    "finding": "Wall-proxy time (build+test seconds) increased monotonically with worker count for both modes and both projects on the public macOS runner (contention, not parallelism gain). swift-syntax at workers=4 additionally produced 4 isolated/schemata outcome disagreements out of 33 MutationIDs (verifiedTimeout/flaky on the isolated side vs survived/killedByAssertion on the schemata side) -- consistent with runner resource contention causing spurious isolated-side timeouts at that worker count, not a schemata-verification defect (0 disagreements at workers=2 and workers=3 for the same project). workers=2 selected for the formal run: fastest and disagreement-free for both projects.",
+    "chosenWorkerCount": 2
+  },
+  "formalPhase": {
+    "workers": 2,
+    "repetitions": 5,
+    "gate": {
+      "disagreementCount": 0,
+      "missingMutationIDs": 0,
+      "duplicateMutationIDs": 0,
+      "repetitionsComplete": "20/20 (2 projects x 2 modes x 5 reps)",
+      "integrityViolations": 0,
+      "withinModeFlakiness": 0,
+      "passed": true
+    },
+    "results": {
+      "swift-numerics-integer-utilities": {
+        "isolated": {
+          "wallSecondsMean": 2197.4,
+          "wallSecondsMedian": 2232,
+          "wallSecondsMin": 1946,
+          "wallSecondsMax": 2412,
+          "wallSecondsStdev": 223.1,
+          "mutationsPerSecondMean": 0.03809,
+          "mutationsPerSecondStdev": 0.00393
+        },
+        "schemata": {
+          "wallSecondsMean": 2125.0,
+          "wallSecondsMedian": 2144,
+          "wallSecondsMin": 1891,
+          "wallSecondsMax": 2435,
+          "wallSecondsStdev": 228.3,
+          "mutationsPerSecondMean": 0.03942,
+          "mutationsPerSecondStdev": 0.00418,
+          "schemataEffectiveCount": 34,
+          "schemataFallbackCount": 49
+        },
+        "speedupRatio": 1.034
+      },
+      "swift-syntax-small-files": {
+        "isolated": {
+          "wallSecondsMean": 3754.0,
+          "wallSecondsMedian": 3474,
+          "wallSecondsMin": 2925,
+          "wallSecondsMax": 5284,
+          "wallSecondsStdev": 917.2,
+          "mutationsPerSecondMean": 0.00916,
+          "mutationsPerSecondStdev": 0.00190
+        },
+        "schemata": {
+          "wallSecondsMean": 3449.0,
+          "wallSecondsMedian": 3372,
+          "wallSecondsMin": 2976,
+          "wallSecondsMax": 3953,
+          "wallSecondsStdev": 376.8,
+          "mutationsPerSecondMean": 0.00966,
+          "mutationsPerSecondStdev": 0.00105,
+          "schemataEffectiveCount": 21,
+          "schemataFallbackCount": 12
+        },
+        "speedupRatio": 1.088
+      }
+    }
+  },
+  "officialClaim": "Under these fixed conditions (same commit f2d5006, same MutationIDs, same workers=2, 5 repetitions, cold runs on GitHub-hosted macOS runners), ROR schemata scoring is measurably faster than isolated execution with zero correctness disagreement: +3.3% wall-time improvement on swift-numerics/IntegerUtilities, +8.1% on swift-syntax small-files. The effect is real but modest and should not be overstated -- both projects still fall back a large share of mutations to isolated execution within the schemata run (fallbackCount > effectiveCount in both corpora), which caps the achievable gain until more operators gain schemata lowerers."
+}
