@@ -84,12 +84,31 @@ enum SchemataRunOrchestration {
             workspaces: schemataWorkspaces, timeoutSeconds: timeoutSeconds
         )
 
-        let fallbackIDs = Set(context.plan.mutations.map(\.id)).subtracting(classification.embeddedIDs)
+        // A mutation `SchemataChunkPlanner` embedded can still end up here:
+        // `SchemataMutationRunner` itself may have found no runtime
+        // activation proof for a passing test (`Outcome.isolatedFallbacks`
+        // — Group 2, ADR-0006's no-HIT/no-STARTUP routing) and dropped it
+        // from its own `results` entirely. Union'd into the *same*
+        // `fallbackIDs` set the planner-time gap already uses, so both
+        // reasons a mutation needs isolated mode converge on one fallback
+        // portion, never two separate isolated runs for the same
+        // MutationID.
+        let dynamicFallbackIDs: Set<MutationID> = if case let .succeeded(outcome) = schemataPortion {
+            Set(outcome.isolatedFallbacks.map(\.mutationID))
+        } else {
+            []
+        }
+        let fallbackIDs = Set(context.plan.mutations.map(\.id)).subtracting(classification.embeddedIDs).union(dynamicFallbackIDs)
         let fallbackReport = try await runFallbackPortion(context, fallbackIDs: fallbackIDs, workspaces: workspaces)
 
         return merge(
             context, startedAt: startedAt, schemataPortion: schemataPortion, fallbackReport: fallbackReport,
-            embeddedCount: classification.embeddedIDs.count, fallbackCount: fallbackIDs.count
+            // Effective counts, not planner-time ones (ADR-0006 Group 2):
+            // a mutation counted among `classification.embeddedIDs` that
+            // then dynamically fell back is no longer schemata-scored, so
+            // it must not still be counted in `effectiveCount` — it is
+            // already folded into `fallbackIDs.count` above instead.
+            embeddedCount: classification.embeddedIDs.count - dynamicFallbackIDs.count, fallbackCount: fallbackIDs.count
         )
     }
 

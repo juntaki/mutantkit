@@ -126,13 +126,53 @@ public enum SchemataChunkPlanner {
 
         var programs: [SchemataProgram] = []
         var embeddedEntries: [SchemataPlanEntry] = []
+        // Failures isolated to one batch — never allowed to take down every
+        // other batch in this group, let alone every other group. See
+        // `lower(batch:...)`'s own doc comment on why a batch can still fail
+        // here even though every point in it individually passed
+        // `analyze()`.
+        var recoveredFallbackEntries: [SchemataPlanEntry] = []
         for key in classified.groups.keys.sorted(by: Self.orderGroupKeys) {
             let points = classified.groups[key]!.sorted { $0.id < $1.id }
             let lowerer = classified.lowererByID[key.lowererID]!
-            for batch in points.chunked(into: maxChunkSize) {
-                let program = try lower(batch: batch, key: key, lowerer: lowerer, filesByTarget: filesByTarget, sources: sources)
-                programs.append(program)
-                embeddedEntries.append(contentsOf: program.entries)
+            let targetInfoForKey = SchemataTargetInfo(
+                projectIdentity: key.projectIdentity, target: key.target, module: key.module, product: key.product
+            )
+            // Non-overlapping waves *before* the size cap: two points at
+            // the identical byte span (a single comparison's boundary and
+            // negation candidates, say — `RelationalOperatorReplacement`
+            // always produces exactly this shape) cannot share one lowered
+            // chunk no matter how small `maxChunkSize` is, since both would
+            // rewrite the same source bytes. Splitting by overlap first,
+            // and size-capping *within* each already-non-overlapping wave,
+            // is what lets a file with many independent comparisons still
+            // batch into as few builds as its worst site's own candidate
+            // count requires — not one build per mutation.
+            for wave in nonOverlappingWaves(points) {
+                for batch in wave.chunked(into: maxChunkSize) {
+                    do {
+                        let program = try lower(batch: batch, key: key, lowerer: lowerer, filesByTarget: filesByTarget, sources: sources)
+                        programs.append(program)
+                        embeddedEntries.append(contentsOf: program.entries)
+                    } catch {
+                        // `analyze()` cleared every point in `batch`
+                        // individually, but `lower()` still failed for the
+                        // batch as a whole — a genuine structural conflict
+                        // `analyze()` cannot see in isolation (an
+                        // unexpected overlap after wave-splitting, a
+                        // namespace derivation failure, or any other
+                        // lowerer-internal error). Recorded as an isolated-
+                        // fallback violation scoped to *this batch's*
+                        // points only: every other batch, wave, and group
+                        // still gets its real chance at schemata embedding.
+                        for point in batch {
+                            recoveredFallbackEntries.append(fallbackEntry(
+                                point: point, info: targetInfoForKey,
+                                reason: .structuralConflict(reason: "batch failed to lower: \(error)")
+                            ))
+                        }
+                    }
+                }
             }
         }
 
@@ -153,7 +193,7 @@ public enum SchemataChunkPlanner {
             backendVersion: backend.backendVersion,
             toolchainHash: backend.toolchainHash,
             buildArgumentsHash: backend.buildArgumentsHash,
-            entries: classified.fallbackEntries + mergedEmbeddedEntries
+            entries: classified.fallbackEntries + recoveredFallbackEntries + mergedEmbeddedEntries
         )
         return SchemataChunkPlanResult(schemataPlan: schemataPlan, programs: programs)
     }
@@ -304,6 +344,47 @@ public enum SchemataChunkPlanner {
     private static func orderGroupKeys(_ lhs: GroupKey, _ rhs: GroupKey) -> Bool {
         (lhs.lowererID, lhs.projectIdentity, lhs.target, lhs.module, lhs.product) <
             (rhs.lowererID, rhs.projectIdentity, rhs.target, rhs.module, rhs.product)
+    }
+
+    /// Greedily partitions `points` into waves with no two overlapping
+    /// `utf8Range`s *in the same file* within a wave. A lowerer's own chunk
+    /// can never embed two points that rewrite the same source bytes —
+    /// `RelationalOperatorReplacementSchemataLowerer`, for one, always
+    /// offers a boundary and a negation candidate anchored at the identical
+    /// operator token — so those must land in *different* waves (and
+    /// therefore different builds) even when they would otherwise fit in
+    /// the same size-capped chunk together.
+    ///
+    /// Byte ranges from *different* files are never compared against each
+    /// other: `utf8Range` is file-relative, so two points in unrelated
+    /// files can trivially share the same numeric offsets without
+    /// conflicting at all — comparing across files here would wave-split
+    /// pairs that were never actually in each other's way, for no reason.
+    ///
+    /// Deterministic: points are sorted by `(file, start offset)` first, so
+    /// two independently-produced plans over the identical input always
+    /// split into the same waves.
+    private struct WavePoint {
+        let file: String
+        let range: ByteRange
+        let point: MutationPoint
+    }
+
+    private static func nonOverlappingWaves(_ points: [MutationPoint]) -> [[MutationPoint]] {
+        var waves: [[WavePoint]] = []
+        for point in points.sorted(by: { ($0.file, $0.utf8Range.start) < ($1.file, $1.utf8Range.start) }) {
+            let wavePoint = WavePoint(file: point.file, range: point.utf8Range, point: point)
+            if let index = waves.firstIndex(where: { wave in
+                wave.allSatisfy {
+                    $0.file != wavePoint.file || $0.range.end <= wavePoint.range.start || wavePoint.range.end <= $0.range.start
+                }
+            }) {
+                waves[index].append(wavePoint)
+            } else {
+                waves.append([wavePoint])
+            }
+        }
+        return waves.map { $0.map(\.point) }
     }
 }
 

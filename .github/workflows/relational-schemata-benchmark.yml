@@ -1,0 +1,210 @@
+name: Relational-operator schemata performance benchmark
+
+# Formal isolated-vs-schemata performance measurement, run against
+# production `main` (RelationalOperatorReplacementSchemataLowerer is
+# permanently registered — no temporary override needed, unlike the old
+# smoke/expansion workflows this supersedes for performance purposes).
+#
+# Two phases, both driven by this one workflow via the `mode` input:
+#   - scout: one repetition per worker count, to pick the stable value
+#   - formal: >=5 repetitions at the chosen worker count
+#
+# Each (project, executionMode, repetition) triple is its own matrix job —
+# never multiple repetitions looped inside one job — so no single job can
+# approach GitHub Actions' 6-hour hosted-runner cap regardless of how many
+# repetitions a formal run asks for.
+#
+# Metrics are derived entirely from the real report.json each run already
+# produces (MutationResult.buildDurationSeconds/testDurationSeconds,
+# ExecutionStrategyReport, RunReport.startedAt/finishedAt) — no separate
+# instrumentation.
+
+on:
+  workflow_dispatch:
+    inputs:
+      workersList:
+        description: JSON array of worker counts to benchmark, e.g. '[2,3,4]' for scouting or '[2]' for a formal run
+        required: true
+        default: '[2,3,4]'
+      repetitions:
+        description: Repetitions per (project, executionMode, worker count)
+        required: true
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relational-schemata-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  matrix-setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - id: build
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+
+          workers = json.loads(os.environ["WORKERS_LIST"])
+          reps = list(range(1, int(os.environ["REPETITIONS"]) + 1))
+          projects = [
+              {
+                  "projectID": "swift-numerics-integer-utilities",
+                  "repositoryURL": "https://github.com/apple/swift-numerics.git",
+                  "commitSHA": "899af71c0256d0ad181e3b7eb3453c1065d928a5",
+                  "sourcePatterns": '["Sources/IntegerUtilities/**/*.swift"]',
+              },
+              {
+                  "projectID": "swift-syntax-small-files",
+                  "repositoryURL": "https://github.com/apple/swift-syntax.git",
+                  "commitSHA": "60e8eb850721b5a6eebbd973b39f450a16553bd9",
+                  "sourcePatterns": (
+                      '["Sources/SwiftSyntax/AbsolutePosition.swift",'
+                      '"Sources/SwiftSyntax/MemoryLayout.swift",'
+                      '"Sources/SwiftSyntax/CommonAncestor.swift",'
+                      '"Sources/SwiftSyntax/SourceLength.swift",'
+                      '"Sources/SwiftSyntax/SyntaxIdentifier.swift",'
+                      '"Sources/SwiftSyntax/Utils.swift",'
+                      '"Sources/SwiftSyntax/AbsoluteSyntaxInfo.swift",'
+                      '"Sources/SwiftSyntax/EditorPlaceholder.swift"]'
+                  ),
+              },
+          ]
+          modes = ["isolated", "schemata"]
+
+          include = []
+          for project in projects:
+              for mode in modes:
+                  for w in workers:
+                      for rep in reps:
+                          entry = dict(project)
+                          entry["executionMode"] = mode
+                          entry["workers"] = w
+                          entry["repetition"] = rep
+                          include.append(entry)
+
+          print("matrix=" + json.dumps({"include": include}))
+          PY
+        env:
+          WORKERS_LIST: ${{ inputs.workersList }}
+          REPETITIONS: ${{ inputs.repetitions }}
+
+  benchmark:
+    needs: matrix-setup
+    runs-on: macos-15
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix-setup.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      - name: Build MutantKit (release, production registry — ROR schemata already enabled on main)
+        run: swift build -c release --product mutantkit
+
+      - name: Build the schemata runtime static library
+        if: matrix.executionMode == 'schemata'
+        run: swift build -c release --product MutantKitSchemataRuntime
+
+      - name: Clone the target project at its pinned commit
+        run: |
+          set -euo pipefail
+          git clone "${{ matrix.repositoryURL }}" /tmp/target-project
+          cd /tmp/target-project
+          git checkout "${{ matrix.commitSHA }}"
+          test "$(git rev-parse HEAD)" = "${{ matrix.commitSHA }}"
+
+      - name: Write a config scoped to this project's source set and worker count
+        working-directory: /tmp/target-project
+        run: |
+          cat > mutantkit.yml <<EOF
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: ${{ matrix.sourcePatterns }}
+          operators:
+            profile: default
+            disable: ["swift.core.bool-literal-inversion", "swift.core.logical-connector-replacement", "swift.core.return-value-replacement", "swift.core.ternary-branch-swap", "swift.core.unary-not-removal"]
+          execution:
+            strategy: ${{ matrix.executionMode }}
+          reports: [json]
+          EOF
+
+      - name: Plan
+        working-directory: /tmp/target-project
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.build/release/mutantkit" plan --project-root . -c mutantkit.yml -o plan.json
+          echo "planned candidates:"
+          python3 -c "import json; plan = json.load(open('plan.json')); print(len(plan['mutations']))"
+
+      - name: Run (cold — fresh checkout, fresh sandboxes, no warm cache reused across repetitions)
+        working-directory: /tmp/target-project
+        env:
+          MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          "$GITHUB_WORKSPACE/.build/release/mutantkit" run \
+            --project-root . -c mutantkit.yml \
+            --plan plan.json --output report.json --no-resume --workers ${{ matrix.workers }}
+          end=$(date +%s)
+          echo "wall_seconds=$((end - start))" >> "$GITHUB_ENV"
+
+      - name: Summarize metrics
+        working-directory: /tmp/target-project
+        run: |
+          set -euo pipefail
+          python3 - <<PY
+          import json
+
+          report = json.load(open("report.json"))
+          results = report["results"]
+          build_durations = [r["buildDurationSeconds"] for r in results if r.get("buildDurationSeconds") is not None]
+          test_durations = [r["testDurationSeconds"] for r in results if r.get("testDurationSeconds") is not None]
+          strategy = report.get("executionStrategy")
+
+          summary = {
+              "projectID": "${{ matrix.projectID }}",
+              "executionMode": "${{ matrix.executionMode }}",
+              "workers": ${{ matrix.workers }},
+              "repetition": ${{ matrix.repetition }},
+              "mutationCount": len(results),
+              "wallSeconds": ${wall_seconds},
+              "totalBuildSeconds": sum(build_durations),
+              "totalTestSeconds": sum(test_durations),
+              "buildCount": len(build_durations),
+              "testCount": len(test_durations),
+              "mutationsPerSecond": len(results) / ${wall_seconds} if ${wall_seconds} > 0 else None,
+              "schemataEffectiveCount": strategy["effectiveCount"] if strategy else None,
+              "schemataFallbackCount": strategy["fallbackCount"] if strategy else None,
+              "integrityPassed": report["integrity"]["passed"],
+              "scoreSurvived": report.get("score", {}).get("survived") if report.get("score") else None,
+              "scoreKilled": report.get("score", {}).get("killed") if report.get("score") else None,
+          }
+          print(json.dumps(summary, indent=2))
+          with open("benchmark-summary.json", "w") as f:
+              json.dump(summary, f, indent=2)
+          PY
+        env:
+          wall_seconds: ${{ env.wall_seconds }}
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.projectID }}-${{ matrix.executionMode }}-w${{ matrix.workers }}-rep${{ matrix.repetition }}
+          path: |
+            /tmp/target-project/plan.json
+            /tmp/target-project/report.json
+            /tmp/target-project/benchmark-summary.json
+          if-no-files-found: warn
+          retention-days: 30

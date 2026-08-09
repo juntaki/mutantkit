@@ -13,12 +13,12 @@ import Testing
 /// internally consistent, not just "didn't throw."
 @Suite("SchemataChunkPlanner")
 struct SchemataChunkPlannerTests {
-    private static let backend = SchemataBackendInfo(
+    fileprivate static let backend = SchemataBackendInfo(
         backendID: "swiftpm-process-executor", backendVersion: 1,
         toolchainHash: "sha256:toolchain", buildArgumentsHash: "sha256:args"
     )
 
-    private static let appTarget = SchemataTargetInfo(
+    fileprivate static let appTarget = SchemataTargetInfo(
         projectIdentity: "App.xcodeproj", target: "App", module: "App", product: "App.app"
     )
 
@@ -335,5 +335,210 @@ struct SchemataChunkPlannerTests {
 
         let data = try JSONEncoder().encode(result.schemataPlan)
         _ = try SchemataPlan.decodeAndValidate(data, against: mutationPlan)
+    }
+}
+
+// Split into its own `@Suite` (rather than continuing
+// `SchemataChunkPlannerTests`'s own body above) purely to keep
+// `type_body_length` reviewable per declaration — still the same
+// planner (`SchemataChunkPlanner.nonOverlappingWaves`) under test, no
+// behavioral split.
+@Suite("SchemataChunkPlanner: same-site overlapping candidates")
+struct SchemataChunkPlannerSameSiteOverlapTests {
+    private static let backend = SchemataChunkPlannerTests.backend
+    private static let appTarget = SchemataChunkPlannerTests.appTarget
+
+    private func discoverPoints(_ source: String, operatorID: String, relativePath: String) throws -> [MutationPoint] {
+        try CoreOperatorExpansionTestSupport.discover(source, operatorID: operatorID, relativePath: relativePath)
+    }
+
+    /// The real bug this suite exists to pin: `RelationalOperatorReplacementOperator`
+    /// always offers *two* candidates per comparison (boundary and negation)
+    /// anchored at the identical operator token, so they share a byte
+    /// range. Before this test's fix, a naive size-capped `chunked(into:)`
+    /// could place both in the same batch, `lower()` would throw
+    /// `overlappingRewriteEnvelopes`, and — because `SchemataRunOrchestration
+    /// .classify` treats *any* `SchemataChunkPlanner.plan` failure as
+    /// "nothing is embeddable" — every mutation in the *entire* run would
+    /// silently fall back to isolated, not just the two that actually
+    /// conflicted. Confirmed against a real external project
+    /// (swift-numerics) before this fix existed: the console read
+    /// `"Schemata chunk planning failed (... claim overlapping byte
+    /// ranges ...); every mutation will run in isolated mode this run."`
+    @Test("Two same-site candidates (boundary + negation) never share a chunk, and every other point still embeds")
+    func sameSiteOverlappingCandidatesSplitIntoSeparateChunks() throws {
+        let source = "func isAtLeastTen(_ value: Int) -> Bool { value >= 10 }\n"
+        let points = try discoverPoints(
+            source, operatorID: RelationalOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
+        // The exact overlap: both anchor to the same `>=` token.
+        #expect(points.count == 2)
+        #expect(points[0].utf8Range == points[1].utf8Range)
+
+        let mutationPlan = makePlan(mutations: points)
+        let registry = try SchemataLowererRegistry(lowerers: [RelationalOperatorReplacementSchemataLowerer()])
+
+        let result = try SchemataChunkPlanner.plan(
+            mutationPlan: mutationPlan, registry: registry,
+            sources: ["Widget.swift": Data(source.utf8)],
+            targetInfo: ["Widget.swift": [Self.appTarget]],
+            backend: Self.backend
+        )
+
+        #expect(result.programs.count == 2, "same-site candidates must land in two separate builds, not fail to lower at all")
+        let fallenBack = result.schemataPlan.entries.filter { !$0.isEmbedded }
+        #expect(fallenBack.isEmpty, "\(fallenBack.map(\.fallbackReason))")
+        #expect(result.schemataPlan.entries.count == 2)
+
+        let data = try JSONEncoder().encode(result.schemataPlan)
+        _ = try SchemataPlan.decodeAndValidate(data, against: mutationPlan)
+    }
+
+    /// A same-site conflict must stay scoped to the two points that
+    /// actually conflict — every *other*, unrelated point in the same
+    /// group still gets embedded. Regression test for the exact failure
+    /// mode described above: before the fix, one conflicting pair sank the
+    /// entire group (or entire run), not just itself.
+    @Test("A same-site conflict never drags down an unrelated mutation in the same group")
+    func sameSiteConflictDoesNotAffectUnrelatedMutation() throws {
+        let source = """
+        func isAtLeastTen(_ value: Int) -> Bool { value >= 10 }
+        func isPositive() -> Bool { true }
+        """
+        let relationalPoints = try discoverPoints(
+            source, operatorID: RelationalOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
+        let boolPoints = try discoverPoints(
+            source, operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: "Widget.swift"
+        )
+        #expect(relationalPoints.count == 2)
+        #expect(boolPoints.count == 1)
+
+        let mutationPlan = makePlan(mutations: relationalPoints + boolPoints)
+        let registry = try SchemataLowererRegistry(lowerers: [
+            BoolLiteralSchemataLowerer(), RelationalOperatorReplacementSchemataLowerer()
+        ])
+
+        let result = try SchemataChunkPlanner.plan(
+            mutationPlan: mutationPlan, registry: registry,
+            sources: ["Widget.swift": Data(source.utf8)],
+            targetInfo: ["Widget.swift": [Self.appTarget]],
+            backend: Self.backend
+        )
+
+        // All 3 points (the 2 conflicting relational candidates, split
+        // across chunks, plus the 1 unrelated bool-literal point) embed —
+        // nothing falls back.
+        let fallenBack = result.schemataPlan.entries.filter { !$0.isEmbedded }
+        #expect(fallenBack.isEmpty, "\(fallenBack.map(\.fallbackReason))")
+        #expect(result.schemataPlan.entries.count == 3)
+    }
+}
+
+// Split into its own `@Suite` for the same `type_body_length` reason as
+// `SchemataChunkPlannerSameSiteOverlapTests` above — a distinct planner
+// behavior (batch-local `lower()` failure recovery) under test, not a
+// behavioral split of the planner itself.
+/// Pins `SchemataChunkPlanner.plan`'s per-batch recovery around
+/// `lower(batch:...)` (added alongside the same-site-overlap fix, #81):
+/// `analyze()` clearing every point in a batch individually does not
+/// guarantee `lower()` succeeds for the batch as a whole — a lowerer can
+/// still hit a structural conflict only visible once it sees every point in
+/// the chunk together. Before this recovery existed, one such failure
+/// discarded every mutation in the *entire run* to isolated fallback (see
+/// `SchemataChunkPlannerSameSiteOverlapTests`'s own doc comment for the real
+/// swift-numerics incident that first exposed this). Uses a fake
+/// `SchemataLowerer` whose `lower(_:sources:)` deliberately throws for one
+/// chosen `MutationID`, never `analyze()` — the same shape a real lowerer's
+/// own internal failure takes.
+@Suite("SchemataChunkPlanner: batch-local lower() failure recovery")
+struct SchemataChunkPlannerBatchFailureRecoveryTests {
+    private static let backend = SchemataChunkPlannerTests.backend
+    private static let appTarget = SchemataChunkPlannerTests.appTarget
+
+    private func discoverPoints(_ source: String, operatorID: String, relativePath: String) throws -> [MutationPoint] {
+        try CoreOperatorExpansionTestSupport.discover(source, operatorID: operatorID, relativePath: relativePath)
+    }
+
+    /// Always eligible; `lower(_:sources:)` throws iff the chunk contains
+    /// one of `poisonedMutationIDs`, otherwise returns a trivially valid
+    /// program embedding every point in the chunk.
+    private struct FailingBatchFakeLowerer: SchemataLowerer {
+        static let lowererID = "test.batch-failure-fake"
+        let poisonedMutationIDs: Set<MutationID>
+
+        var descriptor: SchemataLowererDescriptor {
+            SchemataLowererDescriptor(
+                lowererID: Self.lowererID, lowererVersion: 1, runtimeABIVersion: 1,
+                supportedOperatorIDs: [BoolLiteralInversionOperator.descriptor.id]
+            )
+        }
+
+        func analyze(_ point: MutationPoint, source: Data) -> SchemataEligibility {
+            .eligible(loweringKind: .literalSelection, rewriteEnvelope: point.utf8Range, conflictKeys: [])
+        }
+
+        func lower(_ chunk: SchemataChunk, sources: [SchemataSourceFile]) throws -> SchemataProgram {
+            guard !chunk.points.contains(where: { poisonedMutationIDs.contains($0.id) }) else {
+                struct FakeLoweringFailure: Error {}
+                throw FakeLoweringFailure()
+            }
+            let entries = chunk.points.enumerated().map { index, point in
+                let token = SchemataSelectorToken(namespace: chunk.namespace, localIndex: UInt32(index + 1))
+                let placement = SchemataEmbeddedPlacement(
+                    chunkID: chunk.chunkID, selectorToken: token, sourceEmbeddingID: "fake",
+                    lowererID: Self.lowererID, lowererVersion: 1,
+                    projectIdentity: chunk.projectIdentity, target: chunk.target, module: chunk.module, product: chunk.product,
+                    expectedImages: []
+                )
+                return SchemataPlanEntry(
+                    mutationID: point.id, placement: .embedded(placements: [placement]), conflictGroup: nil,
+                    projectIdentity: chunk.projectIdentity, target: chunk.target, module: chunk.module, product: chunk.product
+                )
+            }
+            return SchemataProgram(chunkID: chunk.chunkID, sourceEmbeddingID: "fake", loweredSources: sources, entries: entries)
+        }
+    }
+
+    @Test("A batch that fails to lower falls back to isolated for only its own points, never an unrelated batch's")
+    func batchLoweringFailureIsolatedToItsOwnBatch() throws {
+        let source = """
+        func flagA() -> Bool { true }
+        func flagB() -> Bool { true }
+        """
+        let points = try discoverPoints(source, operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: "Widget.swift")
+        #expect(points.count == 2, "one candidate per function's own boolean literal")
+
+        let poisoned = try #require(points.first)
+        let healthy = try #require(points.dropFirst().first)
+
+        let mutationPlan = makePlan(mutations: points)
+        let registry = try SchemataLowererRegistry(lowerers: [FailingBatchFakeLowerer(poisonedMutationIDs: [poisoned.id])])
+
+        // maxChunkSize: 1 forces each point into its own batch — `poisoned`
+        // and `healthy` never share a batch, so this isolates the recovery
+        // to exactly the batch that actually failed.
+        let result = try SchemataChunkPlanner.plan(
+            mutationPlan: mutationPlan, registry: registry,
+            sources: ["Widget.swift": Data(source.utf8)],
+            targetInfo: ["Widget.swift": [Self.appTarget]],
+            backend: Self.backend, maxChunkSize: 1
+        )
+
+        #expect(result.schemataPlan.entries.count == 2)
+        let byID = Dictionary(uniqueKeysWithValues: result.schemataPlan.entries.map { ($0.mutationID, $0) })
+
+        let poisonedEntry = try #require(byID[poisoned.id])
+        #expect(!poisonedEntry.isEmbedded, "the batch that genuinely failed to lower must fall back, not silently drop the point")
+        if case let .structuralConflict(reason) = poisonedEntry.fallbackReason {
+            #expect(reason.contains("batch failed to lower"), "fallback reason should identify this as a batch-lowering failure: \(reason)")
+        } else {
+            Issue.record("expected .structuralConflict, got \(String(describing: poisonedEntry.fallbackReason))")
+        }
+
+        let healthyEntry = try #require(byID[healthy.id])
+        #expect(healthyEntry.isEmbedded, "an unrelated batch's point must still embed even though a sibling batch failed to lower")
+
+        #expect(result.programs.count == 1, "only the healthy batch actually produced a program")
     }
 }

@@ -6,6 +6,6 @@ public func survivedFlag() -> Bool {
     true
 }
 
-public func isPositive(_ value: Int) -> Bool {
-    value > 0
+public func negated(_ value: Bool) -> Bool {
+    !value
 }
