@@ -187,9 +187,14 @@ func makeSchemataConfirmationObservation(
     )
     var records: [RuntimeEventRecord] = [.startup(startup)]
     if duplicateStartup {
+        // Same `processID` as the first STARTUP above — a *different*
+        // process independently starting up is legitimate multi-process
+        // multiplicity (`VerifiedSchemataChain`'s own doc comment), not a
+        // duplicate; only two STARTUPs from the identical process violate
+        // the runtime's own at-most-once contract.
         records.append(.startup(RuntimeStartupEvent(
             runID: runID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID, compilationUnitID: compilationUnitID,
-            token: schemataFixtureToken, processID: processID + 1, imageUUID: imageUUID, runtimeABIVersion: 3
+            token: schemataFixtureToken, processID: processID, imageUUID: imageUUID, runtimeABIVersion: 3
         )))
     }
     if includeHit {
