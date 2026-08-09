@@ -1,0 +1,185 @@
+name: Release
+
+# Builds a real `mutantkit` release binary, packages it exactly as a user
+# downloads it (tarball + SHA256SUMS, no repo checkout required to use it),
+# then proves the whole quick-start path works on a machine that never
+# cloned this repo: extract -> doctor -> init -> plan -> run, against a
+# freshly generated SwiftPM fixture. Only a macOS arm64 binary for now —
+# no universal binary, no notarization, no auto-update; see
+# Scripts/release-build.sh.
+#
+# workflow_dispatch lets this whole pipeline be validated before any real
+# tag exists. A `v*` tag push additionally publishes a GitHub Release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Determine version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0-dispatch.$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package
+        run: Scripts/release-build.sh "${{ steps.version.outputs.version }}" dist
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutantkit-macos-arm64
+          path: |
+            dist/mutantkit-macos-arm64.tar.gz
+            dist/SHA256SUMS
+          retention-days: 30
+
+  clean-machine-e2e:
+    needs: build
+    runs-on: macos-15
+    steps:
+      # Deliberately no actions/checkout here — the point of this job is to
+      # prove the quick-start path works with no repo present at all, the
+      # way a real user experiences it.
+      - name: Download the packaged binary only
+        uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-macos-arm64
+          path: download
+
+      - name: Verify checksum
+        working-directory: download
+        run: shasum -a 256 -c SHA256SUMS
+
+      - name: Extract
+        working-directory: download
+        run: tar xzf mutantkit-macos-arm64.tar.gz
+
+      - name: mutantkit --version
+        run: download/mutantkit-macos-arm64/mutantkit --version
+
+      - name: mutantkit doctor (no project yet — must report that honestly)
+        working-directory: download
+        run: |
+          set -euo pipefail
+          ./mutantkit-macos-arm64/mutantkit doctor || true
+
+      - name: Generate a minimal SwiftPM fixture project (no clone of this repo)
+        run: |
+          set -euo pipefail
+          mkdir -p fixture/Sources/Calc fixture/Tests/CalcTests
+          cat > fixture/Package.swift <<'EOF'
+          // swift-tools-version:6.0
+          import PackageDescription
+
+          let package = Package(
+              name: "Calc",
+              targets: [
+                  .target(name: "Calc"),
+                  .testTarget(name: "CalcTests", dependencies: ["Calc"])
+              ]
+          )
+          EOF
+          cat > fixture/Sources/Calc/Calc.swift <<'EOF'
+          public func calcAdd(_ a: Int, _ b: Int) -> Int {
+              a + b
+          }
+
+          public func isPositive(_ x: Int) -> Bool {
+              x > 0
+          }
+          EOF
+          cat > fixture/Tests/CalcTests/CalcTests.swift <<'EOF'
+          import XCTest
+          @testable import Calc
+
+          final class CalcTests: XCTestCase {
+              func testCalcAdd() {
+                  XCTAssertEqual(calcAdd(2, 3), 5)
+              }
+              func testIsPositive() {
+                  XCTAssertTrue(isPositive(1))
+                  XCTAssertFalse(isPositive(-1))
+              }
+          }
+          EOF
+
+      - name: mutantkit doctor (fixture present)
+        working-directory: fixture
+        run: ../download/mutantkit-macos-arm64/mutantkit doctor
+
+      - name: mutantkit init
+        working-directory: fixture
+        run: |
+          set -euo pipefail
+          ../download/mutantkit-macos-arm64/mutantkit init
+          python3 -c "
+          import re
+          with open('mutantkit.yml') as f:
+              c = f.read()
+          c = c.replace(
+              \"    # No test target detected. Add yours here, or run \`mutantkit doctor\`.\n    []\",
+              '    - CalcTests'
+          )
+          with open('mutantkit.yml', 'w') as f:
+              f.write(c)
+          "
+          grep -A2 '^tests:' mutantkit.yml
+
+      - name: mutantkit plan
+        working-directory: fixture
+        run: ../download/mutantkit-macos-arm64/mutantkit plan
+
+      - name: mutantkit run
+        working-directory: fixture
+        run: |
+          set -euo pipefail
+          ../download/mutantkit-macos-arm64/mutantkit run --plan plan.json --output report.json
+          python3 -c "
+          import json
+          report = json.load(open('report.json'))
+          assert len(report['integrity']['violations']) == 0, report['integrity']['violations']
+          assert len(report['results']) == 2, report['results']
+          print('clean-machine E2E gate: PASSED')
+          "
+
+  publish-release:
+    if: github.ref_type == 'tag'
+    needs: [build, clean-machine-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-macos-arm64
+          path: dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ github.ref_name }}" \
+            dist/mutantkit-macos-arm64.tar.gz dist/SHA256SUMS \
+            --repo "${{ github.repository }}" \
+            --title "mutantkit ${{ needs.build.outputs.version }}" \
+            --generate-notes
