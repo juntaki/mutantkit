@@ -40,8 +40,14 @@ public enum MutationVerdictVerifier {
     /// stale entries. Bumped to 2 for ADR-0006 Stage 1: the verifier now
     /// derives outcomes itself instead of reproducing a caller-supplied
     /// one, a real change to what "verified" means even though the
-    /// underlying classification rules were ported, not rewritten.
-    public static let currentVersion = 11
+    /// underlying classification rules were ported, not rewritten. Bumped
+    /// to 12: `verifySchemataChain` now groups STARTUP/HIT by process
+    /// instead of requiring exactly one raw event — the identical
+    /// `MutationObservations` that used to classify as
+    /// `.infrastructureFailure` under a legitimate multi-process test run
+    /// can now classify as `.survived`/`.killedByAssertion`, so a
+    /// pre-bump cached verdict must never be reused as-is.
+    public static let currentVersion = 12
 
     /// `verify(_:)` alone cannot tell a primary kill/crash that skipped its
     /// confirmation because the run's own configuration never enabled one
@@ -118,6 +124,59 @@ public enum MutationVerdictVerifier {
             return .confirmTimeout
         default:
             return .none
+        }
+    }
+
+    /// Why a schemata attempt should be re-run in isolated mode instead of
+    /// being scored from its own (unproven) schemata result — see
+    /// `MutationVerdictVerifier.schemataIsolatedFallbackReason(for:)`, the
+    /// sole place this is decided.
+    ///
+    /// Deliberately narrow: only the two failure shapes a passing test run
+    /// genuinely cannot distinguish from "this mutation was simply never
+    /// executed" (see that function's own doc comment for why the scope
+    /// stops there). Every other `SchemataChainError` case — a duplicate
+    /// STARTUP/HIT, an orphan HIT, a missing/ambiguous build receipt — is a
+    /// real inconsistency, not a proof-of-execution gap, and stays
+    /// `.infrastructureFailure` exactly as before.
+    public enum SchemataIsolatedFallbackReason: String, Codable, Sendable, Hashable {
+        case noStartup
+        case noHit
+    }
+
+    /// Whether `observations`' own schemata attempt lacks *any* runtime
+    /// activation proof (no STARTUP, or a STARTUP with no HIT) — the same
+    /// shape a genuinely uncovered/never-executed mutation produces, which
+    /// no isolated-mode equivalent proof exists to contradict. `nil` means
+    /// no fallback is warranted: either the schemata chain already proved
+    /// itself (`.survived`/`.killedByAssertion` will follow from `verify`
+    /// unchanged), or the failure is a real inconsistency (a duplicate
+    /// event, an orphan HIT, an ambiguous/missing build receipt) that
+    /// isolated mode re-running the mutation would not explain away
+    /// either — those stay `.infrastructureFailure`.
+    ///
+    /// Reuses `verifySchemataChain` itself — never a second, independent
+    /// interpretation of the raw transcript — so this can never drift from
+    /// what `verify(_:policy:)` would actually classify.
+    ///
+    /// Scoped to a *passing* test run only (Phase 1 of the no-HIT ->
+    /// isolated-fallback design): a `.failed`/`.crashed`/`.timedOut` run
+    /// with no HIT is a materially different question (was the failure
+    /// even caused by this mutation at all?) that a future phase can
+    /// address on its own evidence, not folded in here by widening this
+    /// scope quietly.
+    public static func schemataIsolatedFallbackReason(for observations: MutationObservations) -> SchemataIsolatedFallbackReason? {
+        guard let test = observations.test, test.run.status == .passed else { return nil }
+        guard case let .schemata(observation)? = test.applicationEvidence else { return nil }
+        do {
+            _ = try verifySchemataChain(observation)
+            return nil
+        } catch SchemataChainError.noStartup {
+            return .noStartup
+        } catch SchemataChainError.noHit {
+            return .noHit
+        } catch {
+            return nil
         }
     }
 
@@ -481,24 +540,46 @@ public enum MutationVerdictVerifier {
 
     // MARK: - Schemata chain verification (ADR-0006 Stage 2)
 
-    /// One unique, fully-proven schemata chain: a compilation unit,
-    /// independently proven by the build receipt to land in a real built
-    /// image, whose real `LC_UUID` a unique STARTUP event reported loading
-    /// under this exact run, and — for a scorable verdict — a unique HIT
-    /// event from that same process reporting the same unit and image.
+    /// One process's own complete, unambiguous proof: a STARTUP that loaded
+    /// the expected unit/image under this run, and the one HIT that same
+    /// process recorded for the expected mutation.
+    private struct VerifiedProcessSchemataChain {
+        let startup: RuntimeStartupEvent
+        let hit: RuntimeHitEvent
+    }
+
+    /// A compilation unit, independently proven by the build receipt to
+    /// land in a real built image, plus at least one complete per-process
+    /// STARTUP -> HIT chain proving that unit's mutation was selected and
+    /// hit in this exact run.
+    ///
+    /// `processes` is never empty (`verifySchemataChain` throws rather than
+    /// construct one with zero) — but it is not required to hold exactly
+    /// one, either. A single `mutantkit run` invocation can genuinely
+    /// spawn more than one test process for the identical build (the test
+    /// runner's own multi-process execution model, not a MutantKit
+    /// decision) — every one of those processes independently loading the
+    /// same image and independently hitting the same mutation site is
+    /// *more* proof of activation, never ambiguity. What must stay unique
+    /// is each *process's own* STARTUP and HIT (`SchemataChainError
+    /// .duplicateStartup`/`.duplicateHit`) and the semantic identity every
+    /// chain is built from (unit/image/token/embedding/run) — never how
+    /// many processes ran it.
     private struct VerifiedSchemataChain {
         let unit: CompilationUnitReceipt
         let image: BuiltImageReceipt
-        let startup: RuntimeStartupEvent
-        let hit: RuntimeHitEvent
+        let processes: [VerifiedProcessSchemataChain]
     }
 
     private enum SchemataChainError: Error, CustomStringConvertible {
         case noBuildReceipt
         case nonUniqueCompilationUnit
         case nonUniqueBuiltImage
-        case nonUniqueStartup
-        case nonUniqueHit
+        case noStartup
+        case noHit
+        case duplicateStartup(processID: Int32)
+        case duplicateHit(processID: Int32)
+        case orphanHit(processID: Int32)
 
         var description: String {
             switch self {
@@ -508,10 +589,16 @@ public enum MutationVerdictVerifier {
                 "the build receipt does not name exactly one compilation unit matching this mutation's own identity"
             case .nonUniqueBuiltImage:
                 "the build receipt does not name exactly one built image for the matched compilation unit's target"
-            case .nonUniqueStartup:
-                "the transcript does not contain exactly one STARTUP event matching this run's own expectation and the receipt's real image"
-            case .nonUniqueHit:
-                "the transcript does not contain exactly one HIT event from the matched STARTUP's own process, unit, and image"
+            case .noStartup:
+                "the transcript contains no STARTUP event matching this run's own expectation and the receipt's real image"
+            case .noHit:
+                "the transcript contains no HIT event from any process that started up under this run's own expectation"
+            case let .duplicateStartup(processID):
+                "process \(processID) recorded more than one STARTUP event matching this run's own expectation — the runtime's own at-most-once contract was violated"
+            case let .duplicateHit(processID):
+                "process \(processID) recorded more than one HIT event matching this run's own expectation — the runtime's own at-most-once contract was violated"
+            case let .orphanHit(processID):
+                "process \(processID) recorded a HIT event with no matching STARTUP in that same process — an inconsistent transcript"
             }
         }
     }
@@ -527,9 +614,19 @@ public enum MutationVerdictVerifier {
 
     /// Builds the one, fully-proven chain from raw observations alone —
     /// `PlannedMutationRef -> sourceEmbeddingID -> CompilationUnitReceipt ->
-    /// BuiltImageReceipt/architecture/LC_UUID -> STARTUP -> HIT`. The only
-    /// place this proof chain is ever constructed (ADR-0006 Stage 2):
+    /// BuiltImageReceipt/architecture/LC_UUID -> {STARTUP -> HIT}+`. The
+    /// only place this proof chain is ever constructed (ADR-0006 Stage 2):
     /// `SchemataMutationRunner` collects `observation` and decides nothing.
+    ///
+    /// Every raw STARTUP/HIT event not matching the expected semantic
+    /// identity (run/unit/embedding/token/image) is treated as noise from
+    /// an unrelated compilation unit or mutation sharing the same
+    /// transcript — filtered out before any cardinality check, never
+    /// itself a source of ambiguity. What remains is grouped *by process*:
+    /// a real test invocation can legitimately spawn more than one process
+    /// for the identical build (see `VerifiedSchemataChain`'s own doc
+    /// comment), so uniqueness is enforced per process, not across the
+    /// whole raw transcript.
     private static func verifySchemataChain(_ observation: SchemataExecutionObservation) throws -> VerifiedSchemataChain {
         guard let receipt = observation.buildReceipt else { throw SchemataChainError.noBuildReceipt }
         let expectation = observation.expectation
@@ -542,27 +639,63 @@ public enum MutationVerdictVerifier {
         )
         let image = try exactlyOne(receipt.images.filter { $0.buildTarget == unit.buildTarget }, or: .nonUniqueBuiltImage)
 
-        let startupCandidates = observation.transcript.records.compactMap { record -> RuntimeStartupEvent? in
+        func matchesExpectedIdentity(
+            runID: RunID, compilationUnitID: CompilationUnitID, sourceEmbeddingID: SHA256Digest,
+            token: SchemataSelectorToken, imageUUID: ImageUUID
+        ) -> Bool {
+            runID == expectation.runID && compilationUnitID == unit.compilationUnitID && sourceEmbeddingID == unit.sourceEmbeddingID
+                && token == expectation.selectorToken && image.slices.contains { $0.imageUUID == imageUUID }
+        }
+
+        // Both collected before any absence is classified: a transcript
+        // that has a HIT but genuinely no matching STARTUP in that same
+        // process (an inconsistent transcript, `.orphanHit`) must never be
+        // misreported as `.noStartup` — which Group 2's isolated-fallback
+        // routing (`MutationVerdictVerifier.schemataIsolatedFallbackReason`)
+        // treats as "legitimately never executed" and would otherwise
+        // silently paper over a real inconsistency instead of failing
+        // closed.
+        let matchingStartups = observation.transcript.records.compactMap { record -> RuntimeStartupEvent? in
             guard case let .startup(event) = record else { return nil }
             return event
-        }.filter { event in
-            event.runID == expectation.runID && event.compilationUnitID == unit.compilationUnitID
-                && event.sourceEmbeddingID == unit.sourceEmbeddingID && event.token == expectation.selectorToken
-                && image.slices.contains { $0.imageUUID == event.imageUUID }
+        }.filter {
+            matchesExpectedIdentity(
+                runID: $0.runID, compilationUnitID: $0.compilationUnitID, sourceEmbeddingID: $0.sourceEmbeddingID,
+                token: $0.token, imageUUID: $0.imageUUID
+            )
         }
-        let startup = try exactlyOne(startupCandidates, or: .nonUniqueStartup)
-
-        let hitCandidates = observation.transcript.records.compactMap { record -> RuntimeHitEvent? in
+        let matchingHits = observation.transcript.records.compactMap { record -> RuntimeHitEvent? in
             guard case let .hit(event) = record else { return nil }
             return event
-        }.filter { event in
-            event.runID == startup.runID && event.processID == startup.processID && event.compilationUnitID == startup.compilationUnitID
-                && event.sourceEmbeddingID == startup.sourceEmbeddingID && event.token == expectation.selectorToken
-                && image.slices.contains { $0.imageUUID == event.imageUUID }
+        }.filter {
+            matchesExpectedIdentity(
+                runID: $0.runID, compilationUnitID: $0.compilationUnitID, sourceEmbeddingID: $0.sourceEmbeddingID,
+                token: $0.token, imageUUID: $0.imageUUID
+            )
         }
-        let hit = try exactlyOne(hitCandidates, or: .nonUniqueHit)
 
-        return VerifiedSchemataChain(unit: unit, image: image, startup: startup, hit: hit)
+        let startupsByProcess = Dictionary(grouping: matchingStartups, by: \.processID)
+        let hitsByProcess = Dictionary(grouping: matchingHits, by: \.processID)
+
+        for processID in startupsByProcess.keys.sorted() where startupsByProcess[processID]!.count > 1 {
+            throw SchemataChainError.duplicateStartup(processID: processID)
+        }
+        for processID in hitsByProcess.keys.sorted() where hitsByProcess[processID]!.count > 1 {
+            throw SchemataChainError.duplicateHit(processID: processID)
+        }
+        let startupByProcess = startupsByProcess.compactMapValues(\.first)
+        for processID in hitsByProcess.keys.sorted() where startupByProcess[processID] == nil {
+            throw SchemataChainError.orphanHit(processID: processID)
+        }
+
+        guard !matchingStartups.isEmpty else { throw SchemataChainError.noStartup }
+
+        let processes = hitsByProcess.keys.sorted().map { processID in
+            VerifiedProcessSchemataChain(startup: startupByProcess[processID]!, hit: hitsByProcess[processID]!.first!)
+        }
+        guard !processes.isEmpty else { throw SchemataChainError.noHit }
+
+        return VerifiedSchemataChain(unit: unit, image: image, processes: processes)
     }
 
     private static func schemataChainDiagnosis(_ chain: Result<VerifiedSchemataChain, Error>) -> String {

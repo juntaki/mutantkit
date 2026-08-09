@@ -260,8 +260,8 @@ struct RelationalOperatorReplacementSchemataLowererTests {
         )
         let program = try lowerer.lower(chunk, sources: [SchemataSourceFile(relativePath: "Sample.swift", contents: source)])
         let lowered = try #require(program.loweredSources.first)
-        #expect(lowered.contents.contains("__mkLHS >= __mkRHS"), "must reference the real, discovered replacementText")
-        #expect(lowered.contents.contains("__mkLHS < __mkRHS"), "must reference the real, discovered originalText")
+        #expect(lowered.contents.contains("a >= b"), "must reference the real, discovered replacementText")
+        #expect(lowered.contents.contains("a < b"), "must reference the real, discovered originalText")
         #expect(program.entries.count == 1)
         #expect(program.entries.first?.mutationID == mutation.id)
     }
@@ -319,5 +319,29 @@ struct RelationalOperatorReplacementSchemataLowererTests {
         let program = try lowerer.lower(chunk, sources: [SchemataSourceFile(relativePath: "Sample.swift", contents: source)])
         #expect(program.entries.count == 2)
         #expect(parsesWithoutError(program.loweredSources[0].contents), "lowered output must remain syntactically valid Swift")
+    }
+
+    // MARK: - Evaluation count (Phase 1, Section 9)
+
+    /// Proves the specific runtime property the lowering shape now depends
+    /// on for correctness: `lhs`/`rhs` appear twice in the lowered source
+    /// text (once per ternary branch), but Swift's `?:` only evaluates its
+    /// *selected* branch — so at runtime each operand is still evaluated
+    /// exactly once. Exercises the real language construct directly (not
+    /// through `analyze`'s eligibility restriction, which never permits a
+    /// side-effecting operand into production) to pin the underlying
+    /// guarantee this lowerer's design now relies on.
+    @Test("A ternary conditional evaluates only its selected branch, never both")
+    func ternarySelectsOnlyOneBranchAtRuntime() {
+        var lhsEvaluations = 0
+        var rhsEvaluations = 0
+        func lhs() -> Int { lhsEvaluations += 1; return 1 }
+        func rhs() -> Int { rhsEvaluations += 1; return 2 }
+
+        func isActive() -> Bool { true }
+        _ = isActive() ? (lhs() >= rhs()) : (lhs() < rhs())
+
+        #expect(lhsEvaluations == 1, "lhs must be evaluated exactly once regardless of which branch's operator text is selected")
+        #expect(rhsEvaluations == 1, "rhs must be evaluated exactly once regardless of which branch's operator text is selected")
     }
 }

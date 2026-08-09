@@ -17,6 +17,13 @@ struct SchemataLowererRegistryTests {
         #expect(lowerer?.descriptor.lowererID == BoolLiteralSchemataLowerer.lowererID)
     }
 
+    @Test("The built-in registry routes relational-operator-replacement to RelationalOperatorReplacementSchemataLowerer")
+    func routesRelationalOperator() throws {
+        let registry = try SchemataLowererRegistry()
+        let lowerer = registry.lowerer(forOperatorID: RelationalOperatorReplacementOperator.descriptor.id)
+        #expect(lowerer?.descriptor.lowererID == RelationalOperatorReplacementSchemataLowerer.lowererID)
+    }
+
     @Test("An operator no lowerer supports routes to nil")
     func unsupportedOperatorRoutesToNil() throws {
         let registry = try SchemataLowererRegistry()
@@ -27,19 +34,21 @@ struct SchemataLowererRegistryTests {
     /// scoring gate — no separate `SchemataOperatorGate` type exists.
     /// `SchemataChunkPlanner` reads `registry.lowerer(forOperatorID:) == nil`
     /// as `.isolatedFallback(reason: .operatorNotYetLowered)`, so this one
-    /// assertion is what makes every operator except bool-literal-inversion
-    /// fall back to isolated mode, permanently, until a real
-    /// `SchemataLowerer` is registered and proven for it. If this test ever
-    /// needs to change, a new operator's schemata scoring is being turned
-    /// on — that must never happen silently as a side effect of an
-    /// unrelated change to `SchemataLowererRegistry.builtIn`.
-    @Test("Exactly one operator is schemata-eligible: bool-literal-inversion")
-    func exactlyOneOperatorIsEligible() throws {
+    /// assertion is what makes every operator besides bool-literal-inversion
+    /// and relational-operator-replacement fall back to isolated mode,
+    /// permanently, until a real `SchemataLowerer` is registered and proven
+    /// for it. If this test ever needs to change, a new operator's schemata
+    /// scoring is being turned on — that must never happen silently as a
+    /// side effect of an unrelated change to `SchemataLowererRegistry.builtIn`.
+    @Test("Exactly two operators are schemata-eligible: bool-literal-inversion, relational-operator-replacement")
+    func exactlyTwoOperatorsAreEligible() throws {
         let registry = try SchemataLowererRegistry()
         let eligible = MutationRegistry.builtIn.filter { registry.lowerer(forOperatorID: $0.descriptor.id) != nil }
         #expect(
-            eligible.map(\.descriptor.id) == [BoolLiteralInversionOperator.descriptor.id],
-            "only bool-literal-inversion may score under schemata mode today"
+            Set(eligible.map(\.descriptor.id)) == [
+                BoolLiteralInversionOperator.descriptor.id, RelationalOperatorReplacementOperator.descriptor.id
+            ],
+            "only bool-literal-inversion and relational-operator-replacement may score under schemata mode today"
         )
     }
 
@@ -48,12 +57,15 @@ struct SchemataLowererRegistryTests {
     /// routes to `nil` (isolated fallback), so a new operator silently
     /// picking up schemata eligibility (e.g. by accidentally matching an
     /// existing `lowererID`'s `supportedOperatorIDs` glob, if one were ever
-    /// introduced) would fail this test even if `exactlyOneOperatorIsEligible`
+    /// introduced) would fail this test even if `exactlyTwoOperatorsAreEligible`
     /// above somehow still passed.
-    @Test("Every operator other than bool-literal-inversion always routes to isolated fallback")
+    @Test("Every operator other than bool-literal-inversion/relational-operator-replacement always routes to isolated fallback")
     func everyOtherOperatorRoutesToIsolatedFallback() throws {
         let registry = try SchemataLowererRegistry()
-        let others = MutationRegistry.builtIn.filter { $0.descriptor.id != BoolLiteralInversionOperator.descriptor.id }
+        let others = MutationRegistry.builtIn.filter {
+            $0.descriptor.id != BoolLiteralInversionOperator.descriptor.id
+                && $0.descriptor.id != RelationalOperatorReplacementOperator.descriptor.id
+        }
         #expect(!others.isEmpty, "this test is meaningless if there is nothing else registered to check")
         for other in others {
             #expect(

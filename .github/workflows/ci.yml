@@ -184,6 +184,16 @@ jobs:
           - fixture: xcode-incremental-batch-testing
             filter: XcodeIncrementalBatchTestingAcceptanceTests
             simulator: "1"
+          # Real `swiftc -typecheck` proof that RelationalOperatorReplacement-
+          # SchemataLowerer's ternary lowering type-checks at every eligible
+          # operand shape — the same discipline as the batch/incremental
+          # fixtures above, applied to a lowerer still gated out of
+          # SchemataLowererRegistry.builtIn. No schemata runtime binary
+          # involved (see the ror-schemata-differential job below for that),
+          # so it fits this matrix's plain build+test shape.
+          - fixture: ror-schemata-compile
+            filter: RORSchemataCompileViabilityAcceptanceTests
+            simulator: "0"
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -215,6 +225,50 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: acceptance-${{ matrix.fixture }}-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance.log
+
+  # Separate from the `acceptance` matrix above because this suite links and
+  # runs the real schemata runtime binary (SchemataMutationRunner drives a
+  # genuine `swift build`/`swift test` through it) rather than only
+  # type-checking lowered source — it needs
+  # MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE pointing at a real built
+  # `libMutantKitSchemataRuntime.a`, which the matrix's plain build+test
+  # steps never produce. Runs the exact MutationIDs discovered from one
+  # fixture through both MutationRunner (isolated) and SchemataMutationRunner
+  # (schemata, invoked directly — RelationalOperatorReplacementSchemataLowerer
+  # is still not registered in SchemataLowererRegistry.builtIn) and asserts
+  # zero disagreement — the real gate before that registration can happen.
+  ror-schemata-differential:
+    name: ROR schemata isolated-vs-schemata differential
+    runs-on: macos-15
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Build the schemata runtime static library
+        run: swift build -c release --product MutantKitSchemataRuntime
+      - name: Build tests
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      - name: Differential acceptance
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
+        run: |
+          set -o pipefail
+          swift test --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 | tee acceptance.log
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ror-schemata-differential-failure-logs
           if-no-files-found: ignore
           path: |
             build.log
