@@ -1,3 +1,4 @@
+import MutationModel
 import MutationPlanner
 import Testing
 
@@ -28,5 +29,42 @@ struct MutationSuppressionTests {
         #expect(throws: MutationSuppressionError.self) {
             _ = try MutationSuppressionSet.parse("line:Sources/Foo.swift:0")
         }
+    }
+
+    @Test("a fileLineOperator rule (from an inline comment) suppresses only its named operator on that line")
+    func fileLineOperatorSuppressesOnlyItsOperator() {
+        let relational = point(file: "F.swift", line: 3, operatorID: "swift.core.relational-operator-replacement")
+        let unaryNot = point(file: "F.swift", line: 3, operatorID: "swift.core.unary-not-removal")
+        let plan = makePlan(mutations: [relational, unaryNot])
+
+        let set = MutationSuppressionSet(rules: [
+            .fileLineOperator(file: "F.swift", line: 3, operatorID: "swift.core.relational-operator-replacement")
+        ])
+        let result = set.applying(to: plan)
+
+        #expect(result.mutations.map(\.id) == [unaryNot.id])
+        #expect(result.skipped.map(\.id) == [relational.id])
+    }
+
+    private func point(file: String, line: Int, operatorID: String) -> MutationPoint {
+        MutationPoint(
+            id: MutationID(rawValue: "mut_\(file)_\(line)_\(operatorID)"),
+            file: file,
+            enclosingDeclaration: DeclarationIdentity(path: ["Test/test"]),
+            operatorID: operatorID,
+            operatorVersion: 1,
+            occurrenceIndex: 0,
+            utf8Range: ByteRange(0 ..< 1),
+            originalText: "x",
+            replacementText: "y",
+            prefixTokenFingerprint: "pre",
+            suffixTokenFingerprint: "post",
+            sourceFileHash: "hash",
+            expectedSyntaxKind: "kind",
+            confidence: .high,
+            executionMode: .isolated,
+            line: line,
+            column: 1
+        )
     }
 }

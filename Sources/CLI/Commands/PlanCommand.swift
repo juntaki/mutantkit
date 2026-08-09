@@ -69,13 +69,27 @@ struct PlanCommand: AsyncParsableCommand {
             nil
         }
 
-        let plan: MutationPlan
+        var suppressionRules: [MutationSuppressionRule] = []
         if let suppressionURL {
             let contents = try String(contentsOf: suppressionURL, encoding: .utf8)
-            let suppressions = try MutationSuppressionSet.parse(contents)
+            suppressionRules += try MutationSuppressionSet.parse(contents).rules
+        }
+
+        // Only files that actually produced a candidate need scanning — an
+        // inline `mutantkit:disable` comment anywhere else has nothing to
+        // suppress and would just cost a read for no effect.
+        for file in Set(discoveredPlan.mutations.map(\.file)).sorted() {
+            let source = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
+            suppressionRules += InlineMutationSuppressionScanner.scan(source: source, file: file)
+        }
+
+        let plan: MutationPlan
+        if !suppressionRules.isEmpty {
+            let suppressions = MutationSuppressionSet(rules: suppressionRules)
             plan = suppressions.applying(to: discoveredPlan)
             let suppressed = plan.skipped.count - discoveredPlan.skipped.count
-            print("Mutation suppressions: \(suppressed) mutation(s) skipped by \(suppressionURL.path)")
+            print("Mutation suppressions: \(suppressed) mutation(s) skipped "
+                + "(\(suppressionURL.map { "\($0.path), " } ?? "")inline source comments)")
         } else {
             plan = discoveredPlan
         }

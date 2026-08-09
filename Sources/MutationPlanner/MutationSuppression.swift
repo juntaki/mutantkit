@@ -13,6 +13,13 @@ public enum MutationSuppressionRule: Sendable, Hashable {
     case operatorID(String)
     case fileGlob(String)
     case fileLine(file: String, line: Int)
+    /// A single line, scoped to one operator — what an inline
+    /// `// mutantkit:disable-next-line <operatorID>` comment produces (see
+    /// `InlineMutationSuppressionScanner`). Distinct from `fileLine`, which
+    /// suppresses every operator on that line: an inline comment that names
+    /// an operator must not silently also suppress a sibling mutation from
+    /// a different operator anchored at the same line.
+    case fileLineOperator(file: String, line: Int, operatorID: String)
 
     fileprivate var description: String {
         switch self {
@@ -20,6 +27,7 @@ public enum MutationSuppressionRule: Sendable, Hashable {
         case let .operatorID(id): "operator:\(id)"
         case let .fileGlob(pattern): "file:\(pattern)"
         case let .fileLine(file, line): "line:\(file):\(line)"
+        case let .fileLineOperator(file, line, operatorID): "line:\(file):\(line) operator:\(operatorID)"
         }
     }
 
@@ -33,6 +41,8 @@ public enum MutationSuppressionRule: Sendable, Hashable {
             fnmatch(pattern, point.file, 0) == 0
         case let .fileLine(file, line):
             point.file == file && point.line == line
+        case let .fileLineOperator(file, line, operatorID):
+            point.file == file && point.line == line && point.operatorID == operatorID
         }
     }
 }
@@ -108,7 +118,8 @@ public struct MutationSuppressionSet: Sendable, Hashable {
                     id: point.id,
                     file: point.file,
                     reason: .userRequested,
-                    detail: "Suppressed by .mutantkitignore rule `\(rule.description)`.",
+                    detail: "Suppressed by rule `\(rule.description)` "
+                        + "(from .mutantkitignore or an inline `mutantkit:disable` source comment).",
                     operatorID: point.operatorID
                 ))
             } else {

@@ -223,6 +223,45 @@ sources:
     - Sources/SystemIntegration/**
 ```
 
+### Suppressing one mutation
+
+`sources.exclude` is file-level: the mutation is never even discovered. For a
+single known-noisy mutant inside an otherwise-worth-mutating file, that's the
+wrong granularity — MutantKit has two finer-grained options instead, both of
+which keep the mutation **visible in the plan as suppressed, with a reason**,
+never a silent drop:
+
+An inline comment, right next to the code it's about — no separate file to
+keep in sync as lines move:
+
+```swift
+// mutantkit:disable-next-line swift.core.relational-operator-replacement
+if index < count { ... }
+
+if index < count { ... } // mutantkit:disable-line swift.core.relational-operator-replacement
+```
+
+Omit the operator list to suppress every operator on that line. Both forms
+work in any Swift file, no import or macro needed.
+
+Or a `.mutantkitignore` file at the project root (or `--ignore-file`), for
+suppressions that don't map to one line — a whole operator, a whole file
+pattern, or a specific `MutationID` once you already know it from `inspect`:
+
+```
+# .mutantkitignore
+id:mut_a1b2c3d4e5f6a7b8
+operator:swift.core.logical-connector-replacement
+file:Sources/Generated/**
+line:Sources/Foo.swift:42
+```
+
+Either source produces the same audit trail: a suppressed mutant stays in
+`plan.skipped` with `reason: userRequested` and a `detail` naming the exact
+rule that matched, so `discovered == planned + skipped` always holds and
+`mutantkit plan`'s own output reports how many were suppressed and why —
+never a mutation that just quietly stopped appearing.
+
 ## Configuration
 
 ```yaml
