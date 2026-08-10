@@ -28,7 +28,7 @@ jobs:
         include:
           - projectID: swift-numerics-integer-utilities
             repositoryURL: https://github.com/apple/swift-numerics.git
-            commitSHA: 899af71c0256d0ad181e3b7eb3453a165d928a5
+            commitSHA: 899af71c0256d0ad181e3b7eb3453c1065d928a5
             sourcePatterns: '["Sources/IntegerUtilities/**/*.swift"]'
 
           - projectID: swift-syntax-small-files
