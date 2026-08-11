@@ -20,8 +20,7 @@ public struct SchemataLowererRegistry: Sendable {
     /// swift-syntax) with isolated/schemata disagreement = 0.
     public static let builtIn: [any SchemataLowerer] = [
         BoolLiteralSchemataLowerer(),
-        RelationalOperatorReplacementSchemataLowerer(),
-        LogicalConnectorReplacementSchemataLowerer()
+        RelationalOperatorReplacementSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {
