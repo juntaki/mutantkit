@@ -47,7 +47,7 @@ struct SchemataLowererRegistryTests {
     /// for it. If this test ever needs to change, a new operator's schemata
     /// scoring is being turned on — that must never happen silently as a
     /// side effect of an unrelated change to `SchemataLowererRegistry.builtIn`.
-    @Test("Exactly three operators are schemata-eligible: bool-literal-inversion, relational-operator-replacement, logical-connector-replacement")
+    @Test("Three operators are schemata-eligible: bool-literal-inversion, relational-operator-replacement, logical-connector-replacement")
     func exactlyThreeOperatorsAreEligible() throws {
         let registry = try SchemataLowererRegistry()
         let eligible = MutationRegistry.builtIn.filter { registry.lowerer(forOperatorID: $0.descriptor.id) != nil }
@@ -56,7 +56,7 @@ struct SchemataLowererRegistryTests {
                 BoolLiteralInversionOperator.descriptor.id, RelationalOperatorReplacementOperator.descriptor.id,
                 LogicalConnectorReplacementOperator.descriptor.id
             ],
-            "only bool-literal-inversion, relational-operator-replacement, and logical-connector-replacement may score under schemata mode today"
+            "only bool-literal-inversion, relational-operator-replacement, and logical-connector-replacement score under schemata mode"
         )
     }
 
@@ -65,9 +65,9 @@ struct SchemataLowererRegistryTests {
     /// routes to `nil` (isolated fallback), so a new operator silently
     /// picking up schemata eligibility (e.g. by accidentally matching an
     /// existing `lowererID`'s `supportedOperatorIDs` glob, if one were ever
-    /// introduced) would fail this test even if `exactlyTwoOperatorsAreEligible`
+    /// introduced) would fail this test even if `exactlyThreeOperatorsAreEligible`
     /// above somehow still passed.
-    @Test("Every operator other than bool-literal-inversion/relational-operator-replacement/logical-connector-replacement always routes to isolated fallback")
+    @Test("Every operator besides bool-literal-inversion/relational-operator-replacement/logical-connector-replacement is isolated-only")
     func everyOtherOperatorRoutesToIsolatedFallback() throws {
         let registry = try SchemataLowererRegistry()
         let others = MutationRegistry.builtIn.filter {
