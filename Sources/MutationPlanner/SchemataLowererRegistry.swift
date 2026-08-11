@@ -18,9 +18,16 @@ public struct SchemataLowererRegistry: Sendable {
     /// isolated-fallback routing fix, each independently verified against
     /// a real ~116-mutation Expansion run (swift-numerics/IntegerUtilities,
     /// swift-syntax) with isolated/schemata disagreement = 0.
+    /// `LogicalConnectorReplacementSchemataLowerer` promoted here after a
+    /// workers=5 expansion run showed a verifiedTimeout/flaky disagreement
+    /// on one swift-syntax mutation; a workers=2 rerun on the identical
+    /// corpus/plan/timeout (swift-numerics 13 mutations, swift-syntax 6
+    /// mutations) came back disagreement = 0, attributing the workers=5
+    /// failure to CI-runner resource contention, not a lowerer bug.
     public static let builtIn: [any SchemataLowerer] = [
         BoolLiteralSchemataLowerer(),
-        RelationalOperatorReplacementSchemataLowerer()
+        RelationalOperatorReplacementSchemataLowerer(),
+        LogicalConnectorReplacementSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {

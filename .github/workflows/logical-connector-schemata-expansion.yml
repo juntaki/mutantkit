@@ -96,7 +96,7 @@ jobs:
           start=$(date +%s)
           "$GITHUB_WORKSPACE/.build/release/mutantkit" run \
             --project-root . -c mutantkit-isolated.yml \
-            --plan plan.json --output report-isolated.json --no-resume --workers 2
+            --plan plan.json --output report-isolated.json --no-resume --workers 5
           end=$(date +%s)
           echo "isolated_wall_seconds=$((end - start))" >> "$GITHUB_ENV"
 
@@ -109,7 +109,7 @@ jobs:
           start=$(date +%s)
           "$GITHUB_WORKSPACE/.build/release/mutantkit" run \
             --project-root . -c mutantkit-schemata.yml \
-            --plan plan.json --output report-schemata.json --no-resume --workers 2
+            --plan plan.json --output report-schemata.json --no-resume --workers 5
           end=$(date +%s)
           echo "schemata_wall_seconds=$((end - start))" >> "$GITHUB_ENV"
 

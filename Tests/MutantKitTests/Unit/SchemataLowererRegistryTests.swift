@@ -24,16 +24,11 @@ struct SchemataLowererRegistryTests {
         #expect(lowerer?.descriptor.lowererID == RelationalOperatorReplacementSchemataLowerer.lowererID)
     }
 
-    /// `LogicalConnectorReplacementSchemataLowerer` is implemented and unit/
-    /// acceptance-tested but temporarily pulled from `builtIn` while the
-    /// real-corpus promotion gate (isolated vs schemata disagreement = 0 on
-    /// the workers=2 rerun) is still open — see the logical-connector
-    /// promotion investigation. Routes to isolated fallback until re-added.
-    @Test("logical-connector-replacement is not yet schemata-eligible (promotion gate still open)")
-    func logicalConnectorNotYetEligible() throws {
+    @Test("The built-in registry routes logical-connector-replacement to LogicalConnectorReplacementSchemataLowerer")
+    func routesLogicalConnectorOperator() throws {
         let registry = try SchemataLowererRegistry()
         let lowerer = registry.lowerer(forOperatorID: LogicalConnectorReplacementOperator.descriptor.id)
-        #expect(lowerer == nil)
+        #expect(lowerer?.descriptor.lowererID == LogicalConnectorReplacementSchemataLowerer.lowererID)
     }
 
     @Test("An operator no lowerer supports routes to nil")
@@ -52,15 +47,16 @@ struct SchemataLowererRegistryTests {
     /// for it. If this test ever needs to change, a new operator's schemata
     /// scoring is being turned on — that must never happen silently as a
     /// side effect of an unrelated change to `SchemataLowererRegistry.builtIn`.
-    @Test("Exactly two operators are schemata-eligible: bool-literal-inversion, relational-operator-replacement")
-    func exactlyTwoOperatorsAreEligible() throws {
+    @Test("Exactly three operators are schemata-eligible: bool-literal-inversion, relational-operator-replacement, logical-connector-replacement")
+    func exactlyThreeOperatorsAreEligible() throws {
         let registry = try SchemataLowererRegistry()
         let eligible = MutationRegistry.builtIn.filter { registry.lowerer(forOperatorID: $0.descriptor.id) != nil }
         #expect(
             Set(eligible.map(\.descriptor.id)) == [
-                BoolLiteralInversionOperator.descriptor.id, RelationalOperatorReplacementOperator.descriptor.id
+                BoolLiteralInversionOperator.descriptor.id, RelationalOperatorReplacementOperator.descriptor.id,
+                LogicalConnectorReplacementOperator.descriptor.id
             ],
-            "only bool-literal-inversion and relational-operator-replacement may score under schemata mode today"
+            "only bool-literal-inversion, relational-operator-replacement, and logical-connector-replacement may score under schemata mode today"
         )
     }
 
@@ -71,12 +67,13 @@ struct SchemataLowererRegistryTests {
     /// existing `lowererID`'s `supportedOperatorIDs` glob, if one were ever
     /// introduced) would fail this test even if `exactlyTwoOperatorsAreEligible`
     /// above somehow still passed.
-    @Test("Every operator other than bool-literal-inversion/relational-operator-replacement always routes to isolated fallback")
+    @Test("Every operator other than bool-literal-inversion/relational-operator-replacement/logical-connector-replacement always routes to isolated fallback")
     func everyOtherOperatorRoutesToIsolatedFallback() throws {
         let registry = try SchemataLowererRegistry()
         let others = MutationRegistry.builtIn.filter {
             $0.descriptor.id != BoolLiteralInversionOperator.descriptor.id
                 && $0.descriptor.id != RelationalOperatorReplacementOperator.descriptor.id
+                && $0.descriptor.id != LogicalConnectorReplacementOperator.descriptor.id
         }
         #expect(!others.isEmpty, "this test is meaningless if there is nothing else registered to check")
         for other in others {
