@@ -6,6 +6,6 @@ public func survivedFlag() -> Bool {
     true
 }
 
-public func magicNumber() -> Int {
-    return 42
+public func pick(_ flag: Bool) -> Int {
+    flag ? 1 : 2
 }

@@ -30,11 +30,17 @@ public struct SchemataLowererRegistry: Sendable {
     /// violations = 0, and every candidate discovered/classified/reported —
     /// workers=2 used from the start, having already learned workers=5
     /// produces resource-contention false positives on this corpus.
+    /// `ReturnValueReplacementSchemataLowerer` promoted here after a
+    /// workers=2 expansion run on the same corpus (swift-numerics 1
+    /// mutation, swift-syntax 4 mutations) came back disagreement = 0,
+    /// integrity violations = 0, and every candidate discovered/classified/
+    /// reported.
     public static let builtIn: [any SchemataLowerer] = [
         BoolLiteralSchemataLowerer(),
         RelationalOperatorReplacementSchemataLowerer(),
         LogicalConnectorReplacementSchemataLowerer(),
-        UnaryNotRemovalSchemataLowerer()
+        UnaryNotRemovalSchemataLowerer(),
+        ReturnValueReplacementSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {

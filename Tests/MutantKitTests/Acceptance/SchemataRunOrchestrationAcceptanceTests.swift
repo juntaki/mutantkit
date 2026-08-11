@@ -4,24 +4,25 @@ import Testing
 
 /// `mutantkit run` itself, with `execution.strategy: schemata` in the
 /// config, against a fixture with both an embeddable candidate (bool
-/// literal, `killedFlag`/`survivedFlag`) and a non-embeddable one (an
-/// integer-literal `return` in `magicNumber`, no `SchemataLowerer`
-/// registered for `ReturnValueReplacementOperator`) — proving a requested
-/// `.schemata` run genuinely mixes both backends: the bool-literal
-/// candidates run through the real `SchemataMutationRunner`, the
-/// return-value one falls back to isolated mode, and both verdicts land
-/// in one reconciled report (ADR-0006 Stage 3: schemata scoring re-enabled,
-/// gated by which operators have a registered lowerer — see
-/// `SchemataRunOrchestration`'s own doc comment).
+/// literal, `killedFlag`/`survivedFlag`) and a non-embeddable one (the
+/// ternary in `pick`, no `SchemataLowerer` registered for
+/// `TernaryBranchSwapOperator`) — proving a requested `.schemata` run
+/// genuinely mixes both backends: the bool-literal candidates run through
+/// the real `SchemataMutationRunner`, the ternary one falls back to
+/// isolated mode, and both verdicts land in one reconciled report
+/// (ADR-0006 Stage 3: schemata scoring re-enabled, gated by which operators
+/// have a registered lowerer — see `SchemataRunOrchestration`'s own doc
+/// comment).
 ///
-/// Deliberately not a relational-operator, logical-connector, unary-not, or
-/// arithmetic-operator candidate: each of the first three has a
-/// `SchemataLowerer` registered in `SchemataLowererRegistry.builtIn` too, so
-/// none of them reliably falls back anymore; `ArithmeticOperatorReplacementOperator`
-/// is `defaultEnabled: false` (only under the `experimental` profile), so it
-/// never gets discovered at all under this fixture's `profile: default`
-/// config — `ReturnValueReplacementOperator` is what stays both
-/// default-enabled and genuinely isolated-only today.
+/// Deliberately not a relational-operator, logical-connector, unary-not,
+/// return-value, or arithmetic-operator candidate: each of the first four
+/// has a `SchemataLowerer` registered in `SchemataLowererRegistry.builtIn`
+/// too, so none of them reliably falls back anymore;
+/// `ArithmeticOperatorReplacementOperator` is `defaultEnabled: false` (only
+/// under the `experimental` profile), so it never gets discovered at all
+/// under this fixture's `profile: default` config —
+/// `TernaryBranchSwapOperator` is what stays both default-enabled and
+/// genuinely isolated-only today.
 ///
 /// Requires `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` in the environment
 /// (inherited by the spawned `mutantkit` process the same way every other
@@ -67,7 +68,7 @@ struct SchemataRunOrchestrationAcceptanceTests {
         #expect(strategy.effectiveCount == 2, "killedFlag and survivedFlag are the only bool-literal (embeddable) candidates")
         #expect(
             strategy.fallbackCount > 0,
-            "magicNumber's return-value replacement has no registered lowerer, so at least one mutant must fall back to isolated mode"
+            "pick's ternary has no registered lowerer, so at least one mutant must fall back to isolated mode"
         )
         #expect(
             strategy.effectiveCount + strategy.fallbackCount == result.report.results.count,
@@ -75,7 +76,7 @@ struct SchemataRunOrchestrationAcceptanceTests {
         )
     }
 
-    @Test("The bool-literal candidates run through the real schemata backend; the return-value one runs isolated")
+    @Test("The bool-literal candidates run through the real schemata backend; the ternary one runs isolated")
     func mixedBackendAttribution() throws {
         let result = try run()
         #expect(!result.report.results.isEmpty)
@@ -90,12 +91,12 @@ struct SchemataRunOrchestrationAcceptanceTests {
             }
         }
 
-        let returnValueCandidate = try #require(result.report.results.first {
-            $0.point.enclosingDeclaration.description.contains("magicNumber")
+        let ternaryCandidate = try #require(result.report.results.first {
+            $0.point.enclosingDeclaration.description.contains("pick")
         })
-        guard case .isolated? = returnValueCandidate.evidence?.applicationEvidence else {
-            let got = String(describing: returnValueCandidate.evidence?.applicationEvidence)
-            Issue.record("expected isolated evidence for magicNumber's mutant, got \(got)")
+        guard case .isolated? = ternaryCandidate.evidence?.applicationEvidence else {
+            let got = String(describing: ternaryCandidate.evidence?.applicationEvidence)
+            Issue.record("expected isolated evidence for pick's mutant, got \(got)")
             return
         }
 
