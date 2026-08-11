@@ -11,8 +11,7 @@ final class SchemataMixedTests: XCTestCase {
         XCTAssertTrue(true)
     }
 
-    func testNegated() {
-        XCTAssertFalse(negated(true))
-        XCTAssertTrue(negated(false))
+    func testMagicNumber() {
+        XCTAssertEqual(magicNumber(), 42)
     }
 }

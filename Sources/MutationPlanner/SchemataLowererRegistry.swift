@@ -24,10 +24,17 @@ public struct SchemataLowererRegistry: Sendable {
     /// corpus/plan/timeout (swift-numerics 13 mutations, swift-syntax 6
     /// mutations) came back disagreement = 0, attributing the workers=5
     /// failure to CI-runner resource contention, not a lowerer bug.
+    /// `UnaryNotRemovalSchemataLowerer` promoted here after a workers=2
+    /// expansion run on the same corpus (swift-numerics 2 mutations,
+    /// swift-syntax 4 mutations) came back disagreement = 0, integrity
+    /// violations = 0, and every candidate discovered/classified/reported —
+    /// workers=2 used from the start, having already learned workers=5
+    /// produces resource-contention false positives on this corpus.
     public static let builtIn: [any SchemataLowerer] = [
         BoolLiteralSchemataLowerer(),
         RelationalOperatorReplacementSchemataLowerer(),
-        LogicalConnectorReplacementSchemataLowerer()
+        LogicalConnectorReplacementSchemataLowerer(),
+        UnaryNotRemovalSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {

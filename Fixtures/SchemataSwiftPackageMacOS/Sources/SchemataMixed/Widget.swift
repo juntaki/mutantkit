@@ -6,6 +6,6 @@ public func survivedFlag() -> Bool {
     true
 }
 
-public func negated(_ value: Bool) -> Bool {
-    !value
+public func magicNumber() -> Int {
+    return 42
 }
