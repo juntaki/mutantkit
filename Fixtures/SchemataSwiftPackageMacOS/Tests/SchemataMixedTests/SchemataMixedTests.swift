@@ -15,4 +15,8 @@ final class SchemataMixedTests: XCTestCase {
         XCTAssertEqual(pick(true), 1)
         XCTAssertEqual(pick(false), 2)
     }
+
+    func testSum() {
+        XCTAssertEqual(sum(2, 3), 5)
+    }
 }

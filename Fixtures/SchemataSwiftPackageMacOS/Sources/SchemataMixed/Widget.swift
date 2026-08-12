@@ -9,3 +9,7 @@ public func survivedFlag() -> Bool {
 public func pick(_ flag: Bool) -> Int {
     flag ? 1 : 2
 }
+
+public func sum(_ a: Int, _ b: Int) -> Int {
+    a + b
+}

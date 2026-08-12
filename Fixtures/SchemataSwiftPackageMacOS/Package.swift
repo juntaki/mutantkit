@@ -2,9 +2,10 @@
 import PackageDescription
 
 // Acceptance fixture for schemata mode: an ordinary, MutantKit-unaware
-// SwiftPM package with a mix of bool-literal candidates (embeddable by
-// BoolLiteralSchemataLowerer) and a relational-operator candidate (no
-// lowerer registered for it, so it must fall back to isolated mode) — the
+// SwiftPM package with a mix of bool-literal/ternary candidates (embeddable
+// by BoolLiteralSchemataLowerer/TernaryBranchSwapSchemataLowerer) and an
+// arithmetic-operator candidate (experimental-profile-only, no lowerer
+// registered for it, so it must fall back to isolated mode) — the
 // combination `SchemataRunOrchestrationAcceptanceTests` needs to prove one
 // merged report covers both kinds of results correctly.
 let package = Package(

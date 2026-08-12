@@ -35,12 +35,20 @@ public struct SchemataLowererRegistry: Sendable {
     /// mutation, swift-syntax 4 mutations) came back disagreement = 0,
     /// integrity violations = 0, and every candidate discovered/classified/
     /// reported.
+    /// `TernaryBranchSwapSchemataLowerer` promoted here — the last of the
+    /// four originally-unregistered lowerers — after a workers=2 expansion
+    /// run on the same corpus (swift-numerics 22 mutations, 1 embedded/21
+    /// isolated fallback from its conservative operand-safety analysis;
+    /// swift-syntax 0 mutations, no ternary in that pinned file set) came
+    /// back disagreement = 0, integrity violations = 0, and every candidate
+    /// discovered/classified/reported.
     public static let builtIn: [any SchemataLowerer] = [
         BoolLiteralSchemataLowerer(),
         RelationalOperatorReplacementSchemataLowerer(),
         LogicalConnectorReplacementSchemataLowerer(),
         UnaryNotRemovalSchemataLowerer(),
-        ReturnValueReplacementSchemataLowerer()
+        ReturnValueReplacementSchemataLowerer(),
+        TernaryBranchSwapSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {

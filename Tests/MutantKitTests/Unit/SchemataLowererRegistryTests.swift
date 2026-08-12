@@ -45,6 +45,13 @@ struct SchemataLowererRegistryTests {
         #expect(lowerer?.descriptor.lowererID == ReturnValueReplacementSchemataLowerer.lowererID)
     }
 
+    @Test("The built-in registry routes ternary-branch-swap to TernaryBranchSwapSchemataLowerer")
+    func routesTernaryBranchSwapOperator() throws {
+        let registry = try SchemataLowererRegistry()
+        let lowerer = registry.lowerer(forOperatorID: TernaryBranchSwapOperator.descriptor.id)
+        #expect(lowerer?.descriptor.lowererID == TernaryBranchSwapSchemataLowerer.lowererID)
+    }
+
     @Test("An operator no lowerer supports routes to nil")
     func unsupportedOperatorRoutesToNil() throws {
         let registry = try SchemataLowererRegistry()
@@ -61,18 +68,18 @@ struct SchemataLowererRegistryTests {
     /// for it. If this test ever needs to change, a new operator's schemata
     /// scoring is being turned on — that must never happen silently as a
     /// side effect of an unrelated change to `SchemataLowererRegistry.builtIn`.
-    @Test("Five operators are schemata-eligible for schemata scoring")
-    func exactlyFiveOperatorsAreEligible() throws {
+    @Test("Six operators are schemata-eligible for schemata scoring")
+    func exactlySixOperatorsAreEligible() throws {
         let registry = try SchemataLowererRegistry()
         let eligible = MutationRegistry.builtIn.filter { registry.lowerer(forOperatorID: $0.descriptor.id) != nil }
         let eligibleIDs =
             "bool-literal-inversion/relational-operator-replacement/logical-connector-replacement/"
-                + "unary-not-removal/return-value-replacement"
+                + "unary-not-removal/return-value-replacement/ternary-branch-swap"
         #expect(
             Set(eligible.map(\.descriptor.id)) == [
                 BoolLiteralInversionOperator.descriptor.id, RelationalOperatorReplacementOperator.descriptor.id,
                 LogicalConnectorReplacementOperator.descriptor.id, UnaryNotRemovalOperator.descriptor.id,
-                ReturnValueReplacementOperator.descriptor.id
+                ReturnValueReplacementOperator.descriptor.id, TernaryBranchSwapOperator.descriptor.id
             ],
             "\(eligibleIDs) score under schemata"
         )
@@ -83,9 +90,9 @@ struct SchemataLowererRegistryTests {
     /// routes to `nil` (isolated fallback), so a new operator silently
     /// picking up schemata eligibility (e.g. by accidentally matching an
     /// existing `lowererID`'s `supportedOperatorIDs` glob, if one were ever
-    /// introduced) would fail this test even if `exactlyFiveOperatorsAreEligible`
+    /// introduced) would fail this test even if `exactlySixOperatorsAreEligible`
     /// above somehow still passed.
-    @Test("Every operator besides the five schemata-eligible operators above is isolated-only")
+    @Test("Every operator besides the six schemata-eligible operators above is isolated-only")
     func everyOtherOperatorRoutesToIsolatedFallback() throws {
         let registry = try SchemataLowererRegistry()
         let others = MutationRegistry.builtIn.filter {
@@ -94,6 +101,7 @@ struct SchemataLowererRegistryTests {
                 && $0.descriptor.id != LogicalConnectorReplacementOperator.descriptor.id
                 && $0.descriptor.id != UnaryNotRemovalOperator.descriptor.id
                 && $0.descriptor.id != ReturnValueReplacementOperator.descriptor.id
+                && $0.descriptor.id != TernaryBranchSwapOperator.descriptor.id
         }
         #expect(!others.isEmpty, "this test is meaningless if there is nothing else registered to check")
         for other in others {
