@@ -1,0 +1,667 @@
+name: Schemata registry A/B/C performance benchmark
+
+# Formal performance comparison of three SchemataLowererRegistry.builtIn
+# states, on the identical real corpus and the identical MutationPlan:
+#
+#   A: execution.strategy=isolated (no schemata at all) — HEAD binary
+#   B: "ROR-era registry" — only BoolLiteralSchemataLowerer +
+#      RelationalOperatorReplacementSchemataLowerer registered, the
+#      SchemataLowererRegistry.builtIn state right after commit c0488b2
+#      ("feat: enable ROR schemata scoring"), reproduced on top of
+#      otherwise-current code so only the registry array is the variable —
+#      execution.strategy=schemata, built from a throwaway worktree
+#   C: current HEAD's full 6-lowerer registry — execution.strategy=schemata
+#
+# The mutation PLAN depends only on MutationRegistry.builtIn (the operator
+# registry: which operators exist at all), never on
+# SchemataLowererRegistry.builtIn (which operators route to schemata vs
+# isolated execution) — MutationDiscovery always tags a freshly discovered
+# MutationPoint.executionMode as `.isolated` regardless of the schemata
+# registry; SchemataChunkPlanner decides schemata-vs-fallback per mutation
+# only at *run* time, from the config's requested strategy. Verified for
+# this benchmark: `git diff c0488b2 HEAD -- Sources/MutationPlanner/
+# MutationRegistry.swift` is empty — the operator registry has not changed
+# across any of the ROR/logical-connector/unary-not/return-value/ternary
+# schemata-promotion commits. So `mutantkit plan` produces an identical
+# plan.json regardless of which of A/B/C binary runs it, and this workflow
+# generates that plan exactly once per project and shares the one file
+# across every leg and every repetition — never re-planned per run.
+#
+# 5 repetitions per (project, leg) — 2 projects x 3 legs x 5 reps = 30
+# `mutantkit run` invocations total, each its own matrix job (never several
+# repetitions looped inside one job), the same scaling discipline
+# `relational-schemata-benchmark.yml` already established: a single job
+# looping 15 sequential real mutation-testing runs risks the ~6-hour
+# GitHub-hosted-runner execution cap regardless of `timeout-minutes`.
+#
+# workers=2 throughout: workers=5 on this exact corpus produced a
+# verifiedTimeout/flaky disagreement attributed to CI-runner resource
+# contention during the logical-connector-replacement promotion; workers=2
+# reruns since have come back disagreement=0 (see the doc comments on
+# `SchemataLowererRegistry.builtIn`).
+#
+# Corpus: swift-numerics/IntegerUtilities and the same 8 pinned
+# swift-syntax files every prior *-schemata-expansion.yml workflow uses.
+# Full default operator profile, no per-operator disables — this benchmark
+# measures whole-registry performance on the realistic mixed corpus, not
+# one operator's isolated correctness (the *-schemata-expansion.yml
+# workflows already cover that).
+#
+# Job shape:
+#   build-binaries  — builds the two binary sets this benchmark needs (HEAD,
+#                      reused for legs A and C; and a throwaway
+#                      ROR-era-registry worktree build, for leg B only —
+#                      the worktree edit is never committed anywhere, it is
+#                      purely a local build artifact for this workflow)
+#   generate-plan   — plans each project exactly once, with the HEAD binary
+#                      (any binary would do — see above)
+#   matrix-setup    — expands (project x leg x rep) into the benchmark job's
+#                      matrix
+#   benchmark       — one `mutantkit run` per matrix entry, downloading the
+#                      shared plan.json and the leg's binary set
+#   aggregate       — the correctness gate + performance comparison: MutationID
+#                      sets identical across all 30 runs, integrity clean,
+#                      backend disagreement=0, timing statistics, B->C and
+#                      A->C speedup, embedded/fallback per operator for B
+#                      and C, and an explicit "inconclusive" verdict when
+#                      variance swamps the observed difference.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: "Repetitions per (project, leg) — 5 for the formal run, lower (e.g. 2) for a cheap scout dispatch"
+        required: false
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schemata-registry-performance-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REPETITIONS: ${{ github.event.inputs.repetitions || '5' }}
+
+jobs:
+  matrix-setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - id: build
+        env:
+          REPETITIONS: ${{ env.REPETITIONS }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          projects = [
+              {
+                  "projectID": "swift-numerics-integer-utilities",
+                  "repositoryURL": "https://github.com/apple/swift-numerics.git",
+                  "commitSHA": "899af71c0256d0ad181e3b7eb3453c1065d928a5",
+                  "sourcePatterns": '["Sources/IntegerUtilities/**/*.swift"]',
+              },
+              {
+                  "projectID": "swift-syntax-small-files",
+                  "repositoryURL": "https://github.com/apple/swift-syntax.git",
+                  "commitSHA": "60e8eb850721b5a6eebbd973b39f450a16553bd9",
+                  "sourcePatterns": (
+                      '["Sources/SwiftSyntax/AbsolutePosition.swift",'
+                      '"Sources/SwiftSyntax/MemoryLayout.swift",'
+                      '"Sources/SwiftSyntax/CommonAncestor.swift",'
+                      '"Sources/SwiftSyntax/SourceLength.swift",'
+                      '"Sources/SwiftSyntax/SyntaxIdentifier.swift",'
+                      '"Sources/SwiftSyntax/Utils.swift",'
+                      '"Sources/SwiftSyntax/AbsoluteSyntaxInfo.swift",'
+                      '"Sources/SwiftSyntax/EditorPlaceholder.swift"]'
+                  ),
+              },
+          ]
+
+          # leg -> (execution.strategy, which binary set to run it with)
+          legs = [
+              {"leg": "A", "strategy": "isolated", "binaryDir": "head"},
+              {"leg": "B", "strategy": "schemata", "binaryDir": "ror-era"},
+              {"leg": "C", "strategy": "schemata", "binaryDir": "head"},
+          ]
+
+          repetitions = int(os.environ.get("REPETITIONS", "5"))
+
+          include = []
+          for project in projects:
+              for leg in legs:
+                  for rep in range(1, repetitions + 1):
+                      entry = dict(project)
+                      entry.update(leg)
+                      entry["rep"] = rep
+                      include.append(entry)
+
+          print("matrix=" + json.dumps({"include": include}))
+          PY
+
+  build-binaries:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      - name: Build HEAD binaries (legs A [isolated] and C [full 6-lowerer registry])
+        run: |
+          swift build -c release --product mutantkit
+          swift build -c release --product MutantKitSchemataRuntime
+          mkdir -p /tmp/artifact-out/head
+          cp .build/release/mutantkit /tmp/artifact-out/head/mutantkit
+          cp .build/release/libMutantKitSchemataRuntime.a /tmp/artifact-out/head/libMutantKitSchemataRuntime.a
+
+      - name: Create a throwaway worktree with the ROR-era schemata registry (leg B only)
+        run: |
+          set -euo pipefail
+          git worktree add /tmp/ror-era-worktree -b bench/ror-era-registry-tmp HEAD
+          python3 - <<'PY'
+          import re
+
+          path = "/tmp/ror-era-worktree/Sources/MutationPlanner/SchemataLowererRegistry.swift"
+          text = open(path).read()
+
+          pattern = re.compile(
+              r"public static let builtIn: \[any SchemataLowerer\] = \[.*?\]\n",
+              re.S,
+          )
+          replacement = (
+              "public static let builtIn: [any SchemataLowerer] = [\n"
+              "        BoolLiteralSchemataLowerer(),\n"
+              "        RelationalOperatorReplacementSchemataLowerer()\n"
+              "    ]\n"
+          )
+          new_text, count = pattern.subn(replacement, text, count=1)
+          assert count == 1, "failed to patch SchemataLowererRegistry.builtIn — array literal shape changed?"
+          open(path, "w").write(new_text)
+          PY
+          echo "--- patched registry ---"
+          grep -A4 "public static let builtIn" /tmp/ror-era-worktree/Sources/MutationPlanner/SchemataLowererRegistry.swift
+          # Fail loudly if the patch didn't land exactly as intended.
+          registry_file=/tmp/ror-era-worktree/Sources/MutationPlanner/SchemataLowererRegistry.swift
+          grep -q "BoolLiteralSchemataLowerer()," "$registry_file"
+          grep -q "RelationalOperatorReplacementSchemataLowerer()" "$registry_file"
+          # `!` before a command is exempt from `set -e` (it inverts the exit
+          # status, and bash never treats an inverted-status command as a
+          # failure for -e purposes) — an `if` guard with an explicit `exit 1`
+          # is the form that actually aborts the job if any of these leak in.
+          for forbidden in LogicalConnectorReplacementSchemataLowerer UnaryNotRemovalSchemataLowerer ReturnValueReplacementSchemataLowerer TernaryBranchSwapSchemataLowerer; do
+            if grep -q "${forbidden}()" "$registry_file"; then
+              echo "FATAL: ${forbidden}() is present in the patched registry — the ROR-era patch did not isolate the variable as intended" >&2
+              exit 1
+            fi
+          done
+
+      - name: Build ROR-era-registry binaries (leg B) — local build artifact only, never committed anywhere
+        run: |
+          cd /tmp/ror-era-worktree
+          swift build -c release --product mutantkit
+          swift build -c release --product MutantKitSchemataRuntime
+          mkdir -p /tmp/artifact-out/ror-era
+          cp .build/release/mutantkit /tmp/artifact-out/ror-era/mutantkit
+          cp .build/release/libMutantKitSchemataRuntime.a /tmp/artifact-out/ror-era/libMutantKitSchemataRuntime.a
+
+      - name: Remove the throwaway worktree and branch
+        if: always()
+        run: |
+          git worktree remove --force /tmp/ror-era-worktree || true
+          git branch -D bench/ror-era-registry-tmp || true
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: schemata-benchmark-binaries
+          path: /tmp/artifact-out
+          retention-days: 3
+
+  generate-plan:
+    needs: build-binaries
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - projectID: swift-numerics-integer-utilities
+            repositoryURL: https://github.com/apple/swift-numerics.git
+            commitSHA: 899af71c0256d0ad181e3b7eb3453c1065d928a5
+            sourcePatterns: '["Sources/IntegerUtilities/**/*.swift"]'
+
+          - projectID: swift-syntax-small-files
+            repositoryURL: https://github.com/apple/swift-syntax.git
+            commitSHA: 60e8eb850721b5a6eebbd973b39f450a16553bd9
+            sourcePatterns: >-
+              ["Sources/SwiftSyntax/AbsolutePosition.swift",
+               "Sources/SwiftSyntax/MemoryLayout.swift",
+               "Sources/SwiftSyntax/CommonAncestor.swift",
+               "Sources/SwiftSyntax/SourceLength.swift",
+               "Sources/SwiftSyntax/SyntaxIdentifier.swift",
+               "Sources/SwiftSyntax/Utils.swift",
+               "Sources/SwiftSyntax/AbsoluteSyntaxInfo.swift",
+               "Sources/SwiftSyntax/EditorPlaceholder.swift"]
+
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: schemata-benchmark-binaries
+          path: /tmp/bin
+
+      - name: Make HEAD binary executable
+        run: chmod +x /tmp/bin/head/mutantkit
+
+      - name: Clone the target project at its pinned commit
+        run: |
+          set -euo pipefail
+          git clone "${{ matrix.repositoryURL }}" /tmp/target-project
+          cd /tmp/target-project
+          git checkout "${{ matrix.commitSHA }}"
+          test "$(git rev-parse HEAD)" = "${{ matrix.commitSHA }}"
+
+      - name: Write a config scoped to this project's source set (full default profile, no disables)
+        working-directory: /tmp/target-project
+        run: |
+          cat > mutantkit.yml <<EOF
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: ${{ matrix.sourcePatterns }}
+          operators:
+            profile: default
+          reports: [json]
+          EOF
+
+      - name: Plan once — shared by all three legs and all ${{ env.REPETITIONS }} repetitions
+        working-directory: /tmp/target-project
+        run: |
+          set -euo pipefail
+          /tmp/bin/head/mutantkit plan --project-root . -c mutantkit.yml -o plan.json
+          echo "planned candidates:"
+          python3 -c "import json; plan = json.load(open('plan.json')); print(len(plan['mutations']))"
+
+      - name: Upload the shared plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: schemata-benchmark-plan-${{ matrix.projectID }}
+          path: /tmp/target-project/plan.json
+          retention-days: 14
+
+  benchmark:
+    needs: [build-binaries, generate-plan, matrix-setup]
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix-setup.outputs.matrix) }}
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: schemata-benchmark-binaries
+          path: /tmp/bin
+
+      - name: Make this leg's binary executable
+        run: chmod +x /tmp/bin/${{ matrix.binaryDir }}/mutantkit
+
+      - name: Download the shared plan for this project
+        uses: actions/download-artifact@v4
+        with:
+          name: schemata-benchmark-plan-${{ matrix.projectID }}
+          path: /tmp/plan
+
+      - name: Clone the target project at its pinned commit
+        run: |
+          set -euo pipefail
+          git clone "${{ matrix.repositoryURL }}" /tmp/target-project
+          cd /tmp/target-project
+          git checkout "${{ matrix.commitSHA }}"
+          test "$(git rev-parse HEAD)" = "${{ matrix.commitSHA }}"
+          cp /tmp/plan/plan.json plan.json
+
+      - name: Write this leg's config (same operators section used to generate the shared plan)
+        working-directory: /tmp/target-project
+        run: |
+          cat > mutantkit.yml <<EOF
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: ${{ matrix.sourcePatterns }}
+          operators:
+            profile: default
+          execution:
+            strategy: ${{ matrix.strategy }}
+          reports: [json]
+          EOF
+
+      - name: Run (leg ${{ matrix.leg }}, rep ${{ matrix.rep }}) — same plan.json as every other leg/rep for this project
+        working-directory: /tmp/target-project
+        env:
+          MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: /tmp/bin/${{ matrix.binaryDir }}
+        run: |
+          set -euo pipefail
+          start=$(date +%s.%N)
+          /tmp/bin/${{ matrix.binaryDir }}/mutantkit run \
+            --project-root . -c mutantkit.yml \
+            --plan plan.json --output report.json --no-resume --workers 2
+          end=$(date +%s.%N)
+          python3 -c "print(f'{${end} - ${start}:.3f}')" > wall_seconds.txt
+          cat wall_seconds.txt
+
+      - name: Write run-summary.json
+        working-directory: /tmp/target-project
+        run: |
+          set -euo pipefail
+          python3 - <<PY
+          import json
+
+          summary = {
+              "projectID": "${{ matrix.projectID }}",
+              "leg": "${{ matrix.leg }}",
+              "strategy": "${{ matrix.strategy }}",
+              "binaryDir": "${{ matrix.binaryDir }}",
+              "rep": ${{ matrix.rep }},
+              "wallSeconds": float(open("wall_seconds.txt").read().strip()),
+          }
+          json.dump(summary, open("run-summary.json", "w"), indent=2)
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload this run's report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schemata-benchmark-result-${{ matrix.projectID }}-${{ matrix.leg }}-rep${{ matrix.rep }}
+          path: |
+            /tmp/target-project/report.json
+            /tmp/target-project/run-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  aggregate:
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download all run results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: schemata-benchmark-result-*
+          path: /tmp/results
+
+      - name: Compare A/B/C — correctness gate, timing statistics, speedup
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+          import statistics
+          import sys
+
+          # ---- Load every (project, leg, rep) run ----------------------------------
+          runs = []  # each: {"summary": {...}, "report": {...}}
+          for run_dir in sorted(glob.glob("/tmp/results/schemata-benchmark-result-*")):
+              summary_path = os.path.join(run_dir, "run-summary.json")
+              report_path = os.path.join(run_dir, "report.json")
+              if not (os.path.exists(summary_path) and os.path.exists(report_path)):
+                  print(f"FATAL: {run_dir} is missing run-summary.json or report.json")
+                  sys.exit(1)
+              runs.append({
+                  "summary": json.load(open(summary_path)),
+                  "report": json.load(open(report_path)),
+              })
+
+          # Hard-coded, not derived from `runs` -- if an entire project's runs
+          # are missing (e.g. every matrix job for it failed), deriving this
+          # set from what actually downloaded would silently shrink the
+          # expected count to match, defeating the "found fewer than
+          # expected" check below. This must match matrix-setup's project
+          # list independently of what happened to show up.
+          projects = ["swift-numerics-integer-utilities", "swift-syntax-small-files"]
+          legs = ["A", "B", "C"]
+          reps = list(range(1, int(os.environ.get("REPETITIONS", "5")) + 1))
+
+          expected_count = len(projects) * len(legs) * len(reps)
+          if len(runs) != expected_count:
+              print(f"FATAL: expected {expected_count} runs ({len(projects)} projects x {len(legs)} legs x {len(reps)} reps), found {len(runs)}")
+              sys.exit(1)
+
+          def find(project, leg, rep):
+              matches = [
+                  r for r in runs
+                  if r["summary"]["projectID"] == project
+                  and r["summary"]["leg"] == leg
+                  and r["summary"]["rep"] == rep
+              ]
+              assert len(matches) == 1, f"expected exactly one run for {project}/{leg}/rep{rep}, found {len(matches)}"
+              return matches[0]
+
+          hard_failures = []
+
+          def fail(msg):
+              hard_failures.append(msg)
+              print(f"FAIL: {msg}")
+
+          # ---- Hard correctness gates ------------------------------------------------
+          # missing=0, duplicate=0, integrity violations=0, phantom/unproven=0,
+          # and identical MutationID sets across every leg and every repetition.
+          id_sets_by_project = {}
+          outcomes_by_project_leg_rep = {}
+          embedded_fallback_by_project_leg = {}  # (project, leg) -> {operatorID: {"embedded": n, "fallback": n}}
+
+          for project in projects:
+              reference_ids = None
+              for leg in legs:
+                  for rep in reps:
+                      run = find(project, leg, rep)
+                      report = run["report"]
+                      results = report["results"]
+                      integrity = report["integrity"]
+                      violations = integrity["violations"]
+
+                      by_kind = {}
+                      for v in violations:
+                          by_kind.setdefault(v["kind"], []).append(v)
+
+                      missing = len(by_kind.get("plannedMutationWithoutResult", []))
+                      duplicate = len(by_kind.get("duplicateMutationID", []))
+                      phantom = len(by_kind.get("phantomMutant", []))
+                      # A scorable result whose own verificationVersion is 0 was never
+                      # actually re-verified by MutationVerdictVerifier -- "phantomMutant"
+                      # integrity violations don't cover this, it's a property of the
+                      # MutationResult record itself (see MutationResult.swift).
+                      unproven = sum(1 for r in results if r.get("verificationVersion") == 0)
+                      total_violations = len(violations)
+
+                      label = f"{project}/{leg}/rep{rep}"
+                      if missing != 0:
+                          fail(f"{label}: missing={missing} (expected 0)")
+                      if duplicate != 0:
+                          fail(f"{label}: duplicate={duplicate} (expected 0)")
+                      if phantom != 0:
+                          fail(f"{label}: phantom={phantom} (expected 0)")
+                      if unproven != 0:
+                          fail(f"{label}: unproven={unproven} (expected 0, verificationVersion==0 result found)")
+                      if total_violations != 0:
+                          fail(f"{label}: integrity violations={total_violations} (expected 0): {[v['kind'] for v in violations]}")
+
+                      ids = [r["point"]["id"] for r in results]
+                      id_set = set(ids)
+                      if len(ids) != len(id_set):
+                          fail(f"{label}: {len(ids) - len(id_set)} duplicate MutationIDs within this report's results")
+
+                      if reference_ids is None:
+                          reference_ids = id_set
+                      elif id_set != reference_ids:
+                          only_here = id_set - reference_ids
+                          only_reference = reference_ids - id_set
+                          fail(
+                              f"{label}: MutationID set differs from this project's reference set "
+                              f"(+{len(only_here)} unexpected, -{len(only_reference)} missing)"
+                          )
+
+                      outcomes_by_project_leg_rep[(project, leg, rep)] = {
+                          r["point"]["id"]: r["outcome"] for r in results
+                      }
+
+                      # Per-operator embedded/fallback, for schemata legs only.
+                      if leg in ("B", "C"):
+                          per_op = embedded_fallback_by_project_leg.setdefault((project, leg), {})
+                          for r in results:
+                              operator_id = r["point"]["operatorID"]
+                              evidence = r.get("evidence") or {}
+                              application_evidence = evidence.get("applicationEvidence") or {}
+                              routed_schemata = "schemata" in application_evidence
+                              routed_isolated = "isolated" in application_evidence
+                              bucket = per_op.setdefault(operator_id, {"embedded": 0, "fallback": 0, "unknown": 0})
+                              if routed_schemata:
+                                  bucket["embedded"] += 1
+                              elif routed_isolated:
+                                  bucket["fallback"] += 1
+                              else:
+                                  bucket["unknown"] += 1
+
+              id_sets_by_project[project] = reference_ids
+
+          # Per-operator embedded/fallback breakdown should be identical across every
+          # repetition of the same (project, leg) — same source, same registry, same
+          # eligibility. Cross-check rep 1 against every other rep as an extra sanity
+          # gate (not requested explicitly, but cheap given the data is already loaded,
+          # and a divergence here would itself be a real bug worth surfacing).
+          for project in projects:
+              for leg in ("B", "C"):
+                  per_op_rep1 = None
+                  for rep in reps:
+                      per_op = {}
+                      for r in find(project, leg, rep)["report"]["results"]:
+                          operator_id = r["point"]["operatorID"]
+                          evidence = r.get("evidence") or {}
+                          application_evidence = evidence.get("applicationEvidence") or {}
+                          routed_schemata = "schemata" in application_evidence
+                          bucket = per_op.setdefault(operator_id, {"embedded": 0, "fallback": 0})
+                          if routed_schemata:
+                              bucket["embedded"] += 1
+                          else:
+                              bucket["fallback"] += 1
+                      if per_op_rep1 is None:
+                          per_op_rep1 = per_op
+                      elif per_op != per_op_rep1:
+                          fail(f"{project}/{leg}/rep{rep}: per-operator embedded/fallback breakdown differs from rep1 ({per_op} vs {per_op_rep1})")
+
+          # ---- Backend disagreement: A (isolated) vs B/C (schemata), same rep --------
+          for project in projects:
+              for rep in reps:
+                  a = outcomes_by_project_leg_rep[(project, "A", rep)]
+                  for schemata_leg in ("B", "C"):
+                      s = outcomes_by_project_leg_rep[(project, schemata_leg, rep)]
+                      for mutation_id in id_sets_by_project[project]:
+                          a_outcome = a.get(mutation_id)
+                          s_outcome = s.get(mutation_id)
+                          if a_outcome != s_outcome:
+                              fail(
+                                  f"{project}/rep{rep}: backend disagreement for {mutation_id}: "
+                                  f"A(isolated)={a_outcome} {schemata_leg}(schemata)={s_outcome}"
+                              )
+
+          if hard_failures:
+              print(f"\n{len(hard_failures)} correctness gate failure(s) — see FAIL lines above.")
+              sys.exit(1)
+
+          print("Correctness gates: PASS (MutationID sets identical, integrity clean, "
+                "missing=0, duplicate=0, phantom/unproven=0, backend disagreement=0 "
+                f"across {len(projects)} project(s) x {len(legs)} legs x {len(reps)} reps).")
+
+          # ---- Timing statistics ------------------------------------------------------
+          def leg_timings(project, leg):
+              return [find(project, leg, rep)["summary"]["wallSeconds"] for rep in reps]
+
+          def stats(values):
+              return {
+                  "mean": statistics.mean(values),
+                  "median": statistics.median(values),
+                  "min": min(values),
+                  "max": max(values),
+                  "stdev": statistics.stdev(values) if len(values) > 1 else 0.0,
+              }
+
+          def speedup_verdict(faster_label, slower_label, faster_stats, slower_stats):
+              """
+              A deliberately simple heuristic, not a formal significance test:
+              flag "inconclusive" whenever the observed mean difference is smaller
+              than the larger of the two legs' own stdev — i.e., the legs' spread
+              already overlaps by more than the gap between their means, so this
+              sample cannot responsibly assert which is faster.
+              """
+              diff = slower_stats["mean"] - faster_stats["mean"]
+              noise_floor = max(faster_stats["stdev"], slower_stats["stdev"])
+              if diff <= 0:
+                  return {"verdict": "inconclusive", "reason": f"{faster_label} was not faster than {slower_label} on mean wall time"}
+              if diff < noise_floor:
+                  return {
+                      "verdict": "inconclusive",
+                      "reason": (
+                          f"mean difference ({diff:.2f}s) is smaller than the larger leg's "
+                          f"stdev ({noise_floor:.2f}s) — variance swamps the signal"
+                      ),
+                  }
+              speedup = slower_stats["mean"] / faster_stats["mean"] if faster_stats["mean"] > 0 else None
+              return {"verdict": "conclusive", "speedup": speedup, "diffSeconds": diff}
+
+          overall_summary = {}
+          for project in projects:
+              project_summary = {"timing": {}, "embeddedFallback": {}}
+              leg_stats = {}
+              for leg in legs:
+                  values = leg_timings(project, leg)
+                  s = stats(values)
+                  leg_stats[leg] = s
+                  project_summary["timing"][leg] = {"repetitions": values, **s}
+
+              project_summary["speedup"] = {
+                  "B_to_C": speedup_verdict("C", "B", leg_stats["C"], leg_stats["B"]),
+                  "A_to_C": speedup_verdict("C", "A", leg_stats["C"], leg_stats["A"]),
+              }
+
+              for leg in ("B", "C"):
+                  project_summary["embeddedFallback"][leg] = embedded_fallback_by_project_leg[(project, leg)]
+
+              overall_summary[project] = project_summary
+
+              print(f"\n=== {project} ===")
+              for leg in legs:
+                  s = leg_stats[leg]
+                  print(
+                      f"  leg {leg}: mean={s['mean']:.2f}s median={s['median']:.2f}s "
+                      f"min={s['min']:.2f}s max={s['max']:.2f}s stdev={s['stdev']:.2f}s"
+                  )
+              for pair, result in project_summary["speedup"].items():
+                  print(f"  {pair}: {result}")
+              for leg in ("B", "C"):
+                  print(f"  leg {leg} embedded/fallback by operator: {embedded_fallback_by_project_leg[(project, leg)]}")
+
+          with open("/tmp/aggregate-summary.json", "w") as f:
+              json.dump(overall_summary, f, indent=2)
+          PY
+        env:
+          REPETITIONS: ${{ env.REPETITIONS }}
+
+      - name: Upload aggregate summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schemata-benchmark-aggregate-summary
+          path: /tmp/aggregate-summary.json
+          if-no-files-found: warn
+          retention-days: 30
