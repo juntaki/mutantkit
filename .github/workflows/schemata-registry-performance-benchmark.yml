@@ -299,7 +299,13 @@ jobs:
   benchmark:
     needs: [build-binaries, generate-plan, matrix-setup]
     runs-on: macos-15
-    timeout-minutes: 90
+    # Scout dispatch (run 31658158936, repetitions=2) measured: swift-numerics
+    # legs finish quickly, but swift-syntax legs regularly take ~85-90
+    # minutes on macos-15 runners -- right at this job's old 90-minute cap,
+    # so 3 of 12 runs got killed by the timeout itself (not fail-fast: every
+    # cancelled job's own started_at/completed_at was exactly 90 minutes
+    # apart). Raised with real margin above the observed ceiling.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-setup.outputs.matrix) }}
