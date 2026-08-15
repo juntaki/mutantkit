@@ -138,6 +138,26 @@ public enum IntegrityChecker {
             }
         }
 
+        // Under `budget.selection: v2`, ADR-0007 B.7 requires exactly one
+        // `InclusionReason` per selected mutant — never zero, never two, and
+        // never one pointing at a mutant that isn't actually in the plan
+        // (which would mean it was orphaned by a stage that filtered
+        // `mutations` without filtering `budgetInclusionReasons` to match).
+        if !plan.budgetInclusionReasons.isEmpty {
+            let mutationIDs = Set(plan.mutations.map(\.id))
+            let reasonIDs = plan.budgetInclusionReasons.map(\.mutationID)
+            if Set(reasonIDs) != mutationIDs || reasonIDs.count != mutationIDs.count {
+                violations.append(IntegrityViolation(
+                    kind: .countMismatch,
+                    detail: """
+                    Plan has \(plan.mutations.count) selected mutation(s) but \
+                    \(plan.budgetInclusionReasons.count) budgetInclusionReasons record(s) — these must \
+                    match exactly one-to-one under budget.selection: v2 (ADR-0007 B.7).
+                    """
+                ))
+            }
+        }
+
         return violations
     }
 

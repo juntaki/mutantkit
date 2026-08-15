@@ -292,6 +292,28 @@ public enum ConfigurationValidator {
     private static func validateBudgetSampling(_ budget: BudgetSettings) -> [ConfigurationIssue] {
         var issues: [ConfigurationIssue] = []
 
+        if budget.selection == .v2 {
+            issues += validateBudgetSelectionV2(budget)
+        } else if budget.minimumPerStratum != nil || budget.weight != nil {
+            // v1-only knobs still get evaluated below (`stratifyBy`), but v2's
+            // own knobs are meaningless there — warn the same way
+            // `minimumPerOperator` is warned about outside `.operatorSubtype`.
+            if budget.minimumPerStratum != nil {
+                issues.append(ConfigurationIssue(
+                    severity: .warning,
+                    path: "execution.budget.minimumPerStratum",
+                    message: "Only applies under selection: v2; ignored otherwise."
+                ))
+            }
+            if budget.weight != nil {
+                issues.append(ConfigurationIssue(
+                    severity: .warning,
+                    path: "execution.budget.weight",
+                    message: "Only applies under selection: v2; ignored otherwise."
+                ))
+            }
+        }
+
         guard budget.stratifyBy == .operatorSubtype else {
             if budget.minimumPerOperator != nil {
                 issues.append(ConfigurationIssue(
@@ -319,6 +341,46 @@ public enum ConfigurationValidator {
                 path: "execution.budget.minimumPerOperator",
                 message: "Must be at least 1 when present."
             ))
+        }
+        return issues
+    }
+
+    /// `selection: .v2`'s own validation (ADR-0007 B.3/B.8). Weight
+    /// *completeness* against the real operator set is not checkable here —
+    /// operators aren't known until planning-time discovery — so only each
+    /// configured value's range is checked; `BudgetSelectorV2.allocateCounts`
+    /// itself enforces full-coverage-or-nothing at plan time and throws
+    /// `.invalidWeightConfiguration` if violated (`MutationPlanner`
+    /// surfaces that as `PlannerError.budgetSelectionV2Failed`).
+    private static func validateBudgetSelectionV2(_ budget: BudgetSettings) -> [ConfigurationIssue] {
+        var issues: [ConfigurationIssue] = []
+
+        // v2 has to know how many mutants it is dividing among strata; without
+        // maxMutants there is no budget to allocate, same requirement as
+        // stratifyBy: operatorSubtype above.
+        if budget.maxMutants == nil {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "execution.budget.selection",
+                message: "'v2' requires execution.budget.maxMutants to be set."
+            ))
+        }
+        if let minimumPerStratum = budget.minimumPerStratum, minimumPerStratum < 1 {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "execution.budget.minimumPerStratum",
+                message: "Must be at least 1 when present."
+            ))
+        }
+        if let weight = budget.weight {
+            let weightValidRange = 1 ... 1_000_000
+            for (stratumID, value) in weight.sorted(by: { $0.key < $1.key }) where !weightValidRange.contains(value) {
+                issues.append(ConfigurationIssue(
+                    severity: .error,
+                    path: "execution.budget.weight.\(stratumID)",
+                    message: "Must be an integer in \(weightValidRange), got \(value)."
+                ))
+            }
         }
         return issues
     }
@@ -391,7 +453,13 @@ public enum ConfigurationJSONSchema {
                 "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
                 "seed": { "type": ["integer", "null"] },
                 "stratifyBy": { "enum": ["subtype", "operatorSubtype", null] },
-                "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 }
+                "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 },
+                "selection": { "enum": ["v1", "v2", null] },
+                "minimumPerStratum": { "type": ["integer", "null"], "minimum": 1 },
+                "weight": {
+                  "type": ["object", "null"],
+                  "additionalProperties": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+                }
               }
             },
             "diffBase": { "type": ["string", "null"] },

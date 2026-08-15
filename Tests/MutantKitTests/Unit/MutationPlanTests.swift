@@ -45,6 +45,55 @@ struct MutationPlanTests {
         #expect(try plan.encoded() == plan.encoded())
     }
 
+    /// ADR-0007 invariant 8/B.8: a v1 plan (no `budgetInclusionReasons`) must
+    /// encode byte-identically to how it always has. A synthesized encoder
+    /// would emit `"budgetInclusionReasons": []` for every plan since the
+    /// field was added — a Codex integration review caught this as a High
+    /// (breaks the "existing configs produce byte-identical plans"
+    /// guarantee) — so the key must be omitted entirely when empty, not
+    /// present-but-empty.
+    @Test("A v1 plan (no budgetInclusionReasons) omits the key entirely, not [] ")
+    func v1PlanOmitsBudgetInclusionReasonsKey() throws {
+        let plan = try realisticPlan()
+        #expect(plan.budgetInclusionReasons.isEmpty)
+
+        let json = try String(data: plan.encoded(), encoding: .utf8)
+        #expect(json?.contains("budgetInclusionReasons") == false)
+    }
+
+    /// The symmetric case: a v2 plan's non-empty reasons are present and
+    /// round-trip through decode/re-encode unchanged.
+    @Test("A v2 plan's budgetInclusionReasons round-trips through decode/re-encode")
+    func v2PlanRoundTripsBudgetInclusionReasons() throws {
+        let source = try Fixture.text("RealisticViewModel")
+        let path = "Sources/CartViewModel.swift"
+        let points = try discover(source, path: path)
+        let reason = InclusionReason(
+            mutationID: points[0].id,
+            reasonCode: .minimumReservation,
+            stratumPath: [points[0].operatorID],
+            selectionOrdinal: 0
+        )
+        let plan = MutationPlan(
+            planID: "plan_test",
+            createdAt: Date(timeIntervalSince1970: 0),
+            projectRoot: "/tmp",
+            toolchain: ToolchainFingerprint(
+                toolVersion: "0.1.0", toolCommitSHA: nil, swiftVersion: "6.3.3",
+                swiftSyntaxVersion: "603.0.2", xcodeVersion: nil
+            ),
+            configurationHash: "cfg",
+            sourceFileHashes: [path: ContentHash.of(Data(source.utf8))],
+            mutations: [points[0]],
+            skipped: [],
+            operators: [],
+            budgetInclusionReasons: [reason]
+        )
+
+        let decoded = try MutationPlan.decode(from: try plan.encoded())
+        #expect(decoded.budgetInclusionReasons == [reason])
+    }
+
     @Test("A decoded plan carries the same mutations")
     func decodePreservesMutations() throws {
         let plan = try realisticPlan()

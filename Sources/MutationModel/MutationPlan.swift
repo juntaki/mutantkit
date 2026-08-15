@@ -139,6 +139,15 @@ public struct MutationPlan: Codable, Sendable {
     /// Operator descriptors in effect, embedded so results stay interpretable
     /// even if the operator set changes in a later release.
     public let operators: [OperatorDescriptor]
+    /// One record per mutant in `mutations`, present only when this plan was
+    /// selected under `budget.selection: v2` (ADR-0007 B.7) — always empty
+    /// for a v1 plan. Computed once, at planning time, and never recomputed:
+    /// `PlanSharding.shard` copies each shard's subset unchanged rather than
+    /// re-deriving it, and it is excluded from `planID`/`workUnitID`'s hash
+    /// inputs on the same terms `createdAt` already is — derived data
+    /// describing an already-fixed selection, not part of what makes two
+    /// plans "the same plan."
+    public let budgetInclusionReasons: [InclusionReason]
 
     public init(
         planID: String,
@@ -149,7 +158,8 @@ public struct MutationPlan: Codable, Sendable {
         sourceFileHashes: [String: String],
         mutations: [MutationPoint],
         skipped: [SkippedMutation],
-        operators: [OperatorDescriptor]
+        operators: [OperatorDescriptor],
+        budgetInclusionReasons: [InclusionReason] = []
     ) {
         schemaVersion = SchemaVersion.plan
         self.planID = planID
@@ -161,6 +171,57 @@ public struct MutationPlan: Codable, Sendable {
         self.mutations = mutations.sorted { $0.id < $1.id }
         self.skipped = skipped
         self.operators = operators
+        self.budgetInclusionReasons = budgetInclusionReasons.sorted { $0.mutationID < $1.mutationID }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, planID, createdAt, projectRoot, toolchain, configurationHash
+        case sourceFileHashes, mutations, skipped, operators, budgetInclusionReasons
+    }
+
+    /// Custom only for `budgetInclusionReasons`: a plan.json written before
+    /// this field existed has no such key, and decoding that as a hard
+    /// failure would break every plan/checkpoint produced before this
+    /// change for no reason — treated as v1's implicit empty case instead.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        planID = try container.decode(String.self, forKey: .planID)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        projectRoot = try container.decode(String.self, forKey: .projectRoot)
+        toolchain = try container.decode(ToolchainFingerprint.self, forKey: .toolchain)
+        configurationHash = try container.decode(String.self, forKey: .configurationHash)
+        sourceFileHashes = try container.decode([String: String].self, forKey: .sourceFileHashes)
+        mutations = try container.decode([MutationPoint].self, forKey: .mutations)
+        skipped = try container.decode([SkippedMutation].self, forKey: .skipped)
+        operators = try container.decode([OperatorDescriptor].self, forKey: .operators)
+        budgetInclusionReasons = try container.decodeIfPresent(
+            [InclusionReason].self, forKey: .budgetInclusionReasons
+        ) ?? []
+    }
+
+    /// Custom only for `budgetInclusionReasons`: omitted entirely when empty
+    /// (a v1 plan, or a v2 plan with no candidates), rather than encoded as
+    /// `[]`. Synthesized `Encodable` would always emit the key — a Codex
+    /// integration review caught that this makes every v1 plan.json's bytes
+    /// change even though v1's own selection behavior is untouched, breaking
+    /// ADR-0007 invariant 8/B.8's byte-identical-for-existing-configs
+    /// requirement. Omitting rather than emitting `[]` restores that.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(planID, forKey: .planID)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(projectRoot, forKey: .projectRoot)
+        try container.encode(toolchain, forKey: .toolchain)
+        try container.encode(configurationHash, forKey: .configurationHash)
+        try container.encode(sourceFileHashes, forKey: .sourceFileHashes)
+        try container.encode(mutations, forKey: .mutations)
+        try container.encode(skipped, forKey: .skipped)
+        try container.encode(operators, forKey: .operators)
+        if !budgetInclusionReasons.isEmpty {
+            try container.encode(budgetInclusionReasons, forKey: .budgetInclusionReasons)
+        }
     }
 
     /// Total mutations discovered, whether or not they will run.

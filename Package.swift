@@ -103,6 +103,22 @@ let package = Package(
         ),
         .testTarget(name: "BenchmarkRunnerTests", dependencies: ["BenchmarkRunner"]),
 
+        // MARK: Budget Selection v2 evaluation (task #25/#26, Research/budget-selection-v2)
+
+        // Post-processes plan.json/report.json produced by the real
+        // `mutantkit plan`/`run` CLI (which does all discovery/execution) —
+        // this target only needs in-process access to `BudgetSelectorV2`
+        // for the proxy-dependence screen's synthetic weight-vector
+        // resampling, which must run thousands of times fast and cannot
+        // reasonably shell out per round.
+        .executableTarget(
+            name: "BudgetV2Eval",
+            dependencies: [
+                "MutationModel", "MutationPlanner",
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ]
+        ),
+
         // MARK: Tests
 
         .testTarget(

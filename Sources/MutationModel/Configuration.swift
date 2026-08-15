@@ -255,6 +255,17 @@ public enum BudgetStratification: String, Codable, Sendable {
     case operatorSubtype
 }
 
+/// Opt-in switch between v1's `stratifyBy`-driven selection and Budget
+/// Selection v2's two-level allocator (ADR-0007). `nil`/`.v1` (the default)
+/// keeps `stratifyBy`/`minimumPerOperator` in full effect, byte-identical to
+/// existing configs (ADR-0007 invariant 8, Choice 1 — v2 ships opt-in only
+/// this milestone). `.v2` routes through `BudgetSelectorV2` instead, using
+/// `minimumPerStratum`/`weight` and ignoring `stratifyBy`/`minimumPerOperator`.
+public enum BudgetSelectionAlgorithm: String, Codable, Sendable {
+    case v1
+    case v2
+}
+
 public struct BudgetSettings: Codable, Sendable, Hashable {
     public var maxMutants: Int?
     public var maxDurationSeconds: Double?
@@ -265,21 +276,43 @@ public struct BudgetSettings: Codable, Sendable, Hashable {
     /// Minimum mutants reserved per enabled operator with >=1 eligible
     /// candidate, under `stratifyBy: .operatorSubtype`. Defaults to 1 —
     /// enough to get *some* signal per operator, which is the entire point
-    /// of that mode. Ignored under `.subtype` and `nil`.
+    /// of that mode. Ignored under `.subtype` and `nil`. Ignored entirely
+    /// under `selection: .v2` — see `minimumPerStratum`.
     public var minimumPerOperator: Int?
+    /// Opts into Budget Selection v2 (ADR-0007). See
+    /// `BudgetSelectionAlgorithm`'s doc comment.
+    public var selection: BudgetSelectionAlgorithm?
+    /// `selection: .v2` only: the outer stratum's (operator's) Phase 1
+    /// minimum-reservation floor — the v2 analogue of `minimumPerOperator`.
+    /// Defaults to 1 when `.v2` is active and this is unset. Ignored under
+    /// `.v1`/`nil`.
+    public var minimumPerStratum: Int?
+    /// `selection: .v2` only: optional per-operator Phase 2 weight (ADR-0007
+    /// B.3), keyed by operator ID. Empty/unset means equal-share. If any
+    /// entry is configured, every operator with an eligible candidate must
+    /// be configured — a partial configuration is a config-load error (see
+    /// `BudgetSelectorV2.validateWeightConfiguration`). Ignored under
+    /// `.v1`/`nil`.
+    public var weight: [String: Int]?
 
     public init(
         maxMutants: Int? = nil,
         maxDurationSeconds: Double? = nil,
         seed: UInt64? = nil,
         stratifyBy: BudgetStratification? = nil,
-        minimumPerOperator: Int? = nil
+        minimumPerOperator: Int? = nil,
+        selection: BudgetSelectionAlgorithm? = nil,
+        minimumPerStratum: Int? = nil,
+        weight: [String: Int]? = nil
     ) {
         self.maxMutants = maxMutants
         self.maxDurationSeconds = maxDurationSeconds
         self.seed = seed
         self.stratifyBy = stratifyBy
         self.minimumPerOperator = minimumPerOperator
+        self.selection = selection
+        self.minimumPerStratum = minimumPerStratum
+        self.weight = weight
     }
 
     /// `sampling`/`stratifyWithinOperatorBy` were a same-day-superseded
@@ -316,6 +349,9 @@ public struct BudgetSettings: Codable, Sendable, Hashable {
         seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
         stratifyBy = try container.decodeIfPresent(BudgetStratification.self, forKey: .stratifyBy)
         minimumPerOperator = try container.decodeIfPresent(Int.self, forKey: .minimumPerOperator)
+        selection = try container.decodeIfPresent(BudgetSelectionAlgorithm.self, forKey: .selection)
+        minimumPerStratum = try container.decodeIfPresent(Int.self, forKey: .minimumPerStratum)
+        weight = try container.decodeIfPresent([String: Int].self, forKey: .weight)
     }
 }
 

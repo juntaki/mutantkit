@@ -60,12 +60,19 @@ public enum PlanSharding {
 
         var mutations = [[MutationPoint]](repeating: [], count: count)
         var skipped = [[SkippedMutation]](repeating: [], count: count)
+        var inclusionReasons = [[InclusionReason]](repeating: [], count: count)
 
         for point in plan.mutations {
             mutations[index(of: point.id, count: count)].append(point)
         }
         for record in plan.skipped {
             skipped[index(of: record.id, count: count)].append(record)
+        }
+        // Copied unchanged by the same `MutationID`-keyed rule `mutations`
+        // itself shards by — never recomputed from shard-local position or
+        // candidate count (ADR-0007 B.7's shard-stability requirement).
+        for reason in plan.budgetInclusionReasons {
+            inclusionReasons[index(of: reason.mutationID, count: count)].append(reason)
         }
 
         return (0 ..< count).map { shardIndex in
@@ -78,7 +85,8 @@ public enum PlanSharding {
                 sourceFileHashes: plan.sourceFileHashes,
                 mutations: mutations[shardIndex],
                 skipped: skipped[shardIndex],
-                operators: plan.operators
+                operators: plan.operators,
+                budgetInclusionReasons: inclusionReasons[shardIndex]
             )
         }
     }

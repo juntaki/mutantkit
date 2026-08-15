@@ -132,6 +132,13 @@ public struct MutationSuppressionSet: Sendable, Hashable {
         }
         let identity = ([plan.planID] + suppressedIDs.sorted()).joined(separator: "\u{1F}")
 
+        // A suppressed mutant is no longer selected, so its inclusion reason
+        // (if any) would be orphaned — dropped here to keep
+        // `budgetInclusionReasons` exactly one-per-`mutations`-entry, the
+        // same invariant `PlanSharding.shard` preserves for its own subset.
+        let keptIDs = Set(kept.map(\.id))
+        let inclusionReasons = plan.budgetInclusionReasons.filter { keptIDs.contains($0.mutationID) }
+
         return MutationPlan(
             planID: "plan_" + ContentHash.shortDigest(of: identity),
             createdAt: plan.createdAt,
@@ -141,7 +148,8 @@ public struct MutationSuppressionSet: Sendable, Hashable {
             sourceFileHashes: plan.sourceFileHashes,
             mutations: kept,
             skipped: skipped,
-            operators: plan.operators
+            operators: plan.operators,
+            budgetInclusionReasons: inclusionReasons
         )
     }
 }

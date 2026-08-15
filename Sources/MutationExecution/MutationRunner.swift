@@ -40,6 +40,7 @@ public struct MutationRunner: Sendable {
     private let priorityStore: TestPriorityStore?
     private let monotonicNow: @Sendable () -> TimeInterval
     private let operationalIssues = OperationalIssueLog()
+    private let progress: ProgressReporter?
 
     /// Cannot collide with a mutant's sandbox: every mutation ID starts `mut_`.
     private static let baselineSandboxID = "baseline"
@@ -118,6 +119,7 @@ public struct MutationRunner: Sendable {
         resultCache: MutationResultCache? = nil,
         resultCacheDigest: String? = nil,
         priorityStore: TestPriorityStore? = nil,
+        progress: ProgressReporter? = nil,
         monotonicNow: @escaping @Sendable () -> TimeInterval = {
             Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
         }
@@ -136,6 +138,7 @@ public struct MutationRunner: Sendable {
         self.resultCache = resultCache
         self.resultCacheDigest = resultCacheDigest
         self.priorityStore = priorityStore
+        self.progress = progress
         self.monotonicNow = monotonicNow
     }
 
@@ -2567,6 +2570,7 @@ public struct MutationRunner: Sendable {
                 for: MutationResultCache.Key(mutationID: point.id, contextDigest: resultCacheDigest)
             )
         }
+        await progress?.recordCompletion()
         return result
     }
 

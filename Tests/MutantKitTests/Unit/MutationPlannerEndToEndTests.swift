@@ -314,6 +314,69 @@ struct MutationPlannerEndToEndTests {
         #expect(first.planID == second.planID)
     }
 
+    // MARK: - Budget Selection v2 (ADR-0007, opt-in)
+
+    /// `selection: v2` reaches `BudgetSelectorV2` end to end: the plan is
+    /// budget-limited exactly like v1, and — the capability v1 never had —
+    /// every selected mutant carries a `budgetInclusionReasons` record
+    /// (ADR-0007 B.7).
+    @Test("selection: v2 budget-limits the plan and records an InclusionReason for every selected mutant")
+    func budgetSelectionV2ProducesInclusionReasons() async throws {
+        try write("Sources/Big.swift", """
+        struct Big {
+            var a = true
+            var b = true
+            var c = true
+            var d = true
+            var e = true
+        }
+        """)
+
+        let configuration = Configuration(
+            execution: ExecutionSettings(budget: BudgetSettings(maxMutants: 2, selection: .v2))
+        )
+        let plan = try await makePlan(configuration: configuration)
+
+        #expect(plan.mutations.count == 2)
+        #expect(plan.skipped.allSatisfy { $0.reason == .budgetExceeded })
+        #expect(Set(plan.budgetInclusionReasons.map(\.mutationID)) == Set(plan.mutations.map(\.id)))
+        #expect(plan.budgetInclusionReasons.count == plan.mutations.count)
+    }
+
+    /// v1 never populates `budgetInclusionReasons` — the field exists on
+    /// every plan, but stays empty unless `selection: v2` was actually used
+    /// (ADR-0007 B.8: v2 is opt-in, v1 unaffected).
+    @Test("Under v1 (the default), budgetInclusionReasons stays empty")
+    func budgetInclusionReasonsEmptyUnderV1() async throws {
+        try write("Sources/Big.swift", "struct Big { var a = true; var b = true; var c = true }")
+
+        let configuration = Configuration(
+            execution: ExecutionSettings(budget: BudgetSettings(maxMutants: 1))
+        )
+        let plan = try await makePlan(configuration: configuration)
+
+        #expect(plan.budgetInclusionReasons.isEmpty)
+    }
+
+    /// A duplicate `MutationID` is a precondition violation `BudgetSelectorV2`
+    /// itself refuses (ADR-0007 invariant 4) — `applyBudgetGate` must surface
+    /// that refusal as a `PlannerError`, not let it escape unwrapped or, worse,
+    /// silently succeed.
+    @Test("selection: v2 surfaces BudgetSelectorV2's own errors as PlannerError")
+    func budgetSelectionV2InvalidWeightSurfacesAsPlannerError() async throws {
+        try write("Sources/Big.swift", "struct Big { var a = true; var b = true }")
+
+        let configuration = Configuration(
+            execution: ExecutionSettings(budget: BudgetSettings(
+                maxMutants: 1, selection: .v2, weight: ["nonexistentOperator": 1]
+            ))
+        )
+
+        await #expect(throws: PlannerError.self) {
+            try await makePlan(configuration: configuration)
+        }
+    }
+
     /// A budget of zero is impossible to honour: it asks the planner to plan
     /// nothing while pretending to plan something. Refused, not silently empty.
     @Test("A zero budget is refused")

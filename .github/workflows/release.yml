@@ -23,6 +23,10 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -45,6 +49,11 @@ jobs:
       - name: Build and package
         run: Scripts/release-build.sh "${{ steps.version.outputs.version }}" dist
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/mutantkit-macos-arm64.tar.gz
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -54,6 +63,12 @@ jobs:
             dist/SHA256SUMS
           retention-days: 30
 
+  # Section 8: does the packaged artifact install and present a sane CLI
+  # surface on a clean machine? No project, no mutation testing here — that
+  # is user-journey-e2e's job below. This job proves only the packaged
+  # binary itself: obtained from the build job's artifact (never rebuilt),
+  # checksummed, extracted, and put on PATH exactly like a real installed
+  # binary — never invoked via a repo-relative or source-tree path.
   clean-machine-e2e:
     needs: build
     runs-on: macos-15
@@ -71,101 +86,213 @@ jobs:
         working-directory: download
         run: shasum -a 256 -c SHA256SUMS
 
-      - name: Extract
+      - name: Extract into a fresh directory
         working-directory: download
         run: tar xzf mutantkit-macos-arm64.tar.gz
 
+      - name: Assert the tarball itself preserved the executable bit (before any chmod masks a regression)
+        run: |
+          set -euo pipefail
+          bin="download/mutantkit-macos-arm64/mutantkit"
+          if [[ ! -x "$bin" ]]; then
+            echo "FATAL: '$bin' is not executable straight out of the tarball — a direct-tarball user runs it with no chmod step, so this must hold without any repair." >&2
+            ls -l "$bin" >&2
+            exit 1
+          fi
+
+      - name: Install onto PATH like a real install (no source-tree reliance)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          cp download/mutantkit-macos-arm64/mutantkit "$HOME/.local/bin/mutantkit"
+          chmod +x "$HOME/.local/bin/mutantkit"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: which mutantkit resolves to the packaged binary, not a repo path
+        run: |
+          set -euo pipefail
+          resolved="$(command -v mutantkit)"
+          echo "resolved: $resolved"
+          expected="$HOME/.local/bin/mutantkit"
+          if [[ "$resolved" != "$expected" ]]; then
+            echo "FATAL: mutantkit resolved to '$resolved', expected the packaged install at '$expected'" >&2
+            exit 1
+          fi
+
       - name: mutantkit --version
-        run: download/mutantkit-macos-arm64/mutantkit --version
+        run: mutantkit --version
+
+      - name: mutantkit --help
+        run: mutantkit --help
 
       - name: mutantkit doctor (no project yet — must report that honestly)
+        run: mutantkit doctor || true
+
+      - name: Shell completion scripts (zsh, bash, fish)
+        run: |
+          set -euo pipefail
+          for shell in zsh bash fish; do
+            out="$(mutantkit --generate-completion-script "$shell")"
+            if [[ -z "$out" ]]; then
+              echo "FATAL: empty completion script for $shell" >&2
+              exit 1
+            fi
+            echo "$shell completion script: $(printf '%s\n' "$out" | wc -l) lines"
+          done
+
+      - name: Malformed input yields a useful non-zero exit, not a crash
+        run: |
+          set -euo pipefail
+          set +e
+          mutantkit plan --output /tmp/should-not-exist.json --config /tmp/definitely-missing-config.yml
+          code=$?
+          set -e
+          if [[ "$code" -eq 0 ]]; then
+            echo "FATAL: expected a non-zero exit for a missing config file, got success" >&2
+            exit 1
+          fi
+          echo "malformed-input exit code: $code (non-zero, as required)"
+
+  # Section 9: the real user-journey acceptance test. Only the installed
+  # packaged binary is exercised (never a rebuild), against a small, real
+  # Swift package fixture with actual mutable source and real tests
+  # (Fixtures/SwiftPackageMacOS — the same fixture that package's own
+  # comment documents as "the fixture the pipeline is proven against in
+  # CI"). A sparse checkout is used only to obtain that fixture's source
+  # files, never to build or run mutantkit from source.
+  user-journey-e2e:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - name: Checkout only the fixture (not the source tree mutantkit ships from)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            Fixtures/SwiftPackageMacOS
+          sparse-checkout-cone-mode: true
+
+      - name: Download the packaged binary only
+        uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-macos-arm64
+          path: download
+
+      - name: Verify checksum
         working-directory: download
+        run: shasum -a 256 -c SHA256SUMS
+
+      - name: Extract into a fresh directory
+        working-directory: download
+        run: tar xzf mutantkit-macos-arm64.tar.gz
+
+      - name: Assert the tarball itself preserved the executable bit (before any chmod masks a regression)
         run: |
           set -euo pipefail
-          ./mutantkit-macos-arm64/mutantkit doctor || true
+          bin="download/mutantkit-macos-arm64/mutantkit"
+          if [[ ! -x "$bin" ]]; then
+            echo "FATAL: '$bin' is not executable straight out of the tarball — a direct-tarball user runs it with no chmod step, so this must hold without any repair." >&2
+            ls -l "$bin" >&2
+            exit 1
+          fi
 
-      - name: Generate a minimal SwiftPM fixture project (no clone of this repo)
+      - name: Install onto PATH like a real install
         run: |
           set -euo pipefail
-          mkdir -p fixture/Sources/Calc fixture/Tests/CalcTests
-          cat > fixture/Package.swift <<'EOF'
-          // swift-tools-version:6.0
-          import PackageDescription
+          mkdir -p "$HOME/.local/bin"
+          cp download/mutantkit-macos-arm64/mutantkit "$HOME/.local/bin/mutantkit"
+          chmod +x "$HOME/.local/bin/mutantkit"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-          let package = Package(
-              name: "Calc",
-              targets: [
-                  .target(name: "Calc"),
-                  .testTarget(name: "CalcTests", dependencies: ["Calc"])
-              ]
-          )
-          EOF
-          cat > fixture/Sources/Calc/Calc.swift <<'EOF'
-          public func calcAdd(_ a: Int, _ b: Int) -> Int {
-              a + b
-          }
+      - name: Copy the fixture into a clean working directory
+        run: |
+          set -euo pipefail
+          mkdir -p journey
+          cp -R Fixtures/SwiftPackageMacOS/. journey/
 
-          public func isPositive(_ x: Int) -> Bool {
-              x > 0
-          }
-          EOF
-          cat > fixture/Tests/CalcTests/CalcTests.swift <<'EOF'
-          import XCTest
-          @testable import Calc
-
-          final class CalcTests: XCTestCase {
-              func testCalcAdd() {
-                  XCTAssertEqual(calcAdd(2, 3), 5)
-              }
-              func testIsPositive() {
-                  XCTAssertTrue(isPositive(1))
-                  XCTAssertFalse(isPositive(-1))
-              }
-          }
-          EOF
-
-      - name: mutantkit doctor (fixture present)
-        working-directory: fixture
-        run: ../download/mutantkit-macos-arm64/mutantkit doctor
+      - name: mutantkit doctor
+        working-directory: journey
+        run: mutantkit doctor
 
       - name: mutantkit init
-        working-directory: fixture
+        working-directory: journey
+        run: mutantkit init
+
+      - name: Fill in the detected test target and inspect the generated config
+        working-directory: journey
         run: |
           set -euo pipefail
-          ../download/mutantkit-macos-arm64/mutantkit init
           python3 -c "
-          import re
           with open('mutantkit.yml') as f:
               c = f.read()
-          c = c.replace(
-              \"    # No test target detected. Add yours here, or run \`mutantkit doctor\`.\n    []\",
-              '    - CalcTests'
-          )
+          needle = \"    # No test target detected. Add yours here, or run \`mutantkit doctor\`.\n    []\"
+          assert needle in c, 'expected placeholder test-target comment not found in generated config'
+          c = c.replace(needle, '    - PricingTests')
           with open('mutantkit.yml', 'w') as f:
               f.write(c)
           "
-          grep -A2 '^tests:' mutantkit.yml
+          echo "--- generated mutantkit.yml ---"
+          cat mutantkit.yml
+          grep -q '^version:' mutantkit.yml
+          grep -A2 '^tests:' mutantkit.yml | grep -q 'PricingTests'
 
-      - name: mutantkit plan
-        working-directory: fixture
-        run: ../download/mutantkit-macos-arm64/mutantkit plan
-
-      - name: mutantkit run
-        working-directory: fixture
+      - name: mutantkit plan --output plan.json
+        working-directory: journey
         run: |
           set -euo pipefail
-          ../download/mutantkit-macos-arm64/mutantkit run --plan plan.json --output report.json
+          mutantkit plan --output plan.json
+          python3 -c "
+          import json
+          plan = json.load(open('plan.json'))
+          mutations = plan.get('mutations', [])
+          assert len(mutations) > 0, 'plan discovered zero mutations — fixture or planning is broken'
+          print(f'plan integrity OK: {len(mutations)} mutation(s) discovered')
+          "
+
+      - name: mutantkit run --plan plan.json --output report.json
+        working-directory: journey
+        run: mutantkit run --plan plan.json --output report.json
+
+      - name: Verify report integrity, verdicts, and score gating
+        working-directory: journey
+        run: |
+          set -euo pipefail
           python3 -c "
           import json
           report = json.load(open('report.json'))
-          assert len(report['integrity']['violations']) == 0, report['integrity']['violations']
-          assert len(report['results']) == 2, report['results']
-          print('clean-machine E2E gate: PASSED')
+          violations = report['integrity']['violations']
+          assert len(violations) == 0, f'integrity violations present: {violations}'
+          verified = {'killedByAssertion', 'killedByCrash', 'killedByVerifiedTimeout', 'survived', 'noCoverage'}
+          assert any(r['outcome'] in verified for r in report['results']), 'no mutant reached a real verified verdict'
+          assert 'score' in report and report['score'] is not None, 'score missing even though integrity is clean'
+          print('report OK: 0 integrity violations, verified verdicts present, score emitted')
           "
+
+      - name: Pick a real killed MutationID and mutantkit inspect it
+        working-directory: journey
+        run: |
+          set -euo pipefail
+          mutation_id="$(python3 -c "
+          import json
+          report = json.load(open('report.json'))
+          killed = [r for r in report['results'] if r['outcome'] == 'killedByAssertion']
+          assert killed, 'no killedByAssertion mutant in this run to inspect/reproduce'
+          print(killed[0]['mutationRef']['mutationID'])
+          ")"
+          echo "mutation_id=$mutation_id" >> "$GITHUB_ENV"
+          echo "Inspecting real mutation: $mutation_id"
+          mutantkit inspect "$mutation_id" --plan plan.json --report report.json
+
+      - name: mutantkit reproduce the same MutationID
+        working-directory: journey
+        run: mutantkit reproduce "$mutation_id" --plan plan.json --run
+
+      - name: mutantkit gate against the real report
+        working-directory: journey
+        run: mutantkit gate --report report.json --minimum-tested 20 --minimum-effective 20
 
   publish-release:
     if: github.ref_type == 'tag'
-    needs: [build, clean-machine-e2e]
+    needs: [build, clean-machine-e2e, user-journey-e2e]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -173,13 +300,111 @@ jobs:
           name: mutantkit-macos-arm64
           path: dist
 
-      - name: Create GitHub Release
+      # Safe to re-run at any point after a partial publish (dropped
+      # connection mid-upload, runner eviction, etc.), for the SAME tag.
+      # `gh release create` refuses outright if a release for this tag
+      # already exists (no --clobber is ever passed), so a bare re-run can
+      # never silently replace bytes already published under v0.1.0 with a
+      # different rebuild's bytes — the two builds are not guaranteed
+      # byte-identical (see Research/release/v0.1.0-release-readiness.md,
+      # "Reproducibility" — the Mach-O LC_UUID differs across builds of the
+      # identical commit).
+      #
+      # That non-reproducibility is exactly why "just upload whichever of
+      # the two assets is missing, from this run's freshly rebuilt dist/"
+      # is NOT safe on its own: if the tarball was already published by an
+      # earlier run and only SHA256SUMS is missing, this run's local
+      # dist/SHA256SUMS was computed over THIS run's rebuilt tarball, which
+      # can differ byte-for-byte from the one already attached to the
+      # release — uploading it would publish a checksum file that does not
+      # validate the actual published tarball. Symmetrically, if
+      # SHA256SUMS was already published and only the tarball is missing,
+      # this run's rebuilt tarball might not be the one that checksum was
+      # computed over.
+      #
+      # So repair always treats the pair as belonging together and derives
+      # the missing half FROM the already-published half, never from the
+      # local rebuild, and refuses to guess when it can't:
+      #   - both missing  -> upload both from the local build (a genuinely
+      #                      fresh, matched pair; the only case where the
+      #                      local rebuild is used at all)
+      #   - both present  -> no-op
+      #   - tarball published, SHA256SUMS missing -> download the
+      #                      *published* tarball and compute SHA256SUMS
+      #                      from those exact bytes, not the local rebuild
+      #   - SHA256SUMS published, tarball missing -> only upload the local
+      #                      rebuilt tarball if its checksum matches the
+      #                      *published* SHA256SUMS; otherwise fail loudly
+      #                      (never publish bytes that don't match an
+      #                      already-published checksum)
+      - name: Create or repair GitHub Release (never overwrites a published asset, never publishes a mismatched pair)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ github.ref_name }}" \
-            dist/mutantkit-macos-arm64.tar.gz dist/SHA256SUMS \
-            --repo "${{ github.repository }}" \
-            --title "mutantkit ${{ needs.build.outputs.version }}" \
-            --generate-notes
+          repo="${{ github.repository }}"
+          tag="${{ github.ref_name }}"
+          version="${{ needs.build.outputs.version }}"
+          tar_name="mutantkit-macos-arm64.tar.gz"
+          sums_name="SHA256SUMS"
+
+          if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              "dist/${tar_name}" "dist/${sums_name}" \
+              --repo "$repo" \
+              --title "mutantkit ${version}" \
+              --generate-notes
+            exit 0
+          fi
+
+          echo "Release $tag already exists — this is a re-run after a partial publish."
+          existing="$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name')"
+          tar_published=false
+          sums_published=false
+          grep -qxF "$tar_name" <<<"$existing" && tar_published=true
+          grep -qxF "$sums_name" <<<"$existing" && sums_published=true
+
+          if $tar_published && $sums_published; then
+            echo "Both assets already published — nothing to do."
+          elif ! $tar_published && ! $sums_published; then
+            echo "Neither asset published yet — uploading both from this run's build (a matched pair)."
+            gh release upload "$tag" "dist/${tar_name}" "dist/${sums_name}" --repo "$repo"
+          elif $tar_published && ! $sums_published; then
+            echo "Tarball already published, SHA256SUMS missing."
+            echo "Deriving the checksum from the PUBLISHED tarball's actual bytes, not this run's rebuild (builds are not byte-reproducible)."
+            repair_dir="$(mktemp -d)"
+            gh release download "$tag" --repo "$repo" --pattern "$tar_name" --dir "$repair_dir"
+            (cd "$repair_dir" && shasum -a 256 "$tar_name" > "$sums_name")
+            gh release upload "$tag" "$repair_dir/$sums_name" --repo "$repo"
+          else
+            echo "SHA256SUMS already published, tarball missing."
+            echo "Refusing to upload this run's rebuilt tarball unless it matches the PUBLISHED checksum exactly."
+            repair_dir="$(mktemp -d)"
+            gh release download "$tag" --repo "$repo" --pattern "$sums_name" --dir "$repair_dir"
+            # awk's NR (not `wc -l`) so a file missing a trailing newline
+            # still counts as exactly one record instead of zero.
+            line_count="$(awk 'END{print NR}' "$repair_dir/$sums_name")"
+            if [[ "$line_count" != "1" ]]; then
+              echo "FATAL: published SHA256SUMS has $line_count line(s), expected exactly 1 (for $tar_name only). Refusing to guess which entry applies." >&2
+              exit 1
+            fi
+            field_count="$(awk '{print NF}' "$repair_dir/$sums_name")"
+            if [[ "$field_count" != "2" ]]; then
+              echo "FATAL: published SHA256SUMS line has $field_count field(s), expected exactly 2 (digest and filename). Refusing malformed checksum metadata." >&2
+              exit 1
+            fi
+            published_sha="$(awk '{print $1}' "$repair_dir/$sums_name")"
+            published_name="$(awk '{print $2}' "$repair_dir/$sums_name" | sed 's/^\*//')"
+            if [[ "$published_name" != "$tar_name" ]]; then
+              echo "FATAL: published SHA256SUMS names '$published_name', expected '$tar_name'. Refusing to treat a checksum for a different filename as authoritative for this tarball." >&2
+              exit 1
+            fi
+            local_sha="$(shasum -a 256 "dist/${tar_name}" | awk '{print $1}')"
+            if [[ "$published_sha" != "$local_sha" ]]; then
+              echo "FATAL: this run's rebuilt tarball ($local_sha) does not match the already-published SHA256SUMS ($published_sha)." >&2
+              echo "Publishing it would create a release where the checksum doesn't validate the tarball. Refusing." >&2
+              echo "Manual intervention required: either restore the exact tarball that SHA256SUMS was computed from, or delete the stale SHA256SUMS asset and re-run so both are regenerated from a fresh matched pair." >&2
+              exit 1
+            fi
+            gh release upload "$tag" "dist/${tar_name}" --repo "$repo"
+          fi

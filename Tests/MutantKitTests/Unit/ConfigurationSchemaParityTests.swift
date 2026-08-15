@@ -58,7 +58,7 @@ struct ConfigurationSchemaParityTests {
             strategy: .schemata, workers: 4,
             budget: BudgetSettings(
                 maxMutants: 10, maxDurationSeconds: 60, seed: 1, stratifyBy: .operatorSubtype,
-                minimumPerOperator: 5
+                minimumPerOperator: 5, selection: .v2, minimumPerStratum: 2, weight: ["opA": 1]
             ),
             diffBase: "origin/main", measureCoverage: true, retestKilledMutants: true,
             confirmCrashKills: true, confirmTimedOutMutants: true, selectCoveringTests: true,
@@ -69,7 +69,7 @@ struct ConfigurationSchemaParityTests {
         // Budget is its own Codable struct nested under execution.
         let budget = BudgetSettings(
             maxMutants: 10, maxDurationSeconds: 60, seed: 1, stratifyBy: .operatorSubtype,
-            minimumPerOperator: 5
+            minimumPerOperator: 5, selection: .v2, minimumPerStratum: 2, weight: ["opA": 1]
         )
         #expect(try encodedKeys(budget) == nestedSection(["execution", "budget"], in: schema))
     }

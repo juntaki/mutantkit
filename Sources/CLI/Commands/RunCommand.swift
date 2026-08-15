@@ -350,7 +350,8 @@ struct RunCommand: AsyncParsableCommand {
             workspaces: workspaces, runDirectory: runDirectory,
             isolatedOptions: IsolatedRunOptions(
                 checkpoints: checkpoints, artifactsRoot: artifacts, coverageCache: coverageCache, coverageCacheKey: coverageCacheKey,
-                resultCache: resultCache, resultCacheDigest: resultCacheDigest, priorityStore: runnerPriorityStore
+                resultCache: resultCache, resultCacheDigest: resultCacheDigest, priorityStore: runnerPriorityStore,
+                progress: ProgressReporter(total: loadedPlan.mutations.count)
             )
         )
 
@@ -406,6 +407,7 @@ struct RunCommand: AsyncParsableCommand {
         let resultCache: MutationResultCache?
         let resultCacheDigest: String?
         let priorityStore: TestPriorityStore?
+        let progress: ProgressReporter?
     }
 
     /// Dispatches to the existing, unmodified `MutationRunner` for
@@ -433,7 +435,8 @@ struct RunCommand: AsyncParsableCommand {
                 coverageCacheKey: isolatedOptions.coverageCacheKey,
                 resultCache: isolatedOptions.resultCache,
                 resultCacheDigest: isolatedOptions.resultCacheDigest,
-                priorityStore: isolatedOptions.priorityStore
+                priorityStore: isolatedOptions.priorityStore,
+                progress: isolatedOptions.progress
             ).run()
         case .schemata:
             // A separate scratch subdirectory from the isolated-fallback

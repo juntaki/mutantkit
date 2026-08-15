@@ -11,6 +11,11 @@ public enum PlannerError: Error, CustomStringConvertible {
     case invalidBudget(maxMutants: Int)
     case diffScopeMissing(base: String)
     case integrityViolations([IntegrityViolation])
+    /// `budget.selection: v2` (ADR-0007) rejected its own input — a
+    /// duplicate `MutationID`, an invalid `weight` configuration, or a
+    /// `maxMutants`/candidate-count magnitude the overflow-safety bound
+    /// disallows. See `BudgetSelectorV2Error`'s own description for detail.
+    case budgetSelectionV2Failed(BudgetSelectorV2Error)
 
     public var description: String {
         switch self {
@@ -40,6 +45,8 @@ public enum PlannerError: Error, CustomStringConvertible {
             The plan violates its own invariants and will not be executed:
             \(violations.map { "  - \($0.kind.rawValue): \($0.detail)" }.joined(separator: "\n"))
             """
+        case let .budgetSelectionV2Failed(error):
+            "budget.selection: v2 rejected its input: \(error)"
         }
     }
 }
@@ -96,9 +103,12 @@ public struct MutationPlanner: Sendable {
         // Gates run in a fixed order and each dropped mutation leaves at exactly
         // one gate. That is what keeps `discovered == mutations + skipped`
         // exact rather than approximately right.
+        var inclusionReasons: [InclusionReason] = []
         (surviving, skipped) = applyConfidenceGate(surviving, skipped, resolution: resolution)
         (surviving, skipped) = applyDiffGate(surviving, skipped, diffScope: diffScope)
-        (surviving, skipped) = try applyBudgetGate(surviving, skipped, budget: configuration.execution.budget)
+        (surviving, skipped, inclusionReasons) = try applyBudgetGate(
+            surviving, skipped, budget: configuration.execution.budget
+        )
 
         // Sorted so the plan file is byte-identical across runs; `mutations` is
         // sorted by `MutationPlan.init`, `skipped` is not.
@@ -120,7 +130,8 @@ public struct MutationPlanner: Sendable {
             sourceFileHashes: discovery.fileHashes,
             mutations: surviving,
             skipped: skipped,
-            operators: resolution.descriptors
+            operators: resolution.descriptors,
+            budgetInclusionReasons: inclusionReasons
         )
 
         // Checking here costs milliseconds. Checking after execution costs the
@@ -270,17 +281,26 @@ public struct MutationPlanner: Sendable {
         return (split.inScope, skipped)
     }
 
+    /// Returns `(selected, skipped, budgetInclusionReasons)`. The third
+    /// element is only ever non-empty under `budget.selection: v2` — v1's
+    /// two modes produce no `InclusionReason` records (ADR-0007 B.7 is a v2
+    /// capability, not retrofitted onto v1).
     private func applyBudgetGate(
         _ points: [MutationPoint],
         _ skipped: [SkippedMutation],
         budget: BudgetSettings
-    ) throws -> ([MutationPoint], [SkippedMutation]) {
+    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {
         // `maxDurationSeconds` is not a planning input: the planner has no
         // measured baseline and no idea what a mutant costs. The executor stops
         // on that clock and records what it did not reach.
-        guard let maxMutants = budget.maxMutants else { return (points, skipped) }
+        guard let maxMutants = budget.maxMutants else { return (points, skipped, []) }
         guard maxMutants > 0 else { throw PlannerError.invalidBudget(maxMutants: maxMutants) }
-        guard points.count > maxMutants else { return (points, skipped) }
+
+        if budget.selection == .v2 {
+            return try applyBudgetGateV2(points, skipped, maxMutants: maxMutants, budget: budget)
+        }
+
+        guard points.count > maxMutants else { return (points, skipped, []) }
 
         switch budget.stratifyBy {
         case .operatorSubtype:
@@ -305,7 +325,7 @@ public struct MutationPlanner: Sendable {
                     operatorID: point.operatorID
                 )
             }
-            return (selection.selected, skipped)
+            return (selection.selected, skipped, [])
 
         case .subtype, nil:
             let selection = BudgetSelector.select(
@@ -330,8 +350,75 @@ public struct MutationPlanner: Sendable {
                     operatorID: point.operatorID
                 )
             }
-            return (selection.selected, skipped)
+            return (selection.selected, skipped, [])
         }
+    }
+
+    /// Budget Selection v2 (ADR-0007): outer stratum = operator ID, inner
+    /// stratum = the exact (original, replacement) text pair — the same two
+    /// dimensions `.operatorSubtype` already uses, so a v1-vs-v2 comparison
+    /// isolates the allocation algorithm as the only variable, not the
+    /// stratification dimensions too. Unlike v1's modes, this never takes
+    /// the "budget covers the whole pool" shortcut: `allocate` always runs,
+    /// so every selected mutant gets a real `InclusionReason` (B.7 requires
+    /// one for every selected mutant individually, not only when something
+    /// was dropped).
+    private func applyBudgetGateV2(
+        _ points: [MutationPoint],
+        _ skipped: [SkippedMutation],
+        maxMutants: Int,
+        budget: BudgetSettings
+    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {
+        var byOperator: [String: [MutationPoint]] = [:]
+        for point in points {
+            byOperator[point.operatorID, default: []].append(point)
+        }
+        let strata = byOperator.keys.sorted().map { operatorID in
+            BudgetStratumV2(id: operatorID, candidates: byOperator[operatorID] ?? [])
+        }
+
+        let result: [(point: MutationPoint, reason: InclusionReason)]
+        do {
+            result = try BudgetSelectorV2.allocate(
+                strata: strata,
+                limit: maxMutants,
+                seed: budget.seed,
+                minimumPerStratum: budget.minimumPerStratum ?? 1,
+                weight: budget.weight ?? [:],
+                innerDimension: Self.budgetV2SubtypeKey,
+                innerMinimumPerStratum: 1
+            )
+        } catch let error as BudgetSelectorV2Error {
+            throw PlannerError.budgetSelectionV2Failed(error)
+        }
+
+        let selectedIDs = Set(result.map { $0.point.id })
+        let dropped = points.filter { !selectedIDs.contains($0.id) }
+        let newSkipped = skipped + dropped.map { point in
+            SkippedMutation(
+                id: point.id,
+                file: point.file,
+                reason: .budgetExceeded,
+                detail: """
+                Not selected by Budget Selection v2 (seed \(budget.seed.map(String.init) ?? "none")) \
+                for a budget of \(maxMutants) mutants (\(points.count) were eligible).
+                """,
+                operatorID: point.operatorID
+            )
+        }
+
+        return (
+            result.map(\.point).sorted { $0.id < $1.id },
+            newSkipped,
+            result.map(\.reason)
+        )
+    }
+
+    /// v2's inner-dimension key: the exact (original, replacement) text
+    /// pair, mirroring v1's `BudgetSelector.stratumKey` minus the operator
+    /// prefix — v2's outer stratum ID already carries the operator.
+    private static func budgetV2SubtypeKey(_ point: MutationPoint) -> String {
+        "\(point.originalText)\u{1F}\(point.replacementText)"
     }
 
     // MARK: - Plan identity
