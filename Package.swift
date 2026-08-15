@@ -69,7 +69,7 @@ let package = Package(
         // into the C library itself — that library is linked into the
         // target *under test*, a different process entirely.
         .target(name: "MutationExecution", dependencies: ["MutationModel", "SwiftFrontend"]),
-        .target(name: "AppleBuildAdapters", dependencies: ["MutationExecution", "SwiftCoreOperators"]),
+        .target(name: "AppleBuildAdapters", dependencies: ["MutationExecution", "SwiftCoreOperators", "MutationPlanner"]),
 
         // MARK: Output
 
