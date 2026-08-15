@@ -1,7 +1,6 @@
+@testable import CLI
 import Foundation
 import Testing
-
-@testable import CLI
 
 /// `ToolVersion` is the single source of truth for `mutantkit --version`
 /// (wired via `MutantKit.configuration.version` in `MutantKit.swift`) and for

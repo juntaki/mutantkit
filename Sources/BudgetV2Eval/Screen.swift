@@ -42,7 +42,7 @@ private struct ScreenContext {
 }
 
 enum Screen {
-    static let roundCount = 3_000
+    static let roundCount = 3000
     static let minimumObservationsPerTercile = 30
     static let definednessImbalanceThreshold = 0.10
     static let effectSizeFloorFraction = 0.10

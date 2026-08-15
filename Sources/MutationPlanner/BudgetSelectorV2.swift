@@ -92,6 +92,7 @@ public struct PhaseSplit: Sendable, Equatable {
 }
 
 // MARK: - BudgetSelectorV2
+
 //
 // `InclusionReason`/`InclusionReason.ReasonCode` (B.7's audit-trail schema)
 // live in `MutationModel`, not here — `MutationPlan` persists one per
