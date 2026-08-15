@@ -31,6 +31,16 @@ struct StratumTestResult: Codable {
     let observedRange: Double?
 }
 
+/// Groups the four fields that identify which stratum test a `StratumTestResult`
+/// concerns — threaded together through `decide`/`notApplicableMarker` so those
+/// functions don't need one parameter per field.
+private struct ScreenContext {
+    let corpusName: String
+    let metric: Metric
+    let dimension: StratumTestResult.Dimension
+    let parent: String?
+}
+
 enum Screen {
     static let roundCount = 3_000
     static let minimumObservationsPerTercile = 30
@@ -67,7 +77,7 @@ enum Screen {
     ) throws -> [StratumTestResult] {
         let operatorIDs = outerStrata.map(\.id).sorted()
         guard operatorIDs.count >= 2 else {
-            return [notApplicableMarker(corpusName: corpusName, metric: metric, dimension: .outer, parent: nil)]
+            return [notApplicableMarker(ScreenContext(corpusName: corpusName, metric: metric, dimension: .outer, parent: nil))]
         }
 
         var weightShareByStratumRound: [String: [Double]] = Dictionary(uniqueKeysWithValues: operatorIDs.map { ($0, []) })
@@ -95,9 +105,10 @@ enum Screen {
             }
         }
 
+        let context = ScreenContext(corpusName: corpusName, metric: metric, dimension: .outer, parent: nil)
         return operatorIDs.map { stratumID in
             decide(
-                corpusName: corpusName, metric: metric, dimension: .outer, parent: nil, stratum: stratumID,
+                context, stratum: stratumID,
                 weightShares: weightShareByStratumRound[stratumID] ?? [], metricValues: metricValueByRound
             )
         }
@@ -115,15 +126,16 @@ enum Screen {
 
         for parent in byOperator.keys.sorted() {
             let parentCandidates = byOperator[parent] ?? []
+            let innerContext = ScreenContext(corpusName: corpusName, metric: metric, dimension: .inner, parent: parent)
             let innerIDs = Set(parentCandidates.map(Corpus.subtypeKey)).sorted()
             guard innerIDs.count >= 2 else {
-                results.append(notApplicableMarker(corpusName: corpusName, metric: metric, dimension: .inner, parent: parent))
+                results.append(notApplicableMarker(innerContext))
                 continue
             }
 
             let nParent = sDefaultIDsByOperator[parent]?.count ?? 0
             guard nParent > 0 else {
-                results.append(notApplicableMarker(corpusName: corpusName, metric: metric, dimension: .inner, parent: parent))
+                results.append(notApplicableMarker(innerContext))
                 continue
             }
 
@@ -162,7 +174,7 @@ enum Screen {
 
             for stratumID in innerIDs {
                 results.append(decide(
-                    corpusName: corpusName, metric: metric, dimension: .inner, parent: parent, stratum: stratumID,
+                    innerContext, stratum: stratumID,
                     weightShares: weightShareByStratumRound[stratumID] ?? [], metricValues: metricValueByRound
                 ))
             }
@@ -171,9 +183,10 @@ enum Screen {
         return results
     }
 
-    private static func notApplicableMarker(corpusName: String, metric: Metric, dimension: StratumTestResult.Dimension, parent: String?) -> StratumTestResult {
+    private static func notApplicableMarker(_ context: ScreenContext) -> StratumTestResult {
         StratumTestResult(
-            corpus: corpusName, metric: metric.rawValue, dimension: dimension, parent: parent, stratum: "<not-applicable>",
+            corpus: context.corpusName, metric: context.metric.rawValue, dimension: context.dimension,
+            parent: context.parent, stratum: "<not-applicable>",
             decision: .degeneratePass, pValue: nil, effectSize: nil, observedRange: nil
         )
     }
@@ -186,9 +199,12 @@ enum Screen {
     /// Terciles (protocol §5.5): ranked by weight share, formed from *all*
     /// rounds before any round is excluded for an undefined metric value.
     private static func decide(
-        corpusName: String, metric: Metric, dimension: StratumTestResult.Dimension, parent: String?, stratum: String,
-        weightShares: [Double], metricValues: [Int?]
+        _ context: ScreenContext, stratum: String, weightShares: [Double], metricValues: [Int?]
     ) -> StratumTestResult {
+        let corpusName = context.corpusName
+        let metric = context.metric
+        let dimension = context.dimension
+        let parent = context.parent
         let n = weightShares.count
         let order = (0 ..< n).sorted { weightShares[$0] < weightShares[$1] }
         let terciles = [

@@ -27,19 +27,19 @@ enum KruskalWallis {
         let pooled = groups.enumerated().flatMap { groupIndex, values in
             values.map { (groupIndex: groupIndex, value: $0) }
         }
-        let sorted = pooled.enumerated().sorted { $0.element.value < $1.element.value }
+        let order = pooled.indices.sorted { pooled[$0].value < pooled[$1].value }
 
         var ranks = [Double](repeating: 0, count: pooled.count)
         var index = 0
-        while index < sorted.count {
+        while index < order.count {
             var end = index
-            while end + 1 < sorted.count, sorted[end + 1].element.value == sorted[index].element.value {
+            while end + 1 < order.count, pooled[order[end + 1]].value == pooled[order[index]].value {
                 end += 1
             }
             // Average rank (1-based) across the tie block [index...end].
             let averageRank = Double(index + end + 2) / 2.0
             for position in index ... end {
-                ranks[sorted[position].offset] = averageRank
+                ranks[order[position]] = averageRank
             }
             index = end + 1
         }

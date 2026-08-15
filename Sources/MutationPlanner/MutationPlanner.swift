@@ -106,9 +106,12 @@ public struct MutationPlanner: Sendable {
         var inclusionReasons: [InclusionReason] = []
         (surviving, skipped) = applyConfidenceGate(surviving, skipped, resolution: resolution)
         (surviving, skipped) = applyDiffGate(surviving, skipped, diffScope: diffScope)
-        (surviving, skipped, inclusionReasons) = try applyBudgetGate(
+        let budgetGateResult = try applyBudgetGate(
             surviving, skipped, budget: configuration.execution.budget
         )
+        surviving = budgetGateResult.selected
+        skipped = budgetGateResult.skipped
+        inclusionReasons = budgetGateResult.inclusionReasons
 
         // Sorted so the plan file is byte-identical across runs; `mutations` is
         // sorted by `MutationPlan.init`, `skipped` is not.
@@ -281,26 +284,39 @@ public struct MutationPlanner: Sendable {
         return (split.inScope, skipped)
     }
 
-    /// Returns `(selected, skipped, budgetInclusionReasons)`. The third
-    /// element is only ever non-empty under `budget.selection: v2` — v1's
-    /// two modes produce no `InclusionReason` records (ADR-0007 B.7 is a v2
-    /// capability, not retrofitted onto v1).
+    /// The result of a budget gate: which mutations survived, the running
+    /// skip list with this gate's drops appended, and (v2 only) an
+    /// `InclusionReason` per selected mutant.
+    ///
+    /// `inclusionReasons` is only ever non-empty under `budget.selection: v2`
+    /// — v1's two modes produce no `InclusionReason` records (ADR-0007 B.7
+    /// is a v2 capability, not retrofitted onto v1).
+    private struct BudgetGateResult {
+        let selected: [MutationPoint]
+        let skipped: [SkippedMutation]
+        let inclusionReasons: [InclusionReason]
+    }
+
     private func applyBudgetGate(
         _ points: [MutationPoint],
         _ skipped: [SkippedMutation],
         budget: BudgetSettings
-    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {
+    ) throws -> BudgetGateResult {
         // `maxDurationSeconds` is not a planning input: the planner has no
         // measured baseline and no idea what a mutant costs. The executor stops
         // on that clock and records what it did not reach.
-        guard let maxMutants = budget.maxMutants else { return (points, skipped, []) }
+        guard let maxMutants = budget.maxMutants else {
+            return BudgetGateResult(selected: points, skipped: skipped, inclusionReasons: [])
+        }
         guard maxMutants > 0 else { throw PlannerError.invalidBudget(maxMutants: maxMutants) }
 
         if budget.selection == .v2 {
             return try applyBudgetGateV2(points, skipped, maxMutants: maxMutants, budget: budget)
         }
 
-        guard points.count > maxMutants else { return (points, skipped, []) }
+        guard points.count > maxMutants else {
+            return BudgetGateResult(selected: points, skipped: skipped, inclusionReasons: [])
+        }
 
         switch budget.stratifyBy {
         case .operatorSubtype:
@@ -325,7 +341,7 @@ public struct MutationPlanner: Sendable {
                     operatorID: point.operatorID
                 )
             }
-            return (selection.selected, skipped, [])
+            return BudgetGateResult(selected: selection.selected, skipped: skipped, inclusionReasons: [])
 
         case .subtype, nil:
             let selection = BudgetSelector.select(
@@ -350,7 +366,7 @@ public struct MutationPlanner: Sendable {
                     operatorID: point.operatorID
                 )
             }
-            return (selection.selected, skipped, [])
+            return BudgetGateResult(selected: selection.selected, skipped: skipped, inclusionReasons: [])
         }
     }
 
@@ -368,7 +384,7 @@ public struct MutationPlanner: Sendable {
         _ skipped: [SkippedMutation],
         maxMutants: Int,
         budget: BudgetSettings
-    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {
+    ) throws -> BudgetGateResult {
         var byOperator: [String: [MutationPoint]] = [:]
         for point in points {
             byOperator[point.operatorID, default: []].append(point)
@@ -407,10 +423,10 @@ public struct MutationPlanner: Sendable {
             )
         }
 
-        return (
-            result.map(\.point).sorted { $0.id < $1.id },
-            newSkipped,
-            result.map(\.reason)
+        return BudgetGateResult(
+            selected: result.map(\.point).sorted { $0.id < $1.id },
+            skipped: newSkipped,
+            inclusionReasons: result.map(\.reason)
         )
     }
 
