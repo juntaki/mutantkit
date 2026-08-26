@@ -119,7 +119,7 @@ struct SimulatorPoolCloningTests {
 
     private static func pool(_ simctl: FakeSimctl) -> SimulatorPool {
         SimulatorPool(
-            workingDirectory: Self.workingDirectory,
+            workingDirectory: workingDirectory,
             processRunner: { _, arguments, _, _ in
                 if arguments.contains("list") {
                     return Self.success(await simctl.listJSON())
@@ -490,4 +490,3 @@ struct SimulatorPoolCloningTests {
         #expect(ownerPID == ProcessInfo.processInfo.processIdentifier)
     }
 }
-

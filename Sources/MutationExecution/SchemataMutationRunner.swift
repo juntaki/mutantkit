@@ -1901,7 +1901,6 @@ public struct SchemataMutationRunner: Sendable {
         )
     }
 
-
     /// The chunk itself failed to build or produced no product hash, so no
     /// per-mutant test ever ran — but the source-level fact that this
     /// mutation was applied to the chunk's sources is still real and

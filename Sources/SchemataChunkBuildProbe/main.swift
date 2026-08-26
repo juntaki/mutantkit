@@ -41,6 +41,7 @@ let args = Array(CommandLine.arguments.dropFirst())
 guard args.count >= 4 else {
     fail("usage: SchemataChunkBuildProbe <schemata|isolated> <plan.json> <projectRoot> <scratchRoot> [options]")
 }
+
 let mode = args[0]
 let planPath = args[1]
 let projectRoot = URL(fileURLWithPath: args[2])

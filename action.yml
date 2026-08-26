@@ -12,8 +12,9 @@
 # own `shell`.
 name: "Setup MutantKit"
 description: >-
-  Installs the MutantKit Swift mutation-testing CLI from a signed release
-  tarball (no Homebrew, no repo checkout) and adds it to PATH.
+  Installs the MutantKit Swift mutation-testing CLI from a release tarball
+  with GitHub artifact attestation (Sigstore-backed build provenance, not
+  code signing) — no Homebrew, no repo checkout — and adds it to PATH.
 author: "juntaki"
 
 inputs:

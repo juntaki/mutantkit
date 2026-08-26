@@ -226,7 +226,8 @@ struct BenchmarkOrchestratorTests {
 
         let orchestrator = BenchmarkOrchestrator(
             mutantKit: FakeTool(
-                identity: BenchmarkToolIdentity(name: "mutantkit", version: "test"), recorder: CallRecorder(), reportBuilder: mutantKitReport
+                identity: BenchmarkToolIdentity(name: "mutantkit", version: "test"),
+                recorder: CallRecorder(), reportBuilder: mutantKitReport
             ),
             muter: FakeTool(
                 identity: BenchmarkToolIdentity(name: "muter", version: "test"), recorder: CallRecorder(), reportBuilder: muterReport

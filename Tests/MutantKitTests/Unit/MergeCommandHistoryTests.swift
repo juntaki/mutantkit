@@ -1,5 +1,5 @@
-import Foundation
 @testable import CLI
+import Foundation
 import MutationModel
 import MutationPlanner
 import Reporting

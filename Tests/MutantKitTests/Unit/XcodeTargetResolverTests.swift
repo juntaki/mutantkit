@@ -1,5 +1,5 @@
-import Foundation
 @testable import AppleBuildAdapters
+import Foundation
 import Testing
 
 /// Pins `XcodeTargetResolver`'s `project.pbxproj`-parsing half — the piece

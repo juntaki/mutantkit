@@ -576,7 +576,7 @@ enum SchemataRunOrchestration {
     static func plannerFallbackReasonCounts(_ reasons: [SchemataUnsupportedReason]) -> [String: Int] {
         var counts: [String: Int] = [:]
         for reason in reasons {
-            let key: String = switch reason {
+            let key = switch reason {
             case .resultBuilderBody: "resultBuilderBody"
             case .typeVarianceUnproven: "typeVarianceUnproven"
             case .processStartRequired: "processStartRequired"

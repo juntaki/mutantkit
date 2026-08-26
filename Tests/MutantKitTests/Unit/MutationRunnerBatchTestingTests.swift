@@ -141,6 +141,7 @@ struct MutationRunnerBatchTestingTests {
     }
 
     // MARK: - Native XCTest timeout containment (Gate 3 Phase H3)
+
     //
     // This is the actual default, non-wave batching path (`testOneBatch`,
     // dispatched whenever `earlyAbortSelectedTests` is left at its default
@@ -185,7 +186,9 @@ struct MutationRunnerBatchTestingTests {
 
     // MARK: - Batched-result ambiguity recovery (Gate 3 Phase H15C)
 
-    @Test("A mutant missing from the batch's returned results is recovered via a fresh, individual standalone reverify, not dropped or left infrastructureFailure")
+    @Test(
+        "A mutant missing from a batch's results is recovered via a fresh, individual reverify, not dropped or left infrastructureFailure"
+    )
     func missingFromBatchResultsIsRecoveredStandalone() async throws {
         // batchOutcomeOverrides intentionally covers only mutant 0 — mutant
         // 1 is batchable but the fake never reports a result for it, the

@@ -26,26 +26,43 @@ struct RawThroughput: AsyncParsableCommand {
         abstract: "Phase B3: rotation-scheduled raw throughput across an already-materialized real project."
     )
 
-    @Option(name: .long, help: "Real project checkout directory (already cloned, at the exact commit under measurement).") var projectDirectory: String
+    @Option(name: .long, help: "Real project checkout directory (already cloned, at the exact commit under measurement).")
+    var projectDirectory: String
     @Option(name: .long, help: "Project identifier, for the printed report only.") var projectID: String
     @Option(name: .long, help: "The commit this checkout is at.") var repositoryCommit: String
     @Option(name: .long, help: "Path to the mutantkit binary. Omit to skip MutantKit.") var mutantkitBinary: String?
     @Option(name: .long, help: "Path to the muter binary. Omit to skip Muter.") var muterBinary: String?
     @Option(name: .long, help: "Path to the swift-mutation-testing binary. Omit to skip it.") var swiftMutationTestingBinary: String?
-    @Option(name: .long, help: "Restrict MutantKit's own generated config to this sources.include glob (repeatable).") var mutantkitSourceInclude: [String] = []
+    @Option(name: .long, help: "Restrict MutantKit's own generated config to this sources.include glob (repeatable).")
+    var mutantkitSourceInclude: [String] = []
     @Option(
         name: .long,
-        help: "B3.4: pin MutantKit's execution.workers explicitly (e.g. 1 for an ENGINE/CONTROLLED run). Omit to leave the real CLI's own auto default (this repo's own shipped PRACTICAL/DEFAULT profile is workers: 2, set via --mutantkit-workers 2, not this flag's own omission)."
+        help: ArgumentHelp(
+            "B3.4: pin MutantKit's execution.workers explicitly (e.g. 1 for an ENGINE/CONTROLLED run)."
+                + " Omit to leave the real CLI's own auto default (this repo's own shipped PRACTICAL/DEFAULT"
+                + " profile is workers: 2, set via --mutantkit-workers 2, not this flag's own omission)."
+        )
     ) var mutantkitWorkers: Int?
     @Option(name: .long, help: "Restrict Muter to only these files, --files-to-mutate (repeatable).") var muterFilesToMutate: [String] = []
-    @Option(name: .long, help: "Restrict swift-mutation-testing to this single --sources-path.") var swiftMutationTestingSourcesPath: String?
-    @Option(name: .long, help: "swift-mutation-testing --exclude glob(s) (repeatable) — --sources-path is a directory only; excluding every sibling file is the real way to scope it to one file.") var swiftMutationTestingExclude: [String] = []
+    @Option(name: .long, help: "Restrict swift-mutation-testing to this single --sources-path.")
+    var swiftMutationTestingSourcesPath: String?
+    @Option(
+        name: .long,
+        help: ArgumentHelp(
+            "swift-mutation-testing --exclude glob(s) (repeatable) — --sources-path is a directory only;"
+                + " excluding every sibling file is the real way to scope it to one file."
+        )
+    ) var swiftMutationTestingExclude: [String] = []
     @Option(name: .long, help: "How many full rotations to run. B0's own contract specifies a minimum of 5.") var repetitions: Int = 5
     @Option(name: .long, help: "Per-invocation timeout, seconds.") var timeoutSeconds: Double = 3600
     @Option(name: .long, help: "Where to write the raw JSON result.") var output: String
     @Option(
         name: .long,
-        help: "B3.6: tool name(s) (repeatable) for which 0 discovered mutants is the fixture-documented, expected, valid result for this exact scope — e.g. a deliberately mutation-free file. Every other tool still fails closed on an unexplained 0."
+        help: ArgumentHelp(
+            "B3.6: tool name(s) (repeatable) for which 0 discovered mutants is the fixture-documented,"
+                + " expected, valid result for this exact scope — e.g. a deliberately mutation-free file."
+                + " Every other tool still fails closed on an unexplained 0."
+        )
     ) var expectZeroMutants: [String] = []
 
     func run() async throws {
@@ -64,26 +81,12 @@ struct RawThroughput: AsyncParsableCommand {
             directory: URL(fileURLWithPath: projectDirectory)
         )
 
-        var tools: [(name: String, tool: any MutationBenchmarkTool)] = []
-        if let mutantkitBinary {
-            tools.append(("mutantkit", MutantKitBenchmarkTool(
-                binaryURL: URL(fileURLWithPath: mutantkitBinary), toolchainProfile: profile,
-                sourceInclude: mutantkitSourceInclude.isEmpty ? nil : mutantkitSourceInclude, workers: mutantkitWorkers
-            )))
-        }
-        if let muterBinary {
-            tools.append(("muter", MuterBenchmarkTool(
-                binaryURL: URL(fileURLWithPath: muterBinary), toolchainProfile: profile, filesToMutate: muterFilesToMutate
-            )))
-        }
-        if let swiftMutationTestingBinary {
-            tools.append(("swift-mutation-testing", SwiftMutationTestingBenchmarkTool(
-                binaryURL: URL(fileURLWithPath: swiftMutationTestingBinary), toolchainProfile: profile,
-                sourcesPath: swiftMutationTestingSourcesPath, excludePatterns: swiftMutationTestingExclude
-            )))
-        }
+        let tools = resolveTools(profile: profile)
         guard !tools.isEmpty else {
-            print("raw-throughput: no tool binaries given (at least one of --mutantkit-binary/--muter-binary/--swift-mutation-testing-binary is required).")
+            print(
+                "raw-throughput: no tool binaries given (at least one of"
+                    + " --mutantkit-binary/--muter-binary/--swift-mutation-testing-binary is required)."
+            )
             throw ExitCode.failure
         }
 
@@ -107,6 +110,37 @@ struct RawThroughput: AsyncParsableCommand {
             timeoutSeconds: timeoutSeconds, zeroMutantsExpected: zeroMutantsExpected
         )
 
+        Self.printSummaries(summaries)
+        try Self.writeReport(
+            summaries, projectID: projectID, repositoryCommit: repositoryCommit, repetitions: repetitions,
+            mutantKitConcurrencyProfile: mutantkitBinary != nil ? mutantKitConcurrencyLabel : nil, output: output
+        )
+        _ = repetitionResults
+    }
+
+    private func resolveTools(profile: BenchmarkToolchainProfile) -> [(name: String, tool: any MutationBenchmarkTool)] {
+        var tools: [(name: String, tool: any MutationBenchmarkTool)] = []
+        if let mutantkitBinary {
+            tools.append(("mutantkit", MutantKitBenchmarkTool(
+                binaryURL: URL(fileURLWithPath: mutantkitBinary), toolchainProfile: profile,
+                sourceInclude: mutantkitSourceInclude.isEmpty ? nil : mutantkitSourceInclude, workers: mutantkitWorkers
+            )))
+        }
+        if let muterBinary {
+            tools.append(("muter", MuterBenchmarkTool(
+                binaryURL: URL(fileURLWithPath: muterBinary), toolchainProfile: profile, filesToMutate: muterFilesToMutate
+            )))
+        }
+        if let swiftMutationTestingBinary {
+            tools.append(("swift-mutation-testing", SwiftMutationTestingBenchmarkTool(
+                binaryURL: URL(fileURLWithPath: swiftMutationTestingBinary), toolchainProfile: profile,
+                sourcesPath: swiftMutationTestingSourcesPath, excludePatterns: swiftMutationTestingExclude
+            )))
+        }
+        return tools
+    }
+
+    private static func printSummaries(_ summaries: [RawThroughputBenchmark.ToolSummary]) {
         for summary in summaries {
             print("--- \(summary.tool) ---")
             print("  wall (s) by repetition: \(summary.wallSecondsByRepetition.map { String(format: "%.1f", $0) })")
@@ -117,30 +151,37 @@ struct RawThroughput: AsyncParsableCommand {
                 print("  ⚠️ INVALID (B3.6): \(violation.description)")
             }
         }
+    }
 
-        struct Report: Encodable {
-            let projectID: String
-            let repositoryCommit: String
-            let repetitions: Int
-            /// B3.4: which concurrency question this specific MutantKit
-            /// measurement answers — `nil` when MutantKit did not run at
-            /// all this invocation. Never compared against Muter's or
-            /// swift-mutation-testing's own numbers as if it meant the
-            /// same thing; those tools have no equivalent knob here.
-            let mutantKitConcurrencyProfile: String?
-            let summaries: [SummaryReport]
-        }
-        struct SummaryReport: Encodable {
-            let tool: String
-            let wallSecondsByRepetition: [Double]
-            let medianWallSeconds: Double?
-            let discoveredCount: Int?
-            let medianMutantsPerSecond: Double?
-            let violations: [String]
-        }
+    private struct Report: Encodable {
+        let projectID: String
+        let repositoryCommit: String
+        let repetitions: Int
+        /// B3.4: which concurrency question this specific MutantKit
+        /// measurement answers — `nil` when MutantKit did not run at
+        /// all this invocation. Never compared against Muter's or
+        /// swift-mutation-testing's own numbers as if it meant the
+        /// same thing; those tools have no equivalent knob here.
+        let mutantKitConcurrencyProfile: String?
+        let summaries: [SummaryReport]
+    }
+
+    private struct SummaryReport: Encodable {
+        let tool: String
+        let wallSecondsByRepetition: [Double]
+        let medianWallSeconds: Double?
+        let discoveredCount: Int?
+        let medianMutantsPerSecond: Double?
+        let violations: [String]
+    }
+
+    private static func writeReport(
+        _ summaries: [RawThroughputBenchmark.ToolSummary], projectID: String, repositoryCommit: String, repetitions: Int,
+        mutantKitConcurrencyProfile: String?, output: String
+    ) throws {
         let report = Report(
             projectID: projectID, repositoryCommit: repositoryCommit, repetitions: repetitions,
-            mutantKitConcurrencyProfile: mutantkitBinary != nil ? mutantKitConcurrencyLabel : nil,
+            mutantKitConcurrencyProfile: mutantKitConcurrencyProfile,
             summaries: summaries.map {
                 SummaryReport(
                     tool: $0.tool, wallSecondsByRepetition: $0.wallSecondsByRepetition, medianWallSeconds: $0.medianWallSeconds,
@@ -153,7 +194,6 @@ struct RawThroughput: AsyncParsableCommand {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(report).write(to: URL(fileURLWithPath: output))
         print("Wrote \(output).")
-        _ = repetitionResults
     }
 }
 
@@ -180,7 +220,8 @@ struct BuildCorpus: ParsableCommand {
     /// (Phase C13) for why. Omit when comparing against a checkout that
     /// no longer exists; falls back to Muter's own bare basename in that
     /// case, exactly as the underlying function already does.
-    @Option(name: .long, help: "Real project checkout directory, for resolving Muter's own real relative paths.") var projectDirectory: String?
+    @Option(name: .long, help: "Real project checkout directory, for resolving Muter's own real relative paths.")
+    var projectDirectory: String?
     @Option(name: .long, help: "Where to write the corpus JSON.") var output: String
 
     func run() throws {
@@ -319,7 +360,10 @@ struct Run: AsyncParsableCommand {
     var muterOperator: [String] = []
     @Option(name: .long, help: "Restrict swift-mutation-testing to this single --sources-path root directory (its own scoping mechanism).")
     var swiftMutationTestingSourcesPath: String?
-    @Option(name: .long, help: "Restrict swift-mutation-testing to only these operator IDs (its own rawValues, e.g. RelationalOperatorReplacement).")
+    @Option(
+        name: .long,
+        help: "Restrict swift-mutation-testing to only these operator IDs (its own rawValues, e.g. RelationalOperatorReplacement)."
+    )
     var swiftMutationTestingOperator: [String] = []
     @Option(name: .long, help: ArgumentHelp(Self.modesHelp))
     var modes: [String] = []

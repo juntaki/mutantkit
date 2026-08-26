@@ -223,7 +223,7 @@ struct ResultNormalizerTests {
     private func makeMutant(
         path: String = "Widget.swift", start: Int = 10, end: Int = 14, original: String = "true", replacement: String = "false",
         family: String = "boolean-literal", bucket: NormalizedMutant.Bucket = .killed, provenActive: Bool? = nil,
-        line: Int = 0, column: Int = 0
+        line: Int = 0, column: Int = 0, nativeID: String? = nil
     ) -> NormalizedMutant {
         NormalizedMutant(
             identity: CrossToolMutationIdentity(
@@ -231,10 +231,20 @@ struct ResultNormalizerTests {
                 originalTextHash: ResultNormalizer.sha256Hex(original), replacementTextHash: ResultNormalizer.sha256Hex(replacement),
                 normalizedOperatorFamily: family, line: line, column: column
             ),
-            bucket: bucket, provenActive: provenActive
+            bucket: bucket, provenActive: provenActive, nativeID: nativeID
         )
     }
+}
 
+// MARK: - Cross-tool matching + relativePath resolution
+
+//
+// Split into its own extension (same file, same type — `makeMutant` above
+// stays visible via same-file `private` access) purely to keep each
+// individual type body under SwiftLint's `type_body_length` limit; this
+// mirrors the existing split pattern already used elsewhere in this test
+// suite (e.g. `SimulatorPoolLifecycleTests`), not a behavior change.
+extension ResultNormalizerTests {
     @Test("The same edit, same operator family, matches exactly")
     func exactMatch() {
         let mk = makeMutant(provenActive: true)
@@ -301,6 +311,56 @@ struct ResultNormalizerTests {
         #expect(comparison.muterOnly.isEmpty)
     }
 
+    /// Regression test for a real bug: the previous implementation took
+    /// `candidates.first` from Muter's own per-key candidates without
+    /// ever tracking which one was used, then marked the *whole key*
+    /// matched — so if Muter itself reported two distinct entries at one
+    /// key, the second vanished from every category (not comparable, not
+    /// `muterOnly` either), rather than surfacing as real, reportable
+    /// evidence. With only one MutantKit candidate at that key, exactly
+    /// one Muter candidate can be paired; the other must appear in
+    /// `muterOnly`, not disappear.
+    @Test("A second, unpaired Muter candidate at an ambiguous key surfaces in muterOnly, never silently absorbed")
+    func secondMuterCandidateAtSameKeyIsNeverSilentlyAbsorbed() {
+        let mk = makeMutant(replacement: ">=", line: 29, column: 18)
+        let muterA = makeMutant(original: "", replacement: "", line: 29, column: 18)
+        let muterB = makeMutant(original: "", replacement: "", line: 29, column: 18)
+        let comparison = ResultNormalizer.match(mutantKit: [mk], muter: [muterA, muterB])
+        #expect(comparison.exactlyComparable.count == 1, "exactly one Muter candidate can be paired with the one MutantKit candidate")
+        #expect(comparison.muterOnly.count == 1, "the second, unpaired Muter candidate must surface here, not vanish")
+    }
+
+    /// Regression test for a real bug an independent review found in an
+    /// earlier draft of this same fix: pairing by raw input-array order
+    /// (`muterCandidates[i % muterCandidates.count]` over whatever order
+    /// each report happened to list its candidates in) could accidentally
+    /// pair two *different*-family candidates into `approximatelyComparable`
+    /// while leaving a real same-family match unpaired — purely an
+    /// artifact of array order, never a promised property of any
+    /// `normalize*Report` output. Two MutantKit candidates (relational,
+    /// logical) and two Muter candidates (logical, relational) — deliberately
+    /// listed in the *opposite* order on each side — must still produce
+    /// two `exactlyComparable` pairs, not one exact and one approximate.
+    @Test("Same-family candidates on both sides pair exactly regardless of each report's own input order")
+    func sameFamilyCandidatesPairExactlyRegardlessOfInputOrder() {
+        let mkRelational = makeMutant(family: "relational-operator", line: 5, column: 1, nativeID: "mk_rel")
+        let mkLogical = makeMutant(family: "logical-connector", line: 5, column: 1, nativeID: "mk_log")
+        // Deliberately reversed relative to the MutantKit list above.
+        let muterLogical = makeMutant(original: "", replacement: "", family: "logical-connector", line: 5, column: 1, nativeID: "m_log")
+        let muterRelational = makeMutant(
+            original: "", replacement: "", family: "relational-operator", line: 5, column: 1, nativeID: "m_rel"
+        )
+
+        let comparison = ResultNormalizer.match(mutantKit: [mkRelational, mkLogical], muter: [muterLogical, muterRelational])
+        #expect(comparison.exactlyComparable.count == 2, "both same-family pairs must be found regardless of input order")
+        #expect(
+            comparison.approximatelyComparable.isEmpty,
+            "no pairing should ever be forced into a family mismatch when a same-family match exists"
+        )
+        #expect(comparison.muterOnly.isEmpty)
+        #expect(comparison.mutantKitOnly.isEmpty)
+    }
+
     // MARK: - Muter relative-path resolution (Phase C13)
 
     /// Regression test for a second, compounding reason the real
@@ -336,7 +396,9 @@ struct ResultNormalizerTests {
 
     @Test("relativePath falls back to the bare basename when projectDirectory is nil")
     func relativePathFallsBackWhenNoProjectDirectory() {
-        let resolved = ResultNormalizer.relativePath(forMuterFilePath: "/tmp/x_mutated/Sources/A.swift", fallback: "A.swift", projectDirectory: nil)
+        let resolved = ResultNormalizer.relativePath(
+            forMuterFilePath: "/tmp/x_mutated/Sources/A.swift", fallback: "A.swift", projectDirectory: nil
+        )
         #expect(resolved == "A.swift")
     }
 
@@ -410,7 +472,9 @@ struct ResultNormalizerTests {
         // on disk at the right relative path, never its content, so this
         // stays a fast, offline, no-network test.
         let stub = FileManager.default.temporaryDirectory.appendingPathComponent("swift-numerics-stub-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: stub.appendingPathComponent("Sources/IntegerUtilities"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: stub.appendingPathComponent("Sources/IntegerUtilities"), withIntermediateDirectories: true
+        )
         try Data().write(to: stub.appendingPathComponent("Sources/IntegerUtilities/GCD.swift"))
         defer { try? FileManager.default.removeItem(at: stub) }
 
@@ -426,7 +490,14 @@ struct ResultNormalizerTests {
         #expect(comparison.mutantKitOnly.isEmpty)
         #expect(comparison.muterOnly.isEmpty)
     }
+}
 
+// MARK: - Muter/swift-mutation-testing report parsing + median
+
+//
+// Same rationale as the split above: keeps this extension's own body under
+// the `type_body_length` limit too.
+extension ResultNormalizerTests {
     // MARK: - swift-mutation-testing report.json (Phase C13)
 
     /// Real shape confirmed against `ericodx/swift-mutation-testing`'s own
@@ -563,6 +634,39 @@ struct ResultNormalizerTests {
         #expect(comparison.exactlyComparable.count == 1)
         #expect(comparison.mutantKitOnly.isEmpty)
         #expect(comparison.muterOnly.isEmpty)
+    }
+
+    // MARK: - Operator family mapping (arithmetic-operator)
+
+    /// Regression test for a real gap: this repo's own doc comment used
+    /// to claim swift-mutation-testing's `ArithmeticOperatorReplacement`
+    /// had no MutantKit equivalent — false, MutantKit ships
+    /// `swift.core.arithmetic-operator-replacement`. Both sides must map
+    /// onto the same shared family so a real, comparable operator is
+    /// never silently dropped from cross-tool consideration.
+    @Test("MutantKit's and swift-mutation-testing's arithmetic operators map to the same shared family")
+    func arithmeticOperatorFamilyIsSharedAcrossTools() {
+        #expect(ResultNormalizer.mutantKitOperatorFamily("swift.core.arithmetic-operator-replacement") == "arithmetic-operator")
+        #expect(ResultNormalizer.swiftMutationTestingOperatorFamily("ArithmeticOperatorReplacement") == "arithmetic-operator")
+    }
+
+    /// End-to-end proof the mapping actually connects the two tools' real
+    /// mutants (each side's family derived the same way a real
+    /// `normalize*Report` call derives it — from the tool's own raw
+    /// operator ID — not hand-set to the same string), not just the two
+    /// mapping functions in isolation.
+    @Test("A MutantKit arithmetic mutation and a swift-mutation-testing arithmetic mutation at the same position match exactly")
+    func arithmeticMutationsMatchAcrossTools() {
+        let mk = makeMutant(
+            path: "A.swift", start: 0, end: 1, original: "+", replacement: "-",
+            family: ResultNormalizer.mutantKitOperatorFamily("swift.core.arithmetic-operator-replacement"), line: 1, column: 5
+        )
+        let smt = makeMutant(
+            path: "A.swift", start: 0, end: 1, original: "+", replacement: "-",
+            family: ResultNormalizer.swiftMutationTestingOperatorFamily("ArithmeticOperatorReplacement"), line: 1, column: 5
+        )
+        let comparison = ResultNormalizer.match(mutantKit: [mk], comparedAgainst: [smt])
+        #expect(comparison.exactlyComparable.count == 1)
     }
 
     // MARK: - Median

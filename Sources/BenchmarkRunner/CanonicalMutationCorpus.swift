@@ -166,41 +166,10 @@ public enum CanonicalMutationCorpusBuilder {
     public static func build(
         projectID: String, repositoryCommit: String, mutantsByTool: [String: [NormalizedMutant]], now: Date = Date()
     ) -> BuildResult {
-        struct Key: Hashable {
-            let relativePath: String
-            let line: Int
-            let column: Int
-            let operatorFamily: String
-        }
+        typealias Key = CanonicalMutationMatcher.FamilyKey
         struct TextPair: Hashable {
             let original: String
             let replacement: String
-        }
-        // The fixed, known canonical family vocabulary every real
-        // `normalize*Report` function's own `*OperatorFamily` mapping
-        // function emits (`ResultNormalizer.swift`) — used below to
-        // restrict casing normalization to *confirmed* shared values
-        // only. An *unmapped* operator ID deliberately falls through to
-        // its own tool-native raw ID rather than a shared bucket
-        // (`ResultNormalizer`'s own doc comment: "an unrecognized
-        // operator never silently 'matches' something it is not actually
-        // equivalent to") — case is significant there, since two
-        // different tools' own distinct raw IDs could otherwise collide
-        // by a pure casing coincidence (e.g. `FooMutation` vs.
-        // `foomutation`) and enter the corpus as a false cross-tool
-        // match. Real gap found by Codex review of this exact
-        // normalization before it was allowed to ship.
-        let knownCanonicalFamilies: Set<String> = [
-            "boolean-literal", "logical-connector", "relational-operator", "remove-side-effects", "ternary", "unary-not"
-        ]
-        func key(_ mutant: NormalizedMutant) -> Key {
-            let rawFamily = mutant.identity.normalizedOperatorFamily
-            let normalizedFamily = rawFamily.trimmingCharacters(in: .whitespaces).lowercased()
-            let family = knownCanonicalFamilies.contains(normalizedFamily) ? normalizedFamily : rawFamily
-            return Key(
-                relativePath: mutant.identity.relativePath, line: mutant.identity.line,
-                column: mutant.identity.column, operatorFamily: family
-            )
         }
 
         // Tool names are normalized (trimmed, lowercased) before being
@@ -254,21 +223,15 @@ public enum CanonicalMutationCorpusBuilder {
         //    is honest. This key is excluded from this tool's index
         //    entirely — fail closed, never resolved by guessing — and
         //    counted in `ambiguousCounts` instead.
+        // Delegates the actual per-tool indexing/ambiguity-resolution to
+        // `CanonicalMutationMatcher`, the one shared primitive
+        // `MatchedMutantLane` and `ResultNormalizer.match` now also use —
+        // this file used to carry its own separate copy of exactly this
+        // logic.
         var byToolByKey: [String: [Key: NormalizedMutant]] = [:]
         var ambiguousCounts: [String: Int] = [:]
         for (tool, mutants) in normalizedMutantsByTool {
-            var candidatesByKey: [Key: [NormalizedMutant]] = [:]
-            for mutant in mutants { candidatesByKey[key(mutant), default: []].append(mutant) }
-            var indexed: [Key: NormalizedMutant] = [:]
-            var ambiguousKeyCount = 0
-            for (mutantKey, candidates) in candidatesByKey {
-                let distinctTexts = Set(candidates.map { TextPair(original: $0.identity.originalText, replacement: $0.identity.replacementText) })
-                if distinctTexts.count > 1 {
-                    ambiguousKeyCount += 1
-                    continue
-                }
-                indexed[mutantKey] = candidates.sorted { ($0.nativeID ?? "") < ($1.nativeID ?? "") }.first
-            }
+            let (indexed, ambiguousKeyCount) = CanonicalMutationMatcher.indexedByFamilyKey(mutants)
             byToolByKey[tool] = indexed
             ambiguousCounts[tool] = ambiguousKeyCount
         }

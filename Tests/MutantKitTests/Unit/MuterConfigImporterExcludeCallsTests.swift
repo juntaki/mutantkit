@@ -1,6 +1,6 @@
 import Foundation
-import MuterCompatibility
 import MutationModel
+import MuterCompatibility
 import Testing
 
 /// `MuterConfigImporter` had no dedicated test coverage before this file —

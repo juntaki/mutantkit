@@ -68,8 +68,13 @@ Concretely:
 - **A stale anchor is a diagnosis, not a corruption.** If the file changed,
   you get `notApplied` with a precise reason. MutantKit never relocates an edit to
   a nearby offset by guesswork, and never lets an unknown become `survived`.
-- **Test results come from `.xcresult`**, not from regexes over stdout. Output
-  formats change; structured results do not lie about whether a test failed.
+- **Test results come from structured output, not from regexes over stdout.**
+  For Xcode, verdict evidence comes from `.xcresult`. For SwiftPM/macOS,
+  MutantKit uses `swift test`'s exit status as the contract for the verdict,
+  plus `--xunit-output`'s structured xUnit report for counts and failing-test
+  names. Either way, it does not infer verdicts by regex-matching console
+  output, which lies whenever a test framework's own console formatting
+  changes.
 - **MutantKit owns the timeout, and reclaims what it starts.** A mutant that deletes
   a `continuation.resume()` hangs forever. MutantKit kills the process group *and*
   every descendant it can find by PID — because killing the group is not enough
@@ -103,7 +108,7 @@ For contributors, or platforms the prebuilt binary does not cover yet (Intel
 Macs, CI images without Homebrew). Requires Swift 6.0+.
 
 ```bash
-git clone <this repo> && cd mutantkit
+git clone https://github.com/juntaki/mutantkit.git && cd mutantkit
 swift build -c release
 # binary at .build/release/mutantkit
 ```

@@ -548,7 +548,7 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         output.split(separator: "\n").compactMap { rawLine -> TestIdentifier? in
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty, let dotIndex = line.firstIndex(of: ".") else { return nil }
-            let target = String(line[line.startIndex..<dotIndex])
+            let target = String(line[line.startIndex ..< dotIndex])
             let qualifiedName = String(line[line.index(after: dotIndex)...])
             guard !target.isEmpty, qualifiedName.contains("/") else { return nil }
             return TestIdentifier(target: target, qualifiedName: qualifiedName)

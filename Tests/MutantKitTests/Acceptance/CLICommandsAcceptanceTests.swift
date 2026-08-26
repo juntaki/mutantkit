@@ -443,9 +443,11 @@ struct CLICommandsAcceptanceTests {
         #expect(warned.output.contains("Production profile"))
         #expect(warned.output.contains("simulatorPool: true"))
 
+        let tunedExecutionBlock = "execution:\n  strategy: isolated\n  workers: 2\n  simulatorPool: true"
+            + "\n  incrementalBuild: true\n  selectCoveringTests: true"
         let withProfile = withoutProfile.replacingOccurrences(
             of: "execution:\n  strategy: isolated",
-            with: "execution:\n  strategy: isolated\n  workers: 2\n  simulatorPool: true\n  incrementalBuild: true\n  selectCoveringTests: true"
+            with: tunedExecutionBlock
         )
         try Data(withProfile.utf8).write(to: dir.appendingPathComponent("mutantkit.yml"), options: .atomic)
 

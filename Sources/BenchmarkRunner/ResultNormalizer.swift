@@ -11,17 +11,19 @@ import Foundation
 /// real Muter calibration run found **zero** matched mutants despite
 /// running the identical corpus, file, and operator. Root cause, found by
 /// reading Muter's own real `--format json` output directly rather than
-/// its schema on paper: Muter's `AppliedMutationOperator.CodingKeys`
-/// (real source: `Sources/muterCore/TestReporting/MuterTestReport.swift`)
-/// explicitly excludes `mutationSnapshot` from encoding, at every version
-/// — a real report never carries the mutated text at all, so
-/// `originalTextHash`/`replacementTextHash` (this identity's *original*
-/// match key, before this fix) hash an empty string for literally every
-/// Muter mutant, every run, unconditionally. That is not a flaky
-/// intermittent gap; matching on those fields alone was structurally
-/// guaranteed to match nothing, forever, regardless of what corpus or
-/// operator was compared — confirmed by inspecting a real captured
-/// calibration report (`Benchmarks/results/.../stage1-calibration/raw/
+/// its schema on paper: Muter `16`'s `AppliedMutationOperator.CodingKeys`
+/// (real source: `Sources/muterCore/TestReporting/MuterTestReport.swift`
+/// at that version/commit) explicitly excludes `mutationSnapshot` from
+/// encoding — a real report from that version never carries the mutated
+/// text at all, so `originalTextHash`/`replacementTextHash` (this
+/// identity's *original* match key, before this fix) hash an empty
+/// string for every Muter mutant this program has observed. This is
+/// scoped to the verified version deliberately: it is not a claim about
+/// every past or future Muter release, only about the one actually read.
+/// Matching on those fields alone was structurally guaranteed to match
+/// nothing on that version, regardless of what corpus or operator was
+/// compared — confirmed by inspecting a real captured calibration report
+/// (`Benchmarks/results/.../stage1-calibration/raw/
 /// swift-numerics-muter-cold-0.json`), which indeed has no snapshot text
 /// anywhere.
 ///
@@ -260,6 +262,13 @@ public enum ResultNormalizer {
         // already map to `"remove-side-effects"` below, even though all
         // three tools implement essentially the same operator.
         case "swift.core.side-effect-call-removal": "remove-side-effects"
+        // Added after a real review found this mapping missing entirely —
+        // MutantKit does ship this operator (`Sources/SwiftCoreOperators/
+        // ArithmeticOperatorReplacementOperator.swift`, documented in the
+        // public README), so a swift-mutation-testing
+        // `ArithmeticOperatorReplacement` mutant was being silently
+        // dropped from cross-tool consideration rather than compared.
+        case "swift.core.arithmetic-operator-replacement": "arithmetic-operator"
         default: operatorID
         }
     }
@@ -280,9 +289,12 @@ public enum ResultNormalizer {
     /// `mutantKitOperatorFamily`/`muterOperatorFamily` already use, so a
     /// mutation this tool and MutantKit both implement can land in
     /// `exactlyComparable` rather than `approximatelyComparable`.
-    /// `ArithmeticOperatorReplacement`/`NegateConditional` have no
-    /// MutantKit or Muter equivalent in this catalog today, so they fall
-    /// through to their own raw name — never a false shared family.
+    /// `ArithmeticOperatorReplacement` maps onto MutantKit's own
+    /// `swift.core.arithmetic-operator-replacement` (a real review found
+    /// this repo's own doc comment previously, incorrectly, claimed no
+    /// MutantKit equivalent existed). `NegateConditional` still has no
+    /// MutantKit or Muter equivalent in this catalog today, so it falls
+    /// through to its own raw name — never a false shared family.
     public static func swiftMutationTestingOperatorFamily(_ mutatorName: String) -> String {
         switch mutatorName {
         case "RelationalOperatorReplacement": "relational-operator"
@@ -290,6 +302,7 @@ public enum ResultNormalizer {
         case "LogicalOperatorReplacement": "logical-connector"
         case "SwapTernary": "ternary"
         case "RemoveSideEffects": "remove-side-effects"
+        case "ArithmeticOperatorReplacement": "arithmetic-operator"
         default: mutatorName
         }
     }
@@ -492,7 +505,16 @@ public enum ResultNormalizer {
         default: .other
         }
     }
+}
 
+// MARK: - Muter/swift-mutation-testing report parsing
+
+//
+// Split into its own extension (same file, same type) purely to keep
+// each individual type body under SwiftLint's `type_body_length` limit —
+// not a behavior change. Mirrors the same split pattern already used
+// elsewhere in this codebase's own test suites.
+public extension ResultNormalizer {
     // MARK: - Muter report.json
 
     /// Muter's real JSON reporter shape (`Sources/muterCore/TestReporting/
@@ -518,12 +540,12 @@ public enum ResultNormalizer {
     /// baseline-vs-mutant separation). Observable external boundary only,
     /// per this benchmark's own rule of never distributing a total by
     /// guesswork.
-    public struct MuterPhaseTimings: Sendable, Equatable {
+    struct MuterPhaseTimings: Sendable, Equatable {
         public let totalWallSeconds: Double?
         public let operatorCounts: [String: Int]
     }
 
-    public static func muterPhaseTimings(_ data: Data) throws -> MuterPhaseTimings {
+    static func muterPhaseTimings(_ data: Data) throws -> MuterPhaseTimings {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ReportParsingError.malformedReport("top level is not a JSON object")
         }
@@ -567,7 +589,7 @@ public enum ResultNormalizer {
     /// comment describes. `nil` (the default, and every existing caller
     /// before this parameter existed) preserves the old bare-basename
     /// behavior exactly, so this is purely additive.
-    public static func normalizeMuterReport(_ data: Data, projectDirectory: URL? = nil) throws -> [NormalizedMutant] {
+    static func normalizeMuterReport(_ data: Data, projectDirectory: URL? = nil) throws -> [NormalizedMutant] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ReportParsingError.malformedReport("top level is not a JSON object")
         }
@@ -644,7 +666,7 @@ public enum ResultNormalizer {
     /// `projectDirectory` or `filePath` is absent, or no suffix actually
     /// resolves to a real file — never throws, never guesses a path that
     /// does not exist on disk.
-    static func relativePath(forMuterFilePath filePath: String?, fallback: String, projectDirectory: URL?) -> String {
+    internal static func relativePath(forMuterFilePath filePath: String?, fallback: String, projectDirectory: URL?) -> String {
         guard let filePath, let projectDirectory else { return fallback }
         // The leading root `"/"` `pathComponents` element is dropped first
         // so `components[start...].joined(separator: "/")` never produces
@@ -655,7 +677,7 @@ public enum ResultNormalizer {
         // over a shorter one that happens to also exist (e.g. a same-named
         // file at the project root), so this walks from the full path
         // down, not up.
-        for start in 0..<components.count {
+        for start in 0 ..< components.count {
             let candidate = components[start...].joined(separator: "/")
             guard !candidate.isEmpty else { continue }
             if FileManager.default.fileExists(atPath: projectDirectory.appendingPathComponent(candidate).path) {
@@ -708,7 +730,7 @@ public enum ResultNormalizer {
     /// key could never equal MutantKit's own leading-slash-free
     /// `relativePath`, reproducing the exact "0 matched mutants" class of
     /// bug this whole phase exists to fix, just for a different tool.
-    public static func normalizeSwiftMutationTestingReport(_ data: Data) throws -> [NormalizedMutant] {
+    static func normalizeSwiftMutationTestingReport(_ data: Data) throws -> [NormalizedMutant] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ReportParsingError.malformedReport("top level is not a JSON object")
         }
@@ -764,143 +786,5 @@ public enum ResultNormalizer {
         case "Timeout": .infrastructureFailure
         default: .other
         }
-    }
-
-    // MARK: - Cross-tool matching
-
-    /// Matches on `relativePath` + `line` + `column` — **not** the text
-    /// hashes, as of Phase C13. A real Muter `--format json` report never
-    /// carries the mutated text at all (`CrossToolMutationIdentity`'s own
-    /// doc comment has the full account), so `originalTextHash`/
-    /// `replacementTextHash` hash an empty string for every real Muter
-    /// mutant unconditionally — matching on them was structurally
-    /// guaranteed to match zero mutants, which is exactly what a real
-    /// calibration run found. `line`/`column` are real on both sides and
-    /// confirmed to agree for the same real mutation site (see the same
-    /// doc comment). `normalizedOperatorFamily` still decides
-    /// `exactlyComparable` vs. `approximatelyComparable`, unchanged.
-    public static func match(mutantKit: [NormalizedMutant], muter: [NormalizedMutant]) -> CrossToolComparison {
-        struct MatchKey: Hashable {
-            let relativePath: String
-            let line: Int
-            let column: Int
-        }
-        func key(_ mutant: NormalizedMutant) -> MatchKey {
-            MatchKey(
-                relativePath: mutant.identity.relativePath, line: mutant.identity.line, column: mutant.identity.column
-            )
-        }
-
-        var muterByKey: [MatchKey: [NormalizedMutant]] = [:]
-        for mutant in muter { muterByKey[key(mutant), default: []].append(mutant) }
-
-        var exact: [(NormalizedMutant, NormalizedMutant)] = []
-        var approximate: [(NormalizedMutant, NormalizedMutant)] = []
-        var mutantKitOnly: [NormalizedMutant] = []
-        var matchedMuterKeys: Set<MatchKey> = []
-
-        for mkMutant in mutantKit {
-            let k = key(mkMutant)
-            guard let candidates = muterByKey[k], let muterMutant = candidates.first else {
-                mutantKitOnly.append(mkMutant)
-                continue
-            }
-            matchedMuterKeys.insert(k)
-            if mkMutant.identity.normalizedOperatorFamily == muterMutant.identity.normalizedOperatorFamily {
-                exact.append((mkMutant, muterMutant))
-            } else {
-                approximate.append((mkMutant, muterMutant))
-            }
-        }
-        let muterOnly = muter.filter { !matchedMuterKeys.contains(key($0)) }
-
-        return CrossToolComparison(
-            exactlyComparable: exact, approximatelyComparable: approximate, mutantKitOnly: mutantKitOnly, muterOnly: muterOnly
-        )
-    }
-
-    /// Compares MutantKit against any second tool that is not Muter —
-    /// added (Phase C13) for the new swift-mutation-testing adapter, and
-    /// usable for any future third+ adapter the same way. Forwards to
-    /// `match(mutantKit:muter:)` unchanged: the underlying comparison
-    /// (`relativePath`/`line`/`column`/operator family) has never actually
-    /// been Muter-specific, only its parameter name was — this exists
-    /// purely so a non-Muter call site does not read as "compared against
-    /// muter" in its own source. `CrossToolComparison`'s own `muter`-named
-    /// fields (`muterOnly`, the `muter:` half of each comparable pair)
-    /// keep their names regardless of which second tool was actually
-    /// passed in, for the same reason: renaming a public, already-used
-    /// type for a second call site is a larger, separate change this
-    /// phase does not need to make.
-    public static func match(mutantKit: [NormalizedMutant], comparedAgainst other: [NormalizedMutant]) -> CrossToolComparison {
-        match(mutantKit: mutantKit, muter: other)
-    }
-
-    // MARK: - Median
-
-    /// The median, not the mean — a single anomalous run (a thermal
-    /// throttle, a network hiccup during package resolution) must not skew
-    /// the reported number the way it would skew an average.
-    public static func median(_ values: [Double]) -> Double? {
-        guard !values.isEmpty else { return nil }
-        let sorted = values.sorted()
-        let mid = sorted.count / 2
-        return sorted.count.isMultiple(of: 2) ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
-    }
-
-    // MARK: - Hashing
-
-    static func sha256Hex(_ string: String) -> String {
-        let digest = SHA256.hash(data: Data(string.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
-    }
-
-    // MARK: - Backend disagreement (isolated vs schemata, same plan)
-
-    /// One mutation whose isolated-mode and schemata-mode outcome disagree
-    /// — always a real finding, never expected in a healthy run (ADR-0006
-    /// Stage 3's whole differential-acceptance gate exists to make this
-    /// structurally rare in practice).
-    public struct BackendDisagreement: Codable, Sendable {
-        public let identity: CrossToolMutationIdentity
-        public let isolatedOutcome: String
-        public let schemataOutcome: String
-    }
-
-    public struct DifferentialValidationResult: Codable, Sendable {
-        public let comparableMutations: Int
-        public let disagreements: Int
-        public let details: [BackendDisagreement]
-    }
-
-    /// Compares two MutantKit `report.json` runs of the *identical* plan —
-    /// one forced to `execution.strategy: isolated`, one to `schemata` —
-    /// matching purely by `CrossToolMutationIdentity`, exactly the same
-    /// identity `match(mutantKit:muter:)` uses for cross-tool comparison.
-    /// Only mutations both runs actually reported are counted as
-    /// "comparable" — a mutation only one run reports (e.g. an
-    /// isolated-fallback mutation the schemata run also degraded, so it
-    /// exists in both, or one run crashed on it) is not silently treated
-    /// as agreement.
-    public static func compareBackends(isolatedReportData: Data, schemataReportData: Data) throws -> DifferentialValidationResult {
-        let isolated = try normalizeMutantKitReport(isolatedReportData).mutants
-        let schemata = try normalizeMutantKitReport(schemataReportData).mutants
-
-        var schemataByIdentity: [CrossToolMutationIdentity: NormalizedMutant] = [:]
-        for mutant in schemata { schemataByIdentity[mutant.identity] = mutant }
-
-        var comparable = 0
-        var disagreements: [BackendDisagreement] = []
-        for isolatedMutant in isolated {
-            guard let schemataMutant = schemataByIdentity[isolatedMutant.identity] else { continue }
-            comparable += 1
-            if isolatedMutant.bucket != schemataMutant.bucket {
-                disagreements.append(BackendDisagreement(
-                    identity: isolatedMutant.identity,
-                    isolatedOutcome: isolatedMutant.bucket.rawValue, schemataOutcome: schemataMutant.bucket.rawValue
-                ))
-            }
-        }
-        return DifferentialValidationResult(comparableMutations: comparable, disagreements: disagreements.count, details: disagreements)
     }
 }

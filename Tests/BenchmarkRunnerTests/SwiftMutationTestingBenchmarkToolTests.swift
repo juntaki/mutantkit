@@ -23,12 +23,12 @@ struct SwiftMutationTestingBenchmarkToolTests {
     }
 
     @Test("--sources-path is passed as a single flag+value pair")
-    func sourcesPathIsPassedThrough() {
+    func sourcesPathIsPassedThrough() throws {
         let arguments = SwiftMutationTestingBenchmarkTool.arguments(
             reportPath: "/tmp/report.json", mode: .cold, sourcesPath: "Sources/IntegerUtilities", operatorIDs: [], excludePatterns: []
         )
         #expect(arguments.contains("--sources-path"))
-        let index = try! #require(arguments.firstIndex(of: "--sources-path"))
+        let index = try #require(arguments.firstIndex(of: "--sources-path"))
         #expect(arguments[index + 1] == "Sources/IntegerUtilities")
     }
 

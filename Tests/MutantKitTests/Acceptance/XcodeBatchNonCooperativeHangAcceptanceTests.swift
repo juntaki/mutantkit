@@ -20,11 +20,14 @@ import Testing
 /// give Phase H9+'s watchdog logic two genuinely harder-than-`testHangs`
 /// fixtures to develop against while the real differentiator stays
 /// unidentified. See `GATE3-RESULT.md`, Phase H8, for the full account.
-@Suite("Acceptance: non-cooperative hang shapes (Gate 3 Phase H8 — recorded gaps, not proof of containment)", .enabled(if: Acceptance.simulatorEnabled))
+@Suite(
+    "Acceptance: non-cooperative hang shapes (Gate 3 Phase H8 — recorded gaps, not proof of containment)",
+    .enabled(if: Acceptance.simulatorEnabled)
+)
 struct XcodeBatchNonCooperativeHangAcceptanceTests {
     private static let allowanceSeconds = 30.0
 
-    @Test("A background-thread, memory-growing (1 GiB-capped) non-cooperative hang still self-recovers — via native timeout, same as a cooperative sleep hang")
+    @Test("A background-thread, memory-growing, non-cooperative hang still self-recovers via native timeout, like a cooperative sleep hang")
     func backgroundThreadHangStillSelfRecovers() async throws {
         let directory = try Acceptance.stageFixture("XcodeProject")
         let destination = try Acceptance.iPhoneDestination()
@@ -62,7 +65,7 @@ struct XcodeBatchNonCooperativeHangAcceptanceTests {
         #expect(results[MutationID(rawValue: "C")]?.status == .passed)
     }
 
-    @Test("A main-thread, memory-growing (app-hosted) non-cooperative hang also self-recovers — via a faster, different mechanism (SIGTRAP), not native timeout")
+    @Test("A main-thread, memory-growing, non-cooperative hang self-recovers via a faster mechanism (SIGTRAP), not native timeout")
     func mainThreadHangSelfRecoversViaADifferentMechanism() async throws {
         let directory = try Acceptance.stageFixture("XcodeProject")
         let destination = try Acceptance.iPhoneDestination()

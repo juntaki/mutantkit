@@ -19,7 +19,7 @@ struct CanonicalMutationCorpusBuilderTests {
     }
 
     @Test("A mutation present in all three tools' own result sets enters the corpus")
-    func threeWayIntersectionEntersCorpus() {
+    func threeWayIntersectionEntersCorpus() throws {
         let mk = [makeMutant(line: 10, column: 5, nativeID: "mut_abc")]
         let muter = [makeMutant(line: 10, column: 5, original: "", replacement: "")]
         let smt = [makeMutant(line: 10, column: 5, nativeID: "smt_1")]
@@ -29,7 +29,7 @@ struct CanonicalMutationCorpusBuilderTests {
             mutantsByTool: ["mutantkit": mk, "muter": muter, "swift-mutation-testing": smt]
         )
         #expect(result.corpus.mutations.count == 1)
-        let entry = try! #require(result.corpus.mutations.first)
+        let entry = try #require(result.corpus.mutations.first)
         #expect(entry.canonical.relativePath == "A.swift")
         #expect(entry.canonical.line == 10)
         #expect(entry.canonical.column == 5)
@@ -84,7 +84,9 @@ struct CanonicalMutationCorpusBuilderTests {
     /// see `CrossToolMutationIdentity`'s doc comment), so asserting one
     /// as ground truth was a guess, not a fact. The corpus now fails
     /// closed: this key is excluded entirely, and counted as ambiguous.
-    @Test("Two distinct replacements at the same (path, line, column) in one tool's own results are excluded as ambiguous, never arbitrarily resolved")
+    @Test(
+        "Two distinct replacements at the same (path, line, column) in one tool are excluded as ambiguous, never arbitrarily resolved"
+    )
     func samePositionMultipleDistinctReplacementsExcludedAsAmbiguous() {
         let mk = [
             makeMutant(line: 10, column: 5, replacement: ">="),
@@ -120,7 +122,10 @@ struct CanonicalMutationCorpusBuilderTests {
         )
         #expect(result.corpus.mutations.count == 1)
         #expect(result.ambiguousCounts["mutantkit"] == 0)
-        #expect(result.corpus.mutations.first?.tools["mutantkit"]?.nativeID == "mut_a", "deterministic tie-break by native ID among identical candidates")
+        #expect(
+            result.corpus.mutations.first?.tools["mutantkit"]?.nativeID == "mut_a",
+            "deterministic tie-break by native ID among identical candidates"
+        )
     }
 
     @Test("An empty input yields an empty corpus, not a crash")
@@ -147,7 +152,9 @@ struct CanonicalMutationCorpusBuilderTests {
             makeMutant(path: "A.swift", line: 20, column: 1),
             makeMutant(path: "A.swift", line: 5, column: 1)
         ]
-        let muter = mk.map { makeMutant(path: $0.identity.relativePath, line: $0.identity.line, column: $0.identity.column, original: "", replacement: "") }
+        let muter = mk.map {
+            makeMutant(path: $0.identity.relativePath, line: $0.identity.line, column: $0.identity.column, original: "", replacement: "")
+        }
 
         let result = CanonicalMutationCorpusBuilder.build(
             projectID: "example", repositoryCommit: "deadbeef",
@@ -208,6 +215,7 @@ struct CanonicalMutationCorpusBuilderTests {
     }
 
     // MARK: - B1.1 adversarial fixtures (synthetic, per B0/B1.1's own contract:
+
     // validating the matcher's own logic, never requiring a real tool to
     // re-execute a real project to exercise an edge case it may not
     // naturally contain).

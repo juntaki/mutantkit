@@ -19,6 +19,7 @@ guard CommandLine.arguments.count >= 3 else {
     print("usage: PlanStats <plan.json> <projectRoot>")
     exit(1)
 }
+
 let planPath = CommandLine.arguments[1]
 let projectRoot = URL(fileURLWithPath: CommandLine.arguments[2])
 let planData = try Data(contentsOf: URL(fileURLWithPath: planPath))
@@ -29,10 +30,12 @@ var countByOperator: [String: Int] = [:]
 for m in mutationPlan.mutations {
     countByOperator[m.operatorID, default: 0] += 1
 }
+
 print("=== Mutation count by operator ===")
 for (op, count) in countByOperator.sorted(by: { $0.key < $1.key }) {
     print("  \(op): \(count)")
 }
+
 print("  TOTAL: \(mutationPlan.mutations.count)")
 
 // Read every source file the plan references.
@@ -65,6 +68,7 @@ if hasPackageManifest {
     targetInfo = try await XcodeTargetResolver.resolveTargetInfo(projectRoot: projectRoot)
     backendID = "xcode-schemata-v1"
 }
+
 print("\n=== Target resolution ===")
 print("  \(targetInfo.count) files resolved to target info")
 

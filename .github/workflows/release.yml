@@ -18,11 +18,15 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: macos-15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -44,6 +48,20 @@ jobs:
 
       - name: Build and package
         run: Scripts/release-build.sh "${{ steps.version.outputs.version }}" dist
+
+      # Sigstore-backed build provenance for the exact tarball a user
+      # downloads — verifiable with `gh attestation verify`. This is
+      # GitHub artifact attestation, not code signing: it proves which
+      # workflow run/commit produced this exact file, not a code-signing
+      # identity. Restored after being dropped from an earlier version of
+      # this workflow, which had left action.yml's "signed release
+      # tarball" wording pointing at nothing.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/mutantkit-macos-arm64.tar.gz
+            dist/SHA256SUMS
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -133,18 +151,18 @@ jobs:
         run: |
           set -euo pipefail
           ../download/mutantkit-macos-arm64/mutantkit init
-          python3 -c "
-          import re
-          with open('mutantkit.yml') as f:
-              c = f.read()
-          c = c.replace(
-              \"    # No test target detected. Add yours here, or run \`mutantkit doctor\`.\n    []\",
-              '    - CalcTests'
-          )
-          with open('mutantkit.yml', 'w') as f:
-              f.write(c)
-          "
+          # Asserts init's own test-target auto-detection actually found
+          # CalcTests unassisted — this used to be hand-edited into
+          # mutantkit.yml by a Python script after init ran, which meant a
+          # real regression in init's auto-detection could break silently
+          # (the hand-edit would keep "fixing" the file even if init itself
+          # stopped detecting anything). No hand-edit now: if init's own
+          # detection ever regresses, this step fails loudly instead.
           grep -A2 '^tests:' mutantkit.yml
+          grep -qx '    - CalcTests' mutantkit.yml || {
+            echo "::error::mutantkit init did not auto-detect CalcTests as a test target"
+            exit 1
+          }
 
       - name: mutantkit plan
         working-directory: fixture
@@ -167,6 +185,8 @@ jobs:
     if: github.ref_type == 'tag'
     needs: [build, clean-machine-e2e]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

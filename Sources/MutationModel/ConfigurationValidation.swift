@@ -119,7 +119,7 @@ public enum ConfigurationValidator {
             ))
         }
 
-        if !(0...1).contains(configuration.execution.noOpCanarySampleRate) {
+        if !(0 ... 1).contains(configuration.execution.noOpCanarySampleRate) {
             issues.append(ConfigurationIssue(
                 severity: .error,
                 path: "execution.noOpCanarySampleRate",

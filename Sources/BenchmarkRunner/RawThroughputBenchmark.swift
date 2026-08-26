@@ -47,6 +47,7 @@ public enum RawThroughputBenchmark {
             guard violations.isEmpty, let medianWallSeconds, medianWallSeconds > 0, let discoveredCount else { return nil }
             return Double(discoveredCount) / medianWallSeconds
         }
+
         public let discoveredCount: Int?
         /// Every B3.6 validity violation found across this tool's own
         /// repetitions — non-empty means every throughput number above is
@@ -92,7 +93,7 @@ public enum RawThroughputBenchmark {
     ) async throws -> (repetitions: [Repetition], summaries: [ToolSummary]) {
         var repetitionResults: [Repetition] = []
 
-        for repetitionIndex in 0..<repetitions {
+        for repetitionIndex in 0 ..< repetitions {
             let rotation = rotated(tools, by: repetitionIndex)
             for (position, entry) in rotation.enumerated() {
                 let context = BenchmarkRunContext(

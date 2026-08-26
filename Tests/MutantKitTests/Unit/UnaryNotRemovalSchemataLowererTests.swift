@@ -241,7 +241,7 @@ struct UnaryNotRemovalSchemataLowererTests {
         func a() -> Bool { evaluations += 1; return true }
 
         func isActive() -> Bool { true }
-        _ = isActive() ? (a()) : (!a())
+        _ = isActive() ? a() : !a()
 
         #expect(evaluations == 1, "the operand must be evaluated exactly once regardless of which branch's text is selected")
     }

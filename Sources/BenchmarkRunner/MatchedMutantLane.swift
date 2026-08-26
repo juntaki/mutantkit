@@ -25,6 +25,13 @@ public enum MatchedMutantLane {
         /// exists, or the tool's own operator implementation changed) is
         /// a real, reportable possibility, not assumed impossible.
         public let matchedCount: Int
+        /// How many of this tool's own keys were excluded from matching
+        /// because this tool itself reported >1 distinct mutation at the
+        /// same canonical position/family — real, reportable evidence
+        /// that this tool's own results contain an internal ambiguity at
+        /// a position the corpus expected a single, provable mutation.
+        /// Never silently resolved by picking one arbitrarily.
+        public let ambiguousKeyCount: Int
         /// The corpus's own total, for context — `matchedCount` out of
         /// `corpusSize`, never silently just "matchedCount" alone, since
         /// a lower match rate is itself real evidence (drift, a version
@@ -48,10 +55,12 @@ public enum MatchedMutantLane {
         }
 
         public init(
-            tool: String, matchedCount: Int, corpusSize: Int, byBucket: [String: Int], sumMatchedDurationSeconds: Double?
+            tool: String, matchedCount: Int, ambiguousKeyCount: Int, corpusSize: Int,
+            byBucket: [String: Int], sumMatchedDurationSeconds: Double?
         ) {
             self.tool = tool
             self.matchedCount = matchedCount
+            self.ambiguousKeyCount = ambiguousKeyCount
             self.corpusSize = corpusSize
             self.byBucket = byBucket
             self.sumMatchedDurationSeconds = sumMatchedDurationSeconds
@@ -63,15 +72,30 @@ public enum MatchedMutantLane {
     ///     the same real E2E run the corpus itself may have been built
     ///     from, or a fresh, independent one against the same project.
     ///   - corpus: the fixed `CanonicalMutationCorpus` to narrow to.
+    ///
+    /// Matches on the full canonical identity (`CanonicalMutationMatcher
+    /// .FamilyKey` — path + line + column + operatorFamily), the same
+    /// primitive `CanonicalMutationCorpusBuilder` itself uses, not
+    /// `(path, line, column)` alone. A real review found the previous,
+    /// position-only key let a *different* mutation at the same source
+    /// position than the one actually in the corpus silently count as
+    /// "matched" — able to inflate `matchedCount` past `corpusSize` in
+    /// the worst case. `mutants` is also indexed with the same
+    /// fail-closed ambiguity handling as every other caller of
+    /// `CanonicalMutationMatcher`: if this tool's own results report more
+    /// than one distinct mutation at a canonical key, that key is
+    /// excluded from matching entirely (`ambiguousKeyCount`), never
+    /// resolved by picking one arbitrarily.
     public static func measure(tool: String, mutants: [NormalizedMutant], corpus: CanonicalMutationCorpus) -> Measurement {
-        struct Key: Hashable {
-            let relativePath: String
-            let line: Int
-            let column: Int
-        }
-        let corpusKeys = Set(corpus.mutations.map { Key(relativePath: $0.canonical.relativePath, line: $0.canonical.line, column: $0.canonical.column) })
+        let corpusKeys = Set(corpus.mutations.map {
+            CanonicalMutationMatcher.FamilyKey(
+                relativePath: $0.canonical.relativePath, line: $0.canonical.line,
+                column: $0.canonical.column, operatorFamily: $0.canonical.operatorFamily
+            )
+        })
 
-        let matched = mutants.filter { corpusKeys.contains(Key(relativePath: $0.identity.relativePath, line: $0.identity.line, column: $0.identity.column)) }
+        let (indexed, ambiguousKeyCount) = CanonicalMutationMatcher.indexedByFamilyKey(mutants)
+        let matched = indexed.filter { corpusKeys.contains($0.key) }.map(\.value)
 
         var byBucket: [String: Int] = [:]
         for mutant in matched { byBucket[mutant.bucket.rawValue, default: 0] += 1 }
@@ -85,8 +109,8 @@ public enum MatchedMutantLane {
         let sumDuration: Double? = durations.count == matched.count && !matched.isEmpty ? durations.reduce(0, +) : nil
 
         return Measurement(
-            tool: tool, matchedCount: matched.count, corpusSize: corpus.mutations.count, byBucket: byBucket,
-            sumMatchedDurationSeconds: sumDuration
+            tool: tool, matchedCount: matched.count, ambiguousKeyCount: ambiguousKeyCount,
+            corpusSize: corpus.mutations.count, byBucket: byBucket, sumMatchedDurationSeconds: sumDuration
         )
     }
 }

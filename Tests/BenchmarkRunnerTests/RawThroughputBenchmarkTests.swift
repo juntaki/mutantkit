@@ -15,7 +15,7 @@ private struct FakeTool: MutationBenchmarkTool {
     let identity: BenchmarkToolIdentity
     let recorder: InvocationRecorder
     var wallSeconds: Double = 1.0
-    var reportJSON: Data = Data(#"{"results": []}"#.utf8)
+    var reportJSON: Data = .init(#"{"results": []}"#.utf8)
 
     func prepare(project: MaterializedBenchmarkProject, context: BenchmarkRunContext) async throws {}
 
@@ -46,7 +46,10 @@ struct RawThroughputBenchmarkTests {
         let recorder = InvocationRecorder()
         let tools: [(name: String, tool: any MutationBenchmarkTool)] = [
             ("mutantkit", FakeTool(identity: BenchmarkToolIdentity(name: "mutantkit", version: "t"), recorder: recorder)),
-            ("swift-mutation-testing", FakeTool(identity: BenchmarkToolIdentity(name: "swift-mutation-testing", version: "t"), recorder: recorder)),
+            (
+                "swift-mutation-testing",
+                FakeTool(identity: BenchmarkToolIdentity(name: "swift-mutation-testing", version: "t"), recorder: recorder)
+            ),
             ("muter", FakeTool(identity: BenchmarkToolIdentity(name: "muter", version: "t"), recorder: recorder))
         ]
         _ = try await RawThroughputBenchmark.run(
@@ -117,13 +120,15 @@ struct RawThroughputBenchmarkTests {
             func run(project: MaterializedBenchmarkProject, context: BenchmarkRunContext) async throws -> RawBenchmarkRun {
                 await recorder.record(repetition: context.runIndex, tool: identity.name)
                 let count = context.runIndex == 0 ? 1 : 2
-                let results = (0..<count).map { i in
+                let results = (0 ..< count).map { i in
                     #"{"point": {"file": "A.swift", "utf8Range": {"start": \#(i * 10), "end": \#(i * 10 + 4)}, "originalText": "true", "replacementText": "false", "operatorID": "swift.core.bool-literal-inversion", "line": \#(i + 1), "column": 1}, "outcome": "killedByAssertion"}"#
                 }.joined(separator: ",")
                 let json = Data(#"{"results": [\#(results)]}"#.utf8)
                 return RawBenchmarkRun(
                     tool: identity, projectID: project.project.id, projectCommit: project.project.commitSHA, mode: context.mode,
-                    execution: ToolExecutionResult(exitCode: 0, standardOutput: "", standardError: "", wallSeconds: 1.0, timedOut: false, processID: 0),
+                    execution: ToolExecutionResult(
+                        exitCode: 0, standardOutput: "", standardError: "", wallSeconds: 1.0, timedOut: false, processID: 0
+                    ),
                     resources: .unavailable, reportData: json
                 )
             }

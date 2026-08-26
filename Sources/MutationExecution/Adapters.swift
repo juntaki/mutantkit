@@ -266,8 +266,8 @@ public protocol SchemataBatchTestable: SchemataTestable {
     ) async -> [MutationID: TestRunResult]
 }
 
-extension SchemataBatchTestable {
-    public func runSchemataTokenBatch(
+public extension SchemataBatchTestable {
+    func runSchemataTokenBatch(
         _ artifact: BuildArtifact,
         in workspace: URL,
         items: [SchemataBatchTokenItem],
@@ -398,8 +398,8 @@ public protocol BatchTestable: TestAdapter {
     ) async -> [MutationID: TestRunResult]
 }
 
-extension BatchTestable {
-    public func runBatch(
+public extension BatchTestable {
+    func runBatch(
         _ items: [BatchMutantItem],
         in workspace: URL,
         timeoutSeconds: Double

@@ -264,7 +264,7 @@ public enum DestinationResolver {
     /// versions apart from each other at all once tvOS/watchOS/visionOS
     /// destinations started reaching this same "OS:latest" logic.
     private static func versionComponents(of runtimeIdentifier: String) -> [Int] {
-        for (_, token) in Self.simulatorPlatforms {
+        for (_, token) in simulatorPlatforms {
             guard let range = runtimeIdentifier.range(of: "\(token)-") else { continue }
             return runtimeIdentifier[range.upperBound...].split(separator: "-").compactMap { Int($0) }
         }
