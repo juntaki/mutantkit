@@ -45,6 +45,11 @@ jobs:
   lint:
     name: Lint & format check
     runs-on: macos-15
+    # Generous relative to observed reality (~20-25s on this exact job) —
+    # bounds a hang (a stuck `brew install`/download, say) rather than
+    # tuning for the common case. See the `unit` job's own comment for
+    # why every job here now has an explicit ceiling.
+    timeout-minutes: 10
     env:
       SWIFTLINT_VERSION: "0.63.2"
     steps:
@@ -73,6 +78,17 @@ jobs:
   unit:
     name: Unit tests
     runs-on: macos-15
+    # A real, reproducible hang (this job's own `Test` step sitting for
+    # 68+ minutes with no completion, versus ~15-20s for the identical
+    # `swift test` locally) burned real Actions minutes on this account
+    # before three compounding process-handling bugs were found and
+    # fixed (Sources/BenchmarkRunner/ToolRunner.swift). This ceiling is
+    # this project's own "nothing runs unbounded" principle applied to
+    # its own CI: generous relative to known-good local runtime (cold
+    # build + full unit suite) so it never fires on a real, if slow, run,
+    # but bounded so a recurrence (this exact class of bug, or a new one)
+    # fails fast and visibly instead of silently burning an hour+ again.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -131,6 +147,10 @@ jobs:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
     needs: unit
+    # Generous: real xcodebuild/simulator work, legitimately slower than
+    # `unit`'s own plain unit suite — but still bounded, per the same
+    # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
+    timeout-minutes: 30
     strategy:
       # Never cancel siblings: which fixtures fail together is a diagnosis.
       fail-fast: false
@@ -245,6 +265,9 @@ jobs:
     name: ROR schemata isolated-vs-schemata differential
     runs-on: macos-15
     needs: unit
+    # Same reasoning as `acceptance`'s own ceiling: real build/link/test
+    # work, bounded rather than unbounded.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -291,6 +314,9 @@ jobs:
     name: iOS-Simulator schemata runtime (build + link viability)
     runs-on: macos-15
     needs: unit
+    # Same reasoning as `acceptance`'s own ceiling: real build/link/test
+    # work, bounded rather than unbounded.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
