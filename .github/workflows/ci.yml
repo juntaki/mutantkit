@@ -92,17 +92,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
-        run: swift --version && xcodebuild -version
+        shell: bash
+        run: |
+          swift --version && xcodebuild -version
+          echo "CPU count: $(sysctl -n hw.ncpu)"
       - name: Build
         shell: bash
         run: |
           set -o pipefail
           swift build --build-tests 2>&1 | tee build.log
+      # `--num-workers 2`: diagnostic step for the same real CI hang this
+      # job's own `timeout-minutes` above exists for. The hang's own
+      # signature (a burst of ~90 concurrently-"started" Swift Testing
+      # tests across many unrelated files, then total synchronized
+      # silence) is a known shape for the cooperative thread pool getting
+      # exhausted/starved when far more concurrent tasks are scheduled
+      # than this runner's real core count — a GitHub-hosted macOS
+      # runner has meaningfully fewer cores than a typical development
+      # machine, which is exactly the kind of gap that stays invisible
+      # locally. Explicitly bounding worker concurrency is also a
+      # reasonable, low-risk CI setting on its own merits regardless of
+      # whether it turns out to be the fix: it changes how many tests run
+      # at once, never what is tested.
       - name: Test
         shell: bash
         run: |
           set -o pipefail
-          swift test 2>&1 | tee test.log
+          swift test --parallel --num-workers 2 2>&1 | tee test.log
       - name: Upload unit failure logs
         if: failure()
         uses: actions/upload-artifact@v4
