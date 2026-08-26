@@ -543,7 +543,8 @@ private actor GatedBatchAdapter: TestSelecting, BatchTestable, CoverageMeasuring
     }
 
     func runBatch(
-        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double
+        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
     ) async -> [MutationID: TestRunResult] {
         if let jitterMicroseconds {
             try? await Task.sleep(nanoseconds: UInt64.random(in: jitterMicroseconds) * 1000)

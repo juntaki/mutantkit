@@ -171,7 +171,7 @@ struct UnaryNotSchemataIsolatedDifferentialAcceptanceTests {
         let runner = SchemataMutationRunner(
             planID: "plan-unary-not-differential-schemata", workUnitID: "plan-unary-not-differential-schemata",
             programs: programs, points: pointsByID, originalSources: [Self.relativePath: Data(Self.librarySource.utf8)],
-            build: adapter, test: adapter, workspaces: workspaces, timeoutSeconds: 180,
+            build: adapter, test: adapter, workspaces: workspaces, timeouts: TimeoutSettings(baselineSeconds: 180),
             toolchainHash: "test-toolchain", buildArgumentsHash: "test-build-arguments", policy: policy
         )
         let outcome = try await runner.run()

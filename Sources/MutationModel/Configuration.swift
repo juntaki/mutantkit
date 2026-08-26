@@ -197,11 +197,30 @@ public struct OperatorSettings: Codable, Sendable, Hashable {
     public var profile: OperatorProfile
     public var disable: [String]
     public var enable: [String]
+    /// `swift.core.side-effect-call-removal`'s own configuration. `nil`
+    /// (the default) means no calls are excluded beyond the operator's
+    /// own built-in denylist (`fatalError`, `preconditionFailure`, ...).
+    ///
+    /// A dedicated, operator-scoped nested struct rather than a new
+    /// top-level flat field: `OperatorSettings` otherwise applies
+    /// uniformly to every operator (`profile`/`enable`/`disable`), and a
+    /// call-name exclusion list is meaningless to every operator except
+    /// this one. Nesting it under the operator's own name keeps that
+    /// scoping visible in the config file itself, and gives a natural
+    /// place for a future operator's own settings without cluttering this
+    /// struct with unrelated fields.
+    public var sideEffectCallRemoval: SideEffectCallRemovalSettings?
 
-    public init(profile: OperatorProfile = .default, disable: [String] = [], enable: [String] = []) {
+    public init(
+        profile: OperatorProfile = .default,
+        disable: [String] = [],
+        enable: [String] = [],
+        sideEffectCallRemoval: SideEffectCallRemovalSettings? = nil
+    ) {
         self.profile = profile
         self.disable = disable
         self.enable = enable
+        self.sideEffectCallRemoval = sideEffectCallRemoval
     }
 
     public init(from decoder: Decoder) throws {
@@ -209,6 +228,38 @@ public struct OperatorSettings: Codable, Sendable, Hashable {
         profile = try container.decodeIfPresent(OperatorProfile.self, forKey: .profile) ?? .default
         disable = try container.decodeIfPresent([String].self, forKey: .disable) ?? []
         enable = try container.decodeIfPresent([String].self, forKey: .enable) ?? []
+        sideEffectCallRemoval = try container.decodeIfPresent(
+            SideEffectCallRemovalSettings.self, forKey: .sideEffectCallRemoval
+        )
+    }
+}
+
+/// Per-call exclusion for `swift.core.side-effect-call-removal`, the
+/// closest analogue to Muter's `excludeCalls` (see
+/// `MuterConfigImporter`, which maps one directly onto the other during
+/// `migrate --from-muter`).
+///
+/// Matched on the called function/method's own base name only (the
+/// simple name after the last `.`, e.g. `record` for both `logger.record(...)`
+/// and `analytics.record(...)`) — the same pragmatic, not-symbol-resolved
+/// approach `LifecycleSuperCallRemovalOperator`'s method-name denylist and
+/// `OperatorExclusions`' builder-property-name matching already take
+/// throughout this catalog. This means an exclusion is necessarily
+/// coarser than Muter's own (which can, in principle, exclude a
+/// specific receiver's method), but requires no type information to
+/// apply — matching the same trade-off Muter's own `excludeCalls`
+/// warns about (\"Doesn't support overloading currently - all function
+/// calls with a matching name will be skipped\").
+public struct SideEffectCallRemovalSettings: Codable, Sendable, Hashable {
+    public var excludeCalls: [String]
+
+    public init(excludeCalls: [String] = []) {
+        self.excludeCalls = excludeCalls
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        excludeCalls = try container.decodeIfPresent([String].self, forKey: .excludeCalls) ?? []
     }
 }
 
@@ -529,6 +580,87 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// selection the runner cannot tell which mutant a batch failure belongs
     /// to, so such a mutant still tests correctly, just alone.
     public var testBatchSize: Int?
+    /// The fraction (0...1) of isolated-mode, hash-matched "no-op" mutants
+    /// (`MutationRunner.prepare`'s build-product-identical-to-baseline
+    /// short-circuit) that skip the short-circuit and run the real suite
+    /// anyway, as a canary check on `MachOCodeHash` itself.
+    ///
+    /// The short-circuit trusts `MachOCodeHash`'s "identical to baseline"
+    /// claim completely, and that claim has been wrong before: issue #3 (see
+    /// `MachOCodeHash`'s own doc comment) was a real, CI-confirmed false
+    /// positive where a mutation that genuinely reached the binary and
+    /// genuinely failed a test still hashed identical to baseline, because
+    /// the difference lived in linkage rather than in any hashed section's
+    /// bytes. Before the short-circuit existed, running the suite on every
+    /// mutant was what surfaced that — a hash-identical mutant whose tests
+    /// still failed was a visible contradiction. The short-circuit removes
+    /// that net for every hash-matched mutant, since it now never runs their
+    /// tests at all: a future linkage-shaped (or otherwise) gap in
+    /// `MachOCodeHash` — v2 fixed issue #3's specific shape, nothing
+    /// guarantees it is the last one — would hash "identical" and go
+    /// straight to a silent `.infrastructureFailure` with no test ever run
+    /// to contradict it.
+    ///
+    /// This reopens a narrow, low-cost slice of that net rather than
+    /// reverting the short-circuit outright: membership is a deterministic
+    /// function of the mutation's own stable ID (see
+    /// `MutationRunner.isNoOpCanarySample`), never a random draw, so the
+    /// same plan always samples the same canaries — "two runs of the same
+    /// plan produce the same report" (`MutationRunner`'s own doc comment)
+    /// still holds. A sampled mutant that reports anything other than
+    /// `.passed` is exactly issue #3's fingerprint and is logged distinctly
+    /// to `RunReport.operationalIssues` rather than silently absorbed into
+    /// the same `.infrastructureFailure` bucket a genuine no-op would also
+    /// land in.
+    ///
+    /// `0` (the default) disables the canary entirely — the short-circuit
+    /// behaves exactly as it did before this existed. `1` runs every
+    /// hash-matched mutant's tests for real, i.e. no short-circuit at all.
+    /// Left off by default because the cost is the same per-mutant
+    /// wall-clock the short-circuit exists to avoid, paid on every sampled
+    /// mutant; a project that wants the safety net back sets this to a small
+    /// nonzero fraction (e.g. `0.05`) rather than paying it on every mutant.
+    public var noOpCanarySampleRate: Double
+    /// Phase C4 (competitive-parity program): when `true`, `workers > 1`
+    /// against an Xcode/iOS-Simulator destination provisions one real
+    /// simulator slot per worker (the base device for worker 0, a fresh
+    /// `simctl clone` of it for each additional worker) instead of every
+    /// worker contending for the single run-wide destination.
+    ///
+    /// **Off by default.** Scoped narrowly, on purpose, to exactly the
+    /// configuration this has been benchmarked against:
+    /// `incrementalBuild: true` with `testBatchSize` unset. Batched/
+    /// pipelined test execution (`testBatchSize` set) intentionally
+    /// consolidates multiple workers' completed builds into one shared
+    /// test lane — extending that to multiple lanes, one per simulator, is
+    /// a materially different, larger change this phase does not attempt;
+    /// `simulatorPool: true` together with a `testBatchSize` has no effect
+    /// beyond today's single-device behavior, silently, until that follow-
+    /// on work exists. Ignored entirely for `incrementalBuild: false`
+    /// (per-mutant, non-persistent sandboxes have no stable worker
+    /// identity to assign a device to) and for schemata execution (a
+    /// different execution strategy with its own chunk-based concurrency
+    /// model, not addressed by this flag).
+    ///
+    /// **Real, non-trivial local disk cost — budget for it.** Each
+    /// additional worker beyond the first is a full `simctl clone` of the
+    /// base simulator, not a lightweight reference. Observed directly
+    /// during this flag's own benchmarking (`Research/competitive-parity-
+    /// 2026-08/PROGRESS.md`'s C4 entry): a single clone reached 1.6-2.6GB
+    /// partway through one 100-mutant real-project run, so `workers: 4`
+    /// (3 clones) can add several GB on top of whatever the base device
+    /// and the run's own `.mutantkit` sandboxes already use — real
+    /// pressure a disk-exhaustion incident during that same benchmarking
+    /// actually hit. `releaseWorkerPool` deletes every clone it created
+    /// once a run ends (and `cleanupOrphanClones` sweeps any a killed
+    /// prior run left behind, on the next run that provisions a pool), so
+    /// this cost does not accumulate run-over-run on its own — but
+    /// `~/Library/Developer/CoreSimulator/Devices` (every simulator's own
+    /// data, not just this tool's clones) and a project's own
+    /// `.mutantkit/sandboxes` are both worth checking before a `workers >
+    /// 1` run on a machine that has been running many simulator-heavy
+    /// workloads without ever clearing either.
+    public var simulatorPool: Bool
 
     public init(
         strategy: ExecutionMode = .isolated,
@@ -542,7 +674,9 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         selectCoveringTests: Bool = false,
         incrementalBuild: Bool = false,
         earlyAbortSelectedTests: Bool = false,
-        testBatchSize: Int? = nil
+        testBatchSize: Int? = nil,
+        noOpCanarySampleRate: Double = 0,
+        simulatorPool: Bool = false
     ) {
         self.strategy = strategy
         self.workers = workers
@@ -556,6 +690,8 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         self.incrementalBuild = incrementalBuild
         self.earlyAbortSelectedTests = earlyAbortSelectedTests
         self.testBatchSize = testBatchSize
+        self.noOpCanarySampleRate = noOpCanarySampleRate
+        self.simulatorPool = simulatorPool
     }
 
     public init(from decoder: Decoder) throws {
@@ -577,6 +713,8 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         incrementalBuild = try container.decodeIfPresent(Bool.self, forKey: .incrementalBuild) ?? false
         earlyAbortSelectedTests = try container.decodeIfPresent(Bool.self, forKey: .earlyAbortSelectedTests) ?? false
         testBatchSize = try container.decodeIfPresent(Int.self, forKey: .testBatchSize)
+        noOpCanarySampleRate = try container.decodeIfPresent(Double.self, forKey: .noOpCanarySampleRate) ?? 0
+        simulatorPool = try container.decodeIfPresent(Bool.self, forKey: .simulatorPool) ?? false
     }
 
     public func resolvedWorkerCount() -> Int {
@@ -765,6 +903,18 @@ public enum ReportKind: String, Codable, Sendable, CaseIterable {
     case strykerJSON = "stryker-json"
     case html
     case ciSummary = "ci-summary"
+    /// SonarQube/SonarCloud's generic issue import format. Named `sonar`
+    /// rather than `sonar-json` to match the plain single-word convention
+    /// most cases already use (`console`, `xcode`, `json`, `html`) — the
+    /// hyphenated names exist only where a bare word would be ambiguous
+    /// (`stryker-json` vs. our own `json`; `ci-summary` has no one-word
+    /// equivalent at all), which "sonar" does not need.
+    case sonar
+    /// GitHub Actions `::warning::`/`::error::` workflow-command
+    /// annotations (`GitHubActionsReporter`) — printed to stdout during a
+    /// run, like `console`/`xcode`, never written to a file; see that
+    /// reporter's own doc comment for the exact format and escaping rules.
+    case githubActions = "github-actions"
 }
 
 // MARK: - Quality gate

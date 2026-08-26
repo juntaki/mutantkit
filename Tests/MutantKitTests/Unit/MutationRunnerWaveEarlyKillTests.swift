@@ -76,9 +76,17 @@ struct MutationRunnerWaveEarlyKillTests {
         waveOutcomes: (_ points: [MutationPoint]) -> [MutationID: [TestIdentifier: TestRunStatus]] = { _ in [:] },
         fullSuiteOutcomes: (_ points: [MutationPoint]) -> [MutationID: TestRunStatus] = { _ in [:] },
         retestKilledMutants: Bool = false,
+        confirmTimedOutMutants: Bool = false,
         mutantTimeoutSeconds: Double? = nil,
         waveDurationSeconds: Double = 0,
         unbatchedOverride: (_ points: [MutationPoint]) -> [MutationID: TestRunStatus] = { _ in [:] },
+        // Gate 3 Phase H12.2B: which mutants' wave `.timedOut` result should
+        // be scripted as batch-attributed (`isBatchAttributedTimeout: true`
+        // — a whole shared invocation killed with no way to tell which
+        // configuration caused it) rather than the default, native-XCTest-
+        // timeout shape (`false` — this one configuration was individually,
+        // trustworthily identified).
+        batchAttributedTimeouts: (_ points: [MutationPoint]) -> Set<MutationID> = { _ in [] },
         incrementalBuild: Bool = false
     ) async throws -> (report: RunReport, adapter: SpyWaveAdapter, points: [MutationPoint], priorityStoreURL: URL) {
         try writeMutantProject(count: count)
@@ -87,7 +95,7 @@ struct MutationRunnerWaveEarlyKillTests {
             workers: 1,
             retestKilledMutants: retestKilledMutants,
             confirmCrashKills: false,
-            confirmTimedOutMutants: false,
+            confirmTimedOutMutants: confirmTimedOutMutants,
             selectCoveringTests: true,
             incrementalBuild: incrementalBuild,
             earlyAbortSelectedTests: true,
@@ -119,6 +127,7 @@ struct MutationRunnerWaveEarlyKillTests {
             fullSuiteOutcomes: fullSuiteOutcomes(points),
             waveDurationSeconds: waveDurationSeconds,
             unbatchedOverride: unbatchedOverride(points),
+            batchAttributedTimeouts: batchAttributedTimeouts(points),
             clock: clock
         )
 
@@ -482,18 +491,106 @@ struct MutationRunnerWaveEarlyKillTests {
             testBatchSize: 10,
             coverage: { points in [points[0].file: [points[0].line: [testA, testB]]] },
             waveOutcomes: { points in [points[0].id: [testA: .passed, testB: .passed]] },
-            mutantTimeoutSeconds: 0.1,
-            waveDurationSeconds: 0.05
+            mutantTimeoutSeconds: 10,
+            waveDurationSeconds: 3
         )
 
         let timeouts = await adapter.runBatchTimeouts
         #expect(timeouts.count == 2)
-        // Wave 1: nothing spent yet, so a fresh 0.1s budget.
-        #expect(timeouts[0] == 0.1)
-        // Wave 2: already spent ~0.05s of it in wave 1, so this wave's
-        // timeout must be visibly less than a fresh 0.1s — not the same
-        // value repeated.
-        #expect(timeouts[1] < 0.09, "expected wave 2's timeout to reflect the budget already spent, got \(timeouts[1])")
+        // A fixed 10s mutant timeout (`mutantTimeoutSeconds: 10` above) —
+        // `TimeoutController.mutantLimitSeconds(selectedTests:)` no longer
+        // narrows by selection size (Gate 3 found that uncalibrated for
+        // real Xcode/Simulator overhead; see its own doc comment), so this
+        // test pins a small budget directly instead.
+        // Wave 1: nothing spent yet, so the fresh 10s budget.
+        #expect(timeouts[0] == 10)
+        // Wave 2: already spent 3s of it in wave 1, so this wave's timeout
+        // must reflect the budget already spent (10 - 3 = 7), not the same
+        // 10s value repeated.
+        #expect(timeouts[1] == 7, "expected wave 2's timeout to reflect the budget already spent, got \(timeouts[1])")
+    }
+
+    // MARK: - Native XCTest timeout containment (Gate 3 Phase H3)
+
+    /// A chunk with more than one member is exactly the case native
+    /// containment exists for (Phase H1/H2): the outer `batchTimeout` above
+    /// stays a shared, ambiguous fail-safe across every member, so this is
+    /// where XCTest's own per-test allowance is asked to localize a hang to
+    /// just the one member that has it.
+    @Test("A multi-member wave chunk's batch call requests native timeout containment, sized from the resolved mutant limit")
+    func nativeTimeoutAllowanceIsSetForMultiMemberWaveChunksAboveTheFloor() async throws {
+        let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
+
+        let (_, adapter, _, _) = try await run(
+            count: 3,
+            testBatchSize: 3,
+            coverage: { points in
+                var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
+                for point in points { coveringTests[point.file, default: [:]][point.line] = [testA] }
+                return coveringTests
+            },
+            waveOutcomes: { points in
+                Dictionary(uniqueKeysWithValues: points.map { ($0.id, [testA: TestRunStatus.passed]) })
+            },
+            mutantTimeoutSeconds: 90
+        )
+
+        let calls = await adapter.runBatchCalls
+        #expect(calls.count == 1)
+        #expect(calls[0].count == 3)
+        let allowances = await adapter.runBatchNativeTimeoutAllowances
+        #expect(allowances == [90])
+    }
+
+    /// A chunk of exactly one member has no attribution ambiguity for the
+    /// outer timeout to begin with — the same reasoning
+    /// `XcodeBuildAdapter.runBatchOnDestination`'s own
+    /// `isBatchAttributedTimeout: configurationTestIdentifiers.count > 1`
+    /// already applies. Nothing for native containment to localize, so it
+    /// is not requested.
+    @Test("A single-member wave chunk does not request native timeout containment")
+    func nativeTimeoutAllowanceIsNilForASingleMemberChunk() async throws {
+        let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
+        let testB = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testB")
+
+        let (_, adapter, _, _) = try await run(
+            count: 1,
+            testBatchSize: 10,
+            coverage: { points in [points[0].file: [points[0].line: [testA, testB]]] },
+            waveOutcomes: { points in [points[0].id: [testA: .passed, testB: .passed]] },
+            mutantTimeoutSeconds: 90
+        )
+
+        let allowances = await adapter.runBatchNativeTimeoutAllowances
+        #expect(allowances == [nil, nil])
+    }
+
+    /// Phase H1's spike only ever exercised a 60s allowance against a real
+    /// hang — a resolved mutant limit below that has no evidence behind it,
+    /// so containment is skipped rather than risking a false-positive
+    /// timeout from Xcode/Simulator's own per-invocation startup overhead.
+    /// The outer `batchTimeout` alone still applies, exactly as before this
+    /// phase.
+    @Test("A multi-member wave chunk below Phase H1's validated floor does not request native timeout containment")
+    func nativeTimeoutAllowanceIsNilBelowThePhaseH1Floor() async throws {
+        let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
+
+        let (_, adapter, _, _) = try await run(
+            count: 3,
+            testBatchSize: 3,
+            coverage: { points in
+                var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
+                for point in points { coveringTests[point.file, default: [:]][point.line] = [testA] }
+                return coveringTests
+            },
+            waveOutcomes: { points in
+                Dictionary(uniqueKeysWithValues: points.map { ($0.id, [testA: TestRunStatus.passed]) })
+            },
+            mutantTimeoutSeconds: 45
+        )
+
+        let allowances = await adapter.runBatchNativeTimeoutAllowances
+        #expect(allowances == [nil])
     }
 
     /// Codex review finding on this branch: granting a fresh
@@ -520,12 +617,17 @@ struct MutationRunnerWaveEarlyKillTests {
             // real-Xcode acceptance run caught — must never itself decide a
             // classification).
             waveOutcomes: { points in [points[0].id: [testA: .passed, testB: .passed, testC: .timedOut]] },
-            // A real, controllable per-wave duration: after wave 1 (~50ms)
-            // cumulative is under the 80ms budget, so wave 2 runs; after
-            // wave 2 (~100ms) it's over budget, so wave 3 never happens —
-            // the standalone verification below runs instead.
-            mutantTimeoutSeconds: 0.08,
-            waveDurationSeconds: 0.05
+            // A fixed 15s mutant timeout (`mutantTimeoutSeconds: 15` below)
+            // — `TimeoutController.mutantLimitSeconds(selectedTests:)` no
+            // longer narrows by selection size (Gate 3 found that
+            // uncalibrated for real Xcode/Simulator overhead; see its own
+            // doc comment), so this test pins the budget directly instead.
+            // A real, controllable per-wave duration of 8s: after wave 1
+            // cumulative (8s) is under the 15s budget, so wave 2 runs; after
+            // wave 2 (16s) it's over budget, so wave 3 never happens — the
+            // standalone verification below runs instead.
+            mutantTimeoutSeconds: 15,
+            waveDurationSeconds: 8
         )
 
         #expect(report.results.count == 1)
@@ -540,11 +642,12 @@ struct MutationRunnerWaveEarlyKillTests {
         // adapter.
         let standaloneCalls = await adapter.runMutantSelectedTestsCalls
         #expect(standaloneCalls.last ?? nil == [testC])
-        // The reported duration is the accumulated real time across both
-        // waves plus the standalone check, not just the last wave (or
+        // The reported duration is the accumulated simulated time across
+        // both waves (8 + 8 = 16s; the unbatched standalone call itself
+        // advances the shared clock by nothing), not just the last wave (or
         // omitted entirely).
         let testDuration = try #require(report.results[0].testDurationSeconds)
-        #expect(testDuration >= 0.09)
+        #expect(testDuration == 16)
     }
 
     @Test(
@@ -835,6 +938,146 @@ struct MutationRunnerWaveEarlyKillTests {
         #expect(Set(calls[0].map(\.id)) == Set(points.map(\.id)))
         #expect(calls[0].allSatisfy { $0.selectedTests == [sharedTest] })
     }
+
+    // MARK: - Native-timeout-vs-batch-attributed standalone-rerun gate (Gate 3 Phase H12.2B)
+
+    @Test(
+        """
+        A native-XCTest-timeout wave result (isBatchAttributedTimeout=false) skips the redundant standalone \
+        rerun and flows straight to timeout confirmation, which — timing out again — verifies the timeout
+        """
+    )
+    func nativeTimeoutSkipsStandaloneRerunAndConfirmsDirectly() async throws {
+        let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
+
+        let (report, adapter, _, _) = try await run(
+            count: 1,
+            testBatchSize: 10,
+            coverage: { points in [points[0].file: [points[0].line: [testA]]] },
+            waveOutcomes: { points in [points[0].id: [testA: .timedOut]] },
+            confirmTimedOutMutants: true,
+            // Confirmation (the same fake `runMutant` path) times out again —
+            // a genuine, reproduced hang.
+            unbatchedOverride: { points in [points[0].id: .timedOut] }
+            // batchAttributedTimeouts left empty: this mutant's `.timedOut`
+            // is the native-XCTest shape (isBatchAttributedTimeout: false).
+        )
+
+        #expect(report.results.count == 1)
+        #expect(report.results[0].outcome == .verifiedTimeout)
+
+        // Exactly one individual rerun — the timeout confirmation — never
+        // two (which the old, unconditional `run.status == .timedOut` gate
+        // would have produced: one redundant standaloneVerify, plus the
+        // separate confirmTimedOutMutants confirmation).
+        let calls = await adapter.runMutantSelectedTestsCalls
+        #expect(calls.count == 1, "expected only the timeout confirmation rerun, no redundant standalone verify, got \(calls.count)")
+        #expect(calls == [[testA]])
+    }
+
+    @Test(
+        """
+        A batch-attributed timeout (isBatchAttributedTimeout=true — a whole shared invocation killed, no \
+        individual attribution) still gets the mandatory standalone rerun before it is trusted
+        """
+    )
+    func batchAttributedTimeoutStillGetsStandaloneRerun() async throws {
+        let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
+
+        let (report, adapter, _, _) = try await run(
+            count: 1,
+            testBatchSize: 10,
+            coverage: { points in [points[0].file: [points[0].line: [testA]]] },
+            waveOutcomes: { points in [points[0].id: [testA: .timedOut]] },
+            confirmTimedOutMutants: true,
+            // Both the standalone rerun and the subsequent timeout
+            // confirmation go through this same fake `runMutant` path —
+            // scripted to time out again both times, a genuine reproduced
+            // hang either way.
+            unbatchedOverride: { points in [points[0].id: .timedOut] },
+            batchAttributedTimeouts: { points in [points[0].id] }
+        )
+
+        #expect(report.results.count == 1)
+        #expect(report.results[0].outcome == .verifiedTimeout)
+
+        // Two individual reruns: the mandatory standalone rerun (this
+        // mutant's own timeout was never individually attributed by the
+        // batch itself, so it must be re-established first) plus the
+        // separate timeout confirmation.
+        let calls = await adapter.runMutantSelectedTestsCalls
+        #expect(calls.count == 2, "expected both the standalone rerun and the timeout confirmation, got \(calls.count)")
+        #expect(calls == [[testA], [testA]])
+    }
+
+    @Test("A native-XCTest timeout whose confirmation genuinely passes is downgraded to flaky, same as before this phase")
+    func nativeTimeoutConfirmationPassingIsFlaky() async throws {
+        let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
+
+        let (report, adapter, _, priorityStoreURL) = try await run(
+            count: 1,
+            testBatchSize: 10,
+            coverage: { points in [points[0].file: [points[0].line: [testA]]] },
+            waveOutcomes: { points in [points[0].id: [testA: .timedOut]] },
+            confirmTimedOutMutants: true,
+            // Confirmation does NOT reproduce the timeout — a flake, not a
+            // real hang. `MutationVerdictVerifier.confirmTimeout` already
+            // requires `isBatchAttributedTimeout == true` before crediting a
+            // non-reproducing confirmation as a trusted kill — for the
+            // native (false) case this must stay `.flaky` exactly as it did
+            // before this phase's change, since that verifier rule is
+            // untouched.
+            unbatchedOverride: { points in [points[0].id: .passed] }
+        )
+
+        #expect(report.results.count == 1)
+        #expect(report.results[0].outcome == .flaky)
+
+        // Still only one individual rerun (the confirmation) — the native
+        // path's redundant-rerun removal applies regardless of how the
+        // confirmation itself turns out.
+        let calls = await adapter.runMutantSelectedTestsCalls
+        #expect(calls.count == 1)
+
+        let detections = persistedDetections(at: priorityStoreURL)
+        #expect(detections[testA.onlyTestingArgument] == nil, "a flaky-confirmed result must not be recorded as a detection")
+    }
+
+    @Test("Sibling mutants in the same wave chunk are unaffected by one mutant's native-timeout fast path")
+    func siblingMutantsUnaffectedByNativeTimeoutFastPath() async throws {
+        let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
+
+        let (report, adapter, _, _) = try await run(
+            count: 2,
+            testBatchSize: 10,
+            // Both points land in the same generated file (`writeMutantProject`
+            // puts every field on its own line of one `W.swift`) — one
+            // top-level key with both lines, not two entries for the same
+            // file, which would crash as a duplicate dictionary key.
+            coverage: { points in
+                [points[0].file: [points[0].line: [testA], points[1].line: [testA]]]
+            },
+            waveOutcomes: { points in
+                [
+                    points[0].id: [testA: .timedOut],
+                    points[1].id: [testA: .passed]
+                ]
+            },
+            confirmTimedOutMutants: true,
+            unbatchedOverride: { points in [points[0].id: .timedOut] }
+        )
+
+        let sorted = report.results.sorted { $0.id < $1.id }
+        #expect(sorted[0].outcome == .verifiedTimeout)
+        #expect(sorted[1].outcome == .survived)
+
+        // Only the timed-out mutant triggers any individual rerun — its
+        // passing sibling, sharing the same wave batch, is untouched by the
+        // native-timeout fast path.
+        let calls = await adapter.runMutantSelectedTestsCalls
+        #expect(calls.count == 1)
+        #expect(calls == [[testA]])
+    }
 }
 
 // MARK: - Fakes
@@ -918,8 +1161,14 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
     /// disagreeing with the mutant's original wave-batch result, the way a
     /// genuinely flaky test would.
     private let unbatchedOverride: [MutationID: TestRunStatus]
+    /// Gate 3 Phase H12.2B: mutants whose wave `.timedOut` result should
+    /// carry `isBatchAttributedTimeout: true`. Absent from this set (the
+    /// default for every mutant) means the native-XCTest-timeout shape —
+    /// `false`, this one configuration individually identified.
+    private let batchAttributedTimeouts: Set<MutationID>
     private(set) var runBatchCalls: [[BatchMutantItem]] = []
     private(set) var runBatchTimeouts: [Double] = []
+    private(set) var runBatchNativeTimeoutAllowances: [Double?] = []
     private(set) var runMutantSelectedTestsCalls: [Set<TestIdentifier>?] = []
 
     init(
@@ -928,6 +1177,7 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
         fullSuiteOutcomes: [MutationID: TestRunStatus] = [:],
         waveDurationSeconds: Double = 0,
         unbatchedOverride: [MutationID: TestRunStatus] = [:],
+        batchAttributedTimeouts: Set<MutationID> = [],
         clock: ManualClock? = nil
     ) {
         self.perTestCoverage = perTestCoverage
@@ -935,6 +1185,7 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
         self.fullSuiteOutcomes = fullSuiteOutcomes
         self.waveDurationSeconds = waveDurationSeconds
         self.unbatchedOverride = unbatchedOverride
+        self.batchAttributedTimeouts = batchAttributedTimeouts
         self.clock = clock
     }
 
@@ -970,10 +1221,12 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
     }
 
     func runBatch(
-        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double
+        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
     ) async -> [MutationID: TestRunResult] {
         runBatchCalls.append(items)
         runBatchTimeouts.append(timeoutSeconds)
+        runBatchNativeTimeoutAllowances.append(nativeTimeoutAllowanceSeconds)
         if waveDurationSeconds > 0 {
             if let clock {
                 clock.advance(by: waveDurationSeconds)
@@ -984,18 +1237,19 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
 
         var results: [MutationID: TestRunResult] = [:]
         for item in items {
+            let isBatchAttributedTimeout = batchAttributedTimeouts.contains(item.id)
             if let tests = item.selectedTests, let single = tests.first, tests.count == 1 {
                 let status = waveOutcomes[item.id]?[single] ?? .passed
-                results[item.id] = Self.result(status)
+                results[item.id] = Self.result(status, isBatchAttributedTimeout: isBatchAttributedTimeout)
             } else {
                 let status = fullSuiteOutcomes[item.id] ?? .passed
-                results[item.id] = Self.result(status)
+                results[item.id] = Self.result(status, isBatchAttributedTimeout: isBatchAttributedTimeout)
             }
         }
         return results
     }
 
-    private static func result(_ status: TestRunStatus) -> TestRunResult {
+    private static func result(_ status: TestRunStatus, isBatchAttributedTimeout: Bool = false) -> TestRunResult {
         TestRunResult(
             status: status,
             summary: status == .failed
@@ -1003,7 +1257,8 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
                 : nil,
             command: CommandRecord(executable: "xcodebuild", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,
-            diagnosis: "scripted \(status.rawValue)"
+            diagnosis: "scripted \(status.rawValue)",
+            isBatchAttributedTimeout: isBatchAttributedTimeout
         )
     }
 }

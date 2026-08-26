@@ -294,4 +294,162 @@ struct CLICommandsAcceptanceTests {
             in: dir
         )
     }
+
+    // MARK: - init
+
+    /// Phase C11 (competitive-parity program): `mutantkit init` used to
+    /// always write `tests.targets: []`, regardless of project kind,
+    /// leaving every new user to discover and type in their own test
+    /// target names by hand — a real friction point in exactly the
+    /// first-60-seconds path the README's own quick start walks through.
+    /// For a SwiftPM project, the manifest already says which targets are
+    /// test targets; this proves `init`, run against the real binary
+    /// against a real (if minimal) SwiftPM fixture, now fills them in.
+    ///
+    /// Uses its own freshly-staged fixture copy, not `sharedRun`'s
+    /// directory — `init` refuses to overwrite an existing
+    /// `mutantkit.yml` without `--force`, and `sharedRun` already wrote
+    /// one via `planAndRun`.
+    @Test("init detects and fills in a SwiftPM project's real test targets")
+    func initDetectsSwiftPMTestTargets() throws {
+        let dir = try Acceptance.stageFixture("SwiftPackageMacOS")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let result = try Acceptance.run(["init"], in: dir)
+        #expect(result.exitCode == 0)
+        #expect(result.output.contains("PricingTests"))
+
+        let generated = try String(contentsOf: dir.appendingPathComponent("mutantkit.yml"), encoding: .utf8)
+        #expect(generated.contains("PricingTests"))
+        #expect(generated.contains("PricingXCTestTests"))
+        // The stale "no test target detected" placeholder comment must not
+        // survive alongside real, detected target names.
+        #expect(!generated.contains("No test target detected"))
+    }
+
+    /// Phase C13 (competitive-parity program): the C0-C12 closeout was
+    /// correctly rejected for claiming Xcode-competitive onboarding while
+    /// `init` only ever auto-detected test targets for SwiftPM — for an
+    /// Xcode project it wrote `tests.targets: []`, a `nil` scheme, and a
+    /// hardcoded `iPhone 16` destination regardless of what this machine
+    /// actually has installed. `Fixtures/XcodeProject` has four real
+    /// schemes (Checkout, HangApp, HangContainmentTests,
+    /// SwiftTestingCheckoutTests), so `init` here cannot resolve a single
+    /// scheme — this proves the *destination* is still detected for real
+    /// despite that ambiguity (the exact bug `XcodeConfigDetectorTests
+    /// .destinationIsDetectedIndependentlyOfSchemeAmbiguity` covers at the
+    /// unit level; this is the same fix, proven through the real binary).
+    @Test("init detects a real destination for an Xcode project even with more than one scheme")
+    func initDetectsXcodeDestinationDespiteSchemeAmbiguity() throws {
+        let dir = try Acceptance.stageFixture("XcodeProject")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // The fixture ships its own committed `mutantkit.yml`, used by the
+        // real-simulator suites elsewhere — remove it here so `init` writes
+        // a fresh one instead of refusing with "already exists".
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("mutantkit.yml"))
+
+        let result = try Acceptance.run(["init"], in: dir)
+        #expect(result.exitCode == 0)
+        #expect(result.output.contains("Multiple schemes found"))
+        #expect(result.output.contains("Detected destination: platform=iOS Simulator,name=iPhone"))
+
+        let generated = try String(contentsOf: dir.appendingPathComponent("mutantkit.yml"), encoding: .utf8)
+        #expect(generated.contains("platform=iOS Simulator,name=iPhone"))
+    }
+
+    // MARK: - doctor
+
+    /// Regression test for a real bug caught by Codex review before C13's
+    /// Xcode auto-detection was committed as done:
+    /// `DoctorCommand.remedy(forFailedResolutionIn:configuration:)`
+    /// originally suppressed the detected scheme whenever
+    /// `project.scheme` was already set to *anything* — including a
+    /// typo'd/nonexistent scheme, the single most likely reason a scheme
+    /// would be wrong at all.
+    ///
+    /// `AppleAdapterFactory.resolve` never actually validates the scheme
+    /// itself (scheme resolution happens later, during a real build) — it
+    /// can only throw here from project-kind detection or *destination*
+    /// resolution failing. So a scheme typo alone never reaches this
+    /// remedy at all; this test pairs the scheme typo with a genuinely
+    /// invalid destination (the real, reachable failure mode) to prove
+    /// both suggestions come back correctly together: the real scheme
+    /// despite the configured typo, and a real destination despite the
+    /// configured invalid one. `Fixtures/XcodeAppWithUITests` has exactly
+    /// one real scheme (`BatchUIDemo`).
+    @Test("doctor suggests the real scheme and a real destination even when both configured values are wrong")
+    func doctorSuggestsRealSchemeAndDestinationDespiteBothConfiguredWrong() throws {
+        let dir = try Acceptance.stageFixture("XcodeAppWithUITests")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let config = """
+        version: 1
+        project:
+          kind: xcodeProject
+          scheme: BatchUIDemoTypoDoesNotExist
+          destination: platform=iOS Simulator,name=NoSuchSimulatorDeviceAtAll
+        sources:
+          include: [Sources/**]
+        tests:
+          targets: [BatchUIDemoTests]
+        operators:
+          profile: default
+        execution:
+          strategy: isolated
+        reports: [console]
+        """
+        try Data(config.utf8).write(to: dir.appendingPathComponent("mutantkit.yml"), options: .atomic)
+
+        let result = try Acceptance.run(["doctor", "--skip-build"], in: dir)
+        #expect(result.exitCode != 0)
+        #expect(result.output.contains("Detected scheme: BatchUIDemo"))
+        #expect(result.output.contains("set `project.scheme: BatchUIDemo`"))
+        #expect(result.output.contains("Detected a real available destination: platform=iOS Simulator,name=iPhone"))
+    }
+
+    /// Phase C13 item ④: a real 4-way local benchmark against a real large
+    /// iOS app found `execution.simulatorPool: true` + `workers: 2` (this
+    /// exact combination) 2.17x faster than a tuned `workers: 1` reference,
+    /// with identical outcomes and no integrity violations — the measured
+    /// production-grade profile for a Simulator-backed project kind. This
+    /// proves `doctor`, run against the real binary against a real Xcode
+    /// fixture, actually surfaces that finding rather than leaving it as
+    /// a research note nobody using the tool would ever see.
+    @Test("doctor warns when a Simulator-backed project has not enabled the measured production profile")
+    func doctorWarnsAboutMissingProductionProfile() throws {
+        let dir = try Acceptance.stageFixture("XcodeAppWithUITests")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let destination = try Acceptance.iPhoneDestination()
+        let withoutProfile = """
+        version: 1
+        project:
+          kind: xcodeProject
+          scheme: BatchUIDemo
+          destination: \(destination)
+        sources:
+          include: [Sources/**]
+        tests:
+          targets: [BatchUIDemoTests]
+        operators:
+          profile: default
+        execution:
+          strategy: isolated
+        reports: [console]
+        """
+        try Data(withoutProfile.utf8).write(to: dir.appendingPathComponent("mutantkit.yml"), options: .atomic)
+
+        let warned = try Acceptance.run(["doctor", "--skip-build"], in: dir)
+        #expect(warned.output.contains("Production profile"))
+        #expect(warned.output.contains("simulatorPool: true"))
+
+        let withProfile = withoutProfile.replacingOccurrences(
+            of: "execution:\n  strategy: isolated",
+            with: "execution:\n  strategy: isolated\n  workers: 2\n  simulatorPool: true\n  incrementalBuild: true\n  selectCoveringTests: true"
+        )
+        try Data(withProfile.utf8).write(to: dir.appendingPathComponent("mutantkit.yml"), options: .atomic)
+
+        let silent = try Acceptance.run(["doctor", "--skip-build"], in: dir)
+        #expect(!silent.output.contains("Production profile"), "\(silent.output)")
+    }
 }

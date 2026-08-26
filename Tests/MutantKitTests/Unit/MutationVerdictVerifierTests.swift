@@ -272,6 +272,27 @@ struct MutationVerdictVerifierTests {
         #expect(record.outcome == .timedOut)
     }
 
+    /// Round-2 review M1: unlike `.failed`/`.crashed`/`.passed` (see
+    /// `isolatedFailedUnproven` above), `.timedOut` is never routed through
+    /// `unprovenActivation` — `classify` reports a hang as `.timedOut`
+    /// regardless of whether activation is proven. This is the fact
+    /// `MutationRunner.prepare`'s short-circuit comment now describes: had
+    /// the short-circuit not existed, a hash-identical (unproven-activation)
+    /// mutant whose tests hung would have surfaced here as `.timedOut`, not
+    /// `.infrastructureFailure` — a materially different verdict from every
+    /// other unproven-activation test outcome.
+    @Test("timedOut is NOT downgraded to infrastructureFailure when activation is unproven, unlike failed/crashed/passed")
+    func isolatedTimedOutUnprovenIsNotDowngraded() throws {
+        let record = try verify { ref in
+            MutationObservations(
+                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h0", activation: unprovenIsolated)),
+                build: BuildObservation(outcome: .succeeded(buildProductHash: "h0", command: nil)),
+                test: SingleTestObservation(run: run(status: .timedOut), applicationEvidence: .isolated(unprovenIsolated))
+            )
+        }
+        #expect(record.outcome == .timedOut)
+    }
+
     @Test("infrastructureFailure: the test run itself could not produce a verdict")
     func isolatedTestInfrastructureFailure() throws {
         let record = try verify { ref in

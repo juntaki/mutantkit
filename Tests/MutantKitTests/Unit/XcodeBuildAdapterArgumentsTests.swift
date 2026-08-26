@@ -255,3 +255,55 @@ struct DiagnosticsDerivedDataTests {
         #expect(!item.detail.contains("per-workspace, so concurrent mutants cannot overwrite"))
     }
 }
+
+/// Phase C10 (competitive-parity program): `destinationNeedsSimulatorLease`
+/// used to check only `"iOS Simulator"`, so a tvOS/watchOS/visionOS
+/// destination was silently treated as needing no mutual exclusion at all —
+/// two concurrent workers could install and run tests on the very same real
+/// simulator device with no lease protecting either from the other.
+@Suite("Xcode build adapter: destinationNeedsSimulatorLease covers every simulator platform")
+struct XcodeBuildAdapterSimulatorLeaseCoverageTests {
+    private static let workspace = URL(fileURLWithPath: "/tmp/mutantkit-worker-1")
+
+    private func adapter(destination: String) -> XcodeBuildAdapter {
+        var configuration = Configuration()
+        configuration.project.destination = destination
+        return XcodeBuildAdapter(
+            configuration: configuration,
+            kind: .xcodeProject,
+            projectFile: nil,
+            projectRoot: Self.workspace
+        )
+    }
+
+    @Test("An iOS Simulator destination needs a lease (unchanged behavior)")
+    func iOSNeedsLease() {
+        #expect(adapter(destination: "platform=iOS Simulator,name=iPhone 16").destinationNeedsSimulatorLease)
+    }
+
+    @Test("A tvOS Simulator destination needs a lease")
+    func tvOSNeedsLease() {
+        #expect(adapter(destination: "platform=tvOS Simulator,name=Apple TV 4K (3rd generation)").destinationNeedsSimulatorLease)
+    }
+
+    @Test("A watchOS Simulator destination needs a lease")
+    func watchOSNeedsLease() {
+        #expect(adapter(destination: "platform=watchOS Simulator,name=Apple Watch Series 10 (46mm)").destinationNeedsSimulatorLease)
+    }
+
+    @Test("A visionOS Simulator destination needs a lease")
+    func visionOSNeedsLease() {
+        #expect(adapter(destination: "platform=visionOS Simulator,name=Apple Vision Pro").destinationNeedsSimulatorLease)
+    }
+
+    @Test("A macOS destination needs no lease")
+    func macOSNeedsNoLease() {
+        #expect(!adapter(destination: "platform=macOS").destinationNeedsSimulatorLease)
+    }
+
+    @Test("A generic simulator placeholder needs no lease, for every simulator platform")
+    func genericPlaceholderNeedsNoLease() {
+        #expect(!adapter(destination: "generic/platform=iOS Simulator").destinationNeedsSimulatorLease)
+        #expect(!adapter(destination: "generic/platform=tvOS Simulator").destinationNeedsSimulatorLease)
+    }
+}

@@ -9,15 +9,18 @@ Muter is the established Swift mutation testing tool, is MIT licensed, and has
 years of accumulated knowledge about Xcode and SwiftPM integration that would be
 expensive to rediscover. Forking it is the obvious move.
 
-Muter's architecture holds SwiftSyntax node identity from its discovery pass and
-uses that identity to map mutations onto the tree again at apply time, re-parsing
-the source in between to keep memory bounded on large codebases. Node identity
-does not survive a re-parse, so the two passes work against different trees by
-construction.
+At the Muter revision evaluated when this ADR was written (2026-07-17),
+mutation mappings were keyed by SwiftSyntax code-block values from the
+discovery pass, and the apply path could reparse the source when the
+original tree was not already cached, to keep memory bounded on large
+codebases. Node identity does not survive a reparse, so a design that
+depends on matching syntax values across a discovery/apply boundary that
+may or may not reparse ties correctness to memory/caching strategy.
 
-We considered this class of design and decided against it: an architecture where
-a later pass depends on node identity established by an earlier, since-invalidated
-parse ties correctness to memory strategy in a way we did not want to inherit.
+We considered this class of design and decided against it: correctness
+depending on whether an intermediate cache happened to still hold the
+original tree is not a property we wanted to inherit, regardless of how
+often that boundary is actually crossed in the current implementation.
 
 ## Decision
 

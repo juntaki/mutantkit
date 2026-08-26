@@ -119,6 +119,74 @@ let package = Package(
             ]
         ),
 
+        // Research-only execution-vehicle tool for
+        // Research/budget-selection-v2/evaluation-protocol.md §4.1
+        // (revision 7): derives a standalone plan scoped to a pre-computed
+        // outcome execution universe U', through MutationPlan/PlanSharding's
+        // own model-level decode/encode APIs — never by hand-editing plan
+        // JSON. See Sources/PlanSubsetDerivation/main.swift's doc comment.
+        .executableTarget(
+            name: "PlanSubsetDerivation",
+            dependencies: [
+                "MutationModel", "MutationPlanner",
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ]
+        ),
+
+        // Research-only, outcome-blind classification tool for
+        // Research/adr-0008-validation/protocol.md's Protocol v3 addendum
+        // (Corpus B calibration population selection rule): actually runs
+        // SchemataChunkPlanner.plan (the same target-resolution/registry
+        // machinery a real formal run uses) to determine authoritative
+        // embedded membership, not just a lowerer's own `analyze()`. See
+        // Sources/SchemataEligibilityClassifier/EligibilityClassification.swift's
+        // doc comment.
+        .executableTarget(
+            name: "SchemataEligibilityClassifier",
+            dependencies: [
+                "MutationModel", "SwiftFrontend", "SwiftCoreOperators", "MutationPlanner", "AppleBuildAdapters",
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ]
+        ),
+
+        // TEMP diagnostic tool for the muter-comparison Phase 3 slowdown
+        // investigation (Research/muter-comparison) — computes, from a
+        // plan.json alone (no test execution), what SchemataChunkPlanner
+        // would actually embed vs. fall back, broken down by operator, plus
+        // chunk composition. Not part of any frozen protocol; not intended
+        // to be a long-lived target.
+        .executableTarget(
+            name: "PlanStats",
+            dependencies: [
+                "MutationModel", "MutationPlanner", "SwiftCoreOperators", "SwiftFrontend", "AppleBuildAdapters"
+            ]
+        ),
+
+        // TEMP diagnostic tool for the muter-comparison bool-literal-inversion
+        // schemata chunk build-failure investigation — build-only reproducer
+        // (never runs tests) for delta-debugging which MutationID(s) in a
+        // failing chunk are actually responsible. Not part of any frozen
+        // protocol; not intended to be a long-lived target.
+        .executableTarget(
+            name: "SchemataChunkBuildProbe",
+            dependencies: [
+                "MutationModel", "MutationPlanner", "MutationExecution", "AppleBuildAdapters",
+                "SwiftCoreOperators", "SwiftFrontend"
+            ]
+        ),
+
+        // TEMP diagnostic tool for the "direct test-binary invocation"
+        // prototype (does bypassing `xcrun swift test`'s own CLI layer and
+        // invoking an already-built .xctest bundle straight through `xcrun
+        // xctest -XCTest <Class>/<method> <bundle>` save wall time for a
+        // single-test SwiftPM/macOS run?). Standalone — no dependency on
+        // any MutantKit module; it measures a mechanism against an
+        // arbitrary already-built SwiftPM package, not MutantKit's own
+        // runner. Not part of any frozen protocol; not intended to be a
+        // long-lived target, and NOT wired into AppleBuildAdapters or
+        // MutationRunner — that integration is a later step.
+        .executableTarget(name: "DirectXCTestInvokeProbe"),
+
         // MARK: Tests
 
         .testTarget(
@@ -127,7 +195,7 @@ let package = Package(
                 "MutationModel", "SwiftFrontend", "SwiftCoreOperators",
                 "ApplePlatformOperators", "MutationPlanner", "MutationExecution",
                 "AppleBuildAdapters", "Reporting", "MuterCompatibility",
-                "CLI",
+                "CLI", "SchemataEligibilityClassifier",
                 // Not imported by any test file — a target dependency here
                 // exists only so `swift build --build-tests` (already run
                 // before every test invocation) also produces

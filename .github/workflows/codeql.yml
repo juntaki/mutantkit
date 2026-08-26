@@ -1,0 +1,62 @@
+name: CodeQL
+
+# Static analysis via GitHub's CodeQL, separate from the lint/unit/acceptance
+# gates in ci.yml: this looks for security-relevant patterns (the query
+# packs), not style or correctness-by-test. Runs on push to main and on
+# every PR like ci.yml, plus a weekly schedule so newly-disclosed query-pack
+# findings surface even on a week with no code changes.
+#
+# `build-mode: manual` rather than `autobuild`: this is a multi-target
+# SwiftPM package with a plain-C target (MutantKitSchemataRuntimeC) wrapped
+# in a product with an explicit `type: .static`, not a single generic
+# executable — exactly the shape autobuild's build-system heuristics are
+# least reliable on. A manual `swift build` step (the same invocation
+# ci.yml's `unit` job already trusts to build the whole package, including
+# the C target) is both simpler to reason about and guaranteed to match how
+# this package actually builds.
+#
+# macos-15, matching ci.yml/release.yml: this needs the real Xcode/Swift
+# toolchain, not a Linux runner — CodeQL's Swift extractor only runs on
+# macOS.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Wednesday 13:00 UTC: an off-peak slot outside GitHub's own default
+    # examples, chosen only to avoid piling onto the very top of the hour.
+    - cron: "0 13 * * 3"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (swift)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+
+      - name: Build
+        run: swift build
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:swift"

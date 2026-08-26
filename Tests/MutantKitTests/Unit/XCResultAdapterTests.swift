@@ -169,6 +169,99 @@ struct XCResultAdapterTests {
     }
     """.utf8)
 
+    /// Captured shape from a real `xcodebuild test-without-building
+    /// -test-timeouts-enabled YES -maximum-test-execution-time-allowance 60`
+    /// run against a genuinely hanging test (Gate 3 Phase H1 spike,
+    /// `XcodeBatchHangTimeoutSpikeAcceptanceTests`). `issueType` (not
+    /// modelled here — confirmed separately to read `"Uncategorized"` for
+    /// this exact bundle, same as an ordinary assertion failure) is not
+    /// what distinguishes this; `failureText`'s fixed prefix is.
+    private static let nativeTimeoutSummary = Data("""
+    {
+        "devicesAndConfigurations": [],
+        "expectedFailures": 0,
+        "failedTests": 1,
+        "passedTests": 0,
+        "result": "Failed",
+        "skippedTests": 0,
+        "testFailures": [
+            {
+                "failureText": "Test exceeded execution time allowance of 1 minute. The test may have hung; check Xcode's test report for additional diagnostics.",
+                "targetName": "CheckoutTests",
+                "testIdentifier": 2,
+                "testIdentifierString": "HangSpikeTests/testIntentionalHang()",
+                "testName": "testIntentionalHang()"
+            }
+        ],
+        "totalTestCount": 1
+    }
+    """.utf8)
+
+    /// A contrived crash *and* native-timeout mix in the same configuration
+    /// — not observed in a real bundle, but locks the precedence H2-2
+    /// specifies: a crash anywhere in the configuration wins over a
+    /// timeout anywhere else in it, the same way a crash already wins over
+    /// an ordinary failure.
+    private static let crashAndNativeTimeoutSummary = Data("""
+    {
+        "devicesAndConfigurations": [],
+        "expectedFailures": 0,
+        "failedTests": 2,
+        "passedTests": 0,
+        "result": "Failed",
+        "skippedTests": 0,
+        "testFailures": [
+            {
+                "failureText": "Test exceeded execution time allowance of 1 minute.",
+                "targetName": "CheckoutTests",
+                "testIdentifier": 1,
+                "testIdentifierString": "HangSpikeTests/testIntentionalHang()",
+                "testName": "testIntentionalHang()"
+            },
+            {
+                "failureText": "Crash: xctest at CrashProbeTests.testCrashes()",
+                "targetName": "CheckoutTests",
+                "testIdentifier": 2,
+                "testIdentifierString": "CrashProbeTests/testCrashes()",
+                "testName": "testCrashes()"
+            }
+        ],
+        "totalTestCount": 2
+    }
+    """.utf8)
+
+    /// A native timeout alongside an unrelated ordinary assertion failure
+    /// in the same configuration — locks the other half of H2-2's
+    /// precedence: timeout wins over an ordinary failure, the same way a
+    /// crash wins over one.
+    private static let nativeTimeoutAndOrdinaryFailureSummary = Data("""
+    {
+        "devicesAndConfigurations": [],
+        "expectedFailures": 0,
+        "failedTests": 2,
+        "passedTests": 0,
+        "result": "Failed",
+        "skippedTests": 0,
+        "testFailures": [
+            {
+                "failureText": "Test exceeded execution time allowance of 1 minute.",
+                "targetName": "CheckoutTests",
+                "testIdentifier": 1,
+                "testIdentifierString": "HangSpikeTests/testIntentionalHang()",
+                "testName": "testIntentionalHang()"
+            },
+            {
+                "failureText": "XCTAssertTrue failed - intentional failure",
+                "targetName": "CheckoutTests",
+                "testIdentifier": 2,
+                "testIdentifierString": "AssertFailProbeTests/testFails()",
+                "testName": "testFails()"
+            }
+        ],
+        "totalTestCount": 2
+    }
+    """.utf8)
+
     private func classify(_ data: Data) throws -> XCResultAdapter.Outcome {
         let summary = try JSONDecoder().decode(TestSummaryJSON.self, from: data)
         return XCResultAdapter().classify(summary: summary)
@@ -208,5 +301,47 @@ struct XCResultAdapterTests {
     func unattributedFailureCountIsInfrastructureFailureNotAGuessedKill() throws {
         let outcome = try classify(Self.unattributedFailureSummary)
         #expect(outcome.status == .infrastructureFailure)
+    }
+
+    @Test("XCTest's own native execution-time allowance is classified timedOut, not failed")
+    func nativeTimeoutIsClassifiedTimedOut() throws {
+        let outcome = try classify(Self.nativeTimeoutSummary)
+        #expect(outcome.status == .timedOut)
+    }
+
+    @Test("A crash still wins over a native timeout in the same configuration")
+    func crashWinsOverNativeTimeout() throws {
+        let outcome = try classify(Self.crashAndNativeTimeoutSummary)
+        #expect(outcome.status == .crashed)
+    }
+
+    @Test("A native timeout wins over an ordinary assertion failure in the same configuration")
+    func nativeTimeoutWinsOverOrdinaryFailure() throws {
+        let outcome = try classify(Self.nativeTimeoutAndOrdinaryFailureSummary)
+        #expect(outcome.status == .timedOut)
+    }
+
+    @Test("issueType is never consulted — failureText's structured prefix alone drives the timedOut classification")
+    func nativeTimeoutClassificationDoesNotDependOnIssueType() throws {
+        // `TestSummaryJSON`/`Failure` model no `issueType` field at all —
+        // confirmed directly (Gate 3 Phase H1) that Apple's own value for
+        // it ("Uncategorized") is identical for a native timeout and a
+        // plain `XCTFail`, so it cannot be the discriminator. This test
+        // exists so a future attempt to reintroduce an `issueType`-based
+        // check has something concrete to fail against: decoding
+        // `nativeTimeoutSummary` (which carries no `issueType` key) still
+        // classifies as `.timedOut` from `failureText` alone.
+        let outcome = try classify(Self.nativeTimeoutSummary)
+        #expect(outcome.status == .timedOut)
+    }
+
+    @Test("A failure record with no duration at all (the single, unbatched path) still classifies as timedOut")
+    func nativeTimeoutWithoutDurationCorroborationStillClassifies() throws {
+        // The single-run `test-results summary` shape (unlike the batch
+        // tree) never carries a per-failure duration — `durationInSeconds`
+        // decodes to `nil`. Corroboration must be optional, never gating.
+        let summary = try JSONDecoder().decode(TestSummaryJSON.self, from: Self.nativeTimeoutSummary)
+        #expect(summary.testFailures?.first?.durationInSeconds == nil)
+        #expect(XCResultAdapter().classify(summary: summary).status == .timedOut)
     }
 }

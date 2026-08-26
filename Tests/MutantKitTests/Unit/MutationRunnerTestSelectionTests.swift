@@ -146,6 +146,60 @@ struct MutationRunnerTestSelectionTests {
         // narrowed to the same attributed test.
         #expect(selections == [[addTest], [addTest]])
     }
+
+    // MARK: - Selected-test-aware timeout
+
+    // A `10...30`s, `selectedTests.count`-scaled clamp lived here
+    // previously — narrowing a known selection's timeout well below the
+    // whole-suite number. Gate 3's real-iOS-project run found it
+    // uncalibrated for Xcode/Simulator's fixed per-invocation overhead (see
+    // `TimeoutController.mutantLimitSeconds(selectedTests:)`'s own doc
+    // comment and `Research/benchmarks/gate3-ios-schemata-2026-08-23`), so a
+    // known selection now resolves to the same whole-suite number an
+    // unknown one always did — the three tests below assert that identical
+    // outcome instead of a narrower one.
+
+    @Test("A known, non-empty selection resolves to the same whole-suite timeout as an unknown one, not a narrower clamp")
+    func knownSelectionMatchesWholeSuiteTimeout() async throws {
+        let (report, adapter) = try await run(
+            selectCoveringTests: true, attribution: .some([addTest]), mutantSequence: [.failed]
+        )
+
+        #expect(report.results.first?.outcome == .killedByAssertion)
+        let observed = try #require(await adapter.recordedTimeoutSeconds.first)
+        // Default `TimeoutSettings()` with an unmeasured (~0s) baseline
+        // resolves to ~ the adaptive default's overheadAllowance (60s).
+        #expect(abs(observed - 60) < 1)
+    }
+
+    @Test("An unknown/unattributed selection keeps today's whole-suite-scaled timeout, completely unchanged")
+    func unknownSelectionFallsThroughToWholeSuiteTimeout() async throws {
+        let (report, adapter) = try await run(
+            selectCoveringTests: true, attribution: .some(nil), mutantSequence: [.failed]
+        )
+
+        #expect(report.results.first?.outcome == .killedByAssertion)
+        let observed = try #require(await adapter.recordedTimeoutSeconds.first)
+        // Default `TimeoutSettings()` with an unmeasured (~0s) baseline
+        // resolves to ~ the adaptive default's overheadAllowance (60s).
+        #expect(abs(observed - 60) < 1)
+    }
+
+    @Test("A confirmation reruns under the exact same resolved limit the original observation used, never a separately-resolved one")
+    func confirmationReusesThePrimaryRunsResolvedTimeout() async throws {
+        let (report, adapter) = try await run(
+            selectCoveringTests: true, attribution: .some([addTest]),
+            confirmCrashKills: true, mutantSequence: [.crashed, .crashed]
+        )
+
+        #expect(report.results.first?.outcome == .killedByCrash)
+        let observed = await adapter.recordedTimeoutSeconds
+        #expect(observed.count == 2)
+        #expect(
+            abs(observed[0] - observed[1]) < 0.001,
+            "the original observation and its confirmation must resolve to the identical limit, got \(observed)"
+        )
+    }
 }
 
 // MARK: - Fakes
@@ -179,6 +233,7 @@ private actor ScriptedSelectiveTestAdapter: TestSelecting {
     private var remaining: [TestRunStatus]
     private let perTestCoverage: PerTestCoverageMap?
     private(set) var recordedSelections: [Set<TestIdentifier>?] = []
+    private(set) var recordedTimeoutSeconds: [Double] = []
 
     init(mutantSequence: [TestRunStatus], perTestCoverage: PerTestCoverageMap?) {
         remaining = mutantSequence
@@ -209,6 +264,7 @@ private actor ScriptedSelectiveTestAdapter: TestSelecting {
         selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
         recordedSelections.append(selectedTests)
+        recordedTimeoutSeconds.append(timeoutSeconds)
         precondition(!remaining.isEmpty, "runMutant called more times than the test scripted")
         return Self.result(remaining.removeFirst())
     }

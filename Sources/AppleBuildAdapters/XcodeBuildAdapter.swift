@@ -32,13 +32,48 @@ public struct XcodeBuildAdapter: Sendable {
     /// and test call falls back to the previous, per-call resolution in that
     /// case, so this is purely additive.
     let resolvedDestination: ResolvedDestination?
+    /// Phase C4 worker-affinity: when set, `leaseAndRunTests` looks up the
+    /// mutant's sandbox by `workspace.lastPathComponent` here *before*
+    /// falling back to the single, run-wide `resolvedDestination.device`
+    /// every worker otherwise shares. Keyed by
+    /// `WorkspaceManager.directoryName(for:)`'s own hashed sandbox-name
+    /// convention (computed once, by whoever provisions the pool — see
+    /// `RunCommand`), not by the worker id string itself, since a sandbox's
+    /// own directory name is the only worker-identifying value that
+    /// actually reaches this adapter — no protocol change to
+    /// `TestAdapter`/`BuildAdapter` was needed to thread a separate worker
+    /// id down. `nil` (the default, and the only value every existing
+    /// caller passes) reproduces today's single-shared-device behavior
+    /// exactly.
+    ///
+    /// **Known limitation, documented rather than silently accepted**
+    /// (found in adversarial review of Phase C4's design): crash/timeout
+    /// *confirmation* runs (`MutationRunner`'s `-crash-confirm`/
+    /// `-timeout-confirm` sandboxes) are created and named per-mutation-ID,
+    /// never per-worker, so their `workspace.lastPathComponent` never
+    /// matches a key in this dictionary — they always fall through to the
+    /// `resolvedDestination?.device` branch below, i.e. the single shared
+    /// base device, reintroducing exactly the contention `simulatorPool`
+    /// exists to remove, but only for the confirmation re-run of a mutant
+    /// already suspected to have crashed or hung, not for the primary,
+    /// parallel test pass. A structural fix would need to know which
+    /// worker's device produced the original crash/timeout so the
+    /// confirmation run could reuse it — not knowable from this dictionary
+    /// alone, since worker-to-mutant assignment is dynamic (`MutationQueue`
+    /// hands mutants to whichever worker asks next, not a static mapping
+    /// precomputed at provisioning time). Deferred rather than solved in
+    /// this phase: confirmation runs are rare (only suspected
+    /// crashes/timeouts trigger one) relative to the primary pass this
+    /// feature already parallelizes correctly.
+    let workerDevicesByWorkspace: [String: SimulatorDevice]?
 
     public init(
         configuration: Configuration,
         kind: ProjectKind,
         projectFile: URL?,
         projectRoot: URL,
-        resolvedDestination: ResolvedDestination? = nil
+        resolvedDestination: ResolvedDestination? = nil,
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
     ) {
         self.configuration = configuration
         self.kind = kind
@@ -46,6 +81,7 @@ public struct XcodeBuildAdapter: Sendable {
         resultReader = XCResultAdapter()
         simulators = SimulatorPool(workingDirectory: projectRoot)
         self.resolvedDestination = resolvedDestination
+        self.workerDevicesByWorkspace = workerDevicesByWorkspace
     }
 
     /// Test-only initializer that injects the simulator pool, so
@@ -58,7 +94,8 @@ public struct XcodeBuildAdapter: Sendable {
         projectFile: URL?,
         projectRoot: URL,
         resolvedDestination: ResolvedDestination?,
-        simulators: SimulatorPool
+        simulators: SimulatorPool,
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
     ) {
         self.configuration = configuration
         self.kind = kind
@@ -66,6 +103,7 @@ public struct XcodeBuildAdapter: Sendable {
         resultReader = XCResultAdapter()
         self.simulators = simulators
         self.resolvedDestination = resolvedDestination
+        self.workerDevicesByWorkspace = workerDevicesByWorkspace
     }
 
     /// The device name in a destination string, if it names one.
@@ -92,7 +130,16 @@ public struct XcodeBuildAdapter: Sendable {
     /// still collide on it.
     var destinationNeedsSimulatorLease: Bool {
         let target = destination()
-        return target.localizedCaseInsensitiveContains("iOS Simulator")
+        // Phase C10 (competitive-parity program): this used to check only
+        // `"iOS Simulator"`. A tvOS/watchOS/visionOS destination is exactly
+        // as shared and exactly as unsafe for two concurrent workers to
+        // install/run tests on at once as an iOS one is — reusing
+        // `DestinationResolver.isSimulatorDestination` (the same check that
+        // now also resolves those destinations to a pinned device in the
+        // first place) rather than keeping a second, narrower copy of this
+        // logic that would silently under-lease the three platforms the
+        // other copy was just fixed for.
+        return DestinationResolver.isSimulatorDestination(target)
             && !target.localizedCaseInsensitiveContains("generic/")
     }
 
@@ -335,7 +382,12 @@ public struct XcodeBuildAdapter: Sendable {
     /// Non-throwing because every caller treats "could not ask" and "there are
     /// none" the same way: both mean no scheme can be resolved, and both are
     /// reported with the same remedy.
-    func discoverSchemes(in workspace: URL) async -> [String] {
+    ///
+    /// `public`, not just used internally by `resolveScheme`: Phase C13's
+    /// `XcodeConfigDetector` (`init`/`doctor` auto-detection) needs this
+    /// exact same real `xcodebuild -list -json` discovery, before any
+    /// `Configuration` exists to construct a full adapter for a real run.
+    public func discoverSchemes(in workspace: URL) async -> [String] {
         let arguments = projectArguments(in: workspace) + ["-list", "-json"]
         let result = try? await ProcessSupervisor.run(
             executable: ToolPaths.xcodebuild,
@@ -533,6 +585,16 @@ extension XcodeBuildAdapter: TestAdapter {
     /// - Otherwise, the original name-hint behavior: narrowed to the device
     ///   the destination asked for, addressed by whichever UDID
     ///   `SimulatorPool` matches it to.
+    ///
+    /// Checked *before* any of the three cases above: Phase C4's per-worker
+    /// device (`workerDevicesByWorkspace`), when this mutant's persistent
+    /// incremental-build sandbox (`workspace`) has one assigned. Still
+    /// routed through `simulators.withLease(udid:)`, not used directly —
+    /// exclusivity is structurally guaranteed here (each worker's own
+    /// sandbox is only ever touched by that one worker, serially), but
+    /// leasing anyway costs nothing and keeps "at most one lease per
+    /// device" a real invariant the pool enforces, not one this call site
+    /// merely assumes.
     private func leaseAndRunTests(
         artifact: BuildArtifact,
         in workspace: URL,
@@ -549,6 +611,9 @@ extension XcodeBuildAdapter: TestAdapter {
             )
         }
 
+        if let device = workerDevicesByWorkspace?[workspace.lastPathComponent] {
+            return try await simulators.withLease(udid: device.udid, run)
+        }
         if let device = resolvedDestination?.device {
             return try await simulators.withLease(udid: device.udid, run)
         }
@@ -589,18 +654,79 @@ extension XcodeBuildAdapter: TestAdapter {
     /// does with an app already registered under the same bundle identifier
     /// from the mutant before, and an explicit uninstall removes that
     /// variable outright rather than trusting `test-without-building` to
-    /// notice the difference. Best-effort: a bundle that was never installed
-    /// fails to uninstall, and that is the common case, not an error.
-    private func uninstallStaleApp(artifact: BuildArtifact, from lease: SimulatorLease) async {
+    /// notice the difference.
+    ///
+    /// **Not fail-closed — a genuine `simctl uninstall` failure never blocks
+    /// or fails this mutant's run.** Confirmed directly against a real
+    /// simulator (corrects this method's own prior doc comment, which
+    /// assumed the opposite): `simctl uninstall` on a bundle ID that was
+    /// never installed still **exits 0**, with no error output at all —
+    /// "nothing to uninstall" is not distinguishable from "uninstalled
+    /// successfully" at the exit-code level, and does not need to be, since
+    /// both are the fully-expected, ordinary case this method exists to
+    /// handle silently. That means a *non-zero* exit here is never the
+    /// ordinary case — it is always a real failure (a busy device, a
+    /// transient CoreSimulator fault, the same class of flake
+    /// `SimulatorPool.prepare`'s own retry logic exists to absorb
+    /// elsewhere), and swallowing it via a bare `try?` (as this method did
+    /// before) discarded that fact entirely, with no diagnostic reaching
+    /// anyone — a real asymmetry against how this codebase treats the
+    /// analogous `boot`/`bootstatus` failure class. Named in
+    /// `Research/known-issues/schemata-confirm-timeout-image-uuid-mismatch.md`
+    /// as a plausible, unconfirmed contributor to that issue: a stale
+    /// install surviving an uninstall failure immediately before a
+    /// `confirmTimeout` retry could plausibly explain a runtime image UUID
+    /// that disagrees with the build receipt, without needing a rebuild at
+    /// all. Surfaced here as an observable, logged fact (stderr, mirroring
+    /// `MutationRunner`'s own established convention for an infrastructure
+    /// hiccup that must not vanish silently) rather than fixed outright:
+    /// confirming or refuting the actual correlation needs a real
+    /// Xcode/iOS-Simulator schemata timeout fixture run repeatedly under
+    /// load, which is its own, larger, not-yet-scheduled piece of work.
+    /// `report` is a seam, not a production knob: every real caller uses the
+    /// default (a real `FileHandle.standardError.write`), and
+    /// `XcodeBuildAdapterUninstallFailureTests` overrides it to capture
+    /// exactly what would have been reported, against a real `simctl`
+    /// invocation with a deliberately-invalid device, without needing to
+    /// intercept the process's actual stderr file descriptor. `internal`
+    /// (not `private`), for the same reason: a test in another file needs
+    /// to call this directly, bypassing the full `leaseAndRunTests` path
+    /// that would otherwise require a real build and a real lease to reach
+    /// it at all.
+    func uninstallStaleApp(
+        artifact: BuildArtifact, from lease: SimulatorLease,
+        report: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) }
+    ) async {
         guard let xctestrun = artifact.xctestrunPath else { return }
         for bundleID in Self.bundleIdentifiers(inXCTestRun: xctestrun) {
-            _ = try? await ProcessSupervisor.run(
-                executable: ToolPaths.xcrun,
-                arguments: ["simctl", "uninstall", lease.device.udid, bundleID],
-                workingDirectory: FileManager.default.temporaryDirectory,
-                timeoutSeconds: 30
-            )
+            let result: ProcessResult?
+            do {
+                result = try await ProcessSupervisor.run(
+                    executable: ToolPaths.xcrun,
+                    arguments: ["simctl", "uninstall", lease.device.udid, bundleID],
+                    workingDirectory: FileManager.default.temporaryDirectory,
+                    timeoutSeconds: 30
+                )
+            } catch {
+                report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: "\(error)"))
+                result = nil
+            }
+            if let result, !result.succeeded {
+                report(Self.uninstallFailureWarning(
+                    bundleID: bundleID, udid: lease.device.udid,
+                    detail: OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                ))
+            }
         }
+    }
+
+    /// The exact text `uninstallStaleApp` reports for a genuine failure —
+    /// a pure function so `XcodeBuildAdapterUninstallFailureTests` can pin
+    /// its wording directly, independent of whichever real `simctl` error
+    /// text happened to be observed.
+    static func uninstallFailureWarning(bundleID: String, udid: String, detail: String) -> String {
+        "warning: could not uninstall stale app \(bundleID) from simulator \(udid) before this mutant's test run: \(detail)\n"
     }
 
     /// Every `TestHostBundleIdentifier` named in a `.xctestrun` plist — the app
@@ -748,9 +874,16 @@ extension XcodeBuildAdapter: SchemataBuildable {
             try SchemataSourceWriter.write(source, in: workspace)
         }
 
-        let located = try SchemataRuntimeLibraryLocator.locate()
+        let target = destination()
+        guard let platform = SchemataRuntimePlatform.resolve(destination: target) else {
+            throw SchemataRuntimeLibraryLocator.LocatorError.unsupportedDestination(target)
+        }
+        let located = try SchemataRuntimeLibraryLocator.locate(for: platform)
         let linkerArguments = XcodeLinkerInjector.extraArguments(libraryDirectory: located.libraryDirectory)
-        return try await build(in: workspace, extraArguments: linkerArguments)
+        let buildStart = GateTimingRecorder.shared.now()
+        let artifact = try await build(in: workspace, extraArguments: linkerArguments)
+        await GateTimingRecorder.shared.record("chunk.build", chunkID: workspace.lastPathComponent, start: buildStart)
+        return artifact
     }
 
     public func resolveSchemataBuildReceipt(
@@ -759,6 +892,10 @@ extension XcodeBuildAdapter: SchemataBuildable {
         in workspace: URL,
         context: SchemataBuildReceiptContext
     ) async throws -> SchemataBuildReceipt {
+        let receiptStart = GateTimingRecorder.shared.now()
+        defer {
+            Task { await GateTimingRecorder.shared.record("receipt.resolve", chunkID: context.chunkID, start: receiptStart) }
+        }
         let buildSettingsContext = XcodeCompilationUnitImageResolver.BuildSettingsContext(
             projectArguments: projectArguments(in: workspace), scheme: try await resolveScheme(in: workspace), destination: destination(),
             derivedDataPath: derivedDataPath(in: workspace), workspace: workspace, timeoutSeconds: configuration.timeouts.baselineSeconds
@@ -801,17 +938,24 @@ extension XcodeBuildAdapter: SchemataTestable {
     /// `leaseAndRunTests` exactly (only the test phase leases a device; a
     /// build never does).
     public func runSchemataToken(
-        _ artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String]
+        _ artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String],
+        selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
+        // Same empty-means-nil normalisation `TestSelecting.runMutant` uses
+        // above: an empty selection is never sent to `-only-testing:`, which
+        // would run nothing. Falls back to the full configured list, same as
+        // `selectedTests == nil`.
+        let filters = selectedTests.flatMap { $0.isEmpty ? nil : $0.map(\.onlyTestingArgument) }
         guard destinationNeedsSimulatorLease else {
             return try await runSchemataTokenOnDestination(
-                destination(), artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment
+                destination(), artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment,
+                testFilters: filters
             )
         }
 
         do {
             return try await leaseAndRunSchemataToken(
-                artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment
+                artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment, testFilters: filters
             )
         } catch let error as SimulatorPoolError {
             return TestRunResult(
@@ -822,15 +966,22 @@ extension XcodeBuildAdapter: SchemataTestable {
     }
 
     private func leaseAndRunSchemataToken(
-        artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String]
+        artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String], testFilters: [String]?
     ) async throws -> TestRunResult {
         func run(_ lease: SimulatorLease) async throws -> TestRunResult {
+            let uninstallStart = GateTimingRecorder.shared.now()
             await uninstallStaleApp(artifact: artifact, from: lease)
+            await GateTimingRecorder.shared.record("token.uninstall", start: uninstallStart)
             return try await runSchemataTokenOnDestination(
-                lease.destination, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment
+                lease.destination, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment,
+                testFilters: testFilters
             )
         }
 
+        let leaseAndRunStart = GateTimingRecorder.shared.now()
+        defer {
+            Task { await GateTimingRecorder.shared.record("token.leaseAndRun.total", start: leaseAndRunStart) }
+        }
         if let device = resolvedDestination?.device {
             return try await simulators.withLease(udid: device.udid, run)
         }
@@ -854,7 +1005,8 @@ extension XcodeBuildAdapter: SchemataTestable {
     /// mutants running against the same chunk build would otherwise race
     /// on).
     private func runSchemataTokenOnDestination(
-        _ destination: String, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String]
+        _ destination: String, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String],
+        testFilters: [String]? = nil
     ) async throws -> TestRunResult {
         guard let baseXCTestRun = artifact.xctestrunPath else {
             return TestRunResult(
@@ -864,6 +1016,7 @@ extension XcodeBuildAdapter: SchemataTestable {
         }
 
         let variantXCTestRun: URL
+        let variantStart = GateTimingRecorder.shared.now()
         do {
             variantXCTestRun = try Self.xctestrunVariant(mergingEnvironment: environment, into: baseXCTestRun)
         } catch {
@@ -872,6 +1025,7 @@ extension XcodeBuildAdapter: SchemataTestable {
                 diagnosis: "Could not write a schemata .xctestrun variant: \(error)"
             )
         }
+        await GateTimingRecorder.shared.record("token.xctestrunVariant", start: variantStart)
 
         let resultBundle = resultBundlePath(in: workspace, label: "schemata-\(UUID().uuidString)")
         try? FileManager.default.removeItem(at: resultBundle)
@@ -881,7 +1035,7 @@ extension XcodeBuildAdapter: SchemataTestable {
 
         let arguments = Self.testWithoutBuildingArguments(
             xctestrunPath: variantXCTestRun.path, destination: destination, resultBundlePath: resultBundle.path,
-            targets: configuration.tests.targets, extraArguments: configuration.tests.extraArguments
+            targets: testFilters ?? configuration.tests.targets, extraArguments: configuration.tests.extraArguments
         )
 
         let result: ProcessResult
@@ -917,7 +1071,9 @@ extension XcodeBuildAdapter: SchemataTestable {
             )
         }
 
+        let classifyStart = GateTimingRecorder.shared.now()
         let outcome = await resultReader.classify(resultBundle: resultBundle, workingDirectory: workspace)
+        await GateTimingRecorder.shared.record("token.xcresultClassify", start: classifyStart)
         return TestRunResult(
             status: outcome.status, summary: outcome.summary, command: command,
             resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path) ? resultBundle : nil,
@@ -951,12 +1107,37 @@ extension XcodeBuildAdapter: SchemataTestable {
         guard var plist = NSDictionary(contentsOf: base) as? [String: Any] else {
             throw XCTestRunVariantError.malformed(base.path)
         }
-        for key in plist.keys where key != "__xctestrun_metadata__" {
-            guard var target = plist[key] as? [String: Any] else { continue }
-            var targetEnvironment = target["EnvironmentVariables"] as? [String: String] ?? [:]
-            for (variable, value) in environment { targetEnvironment[variable] = value }
-            target["EnvironmentVariables"] = targetEnvironment
-            plist[key] = target
+
+        // Same two on-disk shapes `bundleIdentifiers(inXCTestRun:)` above
+        // already handles: format version 2 nests each real test target
+        // under `TestConfigurations[].TestTargets[]`; version 1 puts every
+        // target directly at the top level next to `__xctestrun_metadata__`.
+        // Only handling the flat v1 shape here silently drops every
+        // injected environment variable on a version-2 `.xctestrun` (the
+        // shape Xcode 26 generates): `TestConfigurations`'s value is an
+        // array, so `as? [String: Any]` fails and the whole key is skipped,
+        // while the two top-level keys that *do* happen to be dictionaries
+        // (`ContainerInfo`, `TestPlan`) are not test targets at all and
+        // silently absorb the write instead.
+        if var configurations = plist["TestConfigurations"] as? [[String: Any]] {
+            for configIndex in configurations.indices {
+                guard var targets = configurations[configIndex]["TestTargets"] as? [[String: Any]] else { continue }
+                for targetIndex in targets.indices {
+                    var targetEnvironment = targets[targetIndex]["EnvironmentVariables"] as? [String: String] ?? [:]
+                    for (variable, value) in environment { targetEnvironment[variable] = value }
+                    targets[targetIndex]["EnvironmentVariables"] = targetEnvironment
+                }
+                configurations[configIndex]["TestTargets"] = targets
+            }
+            plist["TestConfigurations"] = configurations
+        } else {
+            for key in plist.keys where key != "__xctestrun_metadata__" {
+                guard var target = plist[key] as? [String: Any] else { continue }
+                var targetEnvironment = target["EnvironmentVariables"] as? [String: String] ?? [:]
+                for (variable, value) in environment { targetEnvironment[variable] = value }
+                target["EnvironmentVariables"] = targetEnvironment
+                plist[key] = target
+            }
         }
 
         let variant = base.deletingLastPathComponent().appendingPathComponent("variant-\(UUID().uuidString).xctestrun")
@@ -1102,6 +1283,26 @@ extension XcodeBuildAdapter: TestSelecting {
     /// Parses `xcresulttool get test-results tests --compact` output. Exposed
     /// for tests so a captured document can drive the walk without a
     /// toolchain or a real bundle.
+    ///
+    /// `qualifiedName`'s own doc comment describes `"<Class>/<method>"` —
+    /// true for XCTest, whose `nodeIdentifier` is exactly that shape
+    /// (`"AddTests/testAdd()"`, confirmed by `XcodeTestIdentifierEnumerationTests`'
+    /// own captured fixture). A Swift Testing `nodeIdentifier` is shaped
+    /// differently — confirmed by direct reproduction against a real
+    /// Xcode/iOS-Simulator Swift Testing target: it is
+    /// `"<Target>/<method>()"` (the *target* name, never the enclosing
+    /// `@Suite`'s own name, which never appears in the identifier at all)
+    /// — so `qualifiedName` for a Swift Testing test ends up
+    /// `"<Target>/<method>"`, not `"<Class>/<method>"`. This looks
+    /// unusual next to the XCTest case, but it is exactly what makes
+    /// `onlyTestingArgument` (`target + "/" + qualifiedName + "()"`)
+    /// produce the one filter shape `xcodebuild -only-testing:` actually
+    /// matches for a Swift Testing function — empirically, that shape is
+    /// `<Target>/<Target>/<method>()` (the target name doubled), not
+    /// `<Target>/<SuiteName>/<method>()` as the XCTest-shaped convention
+    /// would suggest. See `TestIdentifier.onlyTestingArgument`'s own doc
+    /// comment for the full account, including why this was previously
+    /// silently broken (missing `()`, not this target-doubling shape).
     static func parseTestIdentifiers(_ data: Data) -> [TestIdentifier] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let testNodes = root["testNodes"] as? [[String: Any]]
@@ -1127,13 +1328,114 @@ extension XcodeBuildAdapter: TestSelecting {
     }
 }
 
+// MARK: - Schemata batch testing
+
+extension XcodeBuildAdapter: SchemataBatchTestable {
+    /// Tests several already-embedded schemata tokens — all sharing the one
+    /// `artifact` the chunk build produced — in a single `xcodebuild
+    /// test-without-building` invocation, reusing `BatchXCTestRunBuilder`
+    /// and the same private `runBatchTests`/`runBatchOnDestination` machinery
+    /// `BatchTestable.runBatch` below already uses: both ultimately merge
+    /// `TestConfigurations` into one `.xctestrun` and read results back via
+    /// `XCResultAdapter.classifyBatch`, keyed by configuration name — the
+    /// only difference is that every `BatchTestItem` here points at the
+    /// *same* `xctestrunPath` instead of each mutant's own, with its own
+    /// `environmentVariables` (token/runID/transcript path) standing in for
+    /// what isolated mode's separate artifacts already give it for free.
+    public func runSchemataTokenBatch(
+        _ artifact: BuildArtifact, in workspace: URL, items: [SchemataBatchTokenItem], timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
+    ) async -> [MutationID: TestRunResult] {
+        guard let xctestrunPath = artifact.xctestrunPath else {
+            let failure = TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
+                diagnosis: "The chunk build produced no .xctestrun, so there is nothing for a token batch to run."
+            )
+            return Dictionary(uniqueKeysWithValues: items.map { ($0.mutationID, failure) })
+        }
+
+        var batchable: [BatchTestItem] = []
+        var configurationTestIdentifiers: [String: [String]] = [:]
+        var idsByConfigurationName: [String: MutationID] = [:]
+        // A caller-contract violation (`SchemataBatchTestable
+        // .runSchemataTokenBatch`'s own doc comment: every item must
+        // already have a known, non-empty selection), not a normal runtime
+        // path — reported directly rather than silently dropped or, worse,
+        // fed to `BatchXCTestRunBuilder.build` with an empty
+        // `onlyTestingIdentifiers`, which would drop the target entirely
+        // and throw `.selectionMatchesNoTarget`, failing every *other* item
+        // in the same batch for one item's bad input.
+        var results: [MutationID: TestRunResult] = [:]
+        for item in items {
+            let configurationName = item.mutationID.rawValue
+            guard let selectedTests = item.selectedTests, !selectedTests.isEmpty else {
+                results[item.mutationID] = TestRunResult(
+                    status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
+                    diagnosis: "This token has no known test selection, so it cannot share a batch — it must run unbatched."
+                )
+                continue
+            }
+            batchable.append(BatchTestItem(
+                configurationName: configurationName, xctestrunPath: xctestrunPath,
+                onlyTestingIdentifiers: Array(selectedTests), environmentVariables: item.environment
+            ))
+            configurationTestIdentifiers[configurationName] = selectedTests.map(\.onlyTestingArgument)
+            idsByConfigurationName[configurationName] = item.mutationID
+        }
+
+        func failAllBatchable(_ diagnosis: String) -> [MutationID: TestRunResult] {
+            let failure = TestRunResult(
+                status: .infrastructureFailure, summary: nil,
+                command: CommandRecording.record(executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil),
+                resultArtifactPath: nil, diagnosis: diagnosis
+            )
+            for mutationID in idsByConfigurationName.values { results[mutationID] = failure }
+            return results
+        }
+
+        guard !batchable.isEmpty else { return results }
+
+        let batchData: Data
+        do {
+            batchData = try BatchXCTestRunBuilder.build(items: batchable)
+        } catch {
+            return failAllBatchable("The schemata token batch .xctestrun could not be constructed: \(error)")
+        }
+
+        let batchDirectory = workspace.appendingPathComponent(".mutantkit/SchemataBatches", isDirectory: true)
+        let batchXCTestRunPath = batchDirectory.appendingPathComponent("schemata-batch-\(UUID().uuidString).xctestrun")
+        do {
+            try FileManager.default.createDirectory(at: batchDirectory, withIntermediateDirectories: true)
+            try batchData.write(to: batchXCTestRunPath, options: .atomic)
+        } catch {
+            return failAllBatchable("The schemata token batch .xctestrun could not be written: \(error)")
+        }
+
+        let outcomes = await runBatchTests(
+            xctestrunPath: batchXCTestRunPath, in: workspace, timeoutSeconds: timeoutSeconds,
+            configurationTestIdentifiers: configurationTestIdentifiers,
+            nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
+        )
+
+        for (configurationName, mutationID) in idsByConfigurationName {
+            results[mutationID] = outcomes[configurationName] ?? TestRunResult(
+                status: .infrastructureFailure, summary: nil,
+                command: CommandRecording.record(executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil),
+                resultArtifactPath: nil, diagnosis: "This token's outcome went unreported by the batch classifier."
+            )
+        }
+        return results
+    }
+}
+
 // MARK: - Batch testing
 
 extension XcodeBuildAdapter: BatchTestable {
     public func runBatch(
         _ items: [BatchMutantItem],
         in workspace: URL,
-        timeoutSeconds: Double
+        timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
     ) async -> [MutationID: TestRunResult] {
         var results: [MutationID: TestRunResult] = [:]
         var batchable: [BatchTestItem] = []
@@ -1235,7 +1537,8 @@ extension XcodeBuildAdapter: BatchTestable {
             xctestrunPath: batchXCTestRunPath,
             in: workspace,
             timeoutSeconds: timeoutSeconds,
-            configurationTestIdentifiers: configurationTestIdentifiers
+            configurationTestIdentifiers: configurationTestIdentifiers,
+            nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
         )
 
         for item in batchable {
@@ -1264,12 +1567,14 @@ extension XcodeBuildAdapter: BatchTestable {
         xctestrunPath: URL,
         in workspace: URL,
         timeoutSeconds: Double,
-        configurationTestIdentifiers: [String: [String]]
+        configurationTestIdentifiers: [String: [String]],
+        nativeTimeoutAllowanceSeconds: Double? = nil
     ) async -> [String: TestRunResult] {
         func run(destination: String) async -> [String: TestRunResult] {
             await runBatchOnDestination(
                 destination, xctestrunPath: xctestrunPath, in: workspace,
-                timeoutSeconds: timeoutSeconds, configurationTestIdentifiers: configurationTestIdentifiers
+                timeoutSeconds: timeoutSeconds, configurationTestIdentifiers: configurationTestIdentifiers,
+                nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
             )
         }
 
@@ -1314,7 +1619,8 @@ extension XcodeBuildAdapter: BatchTestable {
         xctestrunPath: URL,
         in workspace: URL,
         timeoutSeconds: Double,
-        configurationTestIdentifiers: [String: [String]]
+        configurationTestIdentifiers: [String: [String]],
+        nativeTimeoutAllowanceSeconds: Double? = nil
     ) async -> [String: TestRunResult] {
         let resultBundle = workspace
             .appendingPathComponent(".mutantkit/Results", isDirectory: true)
@@ -1330,6 +1636,44 @@ extension XcodeBuildAdapter: BatchTestable {
             "-resultBundlePath", resultBundle.path,
             "-collect-test-diagnostics", "never"
         ]
+        // Containment, layered underneath `timeoutSeconds` (the outer,
+        // aggregate fail-safe below, unchanged): confirmed (Gate 3 Phase
+        // H1/H2) that XCTest's own per-test allowance cuts a single
+        // hanging configuration off — reported `.timedOut` by
+        // `XCResultAdapter.classifyBatch`'s native-timeout branch — without
+        // killing this `xcodebuild` invocation or losing its siblings'
+        // results, so a batch no longer has to burn its *entire* combined
+        // outer budget on one hang before anything is known. `nil` (every
+        // caller except isolated wave batching's own multi-member batches,
+        // for now) leaves `xcodebuild`'s own default (timeouts disabled)
+        // untouched.
+        //
+        // Gate 3 Phase H10 once added a second, `ProcessSupervisor`-level
+        // containment layer underneath this one — an external, file-growth-
+        // based stall watchdog on `-resultStreamPath` — for exactly the case
+        // Phase H7 found native timeout does not reliably catch (a
+        // CPU-bound, non-cooperative hang). Phase H12.1 found, via direct
+        // content inspection of that same stream on a real, long-running
+        // hang batch, that the hypothesis behind it was wrong: the ~331s-
+        // periodic writes it depended on distinguishing from "stall" turned
+        // out to be genuine `testStarted`/timeout events for *additional*
+        // tests in the same mutant's own covering-test list, not noise — so
+        // no finite margin could ever have made file-growth a reliable
+        // "this configuration is truly stuck" signal. Retired here; see
+        // `GATE3-RESULT.md`, Phases H10 through H12.2, for the full account.
+        // The real fix for the underlying problem (one mutant's own
+        // multiple covering tests each independently hanging) turned out to
+        // be Phase H12.2's wave-based early-abort for isolated mode and
+        // Phase H12.3's single-test-only batching eligibility for schemata
+        // — neither of which touches this function or `ProcessSupervisor`.
+        if let nativeTimeoutAllowanceSeconds {
+            let allowance = String(format: "%.0f", nativeTimeoutAllowanceSeconds)
+            arguments.append(contentsOf: [
+                "-test-timeouts-enabled", "YES",
+                "-default-test-execution-time-allowance", allowance,
+                "-maximum-test-execution-time-allowance", allowance
+            ])
+        }
         arguments.append(contentsOf: configuration.tests.extraArguments)
 
         let result: ProcessResult
@@ -1524,7 +1868,8 @@ public struct XcodeBuildProjectAdapter: ProjectAdapter {
         kind: ProjectKind,
         projectFile: URL?,
         projectRoot: URL,
-        resolvedDestination: ResolvedDestination? = nil
+        resolvedDestination: ResolvedDestination? = nil,
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
     ) {
         self.kind = kind
         self.resolvedDestination = resolvedDestination
@@ -1533,7 +1878,8 @@ public struct XcodeBuildProjectAdapter: ProjectAdapter {
             kind: kind,
             projectFile: projectFile,
             projectRoot: projectRoot,
-            resolvedDestination: resolvedDestination
+            resolvedDestination: resolvedDestination,
+            workerDevicesByWorkspace: workerDevicesByWorkspace
         )
         simulatorBearingAdapter = adapter
         build = adapter

@@ -35,21 +35,54 @@ struct InitCommand: AsyncParsableCommand {
             print("Run `mutantkit doctor` to see what is missing.")
         }
 
+        let testTargets = await Self.detectedTestTargets(kind: detection?.kind, projectRoot: root)
+        if !testTargets.isEmpty {
+            print("Detected test target(s): \(testTargets.joined(separator: ", "))")
+        }
+
+        // Phase C13: real Xcode/workspace scheme + destination detection —
+        // `xcodeDetection` is `nil`-scheme/empty-testTargets/nil-destination
+        // for every other kind, so this call is a no-op cost there.
+        let xcodeDetection = await XcodeConfigDetector.detect(
+            kind: detection?.kind ?? .auto, projectFile: detection?.projectFile, projectRoot: root
+        )
+        if let scheme = xcodeDetection.scheme {
+            print("Detected scheme: \(scheme)")
+        } else if xcodeDetection.schemeCandidates.count > 1 {
+            print("Multiple schemes found (\(xcodeDetection.schemeCandidates.joined(separator: ", "))) — set `project.scheme` yourself.")
+        }
+        let xcodeTestTargets = xcodeDetection.testTargets
+        if !xcodeTestTargets.isEmpty {
+            print("Detected test target(s): \(xcodeTestTargets.joined(separator: ", "))")
+        }
+
+        let resolvedDestination = xcodeDetection.destination ?? detection.map(defaultDestination(for:)) ?? nil
+        if let resolvedDestination, xcodeDetection.destination != nil {
+            print("Detected destination: \(resolvedDestination)")
+        }
+
         let template = ConfigurationLoader.template(
             for: detection?.kind ?? .auto,
-            scheme: nil,
-            destination: detection.map(defaultDestination(for:)) ?? nil,
-            testTargets: []
+            scheme: xcodeDetection.scheme,
+            destination: resolvedDestination,
+            testTargets: testTargets.isEmpty ? xcodeTestTargets : testTargets
         )
 
         try Data(template.utf8).write(to: destination, options: .atomic)
         print("\nWrote \(destination.path)")
-        print("Next: fill in `tests.targets`, then run `mutantkit doctor` and `mutantkit plan`.")
+        let anyTestTargets = !testTargets.isEmpty || !xcodeTestTargets.isEmpty
+        print(anyTestTargets
+            ? "Next: run `mutantkit doctor` and `mutantkit plan` — `tests.targets` is already filled in, review it before running."
+            : "Next: fill in `tests.targets`, then run `mutantkit doctor` and `mutantkit plan`.")
     }
 
-    /// A default destination is only offered for kinds that require one. Putting
-    /// a simulator destination in a macOS package's config would be noise the
-    /// user has to know to delete.
+    /// A default destination is only offered for kinds that require one, and
+    /// only as a last resort: `XcodeConfigDetector.detect`'s own real,
+    /// currently-available-simulator detection (Phase C13) is tried first;
+    /// this hardcoded name is reached only when that detection could not
+    /// find any simulator at all (no Xcode Platforms installed, `simctl`
+    /// unavailable) — a placeholder the user has to know to fix, same as
+    /// before C13, but now the exception rather than the common case.
     private func defaultDestination(for detection: ProjectDetection) -> String? {
         switch detection.kind {
         case .swiftPackageApple, .xcodeProject, .xcodeWorkspace:
@@ -57,5 +90,31 @@ struct InitCommand: AsyncParsableCommand {
         case .swiftPackageMacOS, .auto:
             nil
         }
+    }
+
+    /// Phase C11 (competitive-parity program): SwiftPM's own manifest
+    /// already says which of its targets are test targets
+    /// (`SwiftPMDependencyGraph.isTestTarget`, backed by `swift package
+    /// describe`'s own `"type": "test"` classification) — this used to be
+    /// thrown away, leaving `tests.targets: []` in every generated
+    /// `mutantkit.yml` regardless of project kind, with only a comment
+    /// telling the user to fill it in by hand. A real, avoidable friction
+    /// point in the exact first-60-seconds path the README's own quick
+    /// start walks through.
+    ///
+    /// Xcode project/workspace kinds are handled separately, by
+    /// `XcodeConfigDetector` (Phase C13) — this function itself still only
+    /// ever returns non-empty for SwiftPM kinds; `run()` merges the two
+    /// results together.
+    ///
+    /// `try?`, matching this command's own established "detection can
+    /// legitimately fail; write a template the user finishes by hand
+    /// rather than refusing" philosophy — a malformed manifest, no `swift`
+    /// on `PATH`, or a timeout all degrade to the pre-existing empty-list
+    /// behavior, never to a thrown error that would block `init` entirely.
+    private static func detectedTestTargets(kind: ProjectKind?, projectRoot: URL) async -> [String] {
+        guard kind == .swiftPackageMacOS || kind == .swiftPackageApple else { return [] }
+        guard let graph = try? await SwiftPMTargetResolver.resolveDependencyGraph(projectRoot: projectRoot) else { return [] }
+        return graph.targets.keys.filter { graph.isTestTarget($0) }.sorted()
     }
 }

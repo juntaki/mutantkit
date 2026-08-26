@@ -118,4 +118,128 @@ enum OperatorExclusions {
         else { return false }
         return knownBuilderPropertyNames.contains(identifier.identifier.text)
     }
+
+    /// True when `node` is used inside a pattern-matching *pattern*
+    /// position — a `switch` case pattern, or the pattern half of `if
+    /// case`/`guard case`/`for case`. All four share exactly one grammar
+    /// node for this, `ExpressionPatternSyntax` ("an expression used as a
+    /// pattern") — confirmed by parsing all four shapes and inspecting the
+    /// resulting tree, not assumed. That node exists in SwiftSyntax's
+    /// grammar *only* for this purpose: it never appears in a `where`
+    /// clause (an ordinary `SequenceExprSyntax`/similar, a sibling of the
+    /// pattern within `SwitchCaseItemSyntax`, not a descendant of it), a
+    /// case body (an ordinary `CodeBlockItemListSyntax`), or any other
+    /// plain expression context — so finding it anywhere in the ancestor
+    /// chain is a precise structural test, not a heuristic keyed on "is
+    /// this node somewhere inside a switch" (which would also, wrongly,
+    /// exclude the body and the `where` clause).
+    ///
+    /// Climbs every ancestor, not just the immediate parent: a tuple or
+    /// enum-associated-value pattern (`case (true, false):`, `case
+    /// .success(true):`) nests the literal several levels below the
+    /// `ExpressionPatternSyntax` itself, inside `TupleExprSyntax`/
+    /// `FunctionCallExprSyntax`-shaped pattern content (confirmed directly
+    /// against `SwiftParser` output, not assumed from the grammar alone —
+    /// for `case (true, false):`, each literal's own ancestor chain is
+    /// `labeledExpr` → `labeledExprList` → `tupleExpr` →
+    /// `expressionPattern`, depth 3, never the immediate parent).
+    ///
+    /// Why this matters for schemata lowering specifically (isolated mode's
+    /// literal byte-splice is unaffected): a lowerer that rewrites a
+    /// literal into a runtime-selectable expression changes the compiler-
+    /// visible pattern shape here, which can invalidate the compiler's
+    /// exhaustiveness analysis or otherwise make schemata lowering unsound
+    /// for pattern matching — not a hypothetical, see ADR-0008 Addendum 4's
+    /// real-corpus finding (`SchemataUnsupportedReason.patternPosition`'s
+    /// own doc comment).
+    static func isInPatternPosition(_ node: some SyntaxProtocol) -> Bool {
+        var cursor: Syntax? = Syntax(node).parent
+        while let current = cursor {
+            if current.is(ExpressionPatternSyntax.self) { return true }
+            cursor = current.parent
+        }
+        return false
+    }
+
+    /// True when `node` *is* the whole condition of a `while` or a
+    /// `repeat`-`while` — the position where a literal is load-bearing for
+    /// the compiler's **reachability** analysis, not merely for its type
+    /// checking.
+    ///
+    /// `while true { … }` is a provably-infinite loop, so the compiler does
+    /// not require the enclosing function to return afterwards. Schemata
+    /// lowering rewrites the literal into a runtime selector call
+    /// (`__mutantkitIsActiveV3(…) ? false : true`), which is not a
+    /// compile-time constant — the loop stops being provably infinite, and
+    /// every enclosing non-`Void` function with no trailing `return` then
+    /// fails to compile ("missing return in instance method expected to
+    /// return …"). Real-corpus evidence, `swift-async-algorithms` 2026-08:
+    /// one such site in `AsyncThrottleSequence.swift` broke its whole
+    /// 93-member shared chunk's build, forfeiting the other 92 members'
+    /// schemata fast path with it (a chunk shares one build, ADR-0008
+    /// Addendum 4) — and the identical signature had already been recorded
+    /// on `swift-argument-parser` before that.
+    ///
+    /// Deliberately narrower than "anywhere inside a while condition": a
+    /// literal nested in a larger condition (`while x == true`,
+    /// `while flag && true`) is not what the compiler folds into a
+    /// reachability fact — such a condition was already runtime-evaluated
+    /// before any lowering, so rewriting the literal changes nothing about
+    /// reachability, and excluding it would cost eligible candidates for no
+    /// safety gain. Parentheses are transparent (`while (true)` is still the
+    /// literal as the condition), so enclosing single-element
+    /// `TupleExprSyntax` wrappers are skipped, matching how the compiler
+    /// itself sees through them.
+    ///
+    /// Syntactic only, and knowingly over-conservative in one direction:
+    /// the compile error only actually bites when the enclosing function
+    /// must return a value and has no terminator after the loop (measured —
+    /// a sibling chunk on the same corpus contained two `while true`
+    /// candidates and built fine). Deciding that precisely means analyzing
+    /// the enclosing declaration's return type and control flow, a real
+    /// semantic analysis; a syntactic exclusion costs a handful of
+    /// candidates their fast path (they still run, in isolated mode, with an
+    /// ordinary byte-splice that has none of this hazard) and never costs a
+    /// whole chunk its build.
+    static func isControlFlowConstantCondition(_ node: some SyntaxProtocol) -> Bool {
+        var current = Syntax(node)
+        while let parent = current.parent {
+            // `repeat { … } while <condition>` — the condition is a bare
+            // expression, so the literal is (modulo parentheses) its direct
+            // child.
+            if let repeatStatement = parent.as(RepeatStmtSyntax.self) {
+                return Syntax(repeatStatement.condition) == current
+            }
+            // `while <condition> { … }` — a `ConditionElementListSyntax`,
+            // whose single `.expression` element is the shape a bare literal
+            // condition takes. A multi-element list (`while a, b`) or a
+            // `case`/optional-binding element is never a compile-time
+            // constant to begin with.
+            if let element = parent.as(ConditionElementSyntax.self) {
+                guard case let .expression(expression) = element.condition, Syntax(expression) == current,
+                      let list = element.parent?.as(ConditionElementListSyntax.self), list.count == 1,
+                      list.parent?.is(WhileStmtSyntax.self) == true
+                else { return false }
+                return true
+            }
+            // Only parentheses are transparent on the way up; anything else
+            // (an operator expression, a call argument, a closure body)
+            // means the literal is not the condition itself. A parenthesized
+            // expression parses as a single unlabeled `TupleExprSyntax`
+            // element, so its two intervening list nodes are stepped through
+            // as well — an unlabeled element only, since `(a: true)` is a
+            // real one-element tuple value, not parentheses.
+            if let labeled = parent.as(LabeledExprSyntax.self), labeled.label == nil {
+                current = parent
+                continue
+            }
+            if parent.is(LabeledExprListSyntax.self) {
+                current = parent
+                continue
+            }
+            guard let tuple = parent.as(TupleExprSyntax.self), tuple.elements.count == 1 else { return false }
+            current = Syntax(tuple)
+        }
+        return false
+    }
 }

@@ -23,7 +23,8 @@ enum CoreOperatorExpansionTestSupport {
     static func discover(
         _ source: String,
         operatorID: String,
-        relativePath: String = "Sample.swift"
+        relativePath: String = "Sample.swift",
+        excludedCallNames: Set<String> = []
     ) throws -> [MutationPoint] {
         let registry = MutationRegistry()
         guard let mutationOperator = registry.operator(withID: operatorID) else {
@@ -33,7 +34,7 @@ enum CoreOperatorExpansionTestSupport {
             )
         }
 
-        return try MutationDiscovery(operators: [mutationOperator])
+        return try MutationDiscovery(operators: [mutationOperator], excludedCallNames: excludedCallNames)
             .discover(source: Data(source.utf8), relativePath: relativePath)
     }
 

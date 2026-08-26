@@ -32,6 +32,16 @@ struct RunCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Fail closed if host resource pressure (memory, load, competing simulators) looks unsafe.")
     var requireHealthyHost = false
 
+    // Off by default so a plain, unsharded `mutantkit run` keeps recording to
+    // `.mutantkit/history` exactly as it always has. Meant for one shard of a
+    // sharded plan (see `mutantkit shard`/`mutantkit merge`): a shard's score
+    // is a partial slice of the project, never the whole thing, and recording
+    // it under the same history that `mutantkit history` shows by default
+    // would misrepresent it as a whole-project result. `mutantkit merge`
+    // records the real, combined number instead — see MergeCommand.
+    @Flag(name: .long, help: "Skip recording this run to `.mutantkit/history`. Use for each shard of a sharded plan — the shard's score is partial; `mutantkit merge`'s combined result is the one that reflects the whole project.")
+    var noHistory = false
+
     func run() async throws {
         let root = common.resolvedProjectRoot
         var settings = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
@@ -57,7 +67,7 @@ struct RunCommand: AsyncParsableCommand {
         }
         let loadedPlan = try MutationPlan.decode(from: Data(contentsOf: planURL))
 
-        let resolution = try await AppleAdapterFactory.resolve(configuration: settings, in: root)
+        var resolution = try await AppleAdapterFactory.resolve(configuration: settings, in: root)
         print("Project: \(resolution.detection.kind.rawValue) — \(resolution.detection.reason)")
 
         let runDirectory = root.appendingPathComponent(".mutantkit")
@@ -177,6 +187,55 @@ struct RunCommand: AsyncParsableCommand {
             throw ExitCode(MutantKitExit.operationalError)
         }
 
+        // Phase C4 (competitive-parity program): one real simulator per
+        // worker instead of every worker contending for the single
+        // destination `simulatorPreparation` just verified. Provisioning
+        // failure is never fail-closed here — this is a performance opt-in,
+        // not a correctness requirement, so a failure prints a clear
+        // message and the run proceeds with today's single-shared-device
+        // behavior rather than aborting a run the user otherwise asked for.
+        let poolProvision = await Self.provisionSimulatorWorkerPoolIfNeeded(
+            resolution: resolution, configuration: settings, projectRoot: root
+        )
+        resolution = poolProvision.resolution
+        // `do`/`catch` around the rest of this function, not a `defer`:
+        // `DispatchSemaphore.wait()` is unavailable from an async context
+        // (the compiler rejects exactly the sync/async bridge a `defer`
+        // would otherwise need here), so cleanup must be an explicit
+        // `await` on every exit path instead — one at the end of the `do`
+        // block for the success path, one in `catch` for every thrown
+        // error (the several early `throw ExitCode(...)` calls below
+        // included, since they are ordinary thrown errors from this `do`
+        // block's point of view).
+        do {
+            try await runAfterSimulatorPoolProvisioned(
+                root: root, settings: settings, loadedPlan: loadedPlan, resolution: resolution,
+                runDirectory: runDirectory, resourceSnapshot: resourceSnapshot, simulatorPreparation: simulatorPreparation
+            )
+            await poolProvision.cleanup()
+        } catch {
+            await poolProvision.cleanup()
+            throw error
+        }
+    }
+
+    /// Everything `run()` does from this point on, given a (possibly
+    /// simulator-pool-provisioned) `resolution` — split out purely so the
+    /// simulator-pool cleanup above can wrap it in a single `do`/`catch`
+    /// without re-indenting the whole rest of an already-large function.
+    /// An instance method, not `static`, so every bare `output`/`report`/
+    /// `failOnSurvivors`/`noResume`/`noHistory`/`common`/`overrides`
+    /// reference already inside this body keeps resolving as `self.x`
+    /// exactly as it did before the extraction.
+    private func runAfterSimulatorPoolProvisioned(
+        root: URL,
+        settings: Configuration,
+        loadedPlan: MutationPlan,
+        resolution: AppleAdapterFactory.Resolution,
+        runDirectory: URL,
+        resourceSnapshot: ResourceSnapshot,
+        simulatorPreparation: SimulatorPreparationRecord
+    ) async throws {
         let scratch = runDirectory.appendingPathComponent("sandboxes")
         let artifacts = runDirectory.appendingPathComponent("artifacts")
         try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
@@ -246,11 +305,18 @@ struct RunCommand: AsyncParsableCommand {
         let coverageCacheRoot = runDirectory.appendingPathComponent("coverage-cache")
         let coverageCache = CoverageProfileCache(root: coverageCacheRoot)
         let coverageCacheKey: CoverageProfileCache.Key?
-        if let digest = try? await RunContextProbe.computeContextDigest(
-            projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache"
-        ) {
+        do {
+            let digest = try await RunContextProbe.computeContextDigest(
+                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache"
+            )
             coverageCacheKey = CoverageProfileCache.Key(contextDigest: digest)
-        } else {
+        } catch {
+            // Printed, not swallowed: "no cache this run" is a real slowdown
+            // (the per-test coverage pass is the most expensive thing a
+            // baseline does), and a user staring at an unexpectedly slow run
+            // deserves the reason rather than having to guess at it. The run
+            // itself continues — recomputing is always correct, just slower.
+            print("\(error)")
             coverageCacheKey = nil
         }
 
@@ -296,12 +362,22 @@ struct RunCommand: AsyncParsableCommand {
             // cache must bump this tag again the same way, precisely
             // because the cache has no other way to know which classifier
             // version produced an entry it is being asked to reuse.
-            resultCacheDigest = try? await RunContextProbe.computeContextDigest(
-                projectRoot: root,
-                configuration: settings,
-                toolchain: toolchain,
-                purpose: "resultCache2"
-            )
+            do {
+                resultCacheDigest = try await RunContextProbe.computeContextDigest(
+                    projectRoot: root,
+                    configuration: settings,
+                    toolchain: toolchain,
+                    purpose: "resultCache2"
+                )
+            } catch {
+                // Deliberately not printed a second time. This digest and the
+                // coverage one above differ only in their `purpose` tag, and
+                // nothing that can fail here depends on it — the failure is
+                // always the same git/filesystem problem, already reported
+                // once above with the same wording. The coverage block runs
+                // unconditionally, so the reason is never lost.
+                resultCacheDigest = nil
+            }
         }
 
         // Deliberately not `sources.exclude`: that governs which files are
@@ -345,7 +421,12 @@ struct RunCommand: AsyncParsableCommand {
             strategy: settings.execution.strategy,
             context: SchemataRunOrchestration.Context(
                 plan: loadedPlan, configuration: settings, projectRoot: root,
-                adapter: resolution.adapter, testAdapter: testAdapter, toolchain: toolchain
+                adapter: resolution.adapter, testAdapter: testAdapter, toolchain: toolchain,
+                // Deliberately the same two values passed to
+                // `IsolatedRunOptions` below, not a second cache instance or
+                // a second digest computation: whichever backend measures
+                // the attribution first, the other one reuses it.
+                coverageCache: coverageCache, coverageCacheKey: coverageCacheKey
             ),
             workspaces: workspaces, runDirectory: runDirectory,
             isolatedOptions: IsolatedRunOptions(
@@ -380,7 +461,17 @@ struct RunCommand: AsyncParsableCommand {
         }
 
         try emit(report, settings: settings, runDirectory: runDirectory)
-        try? RunHistoryStore(root: runDirectory.appendingPathComponent("history")).record(report)
+        // Gate 3 diagnostic instrumentation only (see
+        // `GateTimingRecorder`'s own doc comment) — every other run leaves
+        // this env var unset and pays nothing beyond the spans' already-
+        // negligible recording cost.
+        if let timingOutputPath = ProcessInfo.processInfo.environment["MUTANTKIT_GATE3_TIMING_OUTPUT"] {
+            try await GateTimingRecorder.shared.write(to: URL(fileURLWithPath: timingOutputPath))
+            print("Wrote \(timingOutputPath) (Gate 3 timing spans)")
+        }
+        if !noHistory {
+            Self.recordHistory(report, to: RunHistoryStore(root: runDirectory.appendingPathComponent("history")))
+        }
 
         // Integrity outranks everything: a run whose invariants did not reconcile
         // has no score to threshold against, so there is nothing to compare and
@@ -408,6 +499,104 @@ struct RunCommand: AsyncParsableCommand {
         let resultCacheDigest: String?
         let priorityStore: TestPriorityStore?
         let progress: ProgressReporter?
+    }
+
+    /// The outcome of `provisionSimulatorWorkerPoolIfNeeded`: a
+    /// (possibly-unchanged) `Resolution` to use for the rest of the run,
+    /// and the cleanup to run when it ends, whichever way it ends.
+    /// `cleanup` is always safe to call — a no-op when nothing was ever
+    /// provisioned.
+    private struct SimulatorWorkerPoolProvision {
+        let resolution: AppleAdapterFactory.Resolution
+        let cleanup: @Sendable () async -> Void
+    }
+
+    /// Provisions one real simulator per worker — `execution.simulatorPool:
+    /// true`'s whole effect — or leaves `resolution` untouched when the
+    /// feature is off, inapplicable to this run's configuration, or fails.
+    ///
+    /// Deliberately narrow eligibility (see `ExecutionSettings
+    /// .simulatorPool`'s own doc comment for the full reasoning): only an
+    /// `XcodeBuildProjectAdapter` with a resolved simulator device, only
+    /// `incrementalBuild: true` with `testBatchSize` unset (the one
+    /// execution shape this has actually been benchmarked against —
+    /// per-worker persistent sandboxes give a stable identity to key a
+    /// device assignment on; batched/pipelined execution's single shared
+    /// test lane does not), only `resolvedWorkerCount() > 1` (nothing to
+    /// parallelize otherwise).
+    private static func provisionSimulatorWorkerPoolIfNeeded(
+        resolution: AppleAdapterFactory.Resolution,
+        configuration: Configuration,
+        projectRoot: URL
+    ) async -> SimulatorWorkerPoolProvision {
+        let workers = configuration.execution.resolvedWorkerCount()
+        guard configuration.execution.simulatorPool,
+              configuration.execution.strategy == .isolated,
+              configuration.execution.incrementalBuild,
+              configuration.execution.testBatchSize == nil,
+              workers > 1,
+              let projectAdapter = resolution.adapter as? XcodeBuildProjectAdapter,
+              let baseDevice = projectAdapter.resolvedDestination?.device
+        else {
+            return SimulatorWorkerPoolProvision(resolution: resolution, cleanup: {})
+        }
+
+        // A fresh pool instance is fine here even though `projectAdapter`
+        // owns its own, separate one internally: provisioning only ever
+        // lists/clones/boots/deletes real `simctl` devices, which is
+        // global machine state every `SimulatorPool` instance observes
+        // identically — the exclusive-*leasing* invariant `SimulatorPool`
+        // otherwise guarantees is a property of one actor instance's own
+        // in-memory bookkeeping, not something provisioning needs at all
+        // (nothing here is leased).
+        let provisioningPool = SimulatorPool(workingDirectory: projectRoot)
+        let orphans = await provisioningPool.cleanupOrphanClones()
+        if !orphans.isEmpty {
+            print("Simulator pool: cleaned up \(orphans.count) orphaned clone(s) left by a previous interrupted run.")
+        }
+
+        let devices: [SimulatorDevice]
+        do {
+            devices = try await provisioningPool.provisionWorkerPool(base: baseDevice, count: workers)
+        } catch {
+            print(
+                "Simulator pool: could not provision \(workers) worker slot(s) (\(error)) — "
+                    + "falling back to a single shared simulator for this run."
+            )
+            return SimulatorWorkerPoolProvision(resolution: resolution, cleanup: {})
+        }
+
+        let cloneCount = devices.count - 1
+        print(
+            cloneCount > 0
+                ? "Simulator pool: \(devices.count) worker slot(s) ready (\(cloneCount) clone(s) of \(baseDevice.name))."
+                : "Simulator pool: only 1 slot available; running with a single shared simulator."
+        )
+
+        var devicesByWorkspace: [String: SimulatorDevice] = [:]
+        for (index, device) in devices.enumerated() {
+            devicesByWorkspace[WorkspaceManager.directoryName(for: "incr-worker-\(index)")] = device
+        }
+
+        let newAdapter = AppleAdapterFactory.adapter(
+            for: resolution.detection,
+            configuration: configuration,
+            projectRoot: projectRoot,
+            resolvedDestination: projectAdapter.resolvedDestination,
+            workerDevicesByWorkspace: devicesByWorkspace
+        )
+
+        return SimulatorWorkerPoolProvision(
+            resolution: AppleAdapterFactory.Resolution(adapter: newAdapter, detection: resolution.detection),
+            cleanup: {
+                let failures = await provisioningPool.releaseWorkerPool(devices, base: baseDevice)
+                if !failures.isEmpty {
+                    FileHandle.standardError.write(Data(
+                        "warning: could not delete simulator clone(s): \(failures.joined(separator: ", "))\n".utf8
+                    ))
+                }
+            }
+        )
     }
 
     /// Dispatches to the existing, unmodified `MutationRunner` for
@@ -444,9 +633,16 @@ struct RunCommand: AsyncParsableCommand {
             // collide mid-run.
             let schemataScratch = runDirectory.appendingPathComponent("schemata-sandboxes")
             let schemataWorkspaces = try WorkspaceManager(projectRoot: context.projectRoot, scratchRoot: schemataScratch)
+            // No timeout argument: this call site used to pass
+            // `timeouts.baselineSeconds` as the *only* limit, which
+            // `SchemataMutationRunner` then applied to every per-mutant token
+            // run as well as to the baseline — giving a hanging schemata
+            // mutant the whole suite's budget (600 s by default) where
+            // isolated mode correctly spends `timeouts.mutant`. The runner
+            // now reads `context.configuration.timeouts` itself and resolves
+            // each limit separately.
             return try await SchemataRunOrchestration.run(
-                context: context, workspaces: workspaces, schemataWorkspaces: schemataWorkspaces,
-                timeoutSeconds: context.configuration.timeouts.baselineSeconds
+                context: context, workspaces: workspaces, schemataWorkspaces: schemataWorkspaces
             )
         }
     }
@@ -476,6 +672,9 @@ struct RunCommand: AsyncParsableCommand {
         if let xcode = rendered[.xcode], !xcode.isEmpty {
             print(xcode)
         }
+        if let githubActions = rendered[.githubActions], !githubActions.isEmpty {
+            print(githubActions)
+        }
 
         for (kind, contents) in rendered.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             guard let filename = filename(for: kind) else { continue }
@@ -487,15 +686,52 @@ struct RunCommand: AsyncParsableCommand {
         }
     }
 
-    /// Console and Xcode output go to the terminal, not to a file — writing them
-    /// too would leave stray artifacts nobody asked for.
+    /// Console, Xcode, and GitHub Actions output go to the terminal, not to a
+    /// file — writing them too would leave stray artifacts nobody asked for,
+    /// and GitHub's own runner only recognizes `::warning::`/`::error::`
+    /// workflow commands when they appear in a step's live stdout, never in
+    /// a file it would have to be told to go read.
     private func filename(for kind: ReportKind) -> String? {
         switch kind {
-        case .console, .xcode: nil
+        case .console, .xcode, .githubActions: nil
         case .json: "report.json"
         case .strykerJSON: "stryker-report.json"
         case .html: "report.html"
         case .ciSummary: "summary.md"
+        case .sonar: "sonar-issues.json"
+        }
+    }
+
+    /// Records `report` to `store` — best-effort, like the checkpoint write
+    /// inside `MutationRunner.finalize` (score integrity never depends on
+    /// history), but a silently discarded failure would quietly break
+    /// `mutantkit history` with nobody noticing until they went looking for a
+    /// run that never showed up. A failure is written to `stderr` the same
+    /// way `MutationRunner.finalize` surfaces a checkpoint write failure —
+    /// `try?` alone would swallow it.
+    ///
+    /// Pulled out of `run()`, on the same terms as `resolveTestAdapter`/
+    /// `lockIdentity` below, so the surfacing behavior itself is directly
+    /// testable without a real project or adapter. `stderr` is injectable for
+    /// exactly that reason; production always uses the real
+    /// `FileHandle.standardError`.
+    ///
+    /// Returns the diagnosis written on failure, `nil` on success — mostly
+    /// useful to a caller (a test) that wants to assert a failure was
+    /// actually surfaced rather than just that some output happened.
+    @discardableResult
+    static func recordHistory(
+        _ report: RunReport,
+        to store: RunHistoryStore,
+        stderr: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) }
+    ) -> String? {
+        do {
+            try store.record(report)
+            return nil
+        } catch {
+            let diagnosis = "history write failed for \(report.planID): \(error)"
+            stderr("warning: \(diagnosis)\n")
+            return diagnosis
         }
     }
 

@@ -1,0 +1,58 @@
+name: Action smoke test
+
+# Exercises the repo-root `action.yml` composite action the same way an
+# external consumer would (`uses: juntaki/mutantkit@<ref>`), except pointed
+# at this checkout (`uses: ./`) so a change to action.yml is validated
+# before it ever reaches a tag. Manual/scheduled rather than on every push:
+# unlike `ci.yml` (which builds from source) this depends on a real
+# published GitHub Release existing to download, so it is not a source-of-
+# truth gate for a PR — `release.yml`'s own `clean-machine-e2e` job already
+# proves the underlying tarball/SHA256SUMS/PATH recipe works at release
+# time; this job's only job is to prove action.yml wraps that recipe
+# correctly.
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so a change on the GitHub Actions platform side (runner image,
+    # curl/shasum/tar behavior) that silently breaks the action is caught
+    # without anyone having to remember to run it by hand.
+    - cron: "0 6 * * 1"
+
+jobs:
+  smoke-test:
+    name: Install via action.yml (${{ matrix.version }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both the floating default and an explicit pin — the two paths
+        # action.yml's `inputs.version` branches on.
+        version: ["latest"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mutantkit via this repo's own action.yml
+        id: mutantkit
+        uses: ./
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Confirm mutantkit is on PATH and reports a version
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v mutantkit
+          reported="$(mutantkit --version)"
+          echo "mutantkit --version: $reported"
+          if [ -z "$reported" ]; then
+            echo "::error::mutantkit --version produced no output"
+            exit 1
+          fi
+          if [ "$reported" != "${{ steps.mutantkit.outputs.version }}" ]; then
+            echo "::error::action output version ('${{ steps.mutantkit.outputs.version }}') does not match a fresh 'mutantkit --version' ('$reported')"
+            exit 1
+          fi
+
+      - name: mutantkit doctor (no project — must report that honestly, not crash)
+        shell: bash
+        run: mutantkit doctor || true

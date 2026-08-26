@@ -34,7 +34,7 @@ final class RunContextProbeTests: XCTestCase {
         XCTAssertFalse(RunContextProbe.isToolOwnedPath(".mutantkit-helpers/Foo.swift"))
     }
 
-    // MARK: - gitState stability across tool-owned output
+    // MARK: - worktreeContentState stability across tool-owned output
 
     func testToolOwnedOutputDoesNotChangeGitState() async throws {
         let repo = try makeGitRepo()
@@ -47,7 +47,7 @@ final class RunContextProbeTests: XCTestCase {
         try git(["add", "."], in: repo)
         try git(["commit", "-m", "baseline"], in: repo)
 
-        let before = try await RunContextProbe.gitState(in: repo)
+        let before = try await RunContextProbe.worktreeContentState(in: repo)
 
         // Exactly the files a run itself creates before the digest is computed.
         try write("lock\n", at: makeParent(repo, ".mutantkit/run-locks").appendingPathComponent("owner.lock"))
@@ -58,11 +58,11 @@ final class RunContextProbeTests: XCTestCase {
         // Prior tool name.
         try write("legacy\n", at: makeParent(repo, ".mutare").appendingPathComponent("checkpoint.jsonl"))
 
-        let after = try await RunContextProbe.gitState(in: repo)
+        let after = try await RunContextProbe.worktreeContentState(in: repo)
         XCTAssertEqual(before, after, "tool-owned output must not enter the digest")
     }
 
-    // MARK: - gitState must still move on real changes
+    // MARK: - worktreeContentState must still move on real changes
 
     func testSourceChangeMovesGitState() async throws {
         let (repo, before) = try await committedBaseline()
@@ -72,7 +72,7 @@ final class RunContextProbeTests: XCTestCase {
         try git(["add", "."], in: repo)
         try git(["commit", "-m", "source change"], in: repo)
 
-        let after = try await RunContextProbe.gitState(in: repo)
+        let after = try await RunContextProbe.worktreeContentState(in: repo)
         XCTAssertNotEqual(before, after, "a committed source change must change the digest")
     }
 
@@ -82,7 +82,7 @@ final class RunContextProbeTests: XCTestCase {
 
         try write("let x = 2\n", at: repo.appendingPathComponent("Sources/App/Foo.swift"))
 
-        let after = try await RunContextProbe.gitState(in: repo)
+        let after = try await RunContextProbe.worktreeContentState(in: repo)
         XCTAssertNotEqual(before, after, "an uncommitted tracked-file change must change the digest")
     }
 
@@ -92,7 +92,7 @@ final class RunContextProbeTests: XCTestCase {
 
         try write("let y = 0\n", at: repo.appendingPathComponent("Sources/App/Bar.swift"))
 
-        let after = try await RunContextProbe.gitState(in: repo)
+        let after = try await RunContextProbe.worktreeContentState(in: repo)
         XCTAssertNotEqual(before, after, "a new untracked source file must change the digest")
     }
 
@@ -104,7 +104,7 @@ final class RunContextProbeTests: XCTestCase {
         try git(["add", "."], in: repo)
         try git(["commit", "-m", "test change"], in: repo)
 
-        let after = try await RunContextProbe.gitState(in: repo)
+        let after = try await RunContextProbe.worktreeContentState(in: repo)
         XCTAssertNotEqual(before, after, "a test change must change the digest")
     }
 
@@ -116,7 +116,7 @@ final class RunContextProbeTests: XCTestCase {
         try git(["add", "."], in: repo)
         try git(["commit", "-m", "pbxproj change"], in: repo)
 
-        let after = try await RunContextProbe.gitState(in: repo)
+        let after = try await RunContextProbe.worktreeContentState(in: repo)
         XCTAssertNotEqual(before, after, "a project.pbxproj change must change the digest")
     }
 
@@ -128,7 +128,7 @@ final class RunContextProbeTests: XCTestCase {
         try git(["add", "."], in: repo)
         try git(["commit", "-m", "scheme change"], in: repo)
 
-        let after = try await RunContextProbe.gitState(in: repo)
+        let after = try await RunContextProbe.worktreeContentState(in: repo)
         XCTAssertNotEqual(before, after, "a scheme change must change the digest")
     }
 
@@ -174,64 +174,61 @@ final class RunContextProbeTests: XCTestCase {
         XCTAssertNotEqual(oldDigest, newDigest, "bumping the purpose tag must miss every pre-existing cache entry")
     }
 
+    /// `execution.workers` bounds chunk/mutant-level parallelism only — it
+    /// must never gate whether a coverage-cache entry written by one
+    /// `workers` value is reused by a run configured with a different one.
+    /// Per-test coverage attribution depends on the source tree, tests, and
+    /// toolchain, never on how many workers happen to run mutants
+    /// concurrently, so `workers: 1` and `workers: 4` (all else equal) must
+    /// produce the identical `coverageProfileCache` digest.
+    func testWorkersDoesNotAffectCoverageCacheDigest() async throws {
+        let (repo, _) = try await committedBaseline()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        var configWithOneWorker = Configuration()
+        configWithOneWorker.execution.workers = 1
+        var configWithFourWorkers = Configuration()
+        configWithFourWorkers.execution.workers = 4
+
+        let oneWorkerDigest = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: configWithOneWorker, toolchain: makeToolchain(), purpose: "coverageProfileCache"
+        )
+        let fourWorkerDigest = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: configWithFourWorkers, toolchain: makeToolchain(), purpose: "coverageProfileCache"
+        )
+
+        XCTAssertEqual(
+            oneWorkerDigest, fourWorkerDigest,
+            "a coverage-cache entry must be shared across runs that differ only in execution.workers"
+        )
+    }
+
     // MARK: - Helpers
 
-    /// Builds a repo with the committed baseline used by the "moves" tests and
-    /// returns it together with its initial `gitState`, so each test only has
-    /// to express what it changed.
+    //
+    // The repository plumbing lives in `GitFixture`, shared with
+    // `RunContextProbeContentIdentityTests`. These forwarders keep every call
+    // site above reading the way it always has.
+
     private func committedBaseline() async throws -> (URL, String) {
-        let repo = try makeGitRepo()
-        try write("let x = 1\n", at: repo.appendingPathComponent("Sources/App/Foo.swift"))
-        try write("import XCTest\n", at: repo.appendingPathComponent("Tests/AppTests/FooTests.swift"))
-        try write("pbx-body\n", at: repo.appendingPathComponent("App.xcodeproj/project.pbxproj"))
-        try write("<scheme/>\n", at: repo.appendingPathComponent("App.xcodeproj/xcshareddata/xcschemes/App.xcscheme"))
-        try git(["add", "."], in: repo)
-        try git(["commit", "-m", "baseline"], in: repo)
-        let state = try await RunContextProbe.gitState(in: repo)
-        return (repo, state)
+        let fixture = try await GitFixture.committedBaseline()
+        return (fixture.repo, fixture.state)
     }
 
     private func makeGitRepo() throws -> URL {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MutantKit-RunContextProbeTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        try git(["init"], in: repo)
-        try git(["config", "user.email", "tests@mutantkit.local"], in: repo)
-        try git(["config", "user.name", "MutantKit Tests"], in: repo)
-        return repo
+        try GitFixture.makeRepository(named: "MutantKit-RunContextProbeTests")
     }
 
     @discardableResult
     private func makeParent(_ root: URL, _ relativePath: String) throws -> URL {
-        let url = root.appendingPathComponent(relativePath)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try GitFixture.makeDirectory(relativePath, in: root)
     }
 
     private func write(_ contents: String, at url: URL) throws {
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try Data(contents.utf8).write(to: url)
+        try GitFixture.write(contents, at: url)
     }
 
     private func git(_ arguments: [String], in root: URL) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = arguments
-        process.currentDirectoryURL = root
-        let standardError = Pipe()
-        process.standardError = standardError
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            let message = String(decoding: standardError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            throw NSError(
-                domain: "RunContextProbeTests",
-                code: Int(process.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "git \(arguments.joined(separator: " ")) failed: \(message)"]
-            )
-        }
+        try GitFixture.run(arguments, in: root)
     }
 }

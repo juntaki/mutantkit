@@ -41,6 +41,14 @@ public struct MutationRunner: Sendable {
     private let monotonicNow: @Sendable () -> TimeInterval
     private let operationalIssues = OperationalIssueLog()
     private let progress: ProgressReporter?
+    /// When supplied, `establishBaseline()` uses this instead of building
+    /// and testing the project itself — `SchemataRunOrchestration`'s own
+    /// mechanism for sharing one baseline between the schemata and
+    /// isolated-fallback passes (see `SharedBaselineEstablisher`'s own doc
+    /// comment). `nil` for every other caller, which is every existing one:
+    /// this parameter changes nothing about a plain `mutantkit run
+    /// --strategy isolated`.
+    private let preEstablishedBaseline: SharedBaselineEstablisher.Outcome?
 
     /// Cannot collide with a mutant's sandbox: every mutation ID starts `mut_`.
     private static let baselineSandboxID = "baseline"
@@ -120,6 +128,7 @@ public struct MutationRunner: Sendable {
         resultCacheDigest: String? = nil,
         priorityStore: TestPriorityStore? = nil,
         progress: ProgressReporter? = nil,
+        preEstablishedBaseline: SharedBaselineEstablisher.Outcome? = nil,
         monotonicNow: @escaping @Sendable () -> TimeInterval = {
             Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
         }
@@ -139,6 +148,7 @@ public struct MutationRunner: Sendable {
         self.resultCacheDigest = resultCacheDigest
         self.priorityStore = priorityStore
         self.progress = progress
+        self.preEstablishedBaseline = preEstablishedBaseline
         self.monotonicNow = monotonicNow
     }
 
@@ -927,7 +937,8 @@ public struct MutationRunner: Sendable {
                 let testStarted = Date()
                 let run = try? await runMutantTests(
                     prepared.point, artifact: prepared.artifact, in: prepared.sandbox,
-                    timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: prepared.selectedTests
+                    timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: prepared.selectedTests),
+                    selectedTests: prepared.selectedTests
                 )
                 let testDurationSeconds = Date().timeIntervalSince(testStarted)
                 let result = await finishAfterTest(
@@ -1215,10 +1226,17 @@ public struct MutationRunner: Sendable {
         // clock since `prepared.startedAt`: that also counts build time and
         // time spent waiting behind every other mutant's build/chunk, so a
         // mutant could be timed out before its first test ever ran.
-        let mutantLimitSeconds = baseline.timeouts.mutantLimitSeconds
         let (budgetExpired, stillAlive) = waveSurvivors
             .filter { !$0.remainingTests.isEmpty }
             .reduce(into: (expired: [WaveSurvivor](), alive: [WaveSurvivor]())) { partial, survivor in
+                // Each survivor's own budget — selected-test-clamped where it
+                // has a known, non-empty covering-test selection,
+                // whole-suite-scaled otherwise — not one shared number every
+                // survivor is measured against regardless of how narrow its
+                // own selection is.
+                let mutantLimitSeconds = baseline.timeouts.mutantLimitSeconds(
+                    selectedTests: survivor.prepared.selectedTests
+                )
                 if survivor.cumulativeTestSeconds >= mutantLimitSeconds {
                     partial.expired.append(survivor)
                 } else {
@@ -1237,7 +1255,7 @@ public struct MutationRunner: Sendable {
         // uses — and only *that* result decides the final classification.
         for survivor in budgetExpired {
             let (standaloneRun, standaloneDuration) = await standaloneVerify(
-                survivor.prepared, selectedTests: survivor.remainingTests, baseline: baseline
+                survivor.prepared, selectedTests: Set(survivor.remainingTests), baseline: baseline
             )
             let result = await finishAfterTest(
                 survivor.prepared, baseline: baseline, run: standaloneRun,
@@ -1301,10 +1319,45 @@ public struct MutationRunner: Sendable {
             // blow well past the cumulative budget the pre-wave check above
             // exists to enforce.
             let batchTimeout = chunk.reduce(0.0) { partial, survivor in
-                partial + max(0, baseline.timeouts.mutantLimitSeconds - survivor.cumulativeTestSeconds)
+                let mutantLimitSeconds = baseline.timeouts.mutantLimitSeconds(
+                    selectedTests: survivor.prepared.selectedTests
+                )
+                return partial + max(0, mutantLimitSeconds - survivor.cumulativeTestSeconds)
             }
+            // Containment, layered underneath `batchTimeout` above (which
+            // stays the outer, aggregate fail-safe, unchanged): confirmed
+            // (Gate 3 Phase H1/H2) that XCTest's own per-test allowance
+            // cuts one hanging configuration off — reported `.timedOut` by
+            // `XCResultAdapter.classifyBatch`'s native-timeout branch,
+            // routed into the same confirmation path a single-mutant
+            // timeout already goes through — without killing this batch's
+            // shared `xcodebuild` invocation or losing its other members'
+            // results. Every member of one chunk resolves to the identical
+            // `mutantLimitSeconds` today (the selected-test-width clamp
+            // that could once have varied it per mutant was removed, see
+            // `TimeoutController.mutantLimitSeconds(selectedTests:)`), so
+            // one value covers the whole batch rather than needing
+            // per-item grouping.
+            //
+            // `nil` — native timeout not attempted, `batchTimeout` alone
+            // still applies exactly as before — in two cases: a chunk of
+            // exactly one member has no attribution ambiguity for the
+            // outer timeout to begin with, so there is nothing for this to
+            // contain; and a resolved allowance below Phase H1's own
+            // empirically-validated value (60s — the only value actually
+            // exercised against a real hang) is not a value this has
+            // evidence is safe against false positives from Xcode/Simulator
+            // per-invocation startup overhead.
+            let nativeTimeoutAllowanceSeconds: Double? = {
+                guard chunk.count > 1 else { return nil }
+                let allowance = baseline.timeouts.mutantLimitSeconds
+                return allowance >= 60 ? allowance : nil
+            }()
             let batchStarted = monotonicNow()
-            let runs = await batchable.runBatch(items, in: batchSandbox, timeoutSeconds: batchTimeout)
+            let runs = await batchable.runBatch(
+                items, in: batchSandbox, timeoutSeconds: batchTimeout,
+                nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
+            )
             let duration = monotonicNow() - batchStarted
             // What THIS mutant's own budget is charged for its share of the
             // batch — configurations in a shared invocation run
@@ -1333,24 +1386,39 @@ public struct MutationRunner: Sendable {
                 // this chunk gets by default.
                 var verifiedDurationSeconds: Double?
 
-                // None of `.timedOut`, `.infrastructureFailure`, or missing
-                // from the batch's results at all is a definitive signal
-                // about THIS mutant — every one of them is exactly what a
-                // shared invocation running out of its combined timeout, or
-                // failing to report back cleanly, looks like from the
-                // outside, with no way to tell whether this mutant caused it
-                // or merely shared the invocation with whatever did. Found
-                // for real on a live Xcode project: a chunk of exactly one
-                // survivor still reported `infrastructureFailure` for a
-                // mutant that a plain standalone rerun immediately confirmed
-                // was `killedByAssertion` — so this is not only a multi-
-                // mutant sharing problem, and the check does not gate on
+                // `.infrastructureFailure`, or missing from the batch's
+                // results at all, is a definitive signal about THIS mutant —
+                // both are exactly what a shared invocation failing to
+                // report back cleanly looks like from the outside, with no
+                // way to tell whether this mutant caused it or merely shared
+                // the invocation with whatever did. Found for real on a live
+                // Xcode project: a chunk of exactly one survivor still
+                // reported `infrastructureFailure` for a mutant that a plain
+                // standalone rerun immediately confirmed was
+                // `killedByAssertion` — so this is not only a multi-mutant
+                // sharing problem, and the check does not gate on
                 // `chunk.count`. `.failed`/`.crashed` are left alone: the
                 // batch xctestrun's own attribution of an assertion failure
                 // or crash to a specific configuration is a solid,
                 // independent mechanism this is not second-guessing — only
                 // the batch's non-answers are.
-                if run.status == .timedOut || run.status == .infrastructureFailure
+                //
+                // `.timedOut` is different from the other two, and is only
+                // ambiguous when `isBatchAttributedTimeout` says so (Gate 3
+                // Phase H2's own field, introduced for exactly this
+                // distinction, previously unused on this path — Gate 3 Phase
+                // H12.1/H12.2). A native-XCTest-timeout classification
+                // (`isBatchAttributedTimeout == false`) already names the one
+                // configuration responsible; rerunning it standalone here
+                // before `finishAfterTest` below triggers its own, separate
+                // `confirmTimedOutMutants` confirmation (narrowed to this
+                // same witness test) pays for the identical single-test
+                // confirmation twice. Only a genuine batch-wide kill
+                // (`isBatchAttributedTimeout == true` — the whole shared
+                // invocation was terminated with no way to tell which
+                // configuration caused it) still needs this standalone rerun
+                // to find out whether THIS mutant was actually responsible.
+                if (run.status == .timedOut && run.isBatchAttributedTimeout) || run.status == .infrastructureFailure
                     || runs[survivor.prepared.point.id] == nil {
                     let (standaloneRun, standaloneDuration) = await standaloneVerify(
                         survivor.prepared, selectedTests: [test], baseline: baseline
@@ -1471,12 +1539,22 @@ public struct MutationRunner: Sendable {
     /// not be launched here reports `.infrastructureFailure`, exactly like
     /// every other unbatched test call in this file.
     private func standaloneVerify(
-        _ prepared: PreparedMutant, selectedTests: [TestIdentifier], baseline: BaselineContext
+        _ prepared: PreparedMutant, selectedTests: Set<TestIdentifier>?, baseline: BaselineContext
     ) async -> (run: TestRunResult, duration: Double) {
         let testStarted = monotonicNow()
+        // Scaled off exactly what this standalone attempt actually runs
+        // (`selectedTests`, not unconditionally `prepared.selectedTests` —
+        // a caller may narrow this to the mutant's whole remaining list or
+        // to a single witness test, never its original full covering-test
+        // set, though `testOneBatch`'s own ambiguity-recovery call passes
+        // `prepared.selectedTests` straight through since it has no
+        // narrower list to prefer). `nil` here means the same thing it
+        // always does — no known selection, run the full configured list —
+        // preserved rather than collapsed into an empty `Set`.
+        let timeoutSeconds = baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests)
         let run = try? await runMutantTests(
             prepared.point, artifact: prepared.artifact, in: prepared.sandbox,
-            timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: Set(selectedTests)
+            timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
         )
         let duration = monotonicNow() - testStarted
         return (
@@ -1540,19 +1618,68 @@ public struct MutationRunner: Sendable {
         let items = chunk.map {
             BatchMutantItem(id: $0.point.id, artifact: $0.artifact, selectedTests: $0.selectedTests)
         }
-        let batchTimeout = baseline.timeouts.mutantLimitSeconds * Double(chunk.count)
+        // Each mutant in the shared invocation contributes its own limit —
+        // selected-test-clamped where it has a known, non-empty selection,
+        // whole-suite-scaled otherwise — rather than every mutant in the
+        // batch being charged the same whole-suite number regardless of how
+        // narrow its own selection is.
+        let batchTimeout = chunk.reduce(0.0) { partial, prepared in
+            partial + baseline.timeouts.mutantLimitSeconds(selectedTests: prepared.selectedTests)
+        }
+        // Containment, layered underneath `batchTimeout` above (which stays
+        // the outer, aggregate fail-safe, unchanged) — this is the path a
+        // plain `testBatchSize > 1` configuration (`earlyAbortSelectedTests`
+        // left at its default `false`) actually runs, the same path Gate
+        // 3's real-production-app batch-hang-containment finding came from. See
+        // `testWaveChunk`'s identical native-timeout block for the full
+        // rationale (Gate 3 Phase H1/H2/H3) — repeated here rather than
+        // shared because the two chunk shapes (`[WaveSurvivor]` vs
+        // `[PreparedMutant]`) don't share a common type to factor a helper
+        // over without a bigger refactor than this phase calls for.
+        let nativeTimeoutAllowanceSeconds: Double? = {
+            guard chunk.count > 1 else { return nil }
+            let allowance = baseline.timeouts.mutantLimitSeconds
+            return allowance >= 60 ? allowance : nil
+        }()
         let batchStarted = Date()
-        let runs = await batchable.runBatch(items, in: batchSandbox, timeoutSeconds: batchTimeout)
+        let runs = await batchable.runBatch(
+            items, in: batchSandbox, timeoutSeconds: batchTimeout,
+            nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
+        )
         let batchTestDuration = Date().timeIntervalSince(batchStarted)
 
         for prepared in chunk {
-            let run = runs[prepared.point.id] ?? TestRunResult(
+            var run = runs[prepared.point.id] ?? TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
                 resultArtifactPath: nil,
                 diagnosis: "This mutant's outcome was not reported back from its batch."
             )
+            // `.infrastructureFailure` here — whether `classifyBatch` itself
+            // produced it (no per-configuration evidence in the result
+            // bundle) or it was synthesized just above (missing from `runs`
+            // entirely) — means the *shared invocation's* attribution
+            // failed for this one mutant, not that the mutant is
+            // unprovable. `testWaveChunk` already has this exact gate for
+            // the identical failure shape (found for real on a live Xcode
+            // project — see its own doc comment); `testOneBatch`, the plain
+            // non-wave batch path (`earlyAbortSelectedTests` left at its
+            // default `false`), never had the equivalent protection until
+            // now. `.timedOut` is deliberately left alone here — that
+            // status already has its own correct, existing handling via
+            // `confirmTimedOutMutants`'s policy-driven confirmation
+            // (`isBatchAttributedTimeout` distinguishes a genuine
+            // individually-attributed timeout from a batch-wide one), which
+            // this gate must not duplicate or race against.
+            var verifiedDurationSeconds: Double?
+            if run.status == .infrastructureFailure {
+                let (standaloneRun, standaloneDuration) = await standaloneVerify(
+                    prepared, selectedTests: prepared.selectedTests, baseline: baseline
+                )
+                run = standaloneRun
+                verifiedDurationSeconds = standaloneDuration
+            }
             let result = await finishAfterTest(
-                prepared, baseline: baseline, run: run, testDurationSeconds: batchTestDuration
+                prepared, baseline: baseline, run: run, testDurationSeconds: verifiedDurationSeconds ?? batchTestDuration
             )
             try? await workspaces.destroySandbox(at: prepared.sandbox)
             collected.append(result)
@@ -1591,6 +1718,10 @@ public struct MutationRunner: Sendable {
     /// mutant's is compared against, and a hash taken from a differently-shaped
     /// tree would not be comparable to one taken from a sandbox.
     private func establishBaseline() async -> BaselineAttempt {
+        if let preEstablishedBaseline {
+            return Self.baselineAttempt(from: preEstablishedBaseline, configuration: configuration)
+        }
+
         let started = Date()
 
         let sandbox: URL
@@ -1753,6 +1884,32 @@ public struct MutationRunner: Sendable {
         ))
     }
 
+    /// Converts a `SharedBaselineEstablisher` result into this runner's own
+    /// `BaselineAttempt` shape — the `preEstablishedBaseline` short-circuit
+    /// in `establishBaseline()`'s only caller. `static`, not an instance
+    /// method: it touches no runner state beyond `configuration` (passed
+    /// explicitly), matching `BaselineContext`'s own construction in the
+    /// non-injected path exactly (`timeouts.recordingBaseline`,
+    /// `coverage`/`perTestCoverage` verbatim) so a mutant scored against an
+    /// injected baseline is measured identically to one scored against a
+    /// baseline this runner established itself.
+    private static func baselineAttempt(
+        from outcome: SharedBaselineEstablisher.Outcome, configuration: Configuration
+    ) -> BaselineAttempt {
+        switch outcome {
+        case let .failed(record, diagnosis):
+            return .failed(record: record, diagnosis: diagnosis)
+        case let .established(shared):
+            return .established(BaselineContext(
+                record: shared.record,
+                productHash: shared.record.buildProductHash,
+                timeouts: TimeoutController(settings: configuration.timeouts).recordingBaseline(durationSeconds: shared.testDurationSeconds),
+                coverage: shared.coverage,
+                perTestCoverage: shared.perTestCoverage
+            ))
+        }
+    }
+
     private func unusableBaseline(startedAt: Date, buildCommand: CommandRecord? = nil) -> BaselineRecord {
         BaselineRecord(
             passed: false,
@@ -1874,7 +2031,7 @@ public struct MutationRunner: Sendable {
                     point,
                     artifact: prepared.artifact,
                     in: sandbox,
-                    timeoutSeconds: baseline.timeouts.mutantLimitSeconds,
+                    timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: prepared.selectedTests),
                     selectedTests: prepared.selectedTests
                 )
             } catch {
@@ -1899,8 +2056,10 @@ public struct MutationRunner: Sendable {
     /// and `evaluateInBatches`, so a mutant is prepared identically no
     /// matter which path is about to test it: `.finished` for a verdict
     /// that needed no test at all (an anchor that no longer matches,
-    /// `.noCoverage`, a build that failed to produce a testable artifact),
-    /// `.readyToTest` for one whose build succeeded and needs running.
+    /// `.noCoverage`, a build that failed to produce a testable artifact,
+    /// or — isolated mode only — a build product already proven identical
+    /// to the baseline's, see the short-circuit below), `.readyToTest` for
+    /// one whose build succeeded and still needs running.
     private func prepare(
         _ point: MutationPoint,
         in sandbox: URL,
@@ -2015,6 +2174,70 @@ public struct MutationRunner: Sendable {
             baselineHash: baseline.productHash
         )
 
+        // Short-circuit: in isolated mode the mutation is compiled directly
+        // into the binary, so a build product already identical to the
+        // baseline's needs no test run to classify. This comparison runs
+        // once, immediately after the build and strictly before any test is
+        // ever attempted for this mutant — so `.timedOut` and `.flaky`
+        // cannot already exist at this point; both are outcomes of an
+        // actual test run (`.flaky` only as a *second*, confirming run
+        // disagreeing with a first — see `MutationVerdictVerifier
+        // .confirmKill`/`confirmCrash`), which by construction has not
+        // happened yet.
+        //
+        // What the suite *would* report if run anyway is a separate
+        // question, and it does not have one uniform answer.
+        // `MutationVerdictVerifier.classify` routes `.passed`/`.failed`/
+        // `.crashed` through `unprovenActivation` and downgrades every one
+        // of them to `.infrastructureFailure` once activation is unproven —
+        // for those three, running the suite here really would only ever
+        // confirm what this comparison already knows, at the cost of the
+        // full test-execution wall-clock. But `.timedOut` bypasses that gate
+        // entirely: `classify` always reports a hang as `.timedOut`
+        // regardless of activation. Had this short-circuit not existed and
+        // a hash-identical mutant's tests hung, the verdict would have been
+        // `.timedOut` — and, if `confirmTimedOutMutants` reproduced it on
+        // an independent rebuild, ultimately `.verifiedTimeout`, which this
+        // codebase credits as a real kill — for a mutation that never
+        // reached the binary at all. So for the timeout path specifically,
+        // skipping the run does not just avoid a redundant confirmation; it
+        // closes a route to a false kill credit that running the suite
+        // would otherwise have opened. (Schemata mode has no equivalent:
+        // one shared build embeds every mutation, so there is no per-mutant
+        // pre-test hash to compare — activation there can only be
+        // established by the runtime hit protocol during the test itself.)
+        //
+        // Round-2 review M2: the "identical to baseline" claim this
+        // short-circuit trusts completely comes from `MachOCodeHash`, which
+        // has been wrong before in exactly this direction — issue #3 (see
+        // its own doc comment) was a real, CI-confirmed false positive
+        // where a mutation that genuinely reached the binary and genuinely
+        // failed a test still hashed identical to baseline, because the
+        // difference lived in linkage rather than in any hashed section's
+        // bytes. Before this short-circuit existed, running the suite on
+        // every mutant was the safety net that surfaced that: a
+        // hash-identical mutant whose tests still failed was a visible
+        // contradiction, right here in this run's own diagnosis text. This
+        // short-circuit retires that net for every hash-matched mutant,
+        // since none of their tests run at all any more — see
+        // `Configuration.execution.noOpCanarySampleRate` for the narrow,
+        // deterministic, opt-in slice of it this reopens.
+        if case .buildProductIdenticalToBaseline? = activation, !isNoOpCanarySample(point.id) {
+            return await finished(
+                sourceApplication: .applied(evidence(applied, artifact: artifact, activation: activation)),
+                build: BuildObservation(
+                    outcome: .succeeded(buildProductHash: artifact.productHash, command: artifact.command),
+                    durationSeconds: buildDurationSeconds
+                ),
+                infrastructureFailureDiagnosis: """
+                The mutant's build product is identical to the baseline's, so the mutation never reached the code \
+                under test, and this result proves nothing. Tests were skipped rather than run against a build \
+                already known to contain no mutation.
+                """,
+                buildDurationSeconds: buildDurationSeconds
+            )
+        }
+
         return .readyToTest(PreparedMutant(
             point: point,
             sandbox: sandbox,
@@ -2026,6 +2249,50 @@ public struct MutationRunner: Sendable {
             startedAt: startedAt,
             buildDurationSeconds: buildDurationSeconds
         ))
+    }
+
+    /// Deterministic membership test for `Configuration.execution
+    /// .noOpCanarySampleRate`'s sample of hash-matched "no-op" mutants —
+    /// see the short-circuit above and that setting's own doc comment for
+    /// why this exists.
+    ///
+    /// Keyed off the mutation's own stable `MutationID` rather than a random
+    /// draw, so the same plan always samples the same canaries run to
+    /// run — this type's own top-level doc comment promises "two runs of
+    /// the same plan produce the same report", and a `Bool.random()` here
+    /// would break that promise for every hash-matched mutant. `ContentHash
+    /// .uint64` turns the ID into a value uniform over the full `UInt64`
+    /// range; comparing its position in that range against `rate` is the
+    /// continuous form of `hash % n == 0`, without requiring `rate` to
+    /// divide evenly into any particular `n`.
+    private func isNoOpCanarySample(_ id: MutationID) -> Bool {
+        let rate = configuration.execution.noOpCanarySampleRate
+        guard rate > 0 else { return false }
+        guard rate < 1 else { return true }
+        let position = Double(ContentHash.uint64(of: id.rawValue)) / Double(UInt64.max)
+        return position < rate
+    }
+
+    /// Logs the canary contradiction `finishAfterTest` detects: a mutant
+    /// `MachOCodeHash` swore reached the binary unchanged, whose real test
+    /// run did not simply pass anyway. Recorded both to stderr (for a human
+    /// watching the run live) and to `RunReport.operationalIssues` (for a
+    /// reader of `report.json` afterward), the same two places
+    /// `finalize`'s checkpoint-write failure already uses — this is
+    /// exactly as "the run's own score does not depend on it, but it must
+    /// not silently vanish" as that one is.
+    private func recordNoOpCanaryAnomaly(_ point: MutationPoint, run: TestRunResult) async {
+        let diagnosis = """
+        noOpCanarySampleRate canary for \(point.id): the build product hashed identical to baseline, but the \
+        real test run reported \(run.status.rawValue) rather than passing (\(run.diagnosis)). A mutation that \
+        never reached the binary cannot make a suite that passes on baseline behave differently — this is the \
+        same shape of contradiction issue #3 exposed in MachOCodeHash, and is worth investigating as a possible \
+        false "identical to baseline" claim rather than assumed harmless.
+        """
+        FileHandle.standardError.write(Data("warning: \(diagnosis)\n".utf8))
+        await operationalIssues.append(
+            OperationalIssue(severity: .warning, kind: .noOpCanaryUnexpectedOutcome, mutationID: point.id, diagnosis: diagnosis)
+        )
     }
 
     /// The other half of a prepared mutant's evaluation: gather whatever
@@ -2070,6 +2337,21 @@ public struct MutationRunner: Sendable {
         var timeoutConfirmation: TimeoutConfirmation?
         var confirmationDurationSeconds: Double?
         let activationProven = prepared.activation?.provesActivation ?? false
+
+        // Round-2 review M2: a hash-matched ("no-op") mutant only ever
+        // reaches a real `run` here when `noOpCanarySampleRate` sampled it
+        // as a canary — see `prepare`'s short-circuit and that setting's own
+        // doc comment. `.passed` is the only outcome consistent with the
+        // hash's claim that the mutation never reached the binary; anything
+        // else contradicts it, which is exactly the shape issue #3 took (a
+        // false "identical", exposed only by the suite genuinely not
+        // passing). `MutationVerdictVerifier.classify` still applies its own
+        // rules below, same as always — this only makes sure the
+        // contradiction itself is not lost inside whatever bucket that
+        // produces.
+        if case .buildProductIdenticalToBaseline? = prepared.activation, run.status != .passed {
+            await recordNoOpCanaryAnomaly(prepared.point, run: run)
+        }
 
         // Retesting only ever moves a verdict *out* of a kill, never into
         // one — a mutant that survived or crashed is not re-run, because
@@ -2190,9 +2472,13 @@ public struct MutationRunner: Sendable {
     ) async -> ConfirmationObservation {
         let confirmingRun: TestRunResult
         do {
+            // Same per-mutant timeout the primary run this is confirming
+            // used — derived the same way, from the same `selectedTests`,
+            // never recomputed independently or widened to the whole suite.
             confirmingRun = try await runMutantTests(
                 point, artifact: artifact, in: sandbox,
-                timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: selectedTests
+                timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests),
+                selectedTests: selectedTests
             )
         } catch {
             confirmingRun = infrastructureFailureRun("a confirmation run could not be started: \(error)")
@@ -2266,7 +2552,12 @@ public struct MutationRunner: Sendable {
         do {
             confirmingRun = try await runMutantTests(
                 point, artifact: artifact, in: sandbox,
-                timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: selectedTests
+                // Same per-mutant timeout the primary run this is confirming
+                // used — derived the same way, from the same
+                // `selectedTests`, never recomputed independently or widened
+                // to the whole suite.
+                timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests),
+                selectedTests: selectedTests
             )
         } catch {
             try? await workspaces.destroySandbox(at: sandbox)
@@ -2370,7 +2661,12 @@ public struct MutationRunner: Sendable {
         do {
             confirmingRun = try await runMutantTests(
                 point, artifact: artifact, in: sandbox,
-                timeoutSeconds: baseline.timeouts.mutantLimitSeconds, selectedTests: selectedTests
+                // Same per-mutant timeout the primary run this is confirming
+                // used — derived the same way, from the same
+                // `selectedTests`, never recomputed independently or widened
+                // to the whole suite.
+                timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests),
+                selectedTests: selectedTests
             )
         } catch {
             try? await workspaces.destroySandbox(at: sandbox)

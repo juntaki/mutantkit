@@ -31,7 +31,8 @@ struct MutantKit: AsyncParsableCommand {
             ReproduceCommand.self,
             ShardCommand.self,
             MergeCommand.self,
-            MigrateCommand.self
+            MigrateCommand.self,
+            OperatorCatalogCommand.self
         ],
         defaultSubcommand: nil
     )

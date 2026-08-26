@@ -254,6 +254,113 @@ struct MutationResultCacheTests {
         #expect(loaded == nil, "content that no longer matches the cached observation's pointDigest must not be served")
     }
 
+    // MARK: - Per-mutant validity: the half of the cache key that was always correct
+
+    /// The single most important thing the context digest does *not* have to
+    /// do. A mutant whose own file changed must miss even under an identical
+    /// context digest, because `load` independently re-checks
+    /// `PlannedMutationRef.pointDigest`, which folds in `sourceFileHash`.
+    ///
+    /// The setup is the adversarial one: the *same* mutation site in a file
+    /// that changed somewhere else entirely. ADR-0002 makes the `MutationID`
+    /// stable across that edit on purpose — occurrence index is scoped to the
+    /// enclosing declaration, so adding a function above it renumbers
+    /// nothing. So the ID matches, the key matches, and the only thing
+    /// standing between the caller and a stale verdict is the content digest.
+    /// The test asserts the IDs really are equal first; without that it would
+    /// pass for the wrong reason.
+    @Test("A mutant whose own file changed misses, even with an identical context digest")
+    func mutantWhoseOwnFileChangedMisses() async throws {
+        let before = """
+        struct Example {
+            func isReady() -> Bool { return true }
+        }
+        """
+        let after = """
+        struct Example {
+            func unrelatedHelper() -> Int { return 7 }
+            func isReady() -> Bool { return true }
+        }
+        """
+        let oldPoint = try #require(try discover(before, using: Operators.boolLiteral).first)
+        let newPoint = try #require(try discover(after, using: Operators.boolLiteral).first)
+
+        #expect(oldPoint.id == newPoint.id, "ADR-0002 keeps the ID stable here — that is what makes this adversarial")
+        #expect(oldPoint.sourceFileHash != newPoint.sourceFileHash, "the file's content really did move")
+
+        let cache = MutationResultCache(root: makeScratch(), policy: .permissive)
+        // Same context digest on purpose: this test is about the per-mutant
+        // half of the key doing its job with no help from the context half.
+        let key = MutationResultCache.Key(mutationID: oldPoint.id, contextDigest: "identical-context")
+        let observations = makeObservations(point: oldPoint, outcome: .survived, planID: planID, workUnitID: workUnitID)
+        await store(cache, observations: observations, for: key)
+
+        let loaded = await load(cache, key, point: newPoint)
+
+        #expect(loaded == nil, "a verdict measured against different file content must never be served")
+    }
+
+    /// Two genuinely different mutants that share every superficial property
+    /// a careless key might use — same file, same source, same operator, same
+    /// enclosing declaration — must not be able to read each other's entries.
+    @Test("Two different mutants in one declaration never collide")
+    func differentMutantsInOneDeclarationNeverCollide() async throws {
+        let source = """
+        struct Example {
+            func check() -> Bool { return true && false }
+        }
+        """
+        let points = try discover(source, using: Operators.boolLiteral)
+        #expect(points.count >= 2, "the fixture must actually yield two same-operator mutants in one declaration")
+        let first = points[0]
+        let second = points[1]
+        #expect(first.id != second.id)
+
+        let cache = MutationResultCache(root: makeScratch(), policy: .permissive)
+        let digest = "shared-context"
+        await store(
+            cache, observations: makeObservations(point: first, outcome: .survived, planID: planID, workUnitID: workUnitID),
+            for: MutationResultCache.Key(mutationID: first.id, contextDigest: digest)
+        )
+
+        // The second mutant asking under its own key: nothing stored for it.
+        let ownKey = await load(cache, MutationResultCache.Key(mutationID: second.id, contextDigest: digest), point: second)
+        #expect(ownKey == nil, "the second mutant has no entry of its own")
+
+        // ...and the second mutant presented against the *first* mutant's key,
+        // which is what a key collision would look like from the inside.
+        let borrowedKey = await load(cache, MutationResultCache.Key(mutationID: first.id, contextDigest: digest), point: second)
+        #expect(borrowedKey == nil, "one mutant's stored verdict must never be re-anchored onto a different mutant")
+    }
+
+    /// `storageName` hashes `mutationID ⧉ contextDigest` down to 32 hex
+    /// characters, so a filename collision is conceivable in principle. It
+    /// cannot produce a wrong answer, because `load` re-checks `record.key ==
+    /// key` against the record's own stored copy of the key rather than
+    /// trusting the path it was found at. This forces exactly that situation
+    /// by planting one key's record at another key's path.
+    @Test("An entry found at another key's storage path is rejected, not served")
+    func recordFoundUnderAnotherKeysPathIsRejected() async throws {
+        let point = try makeAnchoredPoint()
+        let root = makeScratch()
+        let cache = MutationResultCache(root: root, policy: .permissive)
+        let stored = MutationResultCache.Key(mutationID: point.id, contextDigest: "context-A")
+        let victim = MutationResultCache.Key(mutationID: point.id, contextDigest: "context-B")
+        await cache.store(
+            makeObservations(point: point, outcome: .survived, planID: planID, workUnitID: workUnitID),
+            durationSeconds: 1, for: stored
+        )
+
+        // Simulate the collision: the same bytes now also live where a lookup
+        // for `victim` will find them.
+        let storedURL = root.appendingPathComponent(storageName(for: stored))
+        try Data(contentsOf: storedURL).write(to: root.appendingPathComponent(storageName(for: victim)))
+
+        let loaded = await load(cache, victim, point: point)
+
+        #expect(loaded == nil, "the record's own key, not the path it was found at, decides whether it applies")
+    }
+
     // MARK: - Allow-list store
 
     @Test("Only definitive, environment-independent verdicts are cached")

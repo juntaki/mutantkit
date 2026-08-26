@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import MutationModel
+import MutationPlanner
 
 /// Implements `Research/budget-selection-v2/evaluation-protocol.md`
 /// (revision 6, independently reviewed GO) §4–§6: budget/seed derivation,
@@ -12,8 +13,66 @@ import MutationModel
 struct BudgetV2EvalCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "budget-v2-eval",
-        subcommands: [Budget.self, ScreenCommand.self, Aggregate.self, Compare.self]
+        subcommands: [Budget.self, ScreenCommand.self, Aggregate.self, Compare.self, Select.self]
     )
+}
+
+struct Select: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "select",
+        abstract: """
+        Materializes v1's and v2's real, production-default selections (protocol §6 step 5) as \
+        standalone plan.json subsets of an allocation-universe plan, via PlanSharding.subset — \
+        pure post-processing over already-computed selector output, no new mutation execution.
+        Feed the resulting plans, alongside the corpus's already-collected outcome report, to \
+        `compare`.
+        """
+    )
+
+    @Argument(help: "Path to the corpus's allocation-universe plan.json (the full discovered pool -- unbudgeted).")
+    var planPath: String
+
+    @Option(help: "This corpus's §4-derived seed.")
+    var seed: UInt64
+
+    @Option(help: "This corpus's §4-derived maxMutants.")
+    var budget: Int
+
+    @Option(help: "Where to write v1's selected plan.json (BudgetSelector.selectByOperatorSubtype, minimumPerOperator: 1).")
+    var outputV1Plan: String
+
+    @Option(help: "Where to write v2's selected plan.json (BudgetSelectorV2.allocate at production defaults -- S_default).")
+    var outputV2Plan: String
+
+    func run() throws {
+        let corpus = try Corpus.load(planPath: planPath, reportPath: nil)
+        let plan = try MutationPlan.decode(from: try Data(contentsOf: URL(fileURLWithPath: planPath)))
+
+        // v1 baseline (protocol §1): stratifyBy: operatorSubtype, minimumPerOperator: 1.
+        let v1Selection = BudgetSelector.selectByOperatorSubtype(
+            corpus.points, limit: budget, seed: seed, minimumPerOperator: 1
+        ).selected
+
+        // v2 S_default (protocol §5.3/§6 step 5): production defaults, weight
+        // unset at both levels -- the exact same computation `screen` performs
+        // internally for S_default, materialized here as a standalone plan.
+        var byOperator: [String: [MutationPoint]] = [:]
+        for point in corpus.points { byOperator[point.operatorID, default: []].append(point) }
+        let outerStrata = byOperator.keys.sorted().map { BudgetStratumV2(id: $0, candidates: byOperator[$0] ?? []) }
+        let v2Selection = try BudgetSelectorV2.allocate(
+            strata: outerStrata, limit: budget, seed: seed, minimumPerStratum: BudgetFormula.minimumPerStratum,
+            weight: [:], innerDimension: Corpus.subtypeKey, innerMinimumPerStratum: 1
+        ).map(\.point)
+
+        let v1Plan = try PlanSharding.subset(of: plan, mutationIDs: v1Selection.map(\.id))
+        let v2Plan = try PlanSharding.subset(of: plan, mutationIDs: v2Selection.map(\.id))
+
+        try v1Plan.encoded().write(to: URL(fileURLWithPath: outputV1Plan))
+        try v2Plan.encoded().write(to: URL(fileURLWithPath: outputV2Plan))
+
+        print("v1 selection (selectByOperatorSubtype): \(v1Selection.count) mutants -> \(outputV1Plan)")
+        print("v2 selection (S_default): \(v2Selection.count) mutants -> \(outputV2Plan)")
+    }
 }
 
 struct Budget: ParsableCommand {

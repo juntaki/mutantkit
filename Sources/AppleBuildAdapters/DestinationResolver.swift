@@ -86,12 +86,55 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
 /// run actually use" has one answer, not one answer per xcodebuild
 /// invocation that happened to agree by luck.
 public enum DestinationResolver {
+    /// Every `platform=` value `xcodebuild -destination` accepts that names a
+    /// simulator, as opposed to macOS or a physical device, paired with the
+    /// token its `SimRuntime` identifier uses for the same platform (e.g. a
+    /// `platform=visionOS Simulator` destination's devices report a runtime
+    /// identifier containing `SimRuntime.xrOS-...`, not `visionOS` — real
+    /// Apple naming, not a typo). Phase C10 (competitive-parity program):
+    /// this list used to be `"iOS Simulator"` alone, which meant a
+    /// `platform=tvOS Simulator,name=X`/`watchOS Simulator`/`visionOS
+    /// Simulator` destination silently skipped this whole type's name/UDID
+    /// pinning entirely — reintroducing, for those three platforms only, the
+    /// exact "OS:latest resolves differently per invocation" bug this type
+    /// exists to fix for iOS (see this type's own doc comment).
+    static let simulatorPlatforms: [(name: String, runtimeToken: String)] = [
+        ("iOS Simulator", "iOS"),
+        ("tvOS Simulator", "tvOS"),
+        ("watchOS Simulator", "watchOS"),
+        ("visionOS Simulator", "xrOS")
+    ]
+
+    /// Module-internal, not `private`: `XcodeBuildAdapter
+    /// .destinationNeedsSimulatorLease` reuses this exact check rather than
+    /// keeping its own separate `"iOS Simulator"`-only test — Phase C10
+    /// found that duplicate had the identical bug this one did, and fixing
+    /// one without the other would have left tvOS/watchOS/visionOS
+    /// destinations resolved correctly but leased not at all, letting two
+    /// concurrent workers collide on one real device.
+    static func isSimulatorDestination(_ requested: String) -> Bool {
+        simulatorPlatforms.contains { requested.localizedCaseInsensitiveContains($0.name) }
+    }
+
+    /// The `SimRuntime` token for the platform `requested` names (`nil` for
+    /// a non-simulator destination) — used to scope "latest installed
+    /// runtime" to runtimes of the *same platform* as what was actually
+    /// requested, never across all installed simulator platforms at once.
+    /// Without this, a machine with both iOS and tvOS runtimes installed
+    /// resolving an unqualified tvOS destination could in principle compute
+    /// "latest" from an iOS runtime identifier that happens to sort higher —
+    /// wrong for exactly the same reason mixing runtimes together was
+    /// already understood to be wrong for iOS alone.
+    private static func runtimeToken(forRequestedDestination requested: String) -> String? {
+        simulatorPlatforms.first { requested.localizedCaseInsensitiveContains($0.name) }?.runtimeToken
+    }
+
     /// Resolves against a live pool — the production entry point. Devices
     /// are only listed (an actual `simctl` call) when `requested` actually
     /// names a simulator; a macOS or physical-device destination never
     /// touches `simctl` at all.
     public static func resolve(_ requested: String, using pool: SimulatorPool) async throws -> ResolvedDestination {
-        guard requested.localizedCaseInsensitiveContains("iOS Simulator") else {
+        guard isSimulatorDestination(requested) else {
             return ResolvedDestination(requested: requested, device: nil)
         }
 
@@ -110,7 +153,7 @@ public enum DestinationResolver {
     /// logic can be pinned in a unit test without any of them needing a real
     /// simulator or a `simctl` call to do it.
     static func resolve(_ requested: String, against devices: [SimulatorDevice]) throws -> ResolvedDestination {
-        guard requested.localizedCaseInsensitiveContains("iOS Simulator") else {
+        guard isSimulatorDestination(requested) else {
             // macOS, a physical device, or something this tool does not
             // model: nothing to pin, and nothing to be ambiguous about.
             return ResolvedDestination(requested: requested, device: nil)
@@ -153,8 +196,15 @@ public enum DestinationResolver {
         // "Latest" is the highest-version runtime installed on the machine
         // at all — not just among this name's matches — because that is
         // what xcodebuild's own unqualified resolution means, and the
-        // property a resolution must not silently deviate from.
-        guard let latestRuntime = devices.map(\.runtimeIdentifier).max(by: Self.runtimeIsOlder) else {
+        // property a resolution must not silently deviate from. Scoped to
+        // runtimes of the *requested platform* (`platformDevices`), not
+        // every installed simulator platform at once — see
+        // `runtimeToken(forRequestedDestination:)`'s own doc comment.
+        let requestedRuntimeToken = Self.runtimeToken(forRequestedDestination: requested)
+        let platformDevices = requestedRuntimeToken.map { token in
+            devices.filter { $0.runtimeIdentifier.localizedCaseInsensitiveContains("SimRuntime.\(token)-") }
+        } ?? devices
+        guard let latestRuntime = platformDevices.map(\.runtimeIdentifier).max(by: Self.runtimeIsOlder) else {
             throw DestinationResolutionError.notFound(name: name, knownNames: [])
         }
 
@@ -194,15 +244,31 @@ public enum DestinationResolver {
 
     // MARK: - Runtime version comparison
 
-    /// `com.apple.CoreSimulator.SimRuntime.iOS-26-3-1` → `[26, 3, 1]`.
+    /// `com.apple.CoreSimulator.SimRuntime.iOS-26-3-1` → `[26, 3, 1]`, or
+    /// `...SimRuntime.tvOS-17-0` → `[17, 0]`, and likewise for `watchOS-`/
+    /// `xrOS-`.
     ///
     /// Compared component-wise as integers, not as strings: a lexicographic
     /// comparison of the identifiers puts `iOS-26-10` before `iOS-26-9`
     /// (`'1' < '9'`), which is simply wrong once any component reaches two
     /// digits.
+    ///
+    /// Phase C10 (competitive-parity program): generalized from a
+    /// hardcoded `"iOS-"` search to every known platform token. Before
+    /// this, a tvOS/watchOS/visionOS runtime identifier always produced an
+    /// empty `[]` here regardless of its real version — harmless while
+    /// `resolve` only ever reached this function for iOS destinations (an
+    /// empty array always sorts as "oldest", so a real iOS runtime always
+    /// won `max(by:)` against any non-iOS one), but would have made
+    /// `runtimeIsOlder` unable to tell two different *tvOS* runtime
+    /// versions apart from each other at all once tvOS/watchOS/visionOS
+    /// destinations started reaching this same "OS:latest" logic.
     private static func versionComponents(of runtimeIdentifier: String) -> [Int] {
-        guard let range = runtimeIdentifier.range(of: "iOS-") else { return [] }
-        return runtimeIdentifier[range.upperBound...].split(separator: "-").compactMap { Int($0) }
+        for (_, token) in Self.simulatorPlatforms {
+            guard let range = runtimeIdentifier.range(of: "\(token)-") else { continue }
+            return runtimeIdentifier[range.upperBound...].split(separator: "-").compactMap { Int($0) }
+        }
+        return []
     }
 
     private static func runtimeIsOlder(_ lhs: String, _ rhs: String) -> Bool {

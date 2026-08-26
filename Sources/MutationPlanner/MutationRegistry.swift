@@ -31,7 +31,8 @@ public struct MutationRegistry: Sendable {
         NilCoalescingFallbackOperator(),
         ReturnValueReplacementOperator(),
         ElseClauseDeletionOperator(),
-        RangeBoundaryReplacementOperator()
+        RangeBoundaryReplacementOperator(),
+        SideEffectCallRemovalOperator()
     ]
 
     /// The outcome of applying settings to the registry.

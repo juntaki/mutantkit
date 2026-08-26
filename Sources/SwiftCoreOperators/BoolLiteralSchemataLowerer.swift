@@ -65,12 +65,33 @@ public enum SchemataLoweringError: Error, Equatable, CustomStringConvertible {
 /// A boolean literal has the simplest possible lowering shape
 /// (`.literalSelection`, see `SchemataLoweringKind`): the replacement is
 /// another literal of the exact same type as the original, so wrapping it in
-/// a ternary selector introduces no expression-position constraint and no
+/// a ternary selector introduces no *type*-position constraint and no
 /// bidirectional-inference hazard — unlike `.expressionTernary` sites, both
 /// arms here are trivially and identically typed regardless of which arm the
 /// runtime selects. This is why bool-literal-inversion is the first operator
 /// lowered: it proves the embed → verify → activate pipeline without the
 /// operator itself introducing a second source of risk.
+///
+/// **Correction (ADR-0008 Addendum 4):** the claim above is about *type*,
+/// not *syntactic*, position — a real-corpus run found a genuine syntactic
+/// constraint this operator's literals can sit in: a `switch`/`if case`/
+/// `guard case`/`for case` pattern position expects a literal pattern the
+/// compiler can reason about for exhaustiveness; this lowering's runtime-
+/// selector rewrite changes that compiler-visible pattern shape and can
+/// invalidate exhaustiveness analysis, regardless of both arms sharing the
+/// same `Bool` type. `analyze(_:source:)` excludes this position via
+/// `OperatorExclusions.isInPatternPosition` (see
+/// `SchemataUnsupportedReason.patternPosition`); every other position is
+/// still true to the claim above.
+///
+/// **Second correction (real-corpus, 2026-08):** a `while`/`repeat`-`while`
+/// *condition* is a second such syntactic position — there the literal is a
+/// compile-time reachability fact (`while true` needs no trailing `return`),
+/// which a runtime selector is not, so lowering it can break the enclosing
+/// function's compilation and with it the whole shared chunk's build.
+/// `analyze(_:source:)` excludes it via
+/// `OperatorExclusions.isControlFlowConstantCondition` (see
+/// `SchemataUnsupportedReason.controlFlowConstant`).
 ///
 /// Source-generation and compilation only, per the roadmap's S1 scope — no
 /// runtime selection exists yet. `__mutantkitIsActiveV3` resolves to
@@ -209,6 +230,29 @@ public struct BoolLiteralSchemataLowerer: SchemataLowerer {
         // already excludes for its own, differently-shaped rewrite.
         guard !OperatorExclusions.isInsideResultBuilderBody(node) else {
             return .isolatedOnly(reason: .resultBuilderBody)
+        }
+        // ADR-0008 Addendum 4: a literal sitting in a switch/if-case/
+        // guard-case/for-case *pattern* position must stay a compile-time
+        // constant — a runtime-selector rewrite there is not one. See
+        // `OperatorExclusions.isInPatternPosition`'s own doc comment for
+        // why this is a precise structural test (only the pattern itself,
+        // never a `where` clause or case body), not a "somewhere inside a
+        // switch" heuristic.
+        guard !OperatorExclusions.isInPatternPosition(node) else {
+            return .isolatedOnly(reason: .patternPosition)
+        }
+        // A literal that *is* a `while`/`repeat`-`while` condition is read
+        // by the compiler as a reachability fact (`while true` needs no
+        // trailing `return`), which a runtime selector is not — see
+        // `OperatorExclusions.isControlFlowConstantCondition`. Same shape as
+        // the pattern-position guard above and for the same class of reason:
+        // the site's *syntactic* role, not its type, is what makes the
+        // lowering unsound there. Excluded at eligibility-classification
+        // time, before chunking, so the candidate simply runs in isolated
+        // mode — where a plain byte splice has none of this hazard — instead
+        // of taking a whole shared chunk's build down with it.
+        guard !OperatorExclusions.isControlFlowConstantCondition(node) else {
+            return .isolatedOnly(reason: .controlFlowConstant)
         }
         // A `static`/module-scope `let` initializer's memoization was
         // reasoned about here in an earlier draft (S6) as a hazard — but

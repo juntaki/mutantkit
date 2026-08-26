@@ -10,6 +10,8 @@ struct MergeCommand: AsyncParsableCommand {
         abstract: "Combine shard reports into one report."
     )
 
+    @OptionGroup var common: CommonOptions
+
     @Argument(help: "The shard reports to merge.")
     var reports: [String]
 
@@ -36,6 +38,22 @@ struct MergeCommand: AsyncParsableCommand {
         try merged.encoded().write(to: URL(fileURLWithPath: output), options: .atomic)
         print(try ConsoleReporter().render(merged))
         print("\nWrote \(output)")
+
+        // The one point in a sharded CI pipeline that knows the real,
+        // whole-project score: each shard's own `mutantkit run` records only
+        // its partial slice (or, with `--no-history`, nothing at all — see
+        // RunCommand), so this is the only history record such a pipeline
+        // ever produces that reflects the whole plan. Best-effort, like
+        // RunCommand's own history write: a failure here should not fail an
+        // otherwise-successful merge, but must not vanish either.
+        do {
+            try RunHistoryStore(
+                root: common.resolvedProjectRoot.appendingPathComponent(".mutantkit/history")
+            ).record(merged)
+        } catch {
+            let diagnosis = "history write failed for \(merged.planID): \(error)"
+            FileHandle.standardError.write(Data("warning: \(diagnosis)\n".utf8))
+        }
 
         guard merged.integrity.passed else {
             throw ExitCode(MutantKitExit.integrityFailure)

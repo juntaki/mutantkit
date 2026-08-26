@@ -98,7 +98,8 @@ private struct FakeBatchableTestAdapter: TestAdapter, BatchTestable {
     }
 
     func runBatch(
-        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double
+        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
     ) async -> [MutationID: TestRunResult] {
         fatalError("not exercised")
     }

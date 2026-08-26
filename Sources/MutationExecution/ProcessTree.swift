@@ -15,29 +15,56 @@ import Foundation
 /// in order to clean up after a launch that went wrong invites the failure it is
 /// trying to fix.
 enum ProcessTree {
+    /// A descendant's identity, not just its number.
+    ///
+    /// `pid_t` is a small, kernel-recycled counter — the OS is free to hand the
+    /// exact same number to a completely unrelated process the moment ours frees
+    /// it. Pairing a PID with the start time the kernel recorded for it turns
+    /// "this PID" into "this specific process instance": a later process that
+    /// reused the number necessarily has a different start time, so a check
+    /// against both together can never true-positive on an impostor. This is
+    /// the identity `reap(_:)` re-verifies against the live table before
+    /// signalling anything — see that function's own doc comment for why a
+    /// snapshot recorded once, is not, by itself, safe to act on later.
+    struct ProcessIdentity: Hashable, Sendable {
+        let pid: pid_t
+        let startTimeSeconds: Int
+        let startTimeMicroseconds: Int32
+    }
+
     /// Every descendant of `root`, deepest last.
     ///
     /// Must be called while `root` is still alive. Once it exits, its children are
     /// reparented to launchd and nothing remains to identify them as ours.
     static func descendants(of root: pid_t) -> [pid_t] {
+        descendantIdentities(of: root).map(\.pid)
+    }
+
+    /// Same walk as `descendants(of:)`, but keeping each descendant's start
+    /// time alongside its PID — the raw material `reap(_:)` needs to verify
+    /// provenance later, after `root` may no longer be alive to vouch for the
+    /// ancestry chain itself. See that function and `ProcessIdentity` for why
+    /// the plain PID this returns is not enough on its own once any real time
+    /// has passed since this call.
+    static func descendantIdentities(of root: pid_t) -> [ProcessIdentity] {
         let table = processTable()
         guard !table.isEmpty else { return [] }
 
-        var childrenByParent: [pid_t: [pid_t]] = [:]
+        var childrenByParent: [pid_t: [Entry]] = [:]
         for entry in table {
-            childrenByParent[entry.ppid, default: []].append(entry.pid)
+            childrenByParent[entry.ppid, default: []].append(entry)
         }
 
-        var found: [pid_t] = []
+        var found: [ProcessIdentity] = []
         var queue = childrenByParent[root] ?? []
         // The kernel cannot report a cycle, but a corrupt read must not become an
         // infinite loop inside the component whose job is to guarantee termination.
         var seen: Set<pid_t> = [root]
 
         while let next = queue.popLast() {
-            guard seen.insert(next).inserted else { continue }
-            found.append(next)
-            queue.append(contentsOf: childrenByParent[next] ?? [])
+            guard seen.insert(next.pid).inserted else { continue }
+            found.append(next.identity)
+            queue.append(contentsOf: childrenByParent[next.pid] ?? [])
         }
 
         return found
@@ -49,6 +76,12 @@ enum ProcessTree {
     /// children of its own that stayed with it. `kill` failing is expected and
     /// ignored: the target has usually already died, which is the outcome we
     /// wanted.
+    ///
+    /// Takes bare PIDs, not `ProcessIdentity` — every existing call site kills
+    /// immediately after its own fresh `descendants(of:)` snapshot, while the
+    /// ancestry that snapshot proved is still fresh (no real time has passed
+    /// for the kernel to recycle anything). `reap(_:)` is the function for a
+    /// PID set observed at some *earlier* point and acted on later.
     static func forceKill(_ pids: [pid_t]) {
         for pid in pids {
             kill(pid, SIGKILL)
@@ -59,9 +92,85 @@ enum ProcessTree {
         }
     }
 
+    /// SIGKILLs every identity whose provenance is still verifiable against
+    /// the *current* process table — the delayed counterpart to `forceKill`.
+    ///
+    /// This exists for exactly one shape of caller: something that observed a
+    /// set of descendants at various points *while* a supervised process was
+    /// alive (continuous polling, not one snapshot), and now — after that
+    /// process has already exited, possibly seconds later — needs to reclaim
+    /// whatever of that set is still running. By the time this runs, `root`'s
+    /// own ancestry link to any survivor is already gone (reparented to
+    /// launchd), so nothing here can re-derive "is this really one of ours"
+    /// from parentage. `ProcessIdentity`'s start-time pairing is what stands
+    /// in for that proof instead: a PID still alive with the *same* start
+    /// time it had when first observed is, with overwhelming probability, the
+    /// same process instance, never a same-numbered stranger — the kernel
+    /// would have to both recycle the PID and coincidentally reuse the exact
+    /// microsecond-resolution start time, which is not expected to occur in
+    /// practice. A PID alive with a *different* start time is left alone
+    /// unconditionally: that is the whole safety property this function
+    /// exists to provide, minimized to the narrowest window `signal(_:_:)`'s
+    /// own doc comment can achieve — never traded away for a simpler
+    /// bare-PID kill here, and never claimed as a stronger, kernel-enforced
+    /// atomic guarantee it cannot actually be (see that doc comment for why).
+    static func reap(_ identities: some Sequence<ProcessIdentity>) {
+        signal(identities, SIGKILL)
+    }
+
+    /// `reap(_:)`, generalized to any signal — the same provenance
+    /// re-verification, used for the polite SIGTERM pass a timeout sends
+    /// before escalating. Sending a lesser signal is not a reason to relax
+    /// the check: an unrelated process that happens to hold a recycled PID
+    /// deserves no signal from us at all, polite or otherwise.
+    ///
+    /// **Re-verifies each identity individually, immediately before *that*
+    /// identity's own direct `kill` call — never once against a single
+    /// batch-wide snapshot shared across the whole set.** An earlier version
+    /// of this function read the process table exactly once at the top of
+    /// this loop and reused that one snapshot for every identity — flagged
+    /// in review as a real gap: for a `identities` set with many entries,
+    /// the snapshot backing a `kill` call late in the loop could already be
+    /// meaningfully stale by the time that iteration runs, widening the
+    /// window in which a verified PID exits and gets recycled before this
+    /// function actually signals it. Re-reading fresh per identity (via
+    /// `isAlive(_:)`, itself one `processTable()` call) narrows that window,
+    /// for the direct kill, to "one `sysctl` call, immediately followed by
+    /// one `kill` call" — the practical minimum achievable in userspace,
+    /// since macOS has no `pidfd`-equivalent primitive that would let a
+    /// caller signal "this exact, already-verified process instance"
+    /// atomically. **This is a real, honest limitation, not fully
+    /// eliminated by this change, and it does not extend past the direct
+    /// kill**: the `getpgid`/group-kill pair immediately below is *not*
+    /// re-verified against a fresh `isAlive` check of its own (flagged in
+    /// review) — if the process exits and its PID is recycled as an
+    /// unrelated group leader in the instant between the direct `kill` and
+    /// `getpgid`, the group signal could reach that unrelated group. Closing
+    /// that too would only push the identical, structurally-unclosable race
+    /// one syscall further, not eliminate it, so this is left as the same
+    /// "best-effort, not a hard kernel guarantee" character
+    /// `ProcessSupervisor`'s own existing process-group signalling already
+    /// has, not silently assumed to be atomic.
+    static func signal(_ identities: some Sequence<ProcessIdentity>, _ signalNumber: Int32) {
+        for identity in identities {
+            guard isAlive(identity) else { continue }
+            kill(identity.pid, signalNumber)
+            if getpgid(identity.pid) == identity.pid {
+                kill(-identity.pid, signalNumber)
+            }
+        }
+    }
+
     /// True when the process exists and we may signal it. For tests and diagnosis.
     static func isAlive(_ pid: pid_t) -> Bool {
         kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /// True only when `identity`'s exact process instance — not just its PID
+    /// number — is still alive, per the same provenance check `reap(_:)`
+    /// uses. For tests and diagnosis.
+    static func isAlive(_ identity: ProcessIdentity) -> Bool {
+        processTable().contains { $0.identity == identity }
     }
 
     // MARK: - Kernel process table
@@ -69,6 +178,12 @@ enum ProcessTree {
     private struct Entry {
         let pid: pid_t
         let ppid: pid_t
+        let startTimeSeconds: Int
+        let startTimeMicroseconds: Int32
+
+        var identity: ProcessIdentity {
+            ProcessIdentity(pid: pid, startTimeSeconds: startTimeSeconds, startTimeMicroseconds: startTimeMicroseconds)
+        }
     }
 
     private static func processTable() -> [Entry] {
@@ -92,7 +207,10 @@ enum ProcessTree {
         guard result == 0 else { return [] }
 
         return buffer.prefix(length / stride).map {
-            Entry(pid: $0.kp_proc.p_pid, ppid: $0.kp_eproc.e_ppid)
+            Entry(
+                pid: $0.kp_proc.p_pid, ppid: $0.kp_eproc.e_ppid,
+                startTimeSeconds: $0.kp_proc.p_starttime.tv_sec, startTimeMicroseconds: Int32($0.kp_proc.p_starttime.tv_usec)
+            )
         }
     }
 }

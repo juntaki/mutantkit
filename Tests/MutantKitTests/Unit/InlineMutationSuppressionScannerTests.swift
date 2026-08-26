@@ -31,8 +31,7 @@ struct InlineMutationSuppressionScannerTests {
 
     @Test("a comma-separated operator list expands into one rule per operator")
     func commaSeparatedOperatorList() {
-        let source = "// mutantkit:disable-next-line swift.core.relational-operator-replacement, "
-            + "swift.core.unary-not-removal\nif !(index < count) { }"
+        let source = "// mutantkit:disable-next-line swift.core.relational-operator-replacement, swift.core.unary-not-removal\nif !(index < count) { }"
         let rules = InlineMutationSuppressionScanner.scan(source: source, file: "F.swift")
         #expect(rules == [
             .fileLineOperator(file: "F.swift", line: 2, operatorID: "swift.core.relational-operator-replacement"),

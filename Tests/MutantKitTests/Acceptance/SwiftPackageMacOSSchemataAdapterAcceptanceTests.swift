@@ -109,7 +109,9 @@ struct SwiftPackageMacOSSchemataAdapterAcceptanceTests {
         let artifact = try await adapter.buildSchemataChunk(loweredSources: program.loweredSources, in: directory)
         #expect(artifact.productHash != nil, "a real build must produce a hashable product")
 
-        let unmutated = try await adapter.runSchemataToken(artifact, in: directory, timeoutSeconds: 60, environment: [:])
+        let unmutated = try await adapter.runSchemataToken(
+            artifact, in: directory, timeoutSeconds: 60, environment: [:], selectedTests: nil
+        )
         #expect(unmutated.status == .passed, "no requested token must behave exactly like the original program: \(unmutated.diagnosis)")
 
         let transcriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("transcript-\(UUID().uuidString).bin")
@@ -122,7 +124,8 @@ struct SwiftPackageMacOSSchemataAdapterAcceptanceTests {
                 SchemataEvidenceCollector.tokenEnvironmentVariable: SchemataEvidenceCollector.tokenEnvironmentValue(for: token),
                 SchemataEvidenceCollector.transcriptPathEnvironmentVariable: transcriptPath.path,
                 SchemataEvidenceCollector.runIDEnvironmentVariable: SchemataEvidenceCollector.runIDEnvironmentValue(for: runID)
-            ]
+            ],
+            selectedTests: nil
         )
         #expect(mutated.status == .failed, "the requested token must activate the embedded mutation and flip the test's result: \(mutated.diagnosis)")
 

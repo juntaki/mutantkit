@@ -140,7 +140,7 @@ struct SchemataConfirmationDifferentialAcceptanceTests {
         let runner = SchemataMutationRunner(
             planID: "plan-differential-confirm-schemata", workUnitID: "plan-differential-confirm-schemata",
             programs: [program], points: pointsByID, originalSources: originalSources,
-            build: adapter, test: adapter, workspaces: workspaces, timeoutSeconds: 120,
+            build: adapter, test: adapter, workspaces: workspaces, timeouts: TimeoutSettings(baselineSeconds: 120),
             toolchainHash: "test-toolchain", buildArgumentsHash: "test-build-arguments", policy: Self.confirmationEnabledPolicy
         )
         let outcome = try await runner.run()

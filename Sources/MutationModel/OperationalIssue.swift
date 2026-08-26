@@ -12,11 +12,25 @@ public struct OperationalIssue: Codable, Sendable, Hashable {
         case error
     }
 
-    /// One case today: `MutationRunner.finalize`'s checkpoint write. New
-    /// kinds get added here as they're given the same treatment — this is
-    /// not a general-purpose error bucket.
+    /// Four cases today: `MutationRunner.finalize`'s checkpoint write, a
+    /// shared schemata chunk build that genuinely failed to compile
+    /// (ADR-0008 Addendum 4's fan-out/observability requirement — one issue
+    /// per failed chunk, never one per affected `MutationID`), and a
+    /// `noOpCanarySampleRate`-sampled mutant whose build product hashed
+    /// identical to baseline yet whose real test run did not simply pass —
+    /// see `Configuration.execution.noOpCanarySampleRate`'s own doc comment.
+    /// New kinds get added here as they're given the same treatment — this
+    /// is not a general-purpose error bucket.
     public enum Kind: String, Codable, Sendable {
         case checkpointWriteFailed
+        /// One chunk's shared lowered program did not compile, so every
+        /// `MutationID` it covered forfeited schemata's fast path and was
+        /// re-run through isolated mode instead. Never affects score or
+        /// integrity (every affected mutation still gets a real isolated
+        /// verdict) — it is a cost/health signal, which is exactly what
+        /// `operationalIssues` is for.
+        case schemataChunkBuildFailed
+        case noOpCanaryUnexpectedOutcome
     }
 
     public let severity: Severity

@@ -16,19 +16,33 @@ public struct MutationContext {
     public let sourceFileHash: String
     /// For line/column in human output only — never used as an anchor.
     public let locationConverter: SourceLocationConverter
+    /// Called-function base names `swift.core.side-effect-call-removal`
+    /// must never propose removing, from
+    /// `OperatorSettings.sideEffectCallRemoval.excludeCalls`
+    /// (`Configuration.operators`). Empty for every other operator and
+    /// every call site that predates this field — a project-wide, generic
+    /// context field rather than a per-operator parameter to `discover`,
+    /// because `MutationRegistry.builtIn` constructs every operator as a
+    /// parameterless value at static-init time, before any configuration
+    /// exists to give it; this is the one seam where a resolved run's
+    /// configuration can still reach an operator's `discover(in:)` without
+    /// changing that registration model. No other operator reads it today.
+    public let excludedCallNames: Set<String>
 
     public init(
         relativePath: String,
         sourceFile: SourceFileSyntax,
         sourceBytes: [UInt8],
         sourceFileHash: String,
-        locationConverter: SourceLocationConverter
+        locationConverter: SourceLocationConverter,
+        excludedCallNames: Set<String> = []
     ) {
         self.relativePath = relativePath
         self.sourceFile = sourceFile
         self.sourceBytes = sourceBytes
         self.sourceFileHash = sourceFileHash
         self.locationConverter = locationConverter
+        self.excludedCallNames = excludedCallNames
     }
 }
 

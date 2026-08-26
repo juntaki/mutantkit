@@ -1,0 +1,33 @@
+# Swift Package Index build configuration.
+#
+# MutantKit is a command-line tool (Package.swift declares
+# `.executable(name: "mutantkit", targets: ["CLI"])`), not a library — the
+# manifest schema (github.com/SwiftPackageIndex/SPIManifest) has no separate
+# "this is a CLI" declaration; SPI reads the executable product straight out
+# of Package.swift and shows it as a command-line tool automatically. All
+# `.spi.yml` needs to say is how to *build* it.
+#
+# Every current CLI dependency is SwiftPM-only (see Package.swift and the
+# README's "Building from source" section: `swift build -c release`), so
+# `macos-spm` — not `macos-xcodebuild`, which is for packages that need a
+# scheme (an app target, an iOS/tvOS/watchOS library) — is the correct
+# platform for every config below.
+#
+# Swift versions: every toolchain Swift Package Index's builder currently
+# supports (SwiftPackageIndex/SPIManifest's `SwiftVersion` enum enumerates
+# exactly 6.1, 6.2, and 6.3 as selectable `swift_version` values — a bare
+# "6.0" is not one of them and SPI silently never builds that config, so it
+# is omitted here). This package's own `swift-tools-version:6.0` (see
+# Package.swift) is the *manifest*-format floor the README's "Requires Swift
+# 6.0+" states, which is a lower bar than the compiler/toolchain version SPI
+# builds with — any of 6.1+ can still parse a 6.0-tools-version manifest, so
+# there is no conflict in declaring only 6.1-6.3 here.
+version: 1
+builder:
+  configs:
+    - platform: macos-spm
+      swift_version: "6.3"
+    - platform: macos-spm
+      swift_version: "6.2"
+    - platform: macos-spm
+      swift_version: "6.1"

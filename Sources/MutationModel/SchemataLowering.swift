@@ -213,6 +213,34 @@ public enum SchemataUnsupportedReason: Codable, Sendable, Hashable {
     /// The site involves an ownership-sensitive binding (`inout`,
     /// `borrowing`, `consuming`) this lowering does not yet reason about.
     case ownershipSensitiveExpression
+    /// The literal sits in a pattern-matching *pattern* position — a
+    /// `switch` case pattern, or the pattern half of `if case`/`guard
+    /// case`/`for case` (SwiftSyntax's `ExpressionPatternSyntax`, the one
+    /// grammar node all four share). Pattern-position literals are excluded
+    /// because replacing a literal pattern with a runtime selector changes
+    /// the compiler-visible pattern shape and can invalidate compile-time
+    /// exhaustiveness analysis or otherwise make schemata lowering unsound
+    /// for pattern matching — not a hypothetical, see ADR-0008 Addendum 4's
+    /// real-corpus finding (a shared schemata chunk failed to compile,
+    /// "switch must be exhaustive," because a case-pattern boolean literal
+    /// had been rewritten this way). Not a type-variance question
+    /// (`.typeVarianceUnproven`), which this case is deliberately kept
+    /// distinct from.
+    case patternPosition
+    /// The literal *is* the condition of a `while` / `repeat`-`while`, where
+    /// the compiler reads it as a **reachability** fact, not merely as a
+    /// value: `while true` is a provably-infinite loop, so no `return` is
+    /// required after it. A schemata lowering replaces the literal with a
+    /// runtime selector call, the loop stops being provably infinite, and
+    /// the enclosing non-`Void` function fails to compile ("missing return
+    /// …"). Real-corpus evidence, `swift-async-algorithms` 2026-08: one such
+    /// site took its entire 93-member shared chunk's build down with it.
+    /// Deliberately distinct from `.patternPosition` (an exhaustiveness/
+    /// pattern-shape question) and from `.typeVarianceUnproven` (a typing
+    /// question) — this one is about control-flow reachability, and keeping
+    /// the three separate is what makes classification output say which
+    /// hazard actually applied.
+    case controlFlowConstant
 }
 
 /// The outcome of asking whether one candidate could be embedded in a

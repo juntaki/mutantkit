@@ -119,6 +119,15 @@ public enum ConfigurationValidator {
             ))
         }
 
+        if !(0...1).contains(configuration.execution.noOpCanarySampleRate) {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "execution.noOpCanarySampleRate",
+                message: "Must be between 0 and 1 (a fraction of hash-matched mutants to sample), not "
+                    + "\(configuration.execution.noOpCanarySampleRate)."
+            ))
+        }
+
         // Batching only batches mutants that have a known, narrowed test
         // selection (see `Configuration.execution.testBatchSize`). Without
         // `selectCoveringTests`, no mutant has one, so a `testBatchSize` set
@@ -470,7 +479,9 @@ public enum ConfigurationJSONSchema {
             "confirmCrashKills": { "type": "boolean" },
             "confirmTimedOutMutants": { "type": "boolean" },
             "earlyAbortSelectedTests": { "type": "boolean" },
-            "testBatchSize": { "type": ["integer", "null"], "minimum": 1 }
+            "testBatchSize": { "type": ["integer", "null"], "minimum": 1 },
+            "noOpCanarySampleRate": { "type": "number", "minimum": 0, "maximum": 1 },
+            "simulatorPool": { "type": "boolean" }
           }
         },
         "timeouts": {
@@ -492,7 +503,7 @@ public enum ConfigurationJSONSchema {
         },
         "reports": {
           "type": "array",
-          "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary"] },
+          "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary", "sonar", "github-actions"] },
           "uniqueItems": true
         },
         "qualityGate": {

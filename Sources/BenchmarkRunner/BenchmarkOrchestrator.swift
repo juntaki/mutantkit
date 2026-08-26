@@ -9,6 +9,17 @@ import Foundation
 public struct BenchmarkOrchestrator: Sendable {
     private let mutantKit: any MutationBenchmarkTool
     private let muter: any MutationBenchmarkTool
+    /// Phase C13: `ericodx/swift-mutation-testing`, the third comparison
+    /// target named from the start of the competitive-parity program.
+    /// Optional and defaulted to `nil` deliberately — unlike `muter`,
+    /// this tool is newly wired up and not every environment/CI runner
+    /// running this benchmark has it installed; `nil` skips it entirely
+    /// rather than making every existing invocation newly required to
+    /// provide a third binary. Run sequentially, after `mutantKit`/`muter`
+    /// for each mode — not folded into `toolOrder`, which only expresses
+    /// a two-way first/second ordering and has no existing need to
+    /// interleave a third tool's own start order.
+    private let swiftMutationTesting: (any MutationBenchmarkTool)?
     private let toolchainProfile: BenchmarkToolchainProfile
     private let runsPerMode: Int
     private let timeoutSeconds: Double
@@ -32,10 +43,12 @@ public struct BenchmarkOrchestrator: Sendable {
     public init(
         mutantKit: any MutationBenchmarkTool, muter: any MutationBenchmarkTool, toolchainProfile: BenchmarkToolchainProfile,
         runsPerMode: Int, timeoutSeconds: Double, outputDirectory: URL, materializer: ProjectMaterializer = ProjectMaterializer(),
-        toolOrder: [BenchmarkMode: ToolExecutionOrder] = [:], modes: [BenchmarkMode] = BenchmarkMode.allCases
+        toolOrder: [BenchmarkMode: ToolExecutionOrder] = [:], modes: [BenchmarkMode] = BenchmarkMode.allCases,
+        swiftMutationTesting: (any MutationBenchmarkTool)? = nil
     ) {
         self.mutantKit = mutantKit
         self.muter = muter
+        self.swiftMutationTesting = swiftMutationTesting
         self.toolchainProfile = toolchainProfile
         self.runsPerMode = runsPerMode
         self.timeoutSeconds = timeoutSeconds
@@ -58,6 +71,7 @@ public struct BenchmarkOrchestrator: Sendable {
             projectResults.append(result)
             allMeasurements.append(contentsOf: result.mutantKitMeasurements.values)
             allMeasurements.append(contentsOf: result.muterMeasurements.values)
+            allMeasurements.append(contentsOf: result.swiftMutationTestingMeasurements.values)
         }
 
         let aggregate = AggregateBenchmarkResult(projects: projectResults)
@@ -89,8 +103,10 @@ public struct BenchmarkOrchestrator: Sendable {
     private func runProject(_ project: BenchmarkProject, rawDirectory: URL) async throws -> AggregateProjectResult {
         var mutantKitMeasurements: [BenchmarkMode: MutationBenchmarkMeasurement] = [:]
         var muterMeasurements: [BenchmarkMode: MutationBenchmarkMeasurement] = [:]
+        var swiftMutationTestingMeasurements: [BenchmarkMode: MutationBenchmarkMeasurement] = [:]
         var lastMutantKitMutants: [NormalizedMutant] = []
         var lastMuterMutants: [NormalizedMutant] = []
+        var lastSwiftMutationTestingMutants: [NormalizedMutant] = []
         var correctnessPassed = true
 
         for mode in modes {
@@ -135,18 +151,71 @@ public struct BenchmarkOrchestrator: Sendable {
                 )
             }
             if let last = muterOutcome.runs.last, let data = last.reportData,
-               let parsed = try? ResultNormalizer.normalizeMuterReport(data) {
+               // `muterOutcome.lastCheckoutDirectory`, passed through
+               // (Phase C13): the real materialized directory Muter
+               // actually ran in for this mode — lets
+               // `normalizeMuterReport` resolve each mutant's real
+               // project-relative path from Muter's own absolute
+               // `filePath`, instead of the bare basename Muter's
+               // file-report groups by — see that function's own doc
+               // comment for why the basename alone was a second,
+               // compounding reason the original cross-tool matching
+               // found zero matches.
+               let parsed = try? ResultNormalizer.normalizeMuterReport(
+                   data, projectDirectory: muterOutcome.lastCheckoutDirectory
+               ) {
                 lastMuterMutants = parsed
                 muterMeasurements[mode] = measurement(from: muterOutcome.runs, muterMutants: parsed)
+            }
+
+            // Phase C13: swift-mutation-testing, run after mutantKit/muter
+            // for this mode — `nil` (the default) skips it entirely, so
+            // every existing invocation without this third binary is
+            // unaffected. Its own `files` dictionary keys are already
+            // real project-relative paths (confirmed against its real
+            // documented report schema), so — unlike Muter — no
+            // `projectDirectory` filesystem-probing parameter is needed
+            // here at all.
+            if let swiftMutationTesting {
+                let smtOutcome = try await runMode(
+                    tool: swiftMutationTesting, project: project, mode: mode, patchFile: patchFile, rawDirectory: rawDirectory
+                )
+                if let last = smtOutcome.runs.last, let data = last.reportData,
+                   let parsed = try? ResultNormalizer.normalizeSwiftMutationTestingReport(data) {
+                    lastSwiftMutationTestingMutants = parsed
+                    swiftMutationTestingMeasurements[mode] = measurement(from: smtOutcome.runs, muterMutants: parsed)
+                }
+                if mode == .cold {
+                    try? FileManager.default.removeItem(at: smtOutcome.lastCheckoutDirectory)
+                }
+            }
+
+            // The last cold-mode checkout for each tool is kept alive by
+            // `runMode` specifically so the work above (Muter's
+            // `relativePath` resolution; MutantKit's own isolated
+            // differential re-run inside `differentialDisagreements`,
+            // which needs `mkOutcome.lastCheckoutDirectory` to still exist
+            // as a real `workingDirectory` too) can actually use it —
+            // cleaned up here, once both are done, so a full sweep's disk
+            // usage is unchanged from before this deferral, just widened
+            // by one mode's own post-processing rather than deleted
+            // mid-`runMode`.
+            if mode == .cold {
+                try? FileManager.default.removeItem(at: mkOutcome.lastCheckoutDirectory)
+                try? FileManager.default.removeItem(at: muterOutcome.lastCheckoutDirectory)
             }
         }
 
         let comparison = (lastMutantKitMutants.isEmpty && lastMuterMutants.isEmpty)
             ? nil : ResultNormalizer.match(mutantKit: lastMutantKitMutants, muter: lastMuterMutants)
+        let comparisonWithSwiftMutationTesting = (lastMutantKitMutants.isEmpty && lastSwiftMutationTestingMutants.isEmpty)
+            ? nil : ResultNormalizer.match(mutantKit: lastMutantKitMutants, comparedAgainst: lastSwiftMutationTestingMutants)
 
         return AggregateProjectResult(
             projectID: project.id, mutantKitMeasurements: mutantKitMeasurements, muterMeasurements: muterMeasurements,
-            comparison: comparison, mutantKitCorrectnessPassed: correctnessPassed
+            comparison: comparison, mutantKitCorrectnessPassed: correctnessPassed,
+            swiftMutationTestingMeasurements: swiftMutationTestingMeasurements,
+            comparisonWithSwiftMutationTesting: comparisonWithSwiftMutationTesting
         )
     }
 
@@ -224,7 +293,19 @@ public struct BenchmarkOrchestrator: Sendable {
             let rawPath = rawDirectory.appendingPathComponent("\(project.id)-\(tool.identity.name)-\(mode.rawValue)-\(index).json")
             try? raw.reportData?.write(to: rawPath)
 
-            if mode == .cold {
+            // The *last* cold-mode checkout is deliberately kept alive
+            // past this loop — Phase C13 found (via Codex review) that
+            // deleting it here, before `runProject` gets a chance to pass
+            // `lastCheckoutDirectory` into `normalizeMuterReport`, silently
+            // defeated that fix's whole real-relative-path resolution for
+            // exactly the `cold` mode the original "0 matched mutants"
+            // finding was measured under: the directory `relativePath`
+            // needs to probe would already be gone by the time it ran.
+            // `runProject` deletes it itself, right after normalization
+            // completes for this mode — so disk usage across a full sweep
+            // is unchanged, just deferred by the width of one mode's own
+            // post-processing.
+            if mode == .cold, index < runsPerMode - 1 {
                 try? FileManager.default.removeItem(at: checkoutDirectory)
             }
         }

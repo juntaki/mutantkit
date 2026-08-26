@@ -6,7 +6,14 @@ import MutationModel
 /// test.
 ///
 /// The format Xcode matches is exact and undocumented-by-contract:
-/// `<file>:<line>:<column>: warning: <message>`
+/// `<file>:<line>:<column>: warning: <message>` or
+/// `<file>:<line>:<column>: error: <message>` — Xcode's own parser treats
+/// both the same way structurally (an issue-navigator entry anchored to a
+/// line), differing only in the icon/severity it renders. A survivor is
+/// always `warning:` (a judgment call: this mutant might be worth a test).
+/// An integrity violation is always `error:` (the run's own proof that a
+/// mutant was applied and observed is broken, so this run's verdicts cannot
+/// be trusted at all — see `integrityDiagnostics`'s own doc comment).
 /// Anything else — a stray prefix, a missing column — is treated as plain log
 /// text and silently disappears from the navigator.
 public struct XcodeReporter: Reporter {
@@ -43,11 +50,19 @@ public struct XcodeReporter: Reporter {
         let point = result.point
         let message = "Mutant survived: \(point.operatorID) changed "
             + "`\(singleLine(point.originalText))` to `\(singleLine(point.replacementText))` "
-            + "and every test still passed. \(result.diagnosis) [\(point.id)]"
+            + "and every test still passed. \(result.diagnosis) "
+            + "[\(point.id)] — run `mutantkit inspect \(point.id.rawValue)` for the full diff and evidence."
 
         return "\(path(for: point.file, in: report)):\(point.line):\(point.column): warning: \(message)"
     }
 
+    /// Integrity violations are `error`, never `warning`: a warning is a
+    /// developer judgment call (this survivor might be worth a test); an
+    /// integrity violation means the run's own proof that a mutant was
+    /// applied and observed is broken, so the *survivor/kill verdicts this
+    /// run produced cannot be trusted at all* — a strictly more severe class
+    /// of problem than "no test caught this," and Xcode's own issue
+    /// navigator distinguishes exactly this severity band.
     private func integrityDiagnostics(_ report: RunReport) -> [String] {
         var lines: [String] = []
         let pointsByID = Dictionary(
@@ -56,15 +71,18 @@ public struct XcodeReporter: Reporter {
         )
 
         for violation in report.integrity.violations {
-            let message = "\(FailClosed.headline): \(violation.kind.rawValue) — \(singleLine(violation.detail))"
+            var message = "\(FailClosed.headline): \(violation.kind.rawValue) — \(singleLine(violation.detail))"
+            if let id = violation.mutationID {
+                message += " — run `mutantkit inspect \(id.rawValue)` for details."
+            }
 
             // Anchor to the offending mutation when the violation names one;
             // otherwise the whole run is at fault and there is no honest line
             // number to point at.
             if let id = violation.mutationID, let point = pointsByID[id] {
-                lines.append("\(path(for: point.file, in: report)):\(point.line):\(point.column): warning: \(message)")
+                lines.append("\(path(for: point.file, in: report)):\(point.line):\(point.column): error: \(message)")
             } else {
-                lines.append("\(report.projectRoot):1:1: warning: \(message)")
+                lines.append("\(report.projectRoot):1:1: error: \(message)")
             }
         }
         return lines

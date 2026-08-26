@@ -162,9 +162,7 @@ struct LogicalConnectorReplacementSchemataLowererTests {
         let source = "func f(a: Bool, b: Bool, c: Bool, d: Bool) -> Bool { (a && b) || (c && d) }"
         let points = try discover(source, path: "Sample.swift", using: Operators.logicalConnector)
         #expect(!points.isEmpty)
-        let variants = points.map {
-            LogicalConnectorMutationVariant(originalOperator: $0.originalText, replacementOperator: $0.replacementText)
-        }
+        let variants = points.map { LogicalConnectorMutationVariant(originalOperator: $0.originalText, replacementOperator: $0.replacementText) }
         let knownPairs: Set<LogicalConnectorMutationVariant> = [
             .init(originalOperator: "&&", replacementOperator: "||"),
             .init(originalOperator: "||", replacementOperator: "&&")

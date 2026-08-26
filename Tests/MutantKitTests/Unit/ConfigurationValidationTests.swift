@@ -63,6 +63,17 @@ struct ConfigurationValidationTests {
         #expect(issues.contains { $0.path == "execution.testBatchSize" && $0.severity == .error })
     }
 
+    @Test("noOpCanarySampleRate outside [0, 1] is rejected")
+    func noOpCanarySampleRateOutOfRangeIsRejected() {
+        var tooHigh = Configuration()
+        tooHigh.execution.noOpCanarySampleRate = 1.5
+        #expect(ConfigurationValidator.validate(tooHigh).contains { $0.path == "execution.noOpCanarySampleRate" && $0.severity == .error })
+
+        var negative = Configuration()
+        negative.execution.noOpCanarySampleRate = -0.1
+        #expect(ConfigurationValidator.validate(negative).contains { $0.path == "execution.noOpCanarySampleRate" && $0.severity == .error })
+    }
+
     @Test("testBatchSize without selectCoveringTests is flagged as ineffective")
     func batchSizeWithoutCoverageIsFlagged() {
         var configuration = Configuration()

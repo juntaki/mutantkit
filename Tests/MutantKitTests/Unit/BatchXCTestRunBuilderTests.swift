@@ -295,4 +295,104 @@ struct BatchXCTestRunBuilderTests {
             ])
         }
     }
+
+    // MARK: - environmentVariables (schemata token batching)
+
+    /// Schemata token batching's whole premise: every token in a chunk
+    /// shares the *same* build (and therefore the same source `.xctestrun`)
+    /// — unlike isolated mode, where `BatchTestItem.xctestrunPath` differs
+    /// per mutant. What must still differ per configuration is each token's
+    /// own `EnvironmentVariables` (token/runID/transcript path), the only
+    /// thing that lets `xcodebuild` activate and report evidence for a
+    /// different mutation in each `TestConfigurations` entry despite all of
+    /// them pointing at the identical binary.
+    @Test("Two items sharing one source xctestrun each get their own, independent EnvironmentVariables")
+    func sharedSourceXCTestRunGetsIndependentEnvironmentPerConfiguration() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mutantkit-batch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let v1: [String: Any] = [
+            "FooTests": Self.target(bundle: "FooTests"),
+            "__xctestrun_metadata__": ["FormatVersion": 1]
+        ]
+        let xctestrunPath = dir.appendingPathComponent("Chunk.xctestrun")
+        let data = try PropertyListSerialization.data(fromPropertyList: v1, format: .xml, options: 0)
+        try data.write(to: xctestrunPath)
+
+        // Both items point at the SAME xctestrunPath — the shared-chunk-build
+        // case — differing only in configurationName and environmentVariables.
+        let batchData = try BatchXCTestRunBuilder.build(items: [
+            BatchTestItem(
+                configurationName: "mut_A", xctestrunPath: xctestrunPath,
+                onlyTestingIdentifiers: [TestIdentifier(target: "FooTests", qualifiedName: "SomeClass/testA")],
+                environmentVariables: ["MUTANTKIT_SCHEMATA_TOKEN": "1:1", "MUTANTKIT_SCHEMATA_RUN_ID": "runA"]
+            ),
+            BatchTestItem(
+                configurationName: "mut_B", xctestrunPath: xctestrunPath,
+                onlyTestingIdentifiers: [TestIdentifier(target: "FooTests", qualifiedName: "SomeClass/testB")],
+                environmentVariables: ["MUTANTKIT_SCHEMATA_TOKEN": "1:2", "MUTANTKIT_SCHEMATA_RUN_ID": "runB"]
+            )
+        ])
+        let batch = try PropertyListSerialization.propertyList(from: batchData, format: nil) as? [String: Any]
+        let configurations = batch?["TestConfigurations"] as? [[String: Any]]
+        #expect(configurations?.count == 2, "each shared-build token still becomes its own independent configuration")
+
+        let byName = Dictionary(uniqueKeysWithValues: (configurations ?? []).compactMap { config -> (String, [String: Any])? in
+            (config["Name"] as? String).map { ($0, config) }
+        })
+        let targetA = (byName["mut_A"]?["TestTargets"] as? [[String: Any]])?.first
+        let targetB = (byName["mut_B"]?["TestTargets"] as? [[String: Any]])?.first
+
+        #expect(targetA?["EnvironmentVariables"] as? [String: String] == ["MUTANTKIT_SCHEMATA_TOKEN": "1:1", "MUTANTKIT_SCHEMATA_RUN_ID": "runA"])
+        #expect(targetB?["EnvironmentVariables"] as? [String: String] == ["MUTANTKIT_SCHEMATA_TOKEN": "1:2", "MUTANTKIT_SCHEMATA_RUN_ID": "runB"])
+        #expect(targetA?["OnlyTestIdentifiers"] as? [String] == ["SomeClass/testA"], "each configuration keeps its own independent test selection too")
+        #expect(targetB?["OnlyTestIdentifiers"] as? [String] == ["SomeClass/testB"])
+    }
+
+    @Test("environmentVariables merges additively into a target that already has its own EnvironmentVariables")
+    func environmentVariablesMergesAdditively() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mutantkit-batch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        var target = Self.target(bundle: "FooTests")
+        target["EnvironmentVariables"] = ["EXISTING_VAR": "keepMe"]
+        let v1: [String: Any] = ["FooTests": target, "__xctestrun_metadata__": ["FormatVersion": 1]]
+        let xctestrunPath = dir.appendingPathComponent("Foo.xctestrun")
+        let data = try PropertyListSerialization.data(fromPropertyList: v1, format: .xml, options: 0)
+        try data.write(to: xctestrunPath)
+
+        let batchData = try BatchXCTestRunBuilder.build(items: [
+            BatchTestItem(
+                configurationName: "mut_001", xctestrunPath: xctestrunPath, onlyTestingIdentifiers: nil,
+                environmentVariables: ["MUTANTKIT_SCHEMATA_TOKEN": "1:1"]
+            )
+        ])
+        let batch = try PropertyListSerialization.propertyList(from: batchData, format: nil) as? [String: Any]
+        let configurations = batch?["TestConfigurations"] as? [[String: Any]]
+        let env = (configurations?.first?["TestTargets"] as? [[String: Any]])?.first?["EnvironmentVariables"] as? [String: String]
+
+        #expect(env == ["EXISTING_VAR": "keepMe", "MUTANTKIT_SCHEMATA_TOKEN": "1:1"])
+    }
+
+    @Test("A nil environmentVariables (every isolated-mode caller) leaves EnvironmentVariables untouched")
+    func nilEnvironmentVariablesIsANoOp() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mutantkit-batch-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let v1: [String: Any] = ["FooTests": Self.target(bundle: "FooTests"), "__xctestrun_metadata__": ["FormatVersion": 1]]
+        let xctestrunPath = dir.appendingPathComponent("Foo.xctestrun")
+        let data = try PropertyListSerialization.data(fromPropertyList: v1, format: .xml, options: 0)
+        try data.write(to: xctestrunPath)
+
+        let batchData = try BatchXCTestRunBuilder.build(items: [
+            BatchTestItem(configurationName: "mut_001", xctestrunPath: xctestrunPath, onlyTestingIdentifiers: nil)
+        ])
+        let batch = try PropertyListSerialization.propertyList(from: batchData, format: nil) as? [String: Any]
+        let target = (batch?["TestConfigurations"] as? [[String: Any]])?.first?["TestTargets"] as? [[String: Any]]
+
+        #expect(target?.first?["EnvironmentVariables"] == nil)
+    }
 }

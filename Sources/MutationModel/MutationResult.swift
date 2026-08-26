@@ -3,8 +3,9 @@ import Foundation
 /// Which tests ran, and which of them failed, taken from structured output.
 ///
 /// Populated from `.xcresult` or the Swift Testing / XCTest structured stream —
-/// never from scraping stdout with regexes, which is how Muter came to classify
-/// a Swift Testing output change as a runtime error.
+/// never from scraping stdout with regexes, which is fragile to test-runner
+/// output-format changes and can misclassify legitimate output as a runtime
+/// error.
 public struct TestOutcomeSummary: Codable, Sendable, Hashable {
     public let total: Int
     public let passed: Int
@@ -484,12 +485,55 @@ public struct ExecutionStrategyReport: Codable, Sendable, Hashable {
     /// individually routed to fallback by `SchemataChunkPlanner`'s own
     /// per-mutation eligibility rules, which is not a degradation.
     public let degradationReason: String?
+    /// How many mutations fell back for each *dynamic* (execution-time)
+    /// reason the schemata backend itself reported — `activation.noHit`,
+    /// `activation.noStartup`, `hangBudgetExceeded`,
+    /// `sharedChunkBuildFailure`, `knownUncovered` (`SchemataMutationRunner
+    /// .SchemataFallbackReason`'s own cases). Present only for a schemata
+    /// run that actually executed a schemata portion; `nil` (not an empty
+    /// dictionary) when there was none, so "no schemata portion ran" stays
+    /// distinguishable from "one ran and nothing fell back dynamically".
+    ///
+    /// Every reason here is computed by `SchemataMutationRunner` anyway;
+    /// before this field existed it was reduced to a bare `Set<MutationID>`
+    /// at merge time and lost, which made a 208-mutant, 7-hour fallback on a
+    /// real corpus reconstructible only by offline forensics. A count
+    /// histogram — not per-mutation reasons — is deliberately the whole
+    /// scope: it is what makes a *systemic* cause visible at a glance, which
+    /// is the failure this exists to catch.
+    public let fallbackReasonCounts: [String: Int]?
+    /// Gate 3 Phase H19: how many mutations fell back for each *planner-time*
+    /// reason — a candidate `SchemataChunkPlanner`/a lowerer's own
+    /// `analyze(_:source:)` never embedded at all, before any token was ever
+    /// attempted (`resultBuilderBody`, `patternPosition`,
+    /// `controlFlowConstant`, `operatorNotYetLowered.<operatorID>`, etc. —
+    /// `SchemataPlanEntry.fallbackReason`'s own cases). Present only for a
+    /// schemata run whose classification actually ran; `nil` (not an empty
+    /// dictionary) when there was none, matching `fallbackReasonCounts`'s own
+    /// nil-vs-empty discipline.
+    ///
+    /// Kept as a *separate* field from `fallbackReasonCounts` rather than
+    /// merged into it: the two are computed at entirely different stages
+    /// (planner-time classification vs. runtime execution) by different
+    /// code, and a Gate 3 100-mutant real-iOS run found `fallbackReasonCounts`
+    /// alone undercounted `fallbackCount` by exactly the mutations this field
+    /// now accounts for — `fallbackReasonCounts` was never meant to explain
+    /// the whole of `fallbackCount` on its own, but nothing said so until
+    /// this field existed to make the split explicit. Together the two
+    /// should sum to `fallbackCount`; a caller reading only the old field for
+    /// "the whole fallback breakdown" was always reading a partial one.
+    public let plannerFallbackReasonCounts: [String: Int]?
 
-    public init(requested: ExecutionMode, effectiveCount: Int, fallbackCount: Int, degradationReason: String? = nil) {
+    public init(
+        requested: ExecutionMode, effectiveCount: Int, fallbackCount: Int, degradationReason: String? = nil,
+        fallbackReasonCounts: [String: Int]? = nil, plannerFallbackReasonCounts: [String: Int]? = nil
+    ) {
         self.requested = requested
         self.effectiveCount = effectiveCount
         self.fallbackCount = fallbackCount
         self.degradationReason = degradationReason
+        self.fallbackReasonCounts = fallbackReasonCounts
+        self.plannerFallbackReasonCounts = plannerFallbackReasonCounts
     }
 }
 

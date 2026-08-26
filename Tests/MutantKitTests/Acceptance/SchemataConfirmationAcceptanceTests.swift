@@ -130,7 +130,7 @@ struct SchemataConfirmationAcceptanceTests {
         let runner = SchemataMutationRunner(
             planID: "plan-schemata-confirm", workUnitID: "plan-schemata-confirm",
             programs: [program], points: pointsByID, originalSources: originalSources,
-            build: adapter, test: adapter, workspaces: workspaces, timeoutSeconds: 120,
+            build: adapter, test: adapter, workspaces: workspaces, timeouts: TimeoutSettings(baselineSeconds: 120),
             toolchainHash: "test-toolchain", buildArgumentsHash: "test-build-arguments", policy: policy
         )
 

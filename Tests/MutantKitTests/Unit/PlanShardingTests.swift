@@ -278,6 +278,101 @@ struct PlanShardingTests {
         }
     }
 
+    // MARK: - subset
+
+    /// An arbitrary subset survives encode -> decode: `MutationPlan.decode`
+    /// (the real, model-level API — not raw JSON parsing) accepts the
+    /// derived plan and reports it as internally consistent, the same way it
+    /// would for a plan produced by real discovery.
+    @Test("An arbitrary subset survives encode -> decode round-trip")
+    func subsetSurvivesRoundTrip() throws {
+        let points = Self.decodablePoints(count: 20)
+        let plan = Self.plan(mutations: points)
+        let requested = Array(points.prefix(7).map(\.id))
+
+        let derived = try PlanSharding.subset(of: plan, mutationIDs: requested)
+        let redecoded = try MutationPlan.decode(from: derived.encoded())
+
+        #expect(redecoded.mutations.count == 7)
+    }
+
+    /// The selected IDs in the round-tripped plan are exactly what was
+    /// requested — no more, no fewer.
+    @Test("The subset contains exactly the requested MutationIDs")
+    func subsetContainsExactlyRequestedIDs() throws {
+        let points = Self.decodablePoints(count: 20)
+        let plan = Self.plan(mutations: points)
+        let requested = Set(points.enumerated().filter { $0.offset % 3 == 0 }.map(\.element.id))
+
+        let derived = try PlanSharding.subset(of: plan, mutationIDs: Array(requested))
+        let redecoded = try MutationPlan.decode(from: derived.encoded())
+
+        #expect(Set(redecoded.mutations.map(\.id)) == requested)
+        #expect(redecoded.mutations.count == requested.count)
+    }
+
+    /// Source/operator context for each retained mutation is preserved
+    /// byte-for-byte, not just its ID — a real `mutantkit run`/`verify`
+    /// against the derived plan needs the full `MutationPoint`, not a stub.
+    @Test("Source and operator context is preserved for each retained mutation")
+    func subsetPreservesSourceAndOperatorContext() throws {
+        let points = Self.decodablePoints(count: 10)
+        let plan = Self.plan(mutations: points)
+        let requested = [points[2].id, points[5].id]
+
+        let derived = try PlanSharding.subset(of: plan, mutationIDs: requested)
+        let redecoded = try MutationPlan.decode(from: derived.encoded())
+
+        let byID = Dictionary(uniqueKeysWithValues: redecoded.mutations.map { ($0.id, $0) })
+        for original in [points[2], points[5]] {
+            #expect(byID[original.id] == original)
+        }
+        #expect(redecoded.operators == plan.operators)
+        #expect(redecoded.sourceFileHashes == plan.sourceFileHashes)
+        #expect(redecoded.planID == plan.planID)
+    }
+
+    /// The parent plan itself is never mutated by deriving a subset from it —
+    /// `subset` returns a fresh `MutationPlan`, and the parent's own
+    /// `mutations` are exactly what they were before the call.
+    @Test("Deriving a subset does not mutate the parent plan")
+    func subsetDoesNotMutateParent() throws {
+        let points = Self.points(count: 10)
+        let plan = Self.plan(mutations: points)
+        let parentMutationsBefore = plan.mutations
+
+        _ = try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, points[1].id])
+
+        #expect(plan.mutations == parentMutationsBefore)
+        #expect(plan.mutations.count == 10)
+    }
+
+    /// Requesting a `MutationID` that is not in the parent plan fails closed
+    /// — a silent skip would make the derived plan smaller than the caller
+    /// asked for with no signal anything was lost.
+    @Test("Requesting a nonexistent MutationID fails closed")
+    func subsetRefusesUnknownID() throws {
+        let points = Self.points(count: 5)
+        let plan = Self.plan(mutations: points)
+        let unknown = MutationID(rawValue: "mut_does_not_exist")
+
+        #expect(throws: PlanSubsetError.self) {
+            try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, unknown])
+        }
+    }
+
+    /// Requesting the same `MutationID` twice fails closed rather than
+    /// silently de-duplicating.
+    @Test("Requesting a duplicate MutationID fails closed")
+    func subsetRefusesDuplicateRequest() throws {
+        let points = Self.points(count: 5)
+        let plan = Self.plan(mutations: points)
+
+        #expect(throws: PlanSubsetError.self) {
+            try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, points[0].id])
+        }
+    }
+
     // MARK: - Fixtures
 
     private static let toolchain = ToolchainFingerprint(
@@ -291,6 +386,38 @@ struct PlanShardingTests {
     private static func points(count: Int) -> [MutationPoint] {
         (0 ..< count).map { index in
             point(id: "mut_\(String(format: "%04d", index))", file: "Sources/File\(index % 3).swift")
+        }
+    }
+
+    /// Like `points(count:)`, but with a distinct file per point (so every
+    /// point's ID preimage is unique) and each `id` set to its own
+    /// `recomputedID` rather than a synthetic placeholder — required for any
+    /// test that exercises `MutationPlan.decode`, since `decode` (unlike raw
+    /// JSON parsing) runs `IntegrityChecker.validatePlan` and rejects both a
+    /// declared ID that does not reproduce from its own components and a
+    /// duplicate ID within one plan.
+    private static func decodablePoints(count: Int) -> [MutationPoint] {
+        (0 ..< count).map { index in
+            let base = point(id: "mut_placeholder", file: "Sources/File\(index).swift")
+            return MutationPoint(
+                id: base.recomputedID,
+                file: base.file,
+                enclosingDeclaration: base.enclosingDeclaration,
+                operatorID: base.operatorID,
+                operatorVersion: base.operatorVersion,
+                occurrenceIndex: base.occurrenceIndex,
+                utf8Range: base.utf8Range,
+                originalText: base.originalText,
+                replacementText: base.replacementText,
+                prefixTokenFingerprint: base.prefixTokenFingerprint,
+                suffixTokenFingerprint: base.suffixTokenFingerprint,
+                sourceFileHash: base.sourceFileHash,
+                expectedSyntaxKind: base.expectedSyntaxKind,
+                confidence: base.confidence,
+                executionMode: base.executionMode,
+                line: base.line,
+                column: base.column
+            )
         }
     }
 

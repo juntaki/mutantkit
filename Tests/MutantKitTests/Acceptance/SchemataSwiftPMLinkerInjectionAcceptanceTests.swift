@@ -150,7 +150,7 @@ struct SchemataSwiftPMLinkerInjectionAcceptanceTests {
         let (directory, token) = try stageUnawarePackage()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let located = try SchemataRuntimeLibraryLocator.locate()
+        let located = try SchemataRuntimeLibraryLocator.locate(for: .macOS)
         try buildWithInjectedLinkerFlags(at: directory, libraryDirectory: located.libraryDirectory)
 
         let unmutated = try runSpikeExecutable(at: directory, environment: [:])
@@ -308,7 +308,7 @@ struct SchemataSwiftPMLinkerInjectionAcceptanceTests {
         let (directory, token) = try stageUnawareLibraryWithTests()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let located = try SchemataRuntimeLibraryLocator.locate()
+        let located = try SchemataRuntimeLibraryLocator.locate(for: .macOS)
         try buildTestsWithInjectedLinkerFlags(at: directory, libraryDirectory: located.libraryDirectory)
 
         let unmutated = try runTestBundle(at: directory, environment: [:])

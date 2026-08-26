@@ -92,7 +92,6 @@ public struct PhaseSplit: Sendable, Equatable {
 }
 
 // MARK: - BudgetSelectorV2
-
 //
 // `InclusionReason`/`InclusionReason.ReasonCode` (B.7's audit-trail schema)
 // live in `MutationModel`, not here — `MutationPlan` persists one per
@@ -183,46 +182,16 @@ public enum BudgetSelectorV2 {
             return Dictionary(uniqueKeysWithValues: strata.map { ($0.id, PhaseSplit()) })
         }
 
-        try requireBudgetMagnitude(strata: strata, limit: limit)
-
-        var split: [String: PhaseSplit] = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, PhaseSplit()) })
-        let candidateCount: [String: Int] = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, $0.candidates.count) })
-        var remaining = limit
-
-        runPhase1Reservation(
-            strata: strata, seed: seed, minimumPerStratum: minimumPerStratum,
-            candidateCount: candidateCount, split: &split, remaining: &remaining
-        )
-
-        // `weight` only matters from here on — validated once, now, per the
-        // doc comment above.
-        try requireValidWeight(weight, strataIDs: strata.map(\.id))
-
-        let (remainderVal, eligible) = runPhase2ProportionalDistribution(
-            strata: strata, weight: weight, candidateCount: candidateCount, split: &split, remaining: &remaining
-        )
-
-        distributeLeftoverSingleSlots(
-            candidateCount: candidateCount, eligible: eligible, remainderVal: remainderVal,
-            split: &split, remaining: &remaining
-        )
-
-        // Postcondition (proved in the ADR): sum(total(split[s])) ==
-        // min(limit, sum(candidateCount.values())).
-        return split
-    }
-
-    /// B.2's overflow-safety note bounds `limit`/`remaining` and
-    /// `sum(candidateCount.values())` to `<= 2^31` — the numbers the
-    /// Int64 overflow proof for `numerator = R * effectiveWeight` (up to
-    /// `2^31 * 10^6`) is actually derived against. Enforced here, not
-    /// merely assumed by a caller, closing a real gap a Codex code
-    /// review found: an unchecked `Int(remaining) * Int64(weight)` can
-    /// trap on a value like `Int.max` before this guard existed.
-    /// Accumulated with an early-exit cap, not a plain `reduce`, so the
-    /// sum itself cannot overflow `Int` before the bound below is even
-    /// checked (Codex re-review Low finding).
-    private static func requireBudgetMagnitude(strata: [BudgetStratumV2], limit: Int) throws {
+        // B.2's overflow-safety note bounds `limit`/`remaining` and
+        // `sum(candidateCount.values())` to `<= 2^31` — the numbers the
+        // Int64 overflow proof for `numerator = R * effectiveWeight` (up to
+        // `2^31 * 10^6`) is actually derived against. Enforced here, not
+        // merely assumed by a caller, closing a real gap a Codex code
+        // review found: an unchecked `Int(remaining) * Int64(weight)` can
+        // trap on a value like `Int.max` before this guard existed.
+        // Accumulated with an early-exit cap, not a plain `reduce`, so the
+        // sum itself cannot overflow `Int` before the bound below is even
+        // checked (Codex re-review Low finding).
         var totalCandidates = 0
         for stratum in strata {
             totalCandidates += stratum.candidates.count
@@ -233,19 +202,12 @@ public enum BudgetSelectorV2 {
                 limit: limit, totalCandidates: totalCandidates, maximum: maximumBudgetMagnitude
             )
         }
-    }
 
-    /// Phase 1: one-slot-per-stratum-per-round minimum reservation. Mutates
-    /// `split`/`remaining` in place, mirroring `allocateCounts`'s own local
-    /// state before this was extracted.
-    private static func runPhase1Reservation(
-        strata: [BudgetStratumV2],
-        seed: UInt64?,
-        minimumPerStratum: Int,
-        candidateCount: [String: Int],
-        split: inout [String: PhaseSplit],
-        remaining: inout Int
-    ) {
+        var split: [String: PhaseSplit] = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, PhaseSplit()) })
+        let candidateCount: [String: Int] = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, $0.candidates.count) })
+        var remaining = limit
+
+        // ---- Phase 1: one-slot-per-stratum-per-round minimum reservation ----
         let order = seededOrder(strata.map(\.id), seed: seed)
         phase1: while remaining > 0 {
             var grantedThisRound = false
@@ -260,21 +222,12 @@ public enum BudgetSelectorV2 {
             }
             if !grantedThisRound { break }
         }
-    }
 
-    /// Phase 2: iterative capacitated largest-remainder, exact integers
-    /// only. Mutates `split`/`remaining` in place; returns the per-stratum
-    /// remainder (for the leftover pass's tie-break) and the final
-    /// `eligible` set the loop stopped on — the leftover pass must reuse
-    /// this exact set, not recompute it, since the Hamilton bound it relies
-    /// on is proved against the state left by this loop's `break`.
-    private static func runPhase2ProportionalDistribution(
-        strata: [BudgetStratumV2],
-        weight: [String: Int],
-        candidateCount: [String: Int],
-        split: inout [String: PhaseSplit],
-        remaining: inout Int
-    ) -> (remainderVal: [String: Int64], eligible: Set<String>) {
+        // `weight` only matters from here on — validated once, now, per the
+        // doc comment above.
+        try requireValidWeight(weight, strataIDs: strata.map(\.id))
+
+        // ---- Phase 2: iterative capacitated largest-remainder, exact integers only ----
         let useEqualWeight = weight.isEmpty
         func residualCapacity(_ id: String) -> Int {
             let current = split[id] ?? PhaseSplit()
@@ -328,43 +281,32 @@ public enum BudgetSelectorV2 {
             // terminates.
         }
 
-        return (remainderVal, eligible)
-    }
-
-    /// Leftover single-slot distribution: exact integer comparison only,
-    /// descending remainder, ties broken by ascending stratum ID. Only
-    /// reached when the round that produced `remainderVal` left `eligible`
-    /// unchanged (the `break` in `runPhase2ProportionalDistribution`), so
-    /// the Hamilton bound the ADR proves applies validly to this exact
-    /// `eligible`.
-    private static func distributeLeftoverSingleSlots(
-        candidateCount: [String: Int],
-        eligible: Set<String>,
-        remainderVal: [String: Int64],
-        split: inout [String: PhaseSplit],
-        remaining: inout Int
-    ) {
-        func residualCapacity(_ id: String) -> Int {
-            let current = split[id] ?? PhaseSplit()
-            return (candidateCount[id] ?? 0) - current.phase1 - current.phase2
-        }
-
-        guard remaining > 0, !eligible.isEmpty else { return }
-        let order2 = eligible.sorted { lhs, rhs in
-            let lhsRemainder = remainderVal[lhs] ?? 0
-            let rhsRemainder = remainderVal[rhs] ?? 0
-            return lhsRemainder == rhsRemainder ? lhs < rhs : lhsRemainder > rhsRemainder
-        }
-        var index = 0
-        while remaining > 0, index < order2.count {
-            let id = order2[index]
-            if residualCapacity(id) > 0 {
-                let current = split[id] ?? PhaseSplit()
-                split[id] = PhaseSplit(phase1: current.phase1, phase2: current.phase2 + 1)
-                remaining -= 1
+        // ---- Leftover single-slot distribution: exact integer comparison
+        // only, descending remainder, ties broken by ascending stratum ID.
+        // Only reached when the round that produced `remainderVal` left
+        // `eligible` unchanged (the break above), so the Hamilton bound the
+        // ADR proves applies validly to this exact `eligible`. ----
+        if remaining > 0, !eligible.isEmpty {
+            let order2 = eligible.sorted { lhs, rhs in
+                let lhsRemainder = remainderVal[lhs] ?? 0
+                let rhsRemainder = remainderVal[rhs] ?? 0
+                return lhsRemainder == rhsRemainder ? lhs < rhs : lhsRemainder > rhsRemainder
             }
-            index += 1
+            var index = 0
+            while remaining > 0, index < order2.count {
+                let id = order2[index]
+                if residualCapacity(id) > 0 {
+                    let current = split[id] ?? PhaseSplit()
+                    split[id] = PhaseSplit(phase1: current.phase1, phase2: current.phase2 + 1)
+                    remaining -= 1
+                }
+                index += 1
+            }
         }
+
+        // Postcondition (proved in the ADR): sum(total(split[s])) ==
+        // min(limit, sum(candidateCount.values())).
+        return split
     }
 
     // MARK: allocate

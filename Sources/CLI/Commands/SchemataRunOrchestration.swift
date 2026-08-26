@@ -51,10 +51,28 @@ enum SchemataRunOrchestration {
         let adapter: any ProjectAdapter
         let testAdapter: any TestAdapter
         let toolchain: ToolchainFingerprint
+        /// The *same* cache instance and key `RunCommand` hands isolated
+        /// mode through `IsolatedRunOptions` — one cache, one digest, both
+        /// backends. Per-test coverage attribution depends on the source
+        /// tree, tests and toolchain, not on which backend measured it, so a
+        /// schemata run and an isolated run of the same unchanged project
+        /// legitimately share the entry rather than each paying for the
+        /// profiling pass separately.
+        let coverageCache: CoverageProfileCache
+        /// `nil` when the CLI's digest computation failed — best-effort, the
+        /// same degradation isolated mode already accepts: coverage is
+        /// re-measured, the run still succeeds.
+        let coverageCacheKey: CoverageProfileCache.Key?
     }
 
+    /// No `timeoutSeconds` parameter (removed deliberately): a single
+    /// caller-supplied limit is what let `RunCommand` hand the *baseline*
+    /// limit to every per-mutant schemata spawn. `Context.configuration
+    /// .timeouts` already carries both limits, so the runner resolves each
+    /// from the same `TimeoutSettings` isolated mode reads — there is no
+    /// longer a place for a call site to pass the wrong one.
     static func run(
-        context: Context, workspaces: WorkspaceManager, schemataWorkspaces: WorkspaceManager, timeoutSeconds: Double
+        context: Context, workspaces: WorkspaceManager, schemataWorkspaces: WorkspaceManager
     ) async throws -> RunReport {
         guard let schemataBuild = context.adapter.build as? SchemataBuildable,
               let schemataTest = context.testAdapter as? SchemataTestable
@@ -63,7 +81,9 @@ enum SchemataRunOrchestration {
         }
 
         let startedAt = Date()
+        let classifyStart = GateTimingRecorder.shared.now()
         let classification = try await classify(context)
+        await GateTimingRecorder.shared.record("classify", start: classifyStart)
 
         // The one source of truth both backends' confirmation gates are
         // asked against (`MutationVerdictVerifier.confirmationRequirement`)
@@ -76,13 +96,28 @@ enum SchemataRunOrchestration {
             confirmTimedOutMutants: context.configuration.execution.confirmTimedOutMutants
         )
 
+        // One baseline, established here and shared by both passes below —
+        // see `SharedBaselineEstablisher`'s own doc comment. Previously
+        // each pass built and tested the unmutated project separately (an
+        // accepted v1 inefficiency, ADR-0006); measured at Gate 3 to cost
+        // ~104s (~9.5% of total wall) on a real iOS project. Established
+        // before either pass runs — a fully-fallback run still needs
+        // exactly the cost it always paid (one baseline), and a fully-
+        // embeddable run likewise, so there is no case where this is
+        // wasted relative to before.
+        let sharedBaselineStart = GateTimingRecorder.shared.now()
+        let sharedBaseline = await establishSharedBaseline(context, workspaces: workspaces)
+        await GateTimingRecorder.shared.record("sharedBaseline.total", start: sharedBaselineStart)
+
+        let schemataPortionStart = GateTimingRecorder.shared.now()
         let schemataPortion = try await runSchemataPortion(
             context, inputs: SchemataPortionInputs(
                 programs: classification.programs, embeddedIDs: classification.embeddedIDs, sources: classification.sources,
-                build: schemataBuild, test: schemataTest, policy: policy
+                build: schemataBuild, test: schemataTest, policy: policy, sharedBaseline: sharedBaseline
             ),
-            workspaces: schemataWorkspaces, timeoutSeconds: timeoutSeconds
+            workspaces: schemataWorkspaces
         )
+        await GateTimingRecorder.shared.record("schemata.portion.total", start: schemataPortionStart)
 
         // A mutation `SchemataChunkPlanner` embedded can still end up here:
         // `SchemataMutationRunner` itself may have found no runtime
@@ -99,17 +134,60 @@ enum SchemataRunOrchestration {
             []
         }
         let fallbackIDs = Set(context.plan.mutations.map(\.id)).subtracting(classification.embeddedIDs).union(dynamicFallbackIDs)
-        let fallbackReport = try await runFallbackPortion(context, fallbackIDs: fallbackIDs, workspaces: workspaces)
+        let fallbackPortionStart = GateTimingRecorder.shared.now()
+        let fallbackReport = try await runFallbackPortion(
+            context, fallbackIDs: fallbackIDs, workspaces: workspaces, sharedBaseline: sharedBaseline
+        )
+        await GateTimingRecorder.shared.record("fallback.portion.total", start: fallbackPortionStart)
 
-        return merge(
+        let mergeStart = GateTimingRecorder.shared.now()
+        let report = merge(
             context, startedAt: startedAt, schemataPortion: schemataPortion, fallbackReport: fallbackReport,
             // Effective counts, not planner-time ones (ADR-0006 Group 2):
             // a mutation counted among `classification.embeddedIDs` that
             // then dynamically fell back is no longer schemata-scored, so
             // it must not still be counted in `effectiveCount` — it is
             // already folded into `fallbackIDs.count` above instead.
-            embeddedCount: classification.embeddedIDs.count - dynamicFallbackIDs.count, fallbackCount: fallbackIDs.count
+            embeddedCount: classification.embeddedIDs.count - dynamicFallbackIDs.count, fallbackCount: fallbackIDs.count,
+            // Gate 3 Phase H19: `classification.plannerFallbackReasons`'
+            // keys are already exactly the planner-time fallback set (every
+            // `MutationID` not in `embeddedIDs`) — never overlaps
+            // `dynamicFallbackIDs`, so no further filtering is needed here.
+            plannerFallbackReasonCounts: Self.plannerFallbackReasonCounts(Array(classification.plannerFallbackReasons.values))
         )
+        await GateTimingRecorder.shared.record("merge", start: mergeStart)
+        return report
+    }
+
+    /// Establishes the one baseline both passes below share — see
+    /// `SharedBaselineEstablisher`'s own doc comment. Never throws: a
+    /// sandbox-creation failure here becomes `.failed(...)`, the same
+    /// fail-closed shape `SharedBaselineEstablisher.establish` itself
+    /// already returns for a build/test failure, so every caller has
+    /// exactly one shape to handle regardless of which step failed.
+    private static func establishSharedBaseline(
+        _ context: Context, workspaces: WorkspaceManager
+    ) async -> SharedBaselineEstablisher.Outcome {
+        let started = Date()
+        let sandbox: URL
+        do {
+            sandbox = try await workspaces.createSandbox(id: "shared-baseline")
+        } catch {
+            return .failed(
+                record: BaselineRecord(
+                    passed: false, testSummary: nil, durationSeconds: Date().timeIntervalSince(started),
+                    buildProductHash: nil, buildCommand: nil, testCommand: nil
+                ),
+                diagnosis: "The shared baseline sandbox could not be created: \(error)"
+            )
+        }
+        let outcome = await SharedBaselineEstablisher.establish(
+            build: context.adapter.build, test: context.testAdapter, in: sandbox,
+            configuration: context.configuration, projectRoot: context.projectRoot,
+            coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey
+        )
+        try? await workspaces.destroySandbox(at: sandbox)
+        return outcome
     }
 
     /// What `classify` determined about a plan: which programs were
@@ -120,6 +198,15 @@ enum SchemataRunOrchestration {
         let programs: [SchemataProgram]
         let embeddedIDs: Set<MutationID>
         let sources: [String: Data]
+        /// Gate 3 Phase H19: every non-embedded entry's own
+        /// `SchemataPlanEntry.fallbackReason` — already computed by
+        /// `SchemataChunkPlanner.plan`/each lowerer's own
+        /// `analyze(_:source:)`, previously read only for `embeddedIDs`
+        /// membership and discarded otherwise. Every `MutationID` not in
+        /// `embeddedIDs` has an entry here (a plan's own completeness
+        /// guarantee — `SchemataPlan.decodeAndValidate` requires exactly
+        /// one entry per input mutation).
+        let plannerFallbackReasons: [MutationID: SchemataUnsupportedReason]
     }
 
     /// Resolves target info and plans chunks. Any failure here (target
@@ -134,11 +221,32 @@ enum SchemataRunOrchestration {
         var sources: [String: Data] = [:]
         try read(files: Set(context.plan.mutations.map(\.file)), projectRoot: context.projectRoot, into: &sources)
 
-        let empty = Classification(programs: [], embeddedIDs: [], sources: sources)
+        let empty = Classification(programs: [], embeddedIDs: [], sources: sources, plannerFallbackReasons: [:])
 
         let targetInfo: [String: [SchemataTargetInfo]]
+        let backendID: String
         do {
-            targetInfo = try await SwiftPMTargetResolver.resolveTargetInfo(projectRoot: context.projectRoot)
+            switch context.adapter.kind {
+            case .swiftPackageMacOS, .swiftPackageApple:
+                targetInfo = try await SwiftPMTargetResolver.resolveTargetInfo(projectRoot: context.projectRoot)
+                backendID = "swiftpm-schemata-v1"
+            case .xcodeProject:
+                targetInfo = try await XcodeTargetResolver.resolveTargetInfo(projectRoot: context.projectRoot)
+                backendID = "xcode-schemata-v1"
+            case .xcodeWorkspace, .auto:
+                // `.xcworkspace` (which can span more than one `.xcodeproj`)
+                // and `.auto` (never actually reached here — every
+                // `ProjectAdapter` `AppleAdapterFactory.adapter(for:)`
+                // constructs already reports a concrete kind, see
+                // `SwiftPackageMacOSProjectAdapter.kind`/
+                // `XcodeBuildProjectAdapter.kind`) are both explicitly out
+                // of scope for schemata target resolution today — same
+                // fail-closed-to-isolated degradation as a genuine
+                // resolution failure below, just without pretending an
+                // attempt was made.
+                print("! Schemata target resolution is not yet implemented for \(context.adapter.kind.rawValue); every mutation will run in isolated mode this run.")
+                return empty
+            }
         } catch {
             print("! Schemata target resolution failed (\(error)); every mutation will run in isolated mode this run.")
             return empty
@@ -157,7 +265,7 @@ enum SchemataRunOrchestration {
         try read(files: targetFiles, projectRoot: context.projectRoot, into: &sources)
 
         let backend = SchemataBackendInfo(
-            backendID: "swiftpm-schemata-v1", backendVersion: 1,
+            backendID: backendID, backendVersion: 1,
             toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: context.configuration.configurationHash
         )
         do {
@@ -166,7 +274,15 @@ enum SchemataRunOrchestration {
                 mutationPlan: context.plan, registry: registry, sources: sources, targetInfo: targetInfo, backend: backend
             )
             let embeddedIDs = Set(result.schemataPlan.entries.filter(\.isEmbedded).map(\.mutationID))
-            return Classification(programs: result.programs, embeddedIDs: embeddedIDs, sources: sources)
+            let plannerFallbackReasons = Dictionary(
+                uniqueKeysWithValues: result.schemataPlan.entries.compactMap { entry in
+                    entry.fallbackReason.map { (entry.mutationID, $0) }
+                }
+            )
+            return Classification(
+                programs: result.programs, embeddedIDs: embeddedIDs, sources: sources,
+                plannerFallbackReasons: plannerFallbackReasons
+            )
         } catch {
             print("! Schemata chunk planning failed (\(error)); every mutation will run in isolated mode this run.")
             return empty
@@ -199,6 +315,7 @@ enum SchemataRunOrchestration {
         let build: any SchemataBuildable
         let test: any SchemataTestable
         let policy: MutationVerdictVerifier.VerdictVerificationPolicy
+        let sharedBaseline: SharedBaselineEstablisher.Outcome
     }
 
     /// `runSchemataPortion`'s outcome, distinguishing "nothing was
@@ -214,7 +331,7 @@ enum SchemataRunOrchestration {
     }
 
     private static func runSchemataPortion(
-        _ context: Context, inputs: SchemataPortionInputs, workspaces: WorkspaceManager, timeoutSeconds: Double
+        _ context: Context, inputs: SchemataPortionInputs, workspaces: WorkspaceManager
     ) async throws -> SchemataPortionResult {
         guard !inputs.programs.isEmpty else { return .notApplicable }
         let points = Dictionary(
@@ -223,12 +340,52 @@ enum SchemataRunOrchestration {
         let runner = SchemataMutationRunner(
             planID: context.plan.planID, workUnitID: context.plan.planID,
             programs: inputs.programs, points: points, originalSources: inputs.sources,
-            build: inputs.build, test: inputs.test, workspaces: workspaces, timeoutSeconds: timeoutSeconds,
+            build: inputs.build, test: inputs.test, workspaces: workspaces,
+            // Both limits, from the same configuration isolated mode reads
+            // — never one pre-resolved number standing in for both (see
+            // `SchemataMutationRunner.timeouts`).
+            timeouts: context.configuration.timeouts,
             toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: context.configuration.configurationHash,
-            policy: inputs.policy
+            policy: inputs.policy,
+            selectCoveringTests: context.configuration.execution.selectCoveringTests,
+            // Same bound isolated mode's own worker pool already resolves
+            // and reads `execution.workers` through
+            // (`MutationRunner.evaluate`) — schemata chunks are as
+            // independent of one another as isolated-mode mutants are (own
+            // sandbox, own build), so the same convention applies unchanged.
+            workers: context.configuration.execution.resolvedWorkerCount(),
+            // The same cache isolated mode already gets — so the second run
+            // of an unchanged project skips schemata mode's profiling pass
+            // too, instead of re-measuring the most expensive part of the
+            // baseline on every single run.
+            coverageCache: context.coverageCache,
+            coverageCacheKey: context.coverageCacheKey,
+            // `inputs.sharedBaseline` (see `run()`) means this pass never
+            // builds or tests the unmutated project itself either — see
+            // `SharedBaselineEstablisher`'s own doc comment for why.
+            preEstablishedBaseline: inputs.sharedBaseline,
+            // Gate 3 Phase H5: the same `execution.testBatchSize` isolated
+            // mode's own batching already reads (`MutationRunner
+            // .testOneBatch`/`testWaveChunk`, Phase H3), not a separate
+            // schemata-specific setting — `nil`/unset resolves to `1`
+            // (batching disabled), the identical "no value configured, no
+            // batching" fallback isolated mode uses at its own call site.
+            schemataTokenBatchSize: context.configuration.execution.testBatchSize ?? 1
         )
         do {
-            return .succeeded(try await runner.run())
+            let outcome = try await runner.run()
+            // ADR-0008 Addendum 4's fan-out/observability requirement, wired
+            // through to a human watching the run live. The same events also
+            // reach `RunReport.operationalIssues` in `merge` below (for a
+            // reader of `report.json` afterward) — the identical
+            // stderr-plus-report treatment `MutationRunner` already gives a
+            // failed checkpoint write, for the same reason: a systemic,
+            // many-mutant event that is invisible in both places is one
+            // nobody ever learns about.
+            for issue in sharedChunkBuildFailureIssues(outcome.sharedChunkBuildFailureEvents) {
+                print("! \(issue.diagnosis)")
+            }
+            return .succeeded(outcome)
         } catch let error as SchemataMutationRunner.RunError {
             // Mirrors `MutationRunner`'s own fail-closed convention (a failed
             // baseline never throws, it returns a report whose integrity
@@ -243,7 +400,8 @@ enum SchemataRunOrchestration {
     }
 
     private static func runFallbackPortion(
-        _ context: Context, fallbackIDs: Set<MutationID>, workspaces: WorkspaceManager
+        _ context: Context, fallbackIDs: Set<MutationID>, workspaces: WorkspaceManager,
+        sharedBaseline: SharedBaselineEstablisher.Outcome
     ) async throws -> RunReport? {
         guard !fallbackIDs.isEmpty else { return nil }
         let plan = context.plan
@@ -254,14 +412,30 @@ enum SchemataRunOrchestration {
         )
         return try await MutationRunner(
             plan: fallbackPlan, configuration: context.configuration, projectRoot: context.projectRoot,
-            build: context.adapter.build, test: context.testAdapter, workspaces: workspaces, toolchain: context.toolchain
+            build: context.adapter.build, test: context.testAdapter, workspaces: workspaces, toolchain: context.toolchain,
+            // The same cache/key the schemata portion above already measures
+            // into (see `Context.coverageCache`'s own doc comment): per-test
+            // coverage attribution depends on the source tree, tests and
+            // toolchain, never on which backend measured it, so this
+            // isolated-fallback baseline must not pay to re-measure it from
+            // scratch when the schemata baseline already has.
+            coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey,
+            // `sharedBaseline` (see `run()`) means this pass never builds or
+            // tests the unmutated project itself — see
+            // `SharedBaselineEstablisher`'s own doc comment for why.
+            preEstablishedBaseline: sharedBaseline
         ).run()
     }
 
-    /// One report from two independent passes. Known, explicitly-accepted
-    /// v1 inefficiency (see ADR-0006): both passes build and run their own
-    /// baseline; only one `BaselineRecord` can go in the final report. A
-    /// genuine schemata baseline failure is surfaced twice:
+    /// One report from two passes that now share a single baseline (see
+    /// `run()`'s own `sharedBaseline` — previously each built and tested
+    /// the unmutated project separately, ADR-0006's accepted v1
+    /// inefficiency; Gate 3 measured that at ~9.5% of total wall on a real
+    /// iOS project, so it is shared now, not duplicated). Only one
+    /// `BaselineRecord` can go in the final report regardless — both
+    /// passes' records are the *same* record by construction today, not
+    /// independently-measured ones that happen to agree. A genuine shared-
+    /// baseline failure is surfaced twice:
     /// `baselinePassed` is unconditionally `false` (so `IntegrityChecker`
     /// raises its real `baselineMismatch` violation, rather than only
     /// failing incidentally on orphaned embedded mutants), and the
@@ -275,7 +449,7 @@ enum SchemataRunOrchestration {
     /// passing runs.
     private static func merge(
         _ context: Context, startedAt: Date, schemataPortion: SchemataPortionResult, fallbackReport: RunReport?,
-        embeddedCount: Int, fallbackCount: Int
+        embeddedCount: Int, fallbackCount: Int, plannerFallbackReasonCounts: [String: Int]
     ) -> RunReport {
         let schemataOutcome: SchemataMutationRunner.Outcome? = if case let .succeeded(outcome) = schemataPortion { outcome } else { nil }
 
@@ -311,14 +485,113 @@ enum SchemataRunOrchestration {
         }
         let integrity = IntegrityChecker.check(plan: context.plan, ledger: ledger, baselinePassed: baselinePassed)
         let executionStrategy = ExecutionStrategyReport(
-            requested: .schemata, effectiveCount: embeddedCount, fallbackCount: fallbackCount, degradationReason: degradationReason
+            requested: .schemata, effectiveCount: embeddedCount, fallbackCount: fallbackCount, degradationReason: degradationReason,
+            fallbackReasonCounts: schemataOutcome.map { fallbackReasonCounts($0.isolatedFallbacks) },
+            // Same nil-vs-empty gating as `fallbackReasonCounts` above,
+            // deliberately: `schemataOutcome` is non-nil only when
+            // `embeddedIDs` was genuinely non-empty, which is exactly when
+            // classification ran for real and `plannerFallbackReasonCounts`
+            // reflects meaningful data (even a genuine, meaningful zero) —
+            // not the fully-degraded case, where nothing was ever classified.
+            plannerFallbackReasonCounts: schemataOutcome.map { _ in plannerFallbackReasonCounts }
         )
 
         return RunReport(
             planID: context.plan.planID, startedAt: startedAt, finishedAt: Date(), projectRoot: context.projectRoot.path,
             toolchain: context.toolchain, baseline: baseline, ledger: ledger, integrity: integrity,
-            executionStrategy: executionStrategy, operationalIssues: fallbackReport?.operationalIssues ?? []
+            executionStrategy: executionStrategy,
+            // The schemata portion's own issues first, then the isolated
+            // pass's — a shared-chunk build failure is a run-level, many-
+            // mutant event, and it must not be buried under whatever
+            // per-mutation issues the fallback pass it caused went on to
+            // produce.
+            operationalIssues: sharedChunkBuildFailureIssues(schemataOutcome?.sharedChunkBuildFailureEvents ?? [])
+                + (fallbackReport?.operationalIssues ?? [])
         )
+    }
+
+    /// ADR-0008 Addendum 4's required aggregate report: one issue per chunk
+    /// whose shared lowered program failed to compile, carrying the
+    /// `MutationID` count it cost and the chunk-level compiler diagnostic
+    /// that caused it — never one issue per affected `MutationID`, which is
+    /// exactly the "many individually-unremarkable fallbacks with no shared
+    /// cause visible" shape the addendum forbids.
+    ///
+    /// `.warning`, not `.error`: every affected mutation still gets a real,
+    /// verified verdict from the isolated fallback pass, so neither score
+    /// nor integrity is in question — what is lost is schemata's fast path,
+    /// which is a cost/health fact, and `operationalIssues` is where this
+    /// codebase already puts exactly that (see `OperationalIssue`'s own doc
+    /// comment). `mutationID` is `nil` because the event genuinely is
+    /// chunk-level: attributing it to any one of the mutations it took down
+    /// would misstate what failed.
+    static func sharedChunkBuildFailureIssues(
+        _ events: [SchemataMutationRunner.SharedChunkBuildFailureEvent]
+    ) -> [OperationalIssue] {
+        events.map { event in
+            OperationalIssue(
+                severity: .warning, kind: .schemataChunkBuildFailed, mutationID: nil,
+                diagnosis: """
+                Schemata chunk \(event.chunkID) failed to build (\(event.diagnosticReference)); \
+                \(event.affectedMutationCount) \(event.affectedMutationCount == 1 ? "mutant" : "mutants") \
+                forfeited schemata execution and ran in isolated mode instead.
+                """
+            )
+        }
+    }
+
+    /// A count histogram of every *dynamic* fallback reason the schemata
+    /// backend reported, for `ExecutionStrategyReport.fallbackReasonCounts`.
+    /// Keys are stable, machine-greppable strings derived from
+    /// `SchemataMutationRunner.SchemataFallbackReason`'s own cases (and, for
+    /// `.activation`, from the verifier's own raw reason value) — never a
+    /// `String(describing:)` of an enum, whose text is not a stable contract.
+    static func fallbackReasonCounts(_ fallbacks: [SchemataMutationRunner.DynamicFallback]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for fallback in fallbacks {
+            let key = switch fallback.reason {
+            case let .activation(reason): "activation.\(reason.rawValue)"
+            case .hangBudgetExceeded: "hangBudgetExceeded"
+            case .sharedChunkBuildFailure: "sharedChunkBuildFailure"
+            case .knownUncovered: "knownUncovered"
+            }
+            counts[key, default: 0] += 1
+        }
+        return counts
+    }
+
+    /// Gate 3 Phase H19: the *planner-time* counterpart to
+    /// `fallbackReasonCounts` above, for
+    /// `ExecutionStrategyReport.plannerFallbackReasonCounts` — a candidate a
+    /// lowerer's own `analyze(_:source:)` (or `SchemataChunkPlanner.plan`,
+    /// for a conflict it could not resolve) never embedded at all, before
+    /// any token was ever attempted. Same stable-string-key discipline as
+    /// `fallbackReasonCounts`: the case name alone for a free-form
+    /// diagnostic payload (`structuralConflict`/`unsupportedOperand`/
+    /// `platformUnsupported` all carry a `reason: String` that is a
+    /// human-readable diagnosis, not a stable identifier, so it is
+    /// deliberately dropped from the key); the operator ID *is* a stable
+    /// identifier, so `operatorNotYetLowered` keeps its own as a suffix,
+    /// the same way `fallbackReasonCounts` keeps `activation`'s.
+    static func plannerFallbackReasonCounts(_ reasons: [SchemataUnsupportedReason]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for reason in reasons {
+            let key: String = switch reason {
+            case .resultBuilderBody: "resultBuilderBody"
+            case .typeVarianceUnproven: "typeVarianceUnproven"
+            case .processStartRequired: "processStartRequired"
+            case let .operatorNotYetLowered(operatorID): "operatorNotYetLowered.\(operatorID)"
+            case .structuralConflict: "structuralConflict"
+            case .platformUnsupported: "platformUnsupported"
+            case .unsupportedOperand: "unsupportedOperand"
+            case .asyncOrThrowingExpression: "asyncOrThrowingExpression"
+            case .ownershipSensitiveExpression: "ownershipSensitiveExpression"
+            case .patternPosition: "patternPosition"
+            case .controlFlowConstant: "controlFlowConstant"
+            }
+            counts[key, default: 0] += 1
+        }
+        return counts
     }
 
     private static func toolchainHash(_ toolchain: ToolchainFingerprint) -> String {

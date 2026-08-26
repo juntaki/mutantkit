@@ -29,11 +29,24 @@ public struct BatchTestItem: Sendable {
     /// empty match) is required for a bundle with none of its own tests
     /// selected.
     public let onlyTestingIdentifiers: [TestIdentifier]?
+    /// Merged into every target dict's own `EnvironmentVariables` (additive,
+    /// same target-scoped merge `XcodeBuildAdapter.xctestrunVariant` already
+    /// does for a single, unbatched schemata token) — `nil` for every
+    /// isolated-mode caller, which needs no per-configuration environment at
+    /// all. Schemata batching (`runSchemataTokenBatch`) is the one caller
+    /// that sets this: each configuration's own token/runID/transcript-path
+    /// variables, so every configuration in one shared `.xctestrun` still
+    /// activates and reports evidence for a different mutation.
+    public let environmentVariables: [String: String]?
 
-    public init(configurationName: String, xctestrunPath: URL, onlyTestingIdentifiers: [TestIdentifier]?) {
+    public init(
+        configurationName: String, xctestrunPath: URL, onlyTestingIdentifiers: [TestIdentifier]?,
+        environmentVariables: [String: String]? = nil
+    ) {
         self.configurationName = configurationName
         self.xctestrunPath = xctestrunPath
         self.onlyTestingIdentifiers = onlyTestingIdentifiers
+        self.environmentVariables = environmentVariables
     }
 }
 
@@ -120,6 +133,23 @@ public enum BatchXCTestRunBuilder {
                 // xctestrun as the unit test bundle a coverage-based
                 // selection actually named) must never reach this bundle's
                 // own `OnlyTestIdentifiers`.
+                // `qualifiedName`, not `onlyTestingArgument`: this is the
+                // batched `.xctestrun` `OnlyTestIdentifiers` key, a
+                // different mechanism from the `-only-testing:` CLI
+                // argument `onlyTestingArgument` builds for the
+                // non-batched path. Phase C13 found and fixed a real bug
+                // in `onlyTestingArgument` (it was missing the trailing
+                // `()` a Swift Testing `@Test` function needs to match at
+                // all via `-only-testing:`) but deliberately left this
+                // call site untouched — known, honest limitation, not
+                // silently assumed fine: whether `OnlyTestIdentifiers`
+                // itself needs the same trailing `()` for a Swift Testing
+                // target has never been verified empirically, only for
+                // XCTest. `testBatchSize` (the only caller of this batched
+                // path) is not the shipped default for any project kind
+                // (see README.md's "Recommended production profile"), so
+                // this is not a correctness gap in the current production
+                // default — but it is unverified, not confirmed correct.
                 let ownIdentifiers = onlyTestingIdentifiers
                     .filter { $0.target == entry.name }
                     .map(\.qualifiedName)
@@ -137,6 +167,13 @@ public enum BatchXCTestRunBuilder {
                 // per-test narrowing.
                 guard !ownIdentifiers.isEmpty else { return nil }
                 target["OnlyTestIdentifiers"] = ownIdentifiers
+                return target
+            }.map { target -> [String: Any] in
+                guard let environmentVariables = item.environmentVariables, !environmentVariables.isEmpty else { return target }
+                var target = target
+                var targetEnvironment = target["EnvironmentVariables"] as? [String: String] ?? [:]
+                for (variable, value) in environmentVariables { targetEnvironment[variable] = value }
+                target["EnvironmentVariables"] = targetEnvironment
                 return target
             }
             if item.onlyTestingIdentifiers != nil, narrowed.isEmpty {

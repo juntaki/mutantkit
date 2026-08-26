@@ -5,10 +5,50 @@ import Foundation
 /// produced it — `MutationID` itself is never comparable across tools
 /// (each tool mints its own, unrelated scheme), so cross-tool matching
 /// needs an identity derived purely from *what changed in the source*, not
-/// from either tool's internal bookkeeping. Line/column alone is
-/// deliberately not enough: a file with more than one candidate on the
-/// same line (a common case for boolean-literal or relational mutants)
-/// would collide.
+/// from either tool's internal bookkeeping.
+///
+/// `line`/`column` (Phase C13, competitive-parity program): added after a
+/// real Muter calibration run found **zero** matched mutants despite
+/// running the identical corpus, file, and operator. Root cause, found by
+/// reading Muter's own real `--format json` output directly rather than
+/// its schema on paper: Muter's `AppliedMutationOperator.CodingKeys`
+/// (real source: `Sources/muterCore/TestReporting/MuterTestReport.swift`)
+/// explicitly excludes `mutationSnapshot` from encoding, at every version
+/// — a real report never carries the mutated text at all, so
+/// `originalTextHash`/`replacementTextHash` (this identity's *original*
+/// match key, before this fix) hash an empty string for literally every
+/// Muter mutant, every run, unconditionally. That is not a flaky
+/// intermittent gap; matching on those fields alone was structurally
+/// guaranteed to match nothing, forever, regardless of what corpus or
+/// operator was compared — confirmed by inspecting a real captured
+/// calibration report (`Benchmarks/results/.../stage1-calibration/raw/
+/// swift-numerics-muter-cold-0.json`), which indeed has no snapshot text
+/// anywhere.
+///
+/// That same real report *does* carry `position.line`/`position.column`
+/// for every mutation, and MutantKit's own `MutationPoint` always carries
+/// real `line`/`column` too (`Sources/MutationModel/MutationPoint.swift` —
+/// non-optional, present in every schema version). Cross-checked directly
+/// against the real swift-numerics calibration pair: for the same real
+/// file and the same real mutation site, both tools report the identical
+/// `(line, column)` pair every time (confirmed for 3 independent
+/// mutations in `GCD.swift`) — even though Muter's own `position
+/// .utf8Offset` field (present, but never previously parsed) disagreed
+/// with MutantKit's `utf8Range.start` by a constant, unexplained 72-byte
+/// delta for that same file, making the byte-offset fields *not* safely
+/// comparable across tools without further investigation this fix does
+/// not depend on. `(relativePath, line, column)` both agrees in practice
+/// and needs no such cross-tool calibration, so it is the new match key.
+///
+/// This does reintroduce the theoretical collision this type's docs used
+/// to warn about (two distinct candidates at the same line *and* column —
+/// e.g. two different replacements of the same relational operator token,
+/// which MutantKit itself produces and Muter does not) — accepted
+/// deliberately: it degrades a same-position multiple-replacement case
+/// from "matched, once each" to "several `mutantKit` mutants correctly
+/// matching the one real `muter` mutant at that position" (still a real,
+/// correct correspondence, not a wrong one), which is strictly better
+/// than the pre-fix "matches nothing, ever."
 public struct CrossToolMutationIdentity: Codable, Hashable, Sendable {
     public let relativePath: String
     public let startUTF8Offset: Int
@@ -16,10 +56,27 @@ public struct CrossToolMutationIdentity: Codable, Hashable, Sendable {
     public let originalTextHash: String
     public let replacementTextHash: String
     public let normalizedOperatorFamily: String
+    /// 1-based source line/column, as reported by the *producing* tool
+    /// itself — the real cross-tool match key as of Phase C13; see this
+    /// type's own doc comment for why the text-hash fields above cannot
+    /// serve that purpose for a real Muter report.
+    public let line: Int
+    public let column: Int
+    /// The real, human-readable original/mutated source text — Phase B1
+    /// (rigorous-benchmark program) added these so a canonical matched
+    /// mutation can be reported as `a > b` → `a >= b`, not just an opaque
+    /// hash. Defaulted to `""` for backward compatibility with every
+    /// existing call site that only ever needed the hashes for matching;
+    /// never used as part of `Hashable`/matching identity on its own — the
+    /// hashes above remain the authoritative "did the text change"
+    /// signal, this is purely for human/report consumption.
+    public let originalText: String
+    public let replacementText: String
 
     public init(
         relativePath: String, startUTF8Offset: Int, endUTF8Offset: Int,
-        originalTextHash: String, replacementTextHash: String, normalizedOperatorFamily: String
+        originalTextHash: String, replacementTextHash: String, normalizedOperatorFamily: String,
+        line: Int = 0, column: Int = 0, originalText: String = "", replacementText: String = ""
     ) {
         self.relativePath = relativePath
         self.startUTF8Offset = startUTF8Offset
@@ -27,6 +84,10 @@ public struct CrossToolMutationIdentity: Codable, Hashable, Sendable {
         self.originalTextHash = originalTextHash
         self.replacementTextHash = replacementTextHash
         self.normalizedOperatorFamily = normalizedOperatorFamily
+        self.line = line
+        self.column = column
+        self.originalText = originalText
+        self.replacementText = replacementText
     }
 }
 
@@ -117,11 +178,38 @@ public struct NormalizedMutant: Sendable {
     /// is present — Muter's own normalized mutants never set this, since
     /// Muter has no equivalent concept.
     public let provenActive: Bool?
+    /// The producing tool's own native mutation ID, when its report
+    /// exposes one — Phase B1 (rigorous-benchmark program) added this so
+    /// a canonical matched mutation can be traced back to, e.g.,
+    /// MutantKit's own `mut_xxx` (`mutantkit reproduce`-able) or
+    /// swift-mutation-testing's own `swift-mutation-testing_N`. `nil` for
+    /// Muter: confirmed against its own real `--format json` output that
+    /// no per-mutation ID field exists there at all (unlike
+    /// `mutationSnapshot`, this is not a CodingKeys exclusion — the field
+    /// is simply absent from the type Muter serializes).
+    public let nativeID: String?
+    /// Real per-mutant wall time (build + test), when the producing
+    /// tool's own report exposes it — Phase B2 (rigorous-benchmark
+    /// program) added this so the matched-mutant lane can compute a real
+    /// "time spent evaluating just the corpus-matched subset" for a tool
+    /// that reports it, rather than only ever falling back to a coarse
+    /// whole-run proxy. Confirmed present in MutantKit's own real report
+    /// (`buildDurationSeconds`/`testDurationSeconds` per result); Muter's
+    /// and swift-mutation-testing's own real report schemas do not expose
+    /// per-mutant duration at all, so this is `nil` for both — a real,
+    /// disclosed capability gap between tools, not fabricated to appear
+    /// symmetric.
+    public let durationSeconds: Double?
 
-    public init(identity: CrossToolMutationIdentity, bucket: Bucket, provenActive: Bool?) {
+    public init(
+        identity: CrossToolMutationIdentity, bucket: Bucket, provenActive: Bool?, nativeID: String? = nil,
+        durationSeconds: Double? = nil
+    ) {
         self.identity = identity
         self.bucket = bucket
+        self.durationSeconds = durationSeconds
         self.provenActive = provenActive
+        self.nativeID = nativeID
     }
 }
 
@@ -165,6 +253,13 @@ public enum ResultNormalizer {
         case "swift.core.logical-connector-replacement": "logical-connector"
         case "swift.core.ternary-branch-swap": "ternary"
         case "swift.core.unary-not-removal": "unary-not"
+        // Phase C13: added while wiring up the swift-mutation-testing
+        // adapter — without this, C3's `swift.core.side-effect-call-removal`
+        // (added this same phase) could never family-match Muter's or
+        // swift-mutation-testing's own `RemoveSideEffects`, both of which
+        // already map to `"remove-side-effects"` below, even though all
+        // three tools implement essentially the same operator.
+        case "swift.core.side-effect-call-removal": "remove-side-effects"
         default: operatorID
         }
     }
@@ -176,6 +271,26 @@ public enum ResultNormalizer {
         case "SwapTernary": "ternary"
         case "RemoveSideEffects": "remove-side-effects"
         default: mutationOperatorID
+        }
+    }
+
+    /// `ericodx/swift-mutation-testing`'s own operator identifiers
+    /// (confirmed via its real `Docs/USAGE.MD` "Operator identifiers"
+    /// table), mapped onto the same shared family vocabulary
+    /// `mutantKitOperatorFamily`/`muterOperatorFamily` already use, so a
+    /// mutation this tool and MutantKit both implement can land in
+    /// `exactlyComparable` rather than `approximatelyComparable`.
+    /// `ArithmeticOperatorReplacement`/`NegateConditional` have no
+    /// MutantKit or Muter equivalent in this catalog today, so they fall
+    /// through to their own raw name — never a false shared family.
+    public static func swiftMutationTestingOperatorFamily(_ mutatorName: String) -> String {
+        switch mutatorName {
+        case "RelationalOperatorReplacement": "relational-operator"
+        case "BooleanLiteralReplacement": "boolean-literal"
+        case "LogicalOperatorReplacement": "logical-connector"
+        case "SwapTernary": "ternary"
+        case "RemoveSideEffects": "remove-side-effects"
+        default: mutatorName
         }
     }
 
@@ -279,17 +394,35 @@ public enum ResultNormalizer {
                   let outcome = result["outcome"] as? String
             else { return nil }
 
+            // `line`/`column` are optional here (`as?`, not `guard let`)
+            // deliberately, unlike the fields above: every *real* MutantKit
+            // report has always carried them (`MutationPoint.line`/
+            // `.column` are non-optional in the model itself), so this
+            // never actually degrades a real report — but making them
+            // required here would needlessly drop entries in every
+            // existing hand-built test fixture that predates Phase C13's
+            // line/column-based cross-tool matching and has no reason to
+            // care about it. `0` is never a collision risk in practice: a
+            // real `line` is always >= 1.
             let identity = CrossToolMutationIdentity(
                 relativePath: file, startUTF8Offset: start, endUTF8Offset: end,
                 originalTextHash: sha256Hex(originalText), replacementTextHash: sha256Hex(replacementText),
-                normalizedOperatorFamily: mutantKitOperatorFamily(operatorID)
+                normalizedOperatorFamily: mutantKitOperatorFamily(operatorID),
+                line: point["line"] as? Int ?? 0, column: point["column"] as? Int ?? 0,
+                originalText: originalText, replacementText: replacementText
             )
             let evidencePresent = (result["evidence"] as? [String: Any])?["applicationEvidence"] != nil
             let mutantBucket = bucket(forMutantKitOutcome: outcome)
             if mutantBucket != .infrastructureFailure, mutantBucket != .other, (result["verificationVersion"] as? Int) == 0 {
                 falseScoredMutants += 1
             }
-            return NormalizedMutant(identity: identity, bucket: mutantBucket, provenActive: evidencePresent)
+            let buildDuration = result["buildDurationSeconds"] as? Double
+            let testDuration = result["testDurationSeconds"] as? Double
+            let duration: Double? = (buildDuration != nil || testDuration != nil) ? (buildDuration ?? 0) + (testDuration ?? 0) : nil
+            return NormalizedMutant(
+                identity: identity, bucket: mutantBucket, provenActive: evidencePresent, nativeID: point["id"] as? String,
+                durationSeconds: duration
+            )
         }
         let phaseTimings = parsePhaseTimings(root: root, results: results)
 
@@ -366,14 +499,19 @@ public enum ResultNormalizer {
     /// Json/JsonReporter.swift` + `MuterTestReport.swift`, confirmed against
     /// a real regression-test snapshot in the muter repository, not
     /// guessed): `fileReports[].appliedOperators[].{mutationPoint:
-    /// {mutationOperatorId, position:{line,column}}, mutationSnapshot:
-    /// {before,after}, testSuiteOutcome}`. `position` is line/column, not a
-    /// UTF-8 byte offset — Muter's own report never reports one, so
-    /// `CrossToolMutationIdentity`'s offsets are synthesized as a stable
+    /// {mutationOperatorId, position:{line,column,utf8Offset}},
+    /// mutationSnapshot: {before,after}, testSuiteOutcome}`. `position`
+    /// carries line/column and (see `normalizeMuterReport`'s own handling
+    /// of `position["utf8Offset"]` below) a UTF-8 byte offset too — this
+    /// doc comment previously claimed no such offset existed, which Phase
+    /// C13 found to be wrong; `CrossToolMutationIdentity`'s byte-offset
+    /// fields are nonetheless still synthesized as a stable
     /// (not-necessarily-comparable-to-MutantKit's-own) encoding of
-    /// `(line, column)`; the identity's `relativePath` + text hashes +
-    /// operator family are what carry real matching weight, exactly as
-    /// intended by "not comparing on line/column alone."
+    /// `(line, column)` rather than that offset, since it does not agree
+    /// numerically with MutantKit's own `utf8Range.start` for the same
+    /// real mutation site (see below); the identity's `relativePath` +
+    /// text hashes + operator family are what carry real matching weight,
+    /// exactly as intended by "not comparing on line/column alone."
     /// Muter's own real phase breakdown — just one total (`timeElapsed`)
     /// and a per-operator mutation count, since Muter's real report.json
     /// never exposes anything finer (no per-mutation build/test split, no
@@ -413,7 +551,23 @@ public enum ResultNormalizer {
         return hours * 3600 + minutes * 60 + seconds
     }
 
-    public static func normalizeMuterReport(_ data: Data) throws -> [NormalizedMutant] {
+    /// `projectDirectory`, when given (Phase C13), lets every mutant's
+    /// `relativePath` be resolved from the *real* per-mutation
+    /// `mutationPoint.filePath` Muter reports (an absolute path into
+    /// whatever working copy Muter made — confirmed by a real captured
+    /// report to be `<benchmark-materialized-dir>_mutated/<real relative
+    /// path>`, e.g. `.../mutantbench-swift-numerics-muter-cold-0_mutated/
+    /// Sources/IntegerUtilities/GCD.swift`) rather than the file-report's
+    /// own bare `fileName` (real value in that same report: `"GCD.swift"`
+    /// — no directory at all). That bare basename can never equal
+    /// MutantKit's own `relativePath` for anything but a file that
+    /// happens to sit at the project root, which was a second, compounding
+    /// reason the original "0 matched mutants" calibration finding
+    /// happened — not just the text-hash issue this type's own doc
+    /// comment describes. `nil` (the default, and every existing caller
+    /// before this parameter existed) preserves the old bare-basename
+    /// behavior exactly, so this is purely additive.
+    public static func normalizeMuterReport(_ data: Data, projectDirectory: URL? = nil) throws -> [NormalizedMutant] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ReportParsingError.malformedReport("top level is not a JSON object")
         }
@@ -438,30 +592,77 @@ public enum ResultNormalizer {
                 // directly against a real report this produced (0 phantom
                 // fields, all Muter measurements silently dropped to zero
                 // before this fix). `before`/`after` therefore default to
-                // empty strings when absent — Muter's own bucket outcome
-                // (killed/survived/etc.) is still real and counted; only
-                // text-hash-based cross-tool matching degrades (an empty-vs-
-                // empty hash can still coincidentally collide across two
-                // Muter mutants, which `relativePath` + operator family
-                // narrows but does not fully prevent — a known, accepted
-                // limitation, never worse than dropping the mutant entirely).
+                // empty strings when absent. This is why cross-tool
+                // matching no longer relies on these hashes at all (Phase
+                // C13; see `CrossToolMutationIdentity`'s own doc comment)
+                // — they are still populated here (never worse than
+                // dropping the mutant), just no longer load-bearing for
+                // `match(mutantKit:muter:)`.
                 let snapshot = applied["mutationSnapshot"] as? [String: Any]
                 let before = snapshot?["before"] as? String ?? ""
                 let after = snapshot?["after"] as? String ?? ""
 
-                // Muter's own `position` never carries a byte offset, so
-                // `(line, column)` is packed into the offset fields as a
-                // stable synthetic pair — never intended to line up
-                // numerically with MutantKit's real UTF-8 offsets; matching
-                // relies on relativePath + text hashes + operator family.
+                // Muter's real `position` *does* carry `utf8Offset` — this
+                // codebase's own prior doc comment claiming otherwise was
+                // wrong, confirmed by a real captured report (Phase C13).
+                // Recorded here for observability, but Phase C13 found it
+                // does not agree numerically with MutantKit's own
+                // `utf8Range.start` for the identical real file/mutation
+                // (a constant, unexplained delta in the one real corpus
+                // checked) — so `line`/`column` are the real match key,
+                // not this offset. Falls back to the old synthetic
+                // `line*1_000_000+column` packing when `utf8Offset` is
+                // absent, purely so this field is never a total void.
+                let utf8Offset = position["utf8Offset"] as? Int ?? (line * 1_000_000 + column)
+
                 let identity = CrossToolMutationIdentity(
-                    relativePath: fileName, startUTF8Offset: line * 1_000_000 + column, endUTF8Offset: line * 1_000_000 + column,
+                    relativePath: relativePath(
+                        forMuterFilePath: mutationPoint["filePath"] as? String, fallback: fileName, projectDirectory: projectDirectory
+                    ),
+                    startUTF8Offset: utf8Offset, endUTF8Offset: utf8Offset,
                     originalTextHash: sha256Hex(before), replacementTextHash: sha256Hex(after),
-                    normalizedOperatorFamily: muterOperatorFamily(operatorID)
+                    normalizedOperatorFamily: muterOperatorFamily(operatorID),
+                    line: line, column: column, originalText: before, replacementText: after
                 )
+                // No `nativeID`: confirmed against a real Muter report
+                // that no per-mutation ID field exists in its own
+                // `--format json` output at all (Phase B1).
                 return NormalizedMutant(identity: identity, bucket: bucket(forMuterOutcome: testSuiteOutcome), provenActive: nil)
             }
         }
+    }
+
+    /// Resolves a Muter mutation's *real* project-relative path from its
+    /// absolute `mutationPoint.filePath`, by probing the filesystem for
+    /// the longest path suffix that actually exists under
+    /// `projectDirectory` — deliberately not a fixed `"_mutated"`-suffix
+    /// string match, since that is Muter's own working-copy naming
+    /// convention today, confirmed against one real captured report, not
+    /// a documented contract this benchmark controls or should assume is
+    /// stable across Muter versions. Falls back to `fallback` (the bare
+    /// `fileName` every caller used before this existed) whenever
+    /// `projectDirectory` or `filePath` is absent, or no suffix actually
+    /// resolves to a real file — never throws, never guesses a path that
+    /// does not exist on disk.
+    static func relativePath(forMuterFilePath filePath: String?, fallback: String, projectDirectory: URL?) -> String {
+        guard let filePath, let projectDirectory else { return fallback }
+        // The leading root `"/"` `pathComponents` element is dropped first
+        // so `components[start...].joined(separator: "/")` never produces
+        // a malformed doubled-slash candidate.
+        let components = URL(fileURLWithPath: filePath).pathComponents.filter { $0 != "/" }
+        // Longest suffix first: a real relative path (e.g.
+        // `Sources/IntegerUtilities/GCD.swift`) should always be preferred
+        // over a shorter one that happens to also exist (e.g. a same-named
+        // file at the project root), so this walks from the full path
+        // down, not up.
+        for start in 0..<components.count {
+            let candidate = components[start...].joined(separator: "/")
+            guard !candidate.isEmpty else { continue }
+            if FileManager.default.fileExists(atPath: projectDirectory.appendingPathComponent(candidate).path) {
+                return candidate
+            }
+        }
+        return fallback
     }
 
     private static func bucket(forMuterOutcome outcome: String) -> NormalizedMutant.Bucket {
@@ -475,23 +676,118 @@ public enum ResultNormalizer {
         }
     }
 
+    // MARK: - swift-mutation-testing report.json
+
+    /// Parses `ericodx/swift-mutation-testing`'s own `--output` report —
+    /// real shape confirmed against its `Docs/STRYKER-COMPATIBILITY.md`
+    /// (a documented, intentional near-superset of the Stryker mutation-
+    /// testing-elements schema v1) *and* directly against its real
+    /// `JsonReporter.swift` source (found by Codex review before this was
+    /// committed as done — see below), not guessed: a top-level `files`
+    /// dictionary keyed by path, each holding a `mutants` array.
+    ///
+    /// Two real, confirmed differences from Muter that make this parser
+    /// simpler than `normalizeMuterReport`, not just differently-shaped:
+    /// (1) `files` dictionary keys are already real paths *relative to
+    /// `projectRoot`* (confirmed in the compatibility doc) — no
+    /// filesystem-probing relative-path resolution is needed here at all.
+    /// (2) `originalText`/`replacement` are real, always-populated fields
+    /// (unlike Muter's `mutationSnapshot`, which a real report never
+    /// includes) — so this tool's mutants get real, meaningful text
+    /// hashes too, even though `match(mutantKit:muter:)` itself no longer
+    /// keys on them (Phase C13; see `CrossToolMutationIdentity`'s own doc
+    /// comment for why).
+    ///
+    /// A leading `/` is stripped from every key. Real bug found by Codex
+    /// review before this was committed as done: `JsonReporter`'s actual
+    /// key computation is `String(filePath.dropFirst(projectRoot.count))`
+    /// — a plain character-count drop, not a proper path-relative
+    /// computation — so for a `projectRoot` without a trailing slash
+    /// (the normal case) every real key comes out as `"/Sources/
+    /// Foo.swift"`, never `"Sources/Foo.swift"`. Left unstripped, this
+    /// key could never equal MutantKit's own leading-slash-free
+    /// `relativePath`, reproducing the exact "0 matched mutants" class of
+    /// bug this whole phase exists to fix, just for a different tool.
+    public static func normalizeSwiftMutationTestingReport(_ data: Data) throws -> [NormalizedMutant] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ReportParsingError.malformedReport("top level is not a JSON object")
+        }
+        let files = root["files"] as? [String: Any] ?? [:]
+
+        return files.flatMap { rawPath, value -> [NormalizedMutant] in
+            let path = rawPath.hasPrefix("/") ? String(rawPath.dropFirst()) : rawPath
+            guard let fileEntry = value as? [String: Any], let mutants = fileEntry["mutants"] as? [[String: Any]] else { return [] }
+            return mutants.compactMap { mutant in
+                guard let mutatorName = mutant["mutatorName"] as? String,
+                      let location = mutant["location"] as? [String: Any],
+                      let start = location["start"] as? [String: Any],
+                      let line = start["line"] as? Int, let column = start["column"] as? Int,
+                      let status = mutant["status"] as? String
+                else { return nil }
+
+                // Real fields, per the compatibility doc — but only ever
+                // used for observability/the text-hash fields' own sake;
+                // matching itself relies on `line`/`column`, exactly like
+                // the Muter path, for the one reason that actually
+                // matters here: consistency, so both cross-tool
+                // comparisons behave identically rather than one relying
+                // on text hashes because this tool happens to supply them
+                // and the other not.
+                let originalText = mutant["originalText"] as? String ?? ""
+                let replacement = mutant["replacement"] as? String ?? ""
+
+                let identity = CrossToolMutationIdentity(
+                    relativePath: path, startUTF8Offset: 0, endUTF8Offset: 0,
+                    originalTextHash: sha256Hex(originalText), replacementTextHash: sha256Hex(replacement),
+                    normalizedOperatorFamily: swiftMutationTestingOperatorFamily(mutatorName),
+                    line: line, column: column, originalText: originalText, replacementText: replacement
+                )
+                return NormalizedMutant(
+                    identity: identity, bucket: bucket(forSwiftMutationTestingStatus: status), provenActive: nil,
+                    nativeID: mutant["id"] as? String
+                )
+            }
+        }
+    }
+
+    /// Status strings per the real tool's own `Docs/STRYKER-COMPATIBILITY.md`
+    /// "Status mapping" table (its internal `ExecutionStatus`, not the
+    /// Stryker-schema string it separately maps to for the JSON file) —
+    /// `"Crash"` counts as killed, matching that same doc's own stated
+    /// rationale ("Crash mutants are killed (the mutation was detected)").
+    private static func bucket(forSwiftMutationTestingStatus status: String) -> NormalizedMutant.Bucket {
+        switch status {
+        case "Killed", "Crash": .killed
+        case "Survived": .survived
+        case "NoCoverage": .noCoverage
+        case "Unviable": .unviable
+        case "Timeout": .infrastructureFailure
+        default: .other
+        }
+    }
+
     // MARK: - Cross-tool matching
 
-    /// Matches purely on `relativePath` + text hashes — the offset fields
-    /// are excluded from the match key on purpose, since Muter's own
-    /// offsets are a synthesized line/column encoding, never a real UTF-8
-    /// byte range comparable to MutantKit's. `normalizedOperatorFamily`
-    /// decides `exactlyComparable` vs. `approximatelyComparable`.
+    /// Matches on `relativePath` + `line` + `column` — **not** the text
+    /// hashes, as of Phase C13. A real Muter `--format json` report never
+    /// carries the mutated text at all (`CrossToolMutationIdentity`'s own
+    /// doc comment has the full account), so `originalTextHash`/
+    /// `replacementTextHash` hash an empty string for every real Muter
+    /// mutant unconditionally — matching on them was structurally
+    /// guaranteed to match zero mutants, which is exactly what a real
+    /// calibration run found. `line`/`column` are real on both sides and
+    /// confirmed to agree for the same real mutation site (see the same
+    /// doc comment). `normalizedOperatorFamily` still decides
+    /// `exactlyComparable` vs. `approximatelyComparable`, unchanged.
     public static func match(mutantKit: [NormalizedMutant], muter: [NormalizedMutant]) -> CrossToolComparison {
         struct MatchKey: Hashable {
             let relativePath: String
-            let originalTextHash: String
-            let replacementTextHash: String
+            let line: Int
+            let column: Int
         }
         func key(_ mutant: NormalizedMutant) -> MatchKey {
             MatchKey(
-                relativePath: mutant.identity.relativePath, originalTextHash: mutant.identity.originalTextHash,
-                replacementTextHash: mutant.identity.replacementTextHash
+                relativePath: mutant.identity.relativePath, line: mutant.identity.line, column: mutant.identity.column
             )
         }
 
@@ -521,6 +817,23 @@ public enum ResultNormalizer {
         return CrossToolComparison(
             exactlyComparable: exact, approximatelyComparable: approximate, mutantKitOnly: mutantKitOnly, muterOnly: muterOnly
         )
+    }
+
+    /// Compares MutantKit against any second tool that is not Muter —
+    /// added (Phase C13) for the new swift-mutation-testing adapter, and
+    /// usable for any future third+ adapter the same way. Forwards to
+    /// `match(mutantKit:muter:)` unchanged: the underlying comparison
+    /// (`relativePath`/`line`/`column`/operator family) has never actually
+    /// been Muter-specific, only its parameter name was — this exists
+    /// purely so a non-Muter call site does not read as "compared against
+    /// muter" in its own source. `CrossToolComparison`'s own `muter`-named
+    /// fields (`muterOnly`, the `muter:` half of each comparable pair)
+    /// keep their names regardless of which second tool was actually
+    /// passed in, for the same reason: renaming a public, already-used
+    /// type for a second call site is a larger, separate change this
+    /// phase does not need to make.
+    public static func match(mutantKit: [NormalizedMutant], comparedAgainst other: [NormalizedMutant]) -> CrossToolComparison {
+        match(mutantKit: mutantKit, muter: other)
     }
 
     // MARK: - Median

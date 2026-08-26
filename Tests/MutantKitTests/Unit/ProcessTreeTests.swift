@@ -86,4 +86,66 @@ struct ProcessTreeTests {
         ProcessTree.forceKill([])
         #expect(ProcessTree.isAlive(getpid()), "the test process should still be here")
     }
+
+    // MARK: - ProcessIdentity / reap(_:) — the delayed, PID-reuse-safe path
+
+    @Test("descendantIdentities finds the same processes as descendants(of:)")
+    func descendantIdentitiesMatchesDescendants() throws {
+        let (parent, cleanup) = try spawnTree()
+        defer { cleanup() }
+
+        let pids = Set(ProcessTree.descendants(of: parent))
+        let identities = ProcessTree.descendantIdentities(of: parent)
+        #expect(Set(identities.map(\.pid)) == pids)
+    }
+
+    @Test("An identity observed while the process is alive is still verifiable, and reap(_:) reclaims it")
+    func reapReclaimsAVerifiedIdentity() throws {
+        let (parent, cleanup) = try spawnTree()
+        defer { cleanup() }
+
+        let identities = ProcessTree.descendantIdentities(of: parent)
+        try #require(!identities.isEmpty)
+        #expect(identities.allSatisfy { ProcessTree.isAlive($0) })
+
+        ProcessTree.reap(identities)
+        Thread.sleep(forTimeInterval: 0.4)
+        #expect(identities.allSatisfy { !ProcessTree.isAlive($0) })
+    }
+
+    /// The actual safety property `reap(_:)` exists for: a stale identity —
+    /// one whose recorded PID is no longer running the same process instance
+    /// (here, simulated directly by fabricating a start time no live process
+    /// could plausibly have) — must never be signalled, even though its PID
+    /// number alone might currently belong to something else entirely.
+    ///
+    /// What this does *not*, and structurally cannot, exercise: the genuine
+    /// kernel TOCTOU window between `signal(_:_:)`'s own `isAlive(_:)` check
+    /// and its own `kill` call a few instructions later (flagged in review;
+    /// see that function's own doc comment for the full disposition). Real
+    /// PID reuse landing inside that specific few-instruction window is not
+    /// deterministically triggerable from a test — the kernel does not
+    /// expose a way to force it — so this test instead pins the comparator
+    /// half of the property (a mismatched identity is correctly rejected),
+    /// which is the part that *is* reliably testable, and is not weakened by
+    /// the residual, acknowledged race the narrower window still carries.
+    @Test("reap(_:) never signals a PID whose current start time no longer matches — the PID-reuse safety property")
+    func reapNeverSignalsAMismatchedIdentity() throws {
+        let (parent, cleanup) = try spawnTree()
+        defer { cleanup() }
+
+        let real = try #require(ProcessTree.descendantIdentities(of: parent).first)
+        let stale = ProcessTree.ProcessIdentity(pid: real.pid, startTimeSeconds: 1, startTimeMicroseconds: 0)
+        #expect(!ProcessTree.isAlive(stale), "a fabricated start time must not match the real process")
+
+        ProcessTree.reap([stale])
+        Thread.sleep(forTimeInterval: 0.2)
+        #expect(ProcessTree.isAlive(real), "reap(_:) must not have killed the real process via its PID-only-matching stale identity")
+    }
+
+    @Test("Reaping nothing signals nothing")
+    func reapOfEmptyListIsSafe() {
+        ProcessTree.reap([])
+        #expect(ProcessTree.isAlive(getpid()), "the test process should still be here")
+    }
 }

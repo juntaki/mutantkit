@@ -27,7 +27,8 @@ struct MutationRegistryTests {
                         "swift.core.nil-coalescing-fallback",
                         "swift.core.return-value-replacement",
                         "swift.core.else-clause-deletion",
-                        "swift.core.range-boundary-replacement"])
+                        "swift.core.range-boundary-replacement",
+                        "swift.core.side-effect-call-removal"])
         #expect(Set(ids).count == ids.count)
     }
 

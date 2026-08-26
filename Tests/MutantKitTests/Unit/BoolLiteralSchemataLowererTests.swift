@@ -113,6 +113,323 @@ struct BoolLiteralSchemataLowererTests {
         #expect(eligibility.isEligible)
     }
 
+    // MARK: - ADR-0008 Addendum 4: pattern-position eligibility
+
+    /// Real-corpus finding: a shared schemata chunk embedding a
+    /// `switch (Bool, Bool) { case (true, false): ... }` failed to compile
+    /// ("switch must be exhaustive") because this operator's literal
+    /// selection changed the compiler-visible shape of a case pattern into
+    /// a runtime expression, invalidating the compiler's exhaustiveness
+    /// analysis. Every literal that is part of the *pattern* itself must be
+    /// ineligible.
+    @Test("Test A: every boolean literal in a switch case pattern is ineligible with reason .patternPosition")
+    func caseA_ineligibleInSwitchCasePattern() throws {
+        let source = """
+        func f(_ a: Bool, _ b: Bool) -> Int {
+            switch (a, b) {
+            case (true, false):
+                return 1
+            default:
+                return 0
+            }
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+            .sorted { $0.utf8Range.start < $1.utf8Range.start }
+        #expect(points.count == 2, "the pattern's own `true` and `false`")
+        for mutationPoint in points {
+            let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+            guard case let .isolatedOnly(reason) = eligibility else {
+                Issue.record("expected .isolatedOnly, got \(eligibility) for \(mutationPoint.originalText)")
+                continue
+            }
+            #expect(reason == .patternPosition)
+        }
+    }
+
+    @Test("Test B: an ordinary boolean-literal expression remains schemata-eligible")
+    func caseB_eligibleAsOrdinaryExpression() throws {
+        let source = "let x = true\n"
+        let mutationPoint = try point(source)
+        #expect(lowerer.analyze(mutationPoint, source: Data(source.utf8)).isEligible)
+    }
+
+    @Test("Test C: a boolean literal in a switch case's body remains schemata-eligible")
+    func caseC_eligibleInCaseBody() throws {
+        let source = """
+        func f(_ x: Int) -> Bool {
+            switch x {
+            case 1:
+                return true
+            default:
+                return false
+            }
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        #expect(points.count == 2, "the two `return` literals — the switch subject/case labels are Int, not Bool")
+        for mutationPoint in points {
+            #expect(lowerer.analyze(mutationPoint, source: Data(source.utf8)).isEligible, "\(mutationPoint.originalText) is in a case body, not a pattern")
+        }
+    }
+
+    @Test("Test D: a boolean literal in a case's `where` expression remains schemata-eligible")
+    func caseD_eligibleInWhereClause() throws {
+        let source = """
+        func f(_ x: Int, _ w: Bool) -> Int {
+            switch x {
+            case let y where w == true:
+                return y
+            default:
+                return 0
+            }
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `w == true`")
+        #expect(points.count == 1)
+        #expect(
+            lowerer.analyze(mutationPoint, source: Data(source.utf8)).isEligible,
+            "a where-clause expression is not a pattern, merely because it sits under the same SwitchCase node as one"
+        )
+    }
+
+    @Test("Test E: pattern exclusion is ancestor-structural, not only direct-parent — an enum-associated-value pattern nests the literal several levels below its ExpressionPatternSyntax ancestor")
+    func caseE_patternExclusionIsAncestorStructuralNotJustDirectParent() throws {
+        let source = """
+        func f(_ x: Bool?) -> Int {
+            if case .some(true) = x {
+                return 1
+            }
+            return 0
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` inside `.some(true)`'s pattern")
+        #expect(points.count == 1)
+        let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .patternPosition, "the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax itself — only an ancestor walk finds it")
+    }
+
+    @Test("Test F: the existing result-builder exclusion is unaffected by the new pattern-position check")
+    func caseF_resultBuilderExclusionUnchanged() throws {
+        let source = """
+        @ViewBuilder
+        func rows() -> Int {
+            if true {
+                1
+            }
+        }
+        """
+        let mutationPoint = try point(source)
+        let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .resultBuilderBody, "must still report the original reason, not .patternPosition")
+    }
+
+    // MARK: - ADR-0008 Addendum 4: the same structural predicate naturally covers if/guard/for case, with no special-casing
+
+    @Test("`guard case` shares the identical ExpressionPatternSyntax grammar — its pattern literal is ineligible with no special-case code")
+    func guardCasePatternLiteralIsIneligible() throws {
+        let source = """
+        func f(_ x: Bool) -> Int {
+            guard case true = x else { return 0 }
+            return 1
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `guard case true = x`")
+        #expect(points.count == 1)
+        let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .patternPosition)
+    }
+
+    @Test("`for case` shares the identical ExpressionPatternSyntax grammar — its pattern literal is ineligible with no special-case code")
+    func forCasePatternLiteralIsIneligible() throws {
+        let source = """
+        func f(_ values: [Bool]) {
+            for case true in values {
+            }
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `for case true in values`")
+        #expect(points.count == 1)
+        let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .patternPosition)
+    }
+
+    // MARK: - Control-flow-constant conditions (`while` / `repeat`-`while`)
+
+    /// Real-corpus finding, `swift-async-algorithms` 2026-08: lowering the
+    /// `true` in `} while true` inside a `-> Reduced?` method produced
+    /// `error: missing return in instance method expected to return
+    /// 'Reduced?'`. `while true` is provably infinite *only* while the
+    /// condition is a compile-time constant; a runtime selector is not one,
+    /// so the compiler starts demanding a `return` after the loop. That one
+    /// site's failure cost its entire 93-member shared chunk its build, and
+    /// with it the other 92 members' schemata fast path.
+    @Test("Negative fixture: a boolean literal that is a `while` condition is ineligible with reason .controlFlowConstant")
+    func whileConditionLiteralIsIneligible() throws {
+        let source = """
+        func f() -> Int {
+            while true {
+                return 1
+            }
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `while true`")
+        #expect(points.count == 1)
+        let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .controlFlowConstant)
+    }
+
+    @Test("Negative fixture: a `repeat`-`while`'s own trailing condition literal is ineligible for the identical reason")
+    func repeatWhileConditionLiteralIsIneligible() throws {
+        let source = """
+        func f() -> Int {
+            repeat {
+                return 1
+            } while true
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `} while true`")
+        #expect(points.count == 1)
+        let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .controlFlowConstant)
+    }
+
+    @Test("Negative fixture: parentheses are transparent — `while (true)` is still the literal as the condition")
+    func parenthesizedWhileConditionLiteralIsIneligible() throws {
+        let source = """
+        func f() -> Int {
+            while (true) {
+                return 1
+            }
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `while (true)`")
+        let eligibility = lowerer.analyze(mutationPoint, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .controlFlowConstant)
+    }
+
+    @Test("Positive fixture: a boolean literal in an ordinary expression inside a `while` *body* is still eligible")
+    func literalInWhileBodyRemainsEligible() throws {
+        let source = """
+        func f(_ limit: Int) -> Bool {
+            var flag = false
+            var index = 0
+            while index < limit {
+                flag = true
+                index += 1
+            }
+            return flag
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        #expect(points.count == 2, "`var flag = false` and `flag = true` — neither is a loop condition")
+        for mutationPoint in points {
+            #expect(
+                lowerer.analyze(mutationPoint, source: Data(source.utf8)).isEligible,
+                "\(mutationPoint.originalText) sits in the loop's body, not in its condition"
+            )
+        }
+    }
+
+    @Test("""
+    Positive fixture: a literal merely *nested* in a larger `while` condition stays eligible — \
+    that condition was never a compile-time constant
+    """)
+    func literalNestedInsideALargerWhileConditionRemainsEligible() throws {
+        let source = """
+        func f(_ flag: Bool) -> Int {
+            var count = 0
+            while flag == true {
+                count += 1
+            }
+            return count
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `flag == true`")
+        #expect(points.count == 1)
+        #expect(
+            lowerer.analyze(mutationPoint, source: Data(source.utf8)).isEligible,
+            """
+            `while flag == true` is already runtime-evaluated, so the compiler never treated this loop as infinite — \
+            lowering the literal changes no reachability fact, and excluding it would cost an eligible candidate for nothing
+            """
+        )
+    }
+
+    @Test("Positive fixture: an `if` condition literal is unaffected — only loops carry the provably-infinite reachability rule")
+    func ifConditionLiteralRemainsEligible() throws {
+        let source = """
+        func f() -> Int {
+            if true {
+                return 1
+            }
+            return 0
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(source, operatorID: BoolLiteralInversionOperator.descriptor.id)
+        let mutationPoint = try #require(points.first, "the `true` in `if true`")
+        #expect(lowerer.analyze(mutationPoint, source: Data(source.utf8)).isEligible)
+    }
+
+    @Test("The existing pattern-position and result-builder exclusions are unaffected by the new control-flow check")
+    func existingExclusionsUnchangedByControlFlowCheck() throws {
+        let patternSource = """
+        func f(_ x: Bool) -> Int {
+            switch x {
+            case true:
+                return 1
+            default:
+                return 0
+            }
+        }
+        """
+        let patternPoints = try CoreOperatorExpansionTestSupport.discover(
+            patternSource, operatorID: BoolLiteralInversionOperator.descriptor.id
+        )
+        let patternPoint = try #require(patternPoints.first)
+        guard case let .isolatedOnly(patternReason) = lowerer.analyze(patternPoint, source: Data(patternSource.utf8)) else {
+            Issue.record("expected .isolatedOnly for the case pattern")
+            return
+        }
+        #expect(patternReason == .patternPosition, "must still report its own reason, not .controlFlowConstant")
+    }
+
     // MARK: - lower: single point
 
     @Test("Lowering one point wraps it in a namespaced runtime selector and records one entry")

@@ -133,7 +133,7 @@ struct SchemataIsolatedDifferentialAcceptanceTests {
         let runner = SchemataMutationRunner(
             planID: "plan-differential-schemata", workUnitID: "plan-differential-schemata",
             programs: [program], points: pointsByID, originalSources: [Self.relativePath: Data(Self.librarySource.utf8)],
-            build: adapter, test: adapter, workspaces: workspaces, timeoutSeconds: 120,
+            build: adapter, test: adapter, workspaces: workspaces, timeouts: TimeoutSettings(baselineSeconds: 120),
             toolchainHash: "test-toolchain", buildArgumentsHash: "test-build-arguments", policy: policy
         )
         let outcome = try await runner.run()

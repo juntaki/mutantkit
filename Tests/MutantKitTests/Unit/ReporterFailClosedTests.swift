@@ -81,6 +81,38 @@ struct ReporterFailClosedTests {
         #expect(output.contains("NO MUTATION SCORE"))
     }
 
+    /// Phase C6 (competitive-parity program): an integrity violation is a
+    /// strictly more severe class of problem than "no test caught this
+    /// mutant" — the run's own proof that a mutant was applied and observed
+    /// is broken, so every verdict this run produced is untrustworthy, not
+    /// just this one line. Xcode's issue navigator distinguishes exactly
+    /// this severity band, so this reporter must say `error:`, never
+    /// `warning:`, for every integrity-violation line it emits.
+    @Test("Xcode reports every integrity violation as error, never warning")
+    func xcodeIntegrityViolationsAreErrorsNotWarnings() throws {
+        let report = failingReport()
+        let output = try XcodeReporter().render(report)
+
+        let lines = output.split(separator: "\n")
+        #expect(!lines.isEmpty)
+        for line in lines {
+            #expect(line.contains(": error: "), "expected every integrity line to be `error:`, got: \(line)")
+            #expect(!line.contains(": warning: "), "an integrity violation must never render as `warning:`, got: \(line)")
+        }
+    }
+
+    /// Phase C6: a survivor diagnostic must name the exact `mutantkit
+    /// inspect <id>` invocation a developer runs to see the full diff and
+    /// evidence — not just the bare `MutationID` in brackets, which names
+    /// the mutant but not the command that unlocks its detail.
+    @Test("Xcode survivor diagnostics include the mutantkit inspect command hint")
+    func xcodeSurvivorDiagnosticsIncludeInspectHint() throws {
+        let output = try XcodeReporter().render(passingReport())
+
+        #expect(output.contains("Mutant survived:"))
+        #expect(output.contains("mutantkit inspect "), "expected an explicit `mutantkit inspect <id>` hint: \(output)")
+    }
+
     @Test("JSON encodes a nil score as an absent key")
     func jsonEncodesNilScoreAsAbsentKey() throws {
         let data = try JSONReporter().render(failingReport()).data(using: .utf8)!

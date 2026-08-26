@@ -1,0 +1,446 @@
+{
+  "baseline" : {
+    "buildCommand" : {
+      "arguments" : [
+        "swift",
+        "build",
+        "--build-tests"
+      ],
+      "durationSeconds" : 26.031824946403503,
+      "environmentOverrides" : {
+
+      },
+      "executable" : "/usr/bin/xcrun",
+      "exitCode" : 0,
+      "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_8ba8496a2525ae171ffd"
+    },
+    "buildDurationSeconds" : 26.09028697013855,
+    "buildProductHash" : "sha256:ba7a49d58542dca29928ef731e0da41d0e25dddc2ca5595d6a5be743c1e5ce84",
+    "durationSeconds" : 47.77634298801422,
+    "passed" : true,
+    "testCommand" : {
+      "arguments" : [
+        "swift",
+        "test",
+        "--skip-build",
+        "--xunit-output",
+        "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_8ba8496a2525ae171ffd/mutantkit-xunit.xml"
+      ],
+      "durationSeconds" : 21.684612035751343,
+      "environmentOverrides" : {
+
+      },
+      "executable" : "/usr/bin/xcrun",
+      "exitCode" : 0,
+      "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_8ba8496a2525ae171ffd"
+    },
+    "testDurationSeconds" : 21.68605101108551
+  },
+  "executionStrategy" : {
+    "degradationReason" : "no mutation in this plan was embeddable under the currently registered schemata lowerers",
+    "effectiveCount" : 0,
+    "fallbackCount" : 4,
+    "requested" : "schemata"
+  },
+  "finishedAt" : "2026-08-05T17:14:00Z",
+  "integrity" : {
+    "buildFailures" : 0,
+    "buildObserved" : 4,
+    "classified" : 4,
+    "discovered" : 4,
+    "executed" : 4,
+    "explicitlySkipped" : 0,
+    "planned" : 4,
+    "reported" : 4,
+    "skippedByReason" : [
+
+    ],
+    "sourceApplied" : 4,
+    "violations" : [
+
+    ]
+  },
+  "operationalIssues" : [
+
+  ],
+  "planID" : "plan_a8f0657315dc3b94",
+  "projectRoot" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0",
+  "results" : [
+    {
+      "buildDurationSeconds" : 21.42582595348358,
+      "diagnosis" : "A test assertion failed on this mutant, so it was caught. The runner reported no per-test breakdown, so which test caught it is unknown.",
+      "durationSeconds" : 39.845836997032166,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ba7a49d58542dca29928ef731e0da41d0e25dddc2ca5595d6a5be743c1e5ce84",
+                "mutantHash" : "sha256:28ebaa38f325fc2bcf78db684e8e2f7b67bd97f9a93d94eeb12bd8d51633b580"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 21.391733050346375,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_855f82a32d56fb6f5fd2"
+        },
+        "buildProductHash" : "sha256:28ebaa38f325fc2bcf78db684e8e2f7b67bd97f9a93d94eeb12bd8d51633b580",
+        "sourceAfterHash" : "sha256:ba47012a18cabc62b3a5fe866b6a4bbb63a93c604a6ae1a33cbbe86e3a506170",
+        "sourceBeforeHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "sourceDiff" : "--- a/Sources/IntegerUtilities/GCD.swift\n+++ b/Sources/IntegerUtilities/GCD.swift\n@@ -32,7 +32,7 @@\n   // Euclidean algorithm for GCD. It's worth using Lehmer instead for larger\n   // integer types, but for now this is good and dead-simple and faster than\n   // the other obvious choice, the binary algorithm.\n-  while y != 0 { (x, y) = (y, x%y) }\n+  while y == 0 { (x, y) = (y, x%y) }\n   // Try to convert result to T.\n   if let result = T(exactly: x.magnitude) { return result }\n   // If that fails, produce a diagnostic.\n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_855f82a32d56fb6f5fd2/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 18.39014494419098,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 1,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_855f82a32d56fb6f5fd2"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_2da12864387b36b4",
+        "planID" : "plan_a8f0657315dc3b94",
+        "pointDigest" : "sha256:55af2fcb8cde807708bf71de109b607b706bd2f30347616288d97922b910ac61",
+        "workUnitID" : "d4910f92fae7489e"
+      },
+      "origin" : "fresh",
+      "outcome" : "killedByAssertion",
+      "point" : {
+        "column" : 11,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "gcd(_:_:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/IntegerUtilities/GCD.swift",
+        "id" : "mut_2da12864387b36b4",
+        "line" : 35,
+        "occurrenceIndex" : 0,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "!=",
+        "prefixTokenFingerprint" : "e6618ba86ca2",
+        "replacementText" : "==",
+        "sourceFileHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "suffixTokenFingerprint" : "fa87d9be5b4c",
+        "utf8Range" : {
+          "end" : 1460,
+          "start" : 1458
+        }
+      },
+      "testDurationSeconds" : 18.391795992851257,
+      "verificationVersion" : 11
+    },
+    {
+      "buildDurationSeconds" : 21.728551983833313,
+      "diagnosis" : "The tests passed with the mutation active in the build product, so nothing in the suite distinguishes this change from the original.",
+      "durationSeconds" : 39.414011001586914,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ba7a49d58542dca29928ef731e0da41d0e25dddc2ca5595d6a5be743c1e5ce84",
+                "mutantHash" : "sha256:25b2da3329048ada029a17e82ecd0ba8ac9439ce5b8eea7dd14198e705219957"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 21.70149803161621,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_4ff73669461819a15498"
+        },
+        "buildProductHash" : "sha256:25b2da3329048ada029a17e82ecd0ba8ac9439ce5b8eea7dd14198e705219957",
+        "sourceAfterHash" : "sha256:d781aef9a4a87131e4ad39431e7f58e04f37aeb175633cf94dc84c0ed703e269",
+        "sourceBeforeHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "sourceDiff" : "--- a/Sources/IntegerUtilities/GCD.swift\n+++ b/Sources/IntegerUtilities/GCD.swift\n@@ -26,7 +26,7 @@\n public func gcd<T: BinaryInteger>(_ a: T, _ b: T) -> T {\n   var x = a\n   var y = b\n-  if x.magnitude < y.magnitude { swap(&x, &y) }\n+  if x.magnitude >= y.magnitude { swap(&x, &y) }\n   // Avoid overflow when x = signed min, y = -1.\n   if y.magnitude == 1 { return 1 }\n   // Euclidean algorithm for GCD. It's worth using Lehmer instead for larger\n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_4ff73669461819a15498/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 17.664258003234863,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_4ff73669461819a15498"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_60467f894270a5a2",
+        "planID" : "plan_a8f0657315dc3b94",
+        "pointDigest" : "sha256:2641aa2ad01dcb1858db84c17faac0fe6fae9752ae7cdcc58413082d949a0723",
+        "workUnitID" : "d4910f92fae7489e"
+      },
+      "origin" : "fresh",
+      "outcome" : "survived",
+      "point" : {
+        "column" : 18,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "gcd(_:_:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/IntegerUtilities/GCD.swift",
+        "id" : "mut_60467f894270a5a2",
+        "line" : 29,
+        "occurrenceIndex" : 1,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "<",
+        "prefixTokenFingerprint" : "5cbb88f922fa",
+        "replacementText" : ">=",
+        "sourceFileHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "suffixTokenFingerprint" : "7e89d28bff84",
+        "utf8Range" : {
+          "end" : 1127,
+          "start" : 1126
+        }
+      },
+      "testDurationSeconds" : 17.665037989616394,
+      "verificationVersion" : 11
+    },
+    {
+      "buildDurationSeconds" : 19.887318968772888,
+      "diagnosis" : "The tests passed with the mutation active in the build product, so nothing in the suite distinguishes this change from the original.",
+      "durationSeconds" : 38.85101306438446,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ba7a49d58542dca29928ef731e0da41d0e25dddc2ca5595d6a5be743c1e5ce84",
+                "mutantHash" : "sha256:3dd35d5a729fbb08c20b150489c549137ffb8e281c8ac023e987878013671bf9"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 19.85685408115387,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_e31f3f909fee70731cf3"
+        },
+        "buildProductHash" : "sha256:3dd35d5a729fbb08c20b150489c549137ffb8e281c8ac023e987878013671bf9",
+        "sourceAfterHash" : "sha256:ce20f87281894c99b85593de7396ad22058d7d4914d7ef0478c140f9aee34b68",
+        "sourceBeforeHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "sourceDiff" : "--- a/Sources/IntegerUtilities/GCD.swift\n+++ b/Sources/IntegerUtilities/GCD.swift\n@@ -26,7 +26,7 @@\n public func gcd<T: BinaryInteger>(_ a: T, _ b: T) -> T {\n   var x = a\n   var y = b\n-  if x.magnitude < y.magnitude { swap(&x, &y) }\n+  if x.magnitude <= y.magnitude { swap(&x, &y) }\n   // Avoid overflow when x = signed min, y = -1.\n   if y.magnitude == 1 { return 1 }\n   // Euclidean algorithm for GCD. It's worth using Lehmer instead for larger\n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_e31f3f909fee70731cf3/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 18.944881916046143,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_e31f3f909fee70731cf3"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_99c6470cd0cf0945",
+        "planID" : "plan_a8f0657315dc3b94",
+        "pointDigest" : "sha256:f61a6fd709be1bdc2844617c8b0c7ad6a77f6de0ac256d845c128a859995638f",
+        "workUnitID" : "d4910f92fae7489e"
+      },
+      "origin" : "fresh",
+      "outcome" : "survived",
+      "point" : {
+        "column" : 18,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "gcd(_:_:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/IntegerUtilities/GCD.swift",
+        "id" : "mut_99c6470cd0cf0945",
+        "line" : 29,
+        "occurrenceIndex" : 0,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "<",
+        "prefixTokenFingerprint" : "5cbb88f922fa",
+        "replacementText" : "<=",
+        "sourceFileHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "suffixTokenFingerprint" : "7e89d28bff84",
+        "utf8Range" : {
+          "end" : 1127,
+          "start" : 1126
+        }
+      },
+      "testDurationSeconds" : 18.9458349943161,
+      "verificationVersion" : 11
+    },
+    {
+      "buildDurationSeconds" : 16.92285704612732,
+      "diagnosis" : "A test assertion failed on this mutant, so it was caught. The runner reported no per-test breakdown, so which test caught it is unknown.",
+      "durationSeconds" : 34.45984196662903,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:ba7a49d58542dca29928ef731e0da41d0e25dddc2ca5595d6a5be743c1e5ce84",
+                "mutantHash" : "sha256:98b2804eff71f8dc26d9089a14010816afea684b2324a25f45884a31e5a13051"
+              }
+            }
+          }
+        },
+        "buildCommand" : {
+          "arguments" : [
+            "swift",
+            "build",
+            "--build-tests"
+          ],
+          "durationSeconds" : 16.896175980567932,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 0,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_6ed431d9b682b3c79995"
+        },
+        "buildProductHash" : "sha256:98b2804eff71f8dc26d9089a14010816afea684b2324a25f45884a31e5a13051",
+        "sourceAfterHash" : "sha256:dcf8c709ca707272ed39fdc676778397774c4d2398a805742c6a05b0ae8090ec",
+        "sourceBeforeHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "sourceDiff" : "--- a/Sources/IntegerUtilities/GCD.swift\n+++ b/Sources/IntegerUtilities/GCD.swift\n@@ -28,7 +28,7 @@\n   var y = b\n   if x.magnitude < y.magnitude { swap(&x, &y) }\n   // Avoid overflow when x = signed min, y = -1.\n-  if y.magnitude == 1 { return 1 }\n+  if y.magnitude != 1 { return 1 }\n   // Euclidean algorithm for GCD. It's worth using Lehmer instead for larger\n   // integer types, but for now this is good and dead-simple and faster than\n   // the other obvious choice, the binary algorithm.\n",
+        "testAttempts" : [
+
+        ],
+        "testCommand" : {
+          "arguments" : [
+            "swift",
+            "test",
+            "--skip-build",
+            "--xunit-output",
+            "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_6ed431d9b682b3c79995/mutantkit-xunit.xml"
+          ],
+          "durationSeconds" : 17.508826971054077,
+          "environmentOverrides" : {
+
+          },
+          "executable" : "/usr/bin/xcrun",
+          "exitCode" : 1,
+          "workingDirectory" : "/var/folders/g3/pffjr_y96bq06blnkf72x_hw0000gn/T/mutantbench-swift-numerics-mutantkit-cold-0/.mutantkit/sandboxes/sbx_6ed431d9b682b3c79995"
+        }
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_d4cd206c871d045f",
+        "planID" : "plan_a8f0657315dc3b94",
+        "pointDigest" : "sha256:582614f825814ab9aa2da4f9ef8b0ad7f047184b42cb7bfb3497bb493b906249",
+        "workUnitID" : "d4910f92fae7489e"
+      },
+      "origin" : "fresh",
+      "outcome" : "killedByAssertion",
+      "point" : {
+        "column" : 18,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "gcd(_:_:)"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "binaryOperatorExpr",
+        "file" : "Sources/IntegerUtilities/GCD.swift",
+        "id" : "mut_d4cd206c871d045f",
+        "line" : 31,
+        "occurrenceIndex" : 0,
+        "operatorID" : "swift.core.relational-operator-replacement",
+        "operatorVersion" : 1,
+        "originalText" : "==",
+        "prefixTokenFingerprint" : "7e89d28bff84",
+        "replacementText" : "!=",
+        "sourceFileHash" : "sha256:e8e09da851cabd1da772d0e5d17ac09645b99f4cc8bd54819f254127692f0309",
+        "suffixTokenFingerprint" : "c32271d5c989",
+        "utf8Range" : {
+          "end" : 1225,
+          "start" : 1223
+        }
+      },
+      "testDurationSeconds" : 17.509746074676514,
+      "verificationVersion" : 11
+    }
+  ],
+  "schemaVersion" : 1,
+  "score" : {
+    "excluded" : {
+
+    },
+    "killed" : 2,
+    "noCoverage" : 0,
+    "survived" : 2
+  },
+  "startedAt" : "2026-08-05T17:10:36Z",
+  "toolchain" : {
+    "swiftSyntaxVersion" : "603.0.0",
+    "swiftVersion" : "Apple Swift version 5.9.2 (swiftlang-5.9.2.2.56 clang-1500.1.0.2.5)",
+    "toolVersion" : "0.1.0-dev",
+    "xcodeVersion" : "Xcode 15.2"
+  }
+}

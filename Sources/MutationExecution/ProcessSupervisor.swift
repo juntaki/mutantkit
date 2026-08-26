@@ -7,8 +7,20 @@ public struct ProcessResult: Sendable {
     public let standardOutput: Data
     public let standardError: Data
     public let durationSeconds: Double
-    /// True when the supervisor, not the process, decided the run was over.
+    /// True when the supervisor, not the process, decided the run was over —
+    /// for *either* reason below. A caller that only needs "was this killed
+    /// by us" (every caller before Gate 3 Phase H10) needs nothing else.
     public let timedOut: Bool
+    /// Gate 3 Phase H10: `true` only when `timedOut` is `true` *and* the
+    /// reason was `StallDetection` (no growth in `progressFilePath` for
+    /// `stallTimeoutSeconds`), never the absolute `timeoutSeconds` deadline.
+    /// Exists purely for accurate diagnosis text — "stalled at Ns" reads
+    /// very differently from "exceeded its Ns limit" when N is the same
+    /// number for both. Never consulted for verdict routing: a stalled kill
+    /// is still `timedOut: true` like any other, and every existing
+    /// `isBatchAttributedTimeout`/confirmation path already treats that
+    /// uniformly, unaware this field even exists.
+    public let stalled: Bool
     /// Set when the process died from a signal rather than exiting normally.
     public let terminatingSignal: Int32?
 
@@ -20,7 +32,8 @@ public struct ProcessResult: Sendable {
         standardError: Data,
         durationSeconds: Double,
         timedOut: Bool,
-        terminatingSignal: Int32?
+        terminatingSignal: Int32?,
+        stalled: Bool = false
     ) {
         self.exitCode = exitCode
         self.standardOutput = standardOutput
@@ -28,6 +41,52 @@ public struct ProcessResult: Sendable {
         self.durationSeconds = durationSeconds
         self.timedOut = timedOut
         self.terminatingSignal = terminatingSignal
+        self.stalled = stalled
+    }
+}
+
+/// Gate 3 Phase H10: an additional, additive kill condition layered
+/// *underneath* `timeoutSeconds` — never a replacement for it. `timeoutSeconds`
+/// remains the absolute ceiling on the whole process's lifetime regardless of
+/// what it is doing; this instead asks "has *anything* written to
+/// `progressFilePath` in the last `stallTimeoutSeconds`", independent of how
+/// much of the overall `timeoutSeconds` budget remains. Deliberately generic:
+/// `ProcessSupervisor` has no notion of `xcodebuild`, XCTest, or test
+/// configurations at all — it only ever asks "did this file grow" — so a
+/// caller reusing `xcodebuild`'s own `-resultStreamPath` (Gate 3 Phase H9's
+/// finding: a live-appended NDJSON stream of `testStarted`/`testFinished`
+/// events, structured, not console output to regex) turns "no test in this
+/// batch has finished in N seconds" into "this file hasn't grown in N
+/// seconds" without teaching this type anything about what the file means.
+public struct StallDetection: Sendable {
+    /// A file this process is expected to append to while it is making
+    /// progress. Growth (byte count increasing since the last check) resets
+    /// the stall clock; the file not existing yet, or not growing, does not
+    /// — a process that has not started writing to it yet is not stalled
+    /// *because of this*, but neither does an absent file count as progress.
+    public let progressFilePath: URL
+    /// How long `progressFilePath` may go without growing before this is
+    /// treated as a stall and the process is killed the same way an absolute
+    /// `timeoutSeconds` deadline already is — the same kill path, the same
+    /// `timedOut: true` result, so a caller who receives it needs no new
+    /// branch to handle "died to a stall" versus "died to the absolute
+    /// deadline" differently. No heuristic invented here for what this value
+    /// should be — the caller supplies it, exactly as it already supplies
+    /// `timeoutSeconds`.
+    public let stallTimeoutSeconds: Double
+    /// How often to actually check the file's size — deliberately coarser
+    /// than the descendant-tracking poll loop's own 1 ms baseline: a `stat`
+    /// call on every 1 ms tick would add real, unnecessary syscall overhead
+    /// to a loop already tuned tightly for a different purpose, and nothing
+    /// about stall detection needs sub-second precision. Configurable only
+    /// for tests, which need to observe a stall firing without waiting out
+    /// a realistic `stallTimeoutSeconds`.
+    let checkIntervalSeconds: Double
+
+    public init(progressFilePath: URL, stallTimeoutSeconds: Double, checkIntervalSeconds: Double = 0.5) {
+        self.progressFilePath = progressFilePath
+        self.stallTimeoutSeconds = stallTimeoutSeconds
+        self.checkIntervalSeconds = checkIntervalSeconds
     }
 }
 
@@ -75,13 +134,26 @@ public enum ProcessSupervisor {
     /// close the moment the writers die and the drain ends immediately.
     private static let drainGracePeriodSeconds: Double = 5
 
+    /// The descendant-tracking poll interval on an unloaded machine — see
+    /// `wait(for:timeoutSeconds:gracePeriodSeconds:)`'s own doc comment for
+    /// the measurements behind this specific number.
+    private static let baselinePollIntervalMicroseconds: useconds_t = 1000
+    /// The ceiling `wait(for:timeoutSeconds:gracePeriodSeconds:)`'s adaptive
+    /// backoff will not exceed, however slow `sysctl(KERN_PROC_ALL)` itself
+    /// gets under load — still an order of magnitude tighter than the
+    /// original design's 100 ms fixed throttle, so even a fully backed-off
+    /// poll remains meaningfully better than the gap this feature exists to
+    /// close, never literally unbounded.
+    private static let maxPollIntervalMicroseconds: useconds_t = 50000
+
     public static func run(
         executable: String,
         arguments: [String],
         workingDirectory: URL,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         timeoutSeconds: Double,
-        terminationGracePeriodSeconds: Double = 5
+        terminationGracePeriodSeconds: Double = 5,
+        stallDetection: StallDetection? = nil
     ) async throws -> ProcessResult {
         try await withCheckedThrowingContinuation { continuation in
             // A dedicated thread: the supervision loop blocks, and we must not
@@ -94,7 +166,8 @@ public enum ProcessSupervisor {
                         workingDirectory: workingDirectory,
                         environment: environment,
                         timeoutSeconds: timeoutSeconds,
-                        terminationGracePeriodSeconds: terminationGracePeriodSeconds
+                        terminationGracePeriodSeconds: terminationGracePeriodSeconds,
+                        stallDetection: stallDetection
                     )
                     continuation.resume(returning: result)
                 } catch {
@@ -114,7 +187,8 @@ public enum ProcessSupervisor {
         workingDirectory: URL,
         environment: [String: String],
         timeoutSeconds: Double,
-        terminationGracePeriodSeconds: Double
+        terminationGracePeriodSeconds: Double,
+        stallDetection: StallDetection? = nil
     ) throws -> ProcessResult {
         var outPipe: [Int32] = [0, 0]
         var errPipe: [Int32] = [0, 0]
@@ -174,10 +248,11 @@ public enum ProcessSupervisor {
         drain(outPipe[0], into: outBox, group: drainGroup)
         drain(errPipe[0], into: errBox, group: drainGroup)
 
-        let (status, timedOut) = wait(
+        let (status, timedOut, stalled) = wait(
             for: pid,
             timeoutSeconds: timeoutSeconds,
-            gracePeriodSeconds: terminationGracePeriodSeconds
+            gracePeriodSeconds: terminationGracePeriodSeconds,
+            stallDetection: stallDetection
         )
 
         // Bounded, never `wait()`. The drain ends when every writer closes the
@@ -204,64 +279,184 @@ public enum ProcessSupervisor {
             standardError: errBox.value,
             durationSeconds: Date().timeIntervalSince(started),
             timedOut: timedOut,
-            terminatingSignal: terminatingSignal
+            terminatingSignal: terminatingSignal,
+            stalled: stalled
         )
     }
 
-    /// Waits for the child, escalating SIGTERM → SIGKILL on timeout.
+    /// Waits for the child, tracking its descendants continuously so any of
+    /// them still running once the child itself is gone — whether it exited
+    /// promptly on its own or had to be killed on a timeout — can be
+    /// reclaimed either way, escalating SIGTERM → SIGKILL only for the
+    /// child itself on a timeout.
     ///
-    /// The process group is the first move but cannot be the only one. Spawning the
-    /// child as a group leader makes `kill(-pgid)` reach everything that stays in
-    /// that group — and some things do not. SwiftPM's `swiftpm-testing-helper`
-    /// puts *itself* into a new group, so the process actually running the mutated
-    /// tests is unreachable that way. Measured: after killing the group of a
-    /// mutant whose test loops forever, the helper survived with `PGID == PID` and
-    /// `PPID == 1`, still burning half a core. It also still held the write end of
-    /// our stdout pipe, so EOF never arrived and the supervisor itself blocked
-    /// forever draining it — one escaped grandchild was enough to hang the tool
-    /// that exists to guarantee termination.
+    /// **Why continuous tracking, not a single snapshot.** The process group
+    /// is the first defense but cannot be the only one: spawning the child as
+    /// a group leader makes `kill(-pgid)` reach everything that stays in that
+    /// group, and some things do not — SwiftPM's `swiftpm-testing-helper`
+    /// puts *itself* into a new group, so the process actually running the
+    /// mutated tests is unreachable that way. Measured: after killing the
+    /// group of a mutant whose test loops forever, the helper survived with
+    /// `PGID == PID` and `PPID == 1`, still burning half a core, and still
+    /// holding the write end of our stdout pipe, so EOF never arrived and the
+    /// supervisor itself blocked forever draining it. A *second*, independent
+    /// gap sits beside that one: this same escape is reachable from a process
+    /// that exits *promptly* too (a crash, not only a hang) — a snapshot
+    /// taken only once, at the moment of a timeout, never fires at all on
+    /// that path, so a descendant left behind by an otherwise-ordinary,
+    /// on-time exit was previously never even looked for. Fixing that
+    /// requires knowing the tree *before* the root is gone, since ancestry is
+    /// the only proof a descendant is really ours, and it disappears the
+    /// instant the root exits (reparented to launchd). **How fast that
+    /// window closes was measured directly, not assumed, and the answer
+    /// forced the polling interval below far tighter than the original
+    /// `waitpid` loop's own 10 ms:** a script that forks a background child
+    /// and then exits can complete that *entire* round trip — including a
+    /// fresh `python3` interpreter's own startup — in under 10 ms often
+    /// enough that 10 ms polling missed the descendant roughly 9 times out
+    /// of 10 in repeated real trials; even 5 ms polling still missed it
+    /// more often than not. 2 ms was the first interval that caught it
+    /// reliably (10/10), so this polls at 1 ms — one safety margin below
+    /// that measured threshold, not an arbitrarily "tight-sounding" number.
+    /// This is not a throttle-vs-correctness judgment call left to
+    /// intuition: an earlier version of this fix polled every 100 ms
+    /// specifically to bound `sysctl(KERN_PROC_ALL)` overhead, reasoning
+    /// that the *existing* 10 ms `waitpid` cadence already had "plenty of
+    /// spare time" above it — measurement disproved that reasoning outright,
+    /// not just the number chosen. The cost side was measured too, not just
+    /// the correctness side: `sysctl(KERN_PROC_ALL)` on real hardware costs
+    /// on the order of 0.1 ms per call, so 1 ms polling spends roughly a
+    /// tenth of this function's own dedicated supervisor thread (already a
+    /// separate `Thread`, never the cooperative pool) continuously polling
+    /// — a real, bounded cost paid by one monitoring thread, not by the
+    /// supervised build/test process itself, and not something that slows
+    /// the actual work down on any machine with more than one core.
+    /// Accumulating every identity `ProcessTree.descendantIdentities(of:)`
+    /// observes across every poll (not just the latest snapshot) is what
+    /// makes that ancestry proof available *after* the root is already
+    /// gone: `ProcessTree.reap(_:)` re-verifies each one (PID *and*
+    /// recorded start time, surviving PID reuse) against the live table
+    /// before ever signalling it, so nothing here trades that safety away
+    /// for the tighter window. The one gap this cannot close is a
+    /// descendant spawned and the root exiting within the same ~1 ms tick —
+    /// bounded, not eliminated, the same shape of limitation the original
+    /// single-snapshot design already had (a descendant spawned between
+    /// that snapshot and the kill call), just far smaller and covering the
+    /// entire run now instead of a single instant.
     ///
-    /// So the descendants are enumerated first and killed by PID as well. The order
-    /// matters: once the parent dies its children are reparented to launchd, and
-    /// the ancestry that identifies them as ours is gone.
+    /// **Adaptive, not a fixed 1 ms forever.** Flagged in review: a fixed
+    /// interval with no floor on the *cost* of a single poll has no circuit
+    /// breaker if `sysctl(KERN_PROC_ALL)` itself becomes slow — a large
+    /// process table under real system load, not the light table this
+    /// interval was measured against. `pollDescendants` below times its own
+    /// `descendantIdentities(of:)` call and backs the interval off
+    /// (doubling, capped at `maxPollIntervalMicroseconds`) whenever a single
+    /// poll's own cost meaningfully exceeds the current interval, and relaxes
+    /// back toward the 1 ms baseline once polls are cheap again — so a
+    /// contended machine degrades this loop's own overhead gracefully
+    /// instead of hammering an already-slow `sysctl` at a fixed cadence
+    /// regardless of what that cadence now actually costs.
     private static func wait(
         for pid: pid_t,
         timeoutSeconds: Double,
-        gracePeriodSeconds: Double
-    ) -> (status: Int32, timedOut: Bool) {
+        gracePeriodSeconds: Double,
+        stallDetection: StallDetection? = nil
+    ) -> (status: Int32, timedOut: Bool, stalled: Bool) {
         var status: Int32 = 0
         let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var observed: Set<ProcessTree.ProcessIdentity> = []
+        var pollIntervalMicroseconds = baselinePollIntervalMicroseconds
 
-        while true {
-            if waitpid(pid, &status, WNOHANG) == pid { return (status, false) }
-
-            if Date() >= deadline { break }
-            // 10 ms granularity is irrelevant against builds measured in seconds,
-            // and polling avoids the signal-handler subtleties of the alternatives.
-            usleep(10000)
+        func pollDescendants() {
+            let pollStarted = Date()
+            observed.formUnion(ProcessTree.descendantIdentities(of: pid))
+            let pollDurationMicroseconds = Date().timeIntervalSince(pollStarted) * 1_000_000
+            if pollDurationMicroseconds > Double(pollIntervalMicroseconds) {
+                pollIntervalMicroseconds = min(pollIntervalMicroseconds * 2, maxPollIntervalMicroseconds)
+            } else if pollIntervalMicroseconds > baselinePollIntervalMicroseconds {
+                pollIntervalMicroseconds = max(pollIntervalMicroseconds / 2, baselinePollIntervalMicroseconds)
+            }
         }
 
-        // Snapshot the tree while the ancestry still exists.
-        let descendants = ProcessTree.descendants(of: pid)
+        // Gate 3 Phase H10: tracks `stallDetection.progressFilePath`'s own
+        // size — deliberately just a byte count, not any understanding of
+        // what the file contains — resetting `lastProgressAt` whenever it
+        // grows, checked no more often than `checkIntervalSeconds` so this
+        // never adds meaningful overhead to the tight descendant-polling
+        // loop above. `nil` `stallDetection` (every caller before this
+        // phase, and every caller that does not opt in) makes this whole
+        // block dead code — `lastStallCheckAt`/`lastProgressSize` never
+        // read, `isStalled()` never called.
+        func progressFileSize() -> Int64? {
+            guard let stallDetection else { return nil }
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: stallDetection.progressFilePath.path) else {
+                return nil
+            }
+            return attributes[.size] as? Int64
+        }
 
-        // Politely first, to the group and to anything that left it.
+        var lastProgressSize = progressFileSize() ?? 0
+        var lastProgressAt = Date()
+        var lastStallCheckAt = Date()
+
+        func isStalled() -> Bool {
+            guard let stallDetection else { return false }
+            let now = Date()
+            guard now.timeIntervalSince(lastStallCheckAt) >= stallDetection.checkIntervalSeconds else { return false }
+            lastStallCheckAt = now
+            if let currentSize = progressFileSize(), currentSize > lastProgressSize {
+                lastProgressSize = currentSize
+                lastProgressAt = now
+                return false
+            }
+            return now.timeIntervalSince(lastProgressAt) >= stallDetection.stallTimeoutSeconds
+        }
+
+        var stalledCause = false
+
+        while true {
+            pollDescendants()
+            if waitpid(pid, &status, WNOHANG) == pid {
+                // An on-time, non-timeout exit — the path a single
+                // at-deadline snapshot could never reach at all.
+                ProcessTree.reap(observed)
+                return (status, false, false)
+            }
+
+            if Date() >= deadline { break }
+            if isStalled() {
+                stalledCause = true
+                break
+            }
+            // 1 ms baseline, not the coarser granularity a build's own
+            // timeout would suggest is "plenty" — see this function's own
+            // doc comment for the measurements that ruled out every coarser
+            // fixed interval tried, and for why this adapts upward under load.
+            usleep(pollIntervalMicroseconds)
+        }
+
+        // Politely first, to the group and to anything that left it —
+        // `reap(_:)` re-verifies provenance before this ever reaches a
+        // stale/reused PID, so a SIGTERM is exactly as safe to send here as
+        // the SIGKILL below.
         kill(-pid, SIGTERM)
-        for descendant in descendants { kill(descendant, SIGTERM) }
+        ProcessTree.signal(observed, SIGTERM)
 
         let graceDeadline = Date().addingTimeInterval(gracePeriodSeconds)
         while Date() < graceDeadline {
+            pollDescendants()
             if waitpid(pid, &status, WNOHANG) == pid {
                 // The process we launched is gone; its escapees need not be.
-                ProcessTree.forceKill(descendants)
-                return (status, true)
+                ProcessTree.reap(observed)
+                return (status, true, stalledCause)
             }
-            usleep(10000)
+            usleep(pollIntervalMicroseconds)
         }
 
         kill(-pid, SIGKILL)
-        ProcessTree.forceKill(descendants)
+        ProcessTree.reap(observed)
         waitpid(pid, &status, 0)
-        return (status, true)
+        return (status, true, stalledCause)
     }
 
     private static func drain(_ fd: Int32, into box: DataBox, group: DispatchGroup) {

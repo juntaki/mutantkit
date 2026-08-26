@@ -26,6 +26,8 @@ public enum ReporterRegistry {
         case .strykerJSON: StrykerReporter()
         case .html: HTMLReporter()
         case .ciSummary: CISummaryReporter()
+        case .sonar: SonarReporter()
+        case .githubActions: GitHubActionsReporter()
         }
     }
 

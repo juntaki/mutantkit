@@ -41,13 +41,19 @@ private struct FakeTool: MutationBenchmarkTool {
     let identity: BenchmarkToolIdentity
     let recorder: CallRecorder
     var orderRecorder: OrderRecorder?
+    /// When set (Phase C13 regression test), overrides the default empty
+    /// report with one built from the real `project` the orchestrator
+    /// materialized — used to prove a cold-mode checkout survives long
+    /// enough for `normalizeMuterReport`'s real relative-path resolution
+    /// to actually run against it, not just warm/incremental.
+    var reportBuilder: (@Sendable (MaterializedBenchmarkProject) -> Data)?
 
     func prepare(project: MaterializedBenchmarkProject, context: BenchmarkRunContext) async throws {}
 
     func run(project: MaterializedBenchmarkProject, context: BenchmarkRunContext) async throws -> RawBenchmarkRun {
         await recorder.record(context.cacheDirectory.path)
         await orderRecorder?.recordStart(mode: context.mode, toolName: identity.name)
-        let reportJSON = Data(#"{"results": [], "integrity": {"passed": true}}"#.utf8)
+        let reportJSON = reportBuilder?(project) ?? Data(#"{"results": [], "integrity": {"passed": true}}"#.utf8)
         return RawBenchmarkRun(
             tool: identity, projectID: project.project.id, projectCommit: project.project.commitSHA, mode: context.mode,
             execution: ToolExecutionResult(
@@ -159,5 +165,95 @@ struct BenchmarkOrchestratorTests {
         try await orchestrator.run(manifest: BenchmarkManifest(schemaVersion: 1, projects: [Self.project]))
 
         #expect(await mkRecorder.cacheDirectories.count == 1, "only cold's single run should have happened, not warm/incremental too")
+    }
+
+    /// Regression test for a real bug caught by Codex review before the
+    /// Phase C13 mutant-matching fix was committed as done: the last
+    /// `cold`-mode checkout used to be deleted *inside* `runMode`, before
+    /// `runProject` got a chance to pass it into `normalizeMuterReport` —
+    /// silently defeating that fix's real relative-path resolution for
+    /// exactly the `cold` mode the original "0 matched mutants" finding
+    /// was measured under. Drives the real `BenchmarkOrchestrator` (not
+    /// `ResultNormalizer` directly, which cannot see this ordering bug at
+    /// all) with fake tools that (a) return a real Muter-shaped report
+    /// whose `mutationPoint.filePath` points at a real file the fake
+    /// Muter tool creates inside the real materialized `project.directory`,
+    /// and (b) a MutantKit report at the identical real relative path/
+    /// line/column — then asserts the two actually match in the written
+    /// `report.md`, proving the checkout was still on disk when
+    /// `normalizeMuterReport` ran.
+    @Test("A cold-mode Muter mutant's real relative path still resolves — the checkout must survive long enough")
+    func coldModeMuterRelativePathSurvivesCleanupOrdering() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("mutantbench-orchestrator-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
+        let mutantKitReport: @Sendable (MaterializedBenchmarkProject) -> Data = { _ in
+            Data(#"""
+            {"results": [{
+              "point": {
+                "file": "Sources/Foo.swift", "utf8Range": {"start": 0, "end": 2},
+                "originalText": "<", "replacementText": ">=",
+                "operatorID": "swift.core.relational-operator-replacement",
+                "line": 3, "column": 5
+              },
+              "outcome": "killedByAssertion"
+            }]}
+            """#.utf8)
+        }
+        let muterReport: @Sendable (MaterializedBenchmarkProject) -> Data = { project in
+            // The real file `relativePath` must find on disk — created
+            // here, inside the fake tool's own `run`, exactly like the
+            // real Muter binary would leave real source files behind in
+            // its own working copy.
+            let nested = project.directory.appendingPathComponent("Sources")
+            try? FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            try? Data().write(to: nested.appendingPathComponent("Foo.swift"))
+
+            return Data(#"""
+            {"fileReports": [{
+              "fileName": "Foo.swift",
+              "appliedOperators": [{
+                "testSuiteOutcome": "passed",
+                "mutationPoint": {
+                  "filePath": "\#(project.directory.path)_mutated/Sources/Foo.swift",
+                  "position": {"line": 3, "column": 5},
+                  "mutationOperatorId": "RelationalOperatorReplacement"
+                }
+              }]
+            }]}
+            """#.utf8)
+        }
+
+        let orchestrator = BenchmarkOrchestrator(
+            mutantKit: FakeTool(
+                identity: BenchmarkToolIdentity(name: "mutantkit", version: "test"), recorder: CallRecorder(), reportBuilder: mutantKitReport
+            ),
+            muter: FakeTool(
+                identity: BenchmarkToolIdentity(name: "muter", version: "test"), recorder: CallRecorder(), reportBuilder: muterReport
+            ),
+            toolchainProfile: Self.testProfile, runsPerMode: 1, timeoutSeconds: 60, outputDirectory: outputDirectory,
+            materializer: ProjectMaterializer(git: AlwaysCleanGit()), modes: [.cold]
+        )
+        // A project id unique to this test, not `Self.project`/"example":
+        // `runMode`'s cold-mode checkout directory is named purely from
+        // `(project.id, tool, mode, index)` under the *shared* system temp
+        // directory, with no per-test-run salt. Swift Testing runs this
+        // suite's tests concurrently by default, and every other test here
+        // also uses "example" — reusing it made this test flaky (another
+        // concurrently-running test's cold-mode checkout for the same
+        // project id/tool/mode/index could be created, wiped, or reused
+        // out from under this one). A unique id sidesteps that pre-existing,
+        // orchestrator-level directory-naming collision risk entirely,
+        // rather than trying to fix it here.
+        let project = BenchmarkProject(
+            id: "relpath-regression-\(UUID().uuidString)", repositoryURL: "https://example.com/example.git",
+            commitSHA: String(repeating: "a", count: 40), projectKind: .swiftPackage
+        )
+        try await orchestrator.run(manifest: BenchmarkManifest(schemaVersion: 1, projects: [project]))
+
+        let report = try String(contentsOf: outputDirectory.appendingPathComponent("report.md"), encoding: .utf8)
+        #expect(report.contains("exactly comparable: 1"), "\(report)")
+        #expect(report.contains("MutantKit-only: 0"), "\(report)")
+        #expect(report.contains("Muter-only: 0"), "\(report)")
     }
 }

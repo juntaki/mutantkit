@@ -94,7 +94,8 @@ public struct MutationPlanner: Sendable {
         let discovery = try await discoverConcurrently(
             files: files,
             root: root,
-            operators: resolution.enabledOperators
+            operators: resolution.enabledOperators,
+            excludedCallNames: Set(configuration.operators.sideEffectCallRemoval?.excludeCalls ?? [])
         )
 
         var surviving = discovery.points
@@ -106,12 +107,9 @@ public struct MutationPlanner: Sendable {
         var inclusionReasons: [InclusionReason] = []
         (surviving, skipped) = applyConfidenceGate(surviving, skipped, resolution: resolution)
         (surviving, skipped) = applyDiffGate(surviving, skipped, diffScope: diffScope)
-        let budgetGateResult = try applyBudgetGate(
+        (surviving, skipped, inclusionReasons) = try applyBudgetGate(
             surviving, skipped, budget: configuration.execution.budget
         )
-        surviving = budgetGateResult.selected
-        skipped = budgetGateResult.skipped
-        inclusionReasons = budgetGateResult.inclusionReasons
 
         // Sorted so the plan file is byte-identical across runs; `mutations` is
         // sorted by `MutationPlan.init`, `skipped` is not.
@@ -168,7 +166,8 @@ public struct MutationPlanner: Sendable {
     private func discoverConcurrently(
         files: [String],
         root: URL,
-        operators: [any MutationOperator]
+        operators: [any MutationOperator],
+        excludedCallNames: Set<String>
     ) async throws -> DiscoveryOutcome {
         guard !files.isEmpty else { return DiscoveryOutcome() }
 
@@ -181,7 +180,10 @@ public struct MutationPlanner: Sendable {
             while next < limit {
                 let relativePath = files[next]
                 group.addTask {
-                    try Self.discover(operators: operators, root: root, relativePath: relativePath)
+                    try Self.discover(
+                        operators: operators, root: root, relativePath: relativePath,
+                        excludedCallNames: excludedCallNames
+                    )
                 }
                 next += 1
             }
@@ -193,7 +195,10 @@ public struct MutationPlanner: Sendable {
                 if next < files.count {
                     let relativePath = files[next]
                     group.addTask {
-                        try Self.discover(operators: operators, root: root, relativePath: relativePath)
+                        try Self.discover(
+                            operators: operators, root: root, relativePath: relativePath,
+                            excludedCallNames: excludedCallNames
+                        )
                     }
                     next += 1
                 }
@@ -210,7 +215,8 @@ public struct MutationPlanner: Sendable {
     private static func discover(
         operators: [any MutationOperator],
         root: URL,
-        relativePath: String
+        relativePath: String,
+        excludedCallNames: Set<String>
     ) throws -> FileDiscovery {
         let url = root.appendingPathComponent(relativePath)
         let data: Data
@@ -222,7 +228,7 @@ public struct MutationPlanner: Sendable {
 
         // Built per task: one discovery instance shared across tasks would be
         // shared mutable state for no gain — construction is free.
-        let discovery = MutationDiscovery(operators: operators)
+        let discovery = MutationDiscovery(operators: operators, excludedCallNames: excludedCallNames)
         return FileDiscovery(
             relativePath: relativePath,
             sourceFileHash: ContentHash.of(data),
@@ -284,39 +290,26 @@ public struct MutationPlanner: Sendable {
         return (split.inScope, skipped)
     }
 
-    /// The result of a budget gate: which mutations survived, the running
-    /// skip list with this gate's drops appended, and (v2 only) an
-    /// `InclusionReason` per selected mutant.
-    ///
-    /// `inclusionReasons` is only ever non-empty under `budget.selection: v2`
-    /// — v1's two modes produce no `InclusionReason` records (ADR-0007 B.7
-    /// is a v2 capability, not retrofitted onto v1).
-    private struct BudgetGateResult {
-        let selected: [MutationPoint]
-        let skipped: [SkippedMutation]
-        let inclusionReasons: [InclusionReason]
-    }
-
+    /// Returns `(selected, skipped, budgetInclusionReasons)`. The third
+    /// element is only ever non-empty under `budget.selection: v2` — v1's
+    /// two modes produce no `InclusionReason` records (ADR-0007 B.7 is a v2
+    /// capability, not retrofitted onto v1).
     private func applyBudgetGate(
         _ points: [MutationPoint],
         _ skipped: [SkippedMutation],
         budget: BudgetSettings
-    ) throws -> BudgetGateResult {
+    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {
         // `maxDurationSeconds` is not a planning input: the planner has no
         // measured baseline and no idea what a mutant costs. The executor stops
         // on that clock and records what it did not reach.
-        guard let maxMutants = budget.maxMutants else {
-            return BudgetGateResult(selected: points, skipped: skipped, inclusionReasons: [])
-        }
+        guard let maxMutants = budget.maxMutants else { return (points, skipped, []) }
         guard maxMutants > 0 else { throw PlannerError.invalidBudget(maxMutants: maxMutants) }
 
         if budget.selection == .v2 {
             return try applyBudgetGateV2(points, skipped, maxMutants: maxMutants, budget: budget)
         }
 
-        guard points.count > maxMutants else {
-            return BudgetGateResult(selected: points, skipped: skipped, inclusionReasons: [])
-        }
+        guard points.count > maxMutants else { return (points, skipped, []) }
 
         switch budget.stratifyBy {
         case .operatorSubtype:
@@ -341,7 +334,7 @@ public struct MutationPlanner: Sendable {
                     operatorID: point.operatorID
                 )
             }
-            return BudgetGateResult(selected: selection.selected, skipped: skipped, inclusionReasons: [])
+            return (selection.selected, skipped, [])
 
         case .subtype, nil:
             let selection = BudgetSelector.select(
@@ -366,7 +359,7 @@ public struct MutationPlanner: Sendable {
                     operatorID: point.operatorID
                 )
             }
-            return BudgetGateResult(selected: selection.selected, skipped: skipped, inclusionReasons: [])
+            return (selection.selected, skipped, [])
         }
     }
 
@@ -384,7 +377,7 @@ public struct MutationPlanner: Sendable {
         _ skipped: [SkippedMutation],
         maxMutants: Int,
         budget: BudgetSettings
-    ) throws -> BudgetGateResult {
+    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {
         var byOperator: [String: [MutationPoint]] = [:]
         for point in points {
             byOperator[point.operatorID, default: []].append(point)
@@ -423,10 +416,10 @@ public struct MutationPlanner: Sendable {
             )
         }
 
-        return BudgetGateResult(
-            selected: result.map(\.point).sorted { $0.id < $1.id },
-            skipped: newSkipped,
-            inclusionReasons: result.map(\.reason)
+        return (
+            result.map(\.point).sorted { $0.id < $1.id },
+            newSkipped,
+            result.map(\.reason)
         )
     }
 
@@ -465,7 +458,16 @@ public struct MutationPlanner: Sendable {
 ///
 /// Both strategies are deterministic; the seed only decides *which* kind of
 /// determinism. Neither ever consults the system RNG.
-enum BudgetSelector {
+/// `selectByOperatorSubtype` is `public` (closing a Budget Selection v2
+/// evaluation tooling gap): `Research/budget-selection-v2/evaluation-protocol.md`
+/// §6 step 5 requires computing v1's *real* production selection outside this
+/// module (in `Sources/BudgetV2Eval`) so the same already-collected outcome
+/// data can be reused rather than re-executing mutation testing — this needs
+/// genuine external call access to the real function, not a reimplementation.
+/// `select(_:limit:seed:stratifyBy:)` and the two phase helpers stay
+/// unexported; only the one entry point the evaluation tooling actually calls
+/// is widened.
+public enum BudgetSelector {
     static func select(
         _ points: [MutationPoint],
         limit: Int,
@@ -493,14 +495,14 @@ enum BudgetSelector {
     /// bookkeeping for the caller to explain every drop (see
     /// `MutationPlanner.applyBudgetGate`'s `.operatorSubtype` branch) and to
     /// report eligible/selected counts per operator.
-    struct BalancedSelection {
-        let selected: [MutationPoint]
-        let dropped: [MutationPoint]
+    public struct BalancedSelection {
+        public let selected: [MutationPoint]
+        public let dropped: [MutationPoint]
         /// Eligible candidate count per operator, i.e. `points.count` grouped
         /// by `operatorID` — everything this gate saw, before allocation.
-        let candidatesPerOperator: [String: Int]
+        public let candidatesPerOperator: [String: Int]
         /// How many of each operator's candidates were actually selected.
-        let assignedPerOperator: [String: Int]
+        public let assignedPerOperator: [String: Int]
     }
 
     /// Reserves `minimumPerOperator` mutants for every operator with at least
@@ -543,7 +545,7 @@ enum BudgetSelector {
     ///    operator's distinct (original, replacement) pairs in
     ///    `seededOrder`, not alphabetical, priority when the pair count
     ///    exceeds the operator's slot count.
-    static func selectByOperatorSubtype(
+    public static func selectByOperatorSubtype(
         _ points: [MutationPoint],
         limit: Int,
         seed: UInt64?,

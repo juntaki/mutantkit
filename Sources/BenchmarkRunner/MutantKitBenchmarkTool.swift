@@ -30,10 +30,22 @@ public struct MutantKitBenchmarkTool: MutationBenchmarkTool {
     /// existing default (every `defaultEnabled` operator under the
     /// `default` profile).
     private let disableOperators: [String]
+    /// B3.4 (rigorous-benchmark program): `execution.workers` in the
+    /// generated config — `nil` omits the key entirely, which the real
+    /// `mutantkit` CLI defaults to `auto` (half the core count). Exists so
+    /// one raw-throughput run can be explicitly pinned to `1` (an
+    /// "ENGINE/CONTROLLED" measurement, isolating the mutation engine
+    /// itself from this machine's own concurrency) and compared, clearly
+    /// labeled, against a separate run left at this repo's own real
+    /// shipped default (`workers: 2`, see `ConfigurationLoader`'s
+    /// production-profile template) — never silently comparing one tool's
+    /// concurrency=1 number against another tool's own higher default and
+    /// calling the difference a measure of engine speed.
+    private let workers: Int?
 
     public init(
         binaryURL: URL, version: String = "unknown", toolchainProfile: BenchmarkToolchainProfile, toolRunner: ToolRunner = ToolRunner(),
-        sourceInclude: [String]? = nil, disableOperators: [String] = []
+        sourceInclude: [String]? = nil, disableOperators: [String] = [], workers: Int? = nil
     ) {
         self.binaryURL = binaryURL
         identity = BenchmarkToolIdentity(name: "mutantkit", version: version)
@@ -41,6 +53,7 @@ public struct MutantKitBenchmarkTool: MutationBenchmarkTool {
         self.toolRunner = toolRunner
         self.sourceInclude = sourceInclude
         self.disableOperators = disableOperators
+        self.workers = workers
     }
 
     /// Every subprocess this adapter launches gets the identical toolchain
@@ -74,6 +87,10 @@ public struct MutantKitBenchmarkTool: MutationBenchmarkTool {
     func defaultConfiguration(for project: BenchmarkProject) -> String {
         let include = (sourceInclude ?? ["Sources/**"]).map { "\"\($0)\"" }.joined(separator: ", ")
         let disable = disableOperators.map { "\"\($0)\"" }.joined(separator: ", ")
+        // Omitted entirely when `nil`, matching the real CLI's own
+        // omitted-key-means-`auto` behavior rather than writing a
+        // placeholder value this adapter would have to invent.
+        let workersLine = workers.map { "\n  workers: \($0)" } ?? ""
         switch project.projectKind {
         case .swiftPackage:
             return """
@@ -86,7 +103,7 @@ public struct MutantKitBenchmarkTool: MutationBenchmarkTool {
               profile: default
               disable: [\(disable)]
             execution:
-              strategy: schemata
+              strategy: schemata\(workersLine)
             reports: [json]
             """
         case .xcodeProject, .xcodeWorkspace:
@@ -104,7 +121,7 @@ public struct MutantKitBenchmarkTool: MutationBenchmarkTool {
               profile: default
               disable: [\(disable)]
             execution:
-              strategy: isolated
+              strategy: isolated\(workersLine)
             reports: [json]
             """
         }

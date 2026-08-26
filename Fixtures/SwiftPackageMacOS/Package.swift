@@ -11,5 +11,14 @@ let package = Package(
     targets: [
         .target(name: "Pricing"),
         .testTarget(name: "PricingTests", dependencies: ["Pricing"]),
+        // Phase C2 (competitive-parity program): proves SwiftPM + XCTest is
+        // real acceptance-tested end to end, not merely a code path that
+        // exists. Every other SwiftPM/macOS fixture in this repo
+        // (`SwiftPackageMacOS` itself, `CoreOperatorExpansion`,
+        // `HangingMutant`) uses Swift Testing exclusively -- this was a real
+        // gap, not a deliberate one. Separate target, not mixed into
+        // `PricingTests`, so `tests.targets` can point at exactly one
+        // framework and the two never share a coverage universe.
+        .testTarget(name: "PricingXCTestTests", dependencies: ["Pricing"]),
     ]
 )

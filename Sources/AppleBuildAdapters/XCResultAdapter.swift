@@ -171,6 +171,24 @@ public struct XCResultAdapter: Sendable {
             )
         }
 
+        // Same precedence slot as `isCrash` above (checked after it, so a
+        // crash still wins if a bundle somehow reports both): any failure
+        // in this configuration whose own structured text proves XCTest's
+        // native per-test allowance cut it off is enough to call the whole
+        // configuration timed out, exactly like one crashing test call is
+        // enough to call the whole configuration crashed.
+        let nativeTimeouts = failures.filter(\.isNativeTimeout)
+        if !nativeTimeouts.isEmpty {
+            return Outcome(
+                status: .timedOut,
+                summary: outcomeSummary,
+                diagnosis: """
+                XCTest's own execution-time allowance was exceeded in \(describe(nativeTimeouts)). \
+                \(nativeTimeouts[0].failureText)
+                """
+            )
+        }
+
         if let outcome = failedCountOutcome(summary: summary, failures: failures, outcomeSummary: outcomeSummary) {
             return outcome
         }
@@ -483,7 +501,8 @@ extension XCResultAdapter {
                             testName: node.name ?? identifier,
                             targetName: currentTarget ?? "",
                             failureText: failureText,
-                            testIdentifierString: identifier
+                            testIdentifierString: identifier,
+                            durationInSeconds: configuration.durationInSeconds
                         )
                     )
                 }
@@ -632,6 +651,14 @@ struct BatchTestNodesJSON: Decodable {
         let nodeIdentifier: String?
         let result: String?
         let children: [Node]?
+        /// Only meaningful on a `Test Plan Configuration` node — confirmed
+        /// present there against a real batch bundle (Gate 3 Phase H1
+        /// spike): a native-timeout configuration's own duration lands
+        /// exactly on the configured
+        /// `-maximum-test-execution-time-allowance`, corroborating (never
+        /// gating — see `TestSummaryJSON.Failure.isNativeTimeout`)
+        /// `ownFailures`' structured-text classification.
+        let durationInSeconds: Double?
     }
 }
 
@@ -671,6 +698,25 @@ struct TestSummaryJSON: Decodable {
         let failureText: String
         /// Absent on older bundles; `testName` is the fallback identity.
         let testIdentifierString: String?
+        /// Only ever populated from the batch per-test hierarchy's own
+        /// `Test Plan Configuration` node — `xcresulttool get test-results
+        /// summary`'s flat `testFailures[]` (the single, unbatched
+        /// classification path) carries no per-failure duration at all.
+        /// `nil` there, never fetched with an extra process call just to
+        /// fill it in: see `isNativeTimeout`'s doc comment for why it is
+        /// corroboration only, never required.
+        let durationInSeconds: Double?
+
+        init(
+            testName: String, targetName: String, failureText: String,
+            testIdentifierString: String?, durationInSeconds: Double? = nil
+        ) {
+            self.testName = testName
+            self.targetName = targetName
+            self.failureText = failureText
+            self.testIdentifierString = testIdentifierString
+            self.durationInSeconds = durationInSeconds
+        }
 
         /// Stable name for this test, preferring the fully-qualified form.
         var identifier: String {
@@ -689,6 +735,27 @@ struct TestSummaryJSON: Decodable {
         /// runner's console output.
         var isCrash: Bool {
             failureText.hasPrefix("Crash:")
+        }
+
+        /// Whether XCTest's own native per-test execution-time allowance
+        /// (`-maximum-test-execution-time-allowance`) cut this test off,
+        /// rather than an assertion failing or the runner crashing.
+        ///
+        /// Confirmed against a real batch (Gate 3 Phase H1 spike,
+        /// `XcodeBatchHangTimeoutSpikeAcceptanceTests`): the result
+        /// bundle's `issueType` field does *not* distinguish this from an
+        /// ordinary assertion failure — both read `"Uncategorized"` — but
+        /// `failureText` always starts with this exact, fixed,
+        /// Apple-authored sentence. Reads the same structured field
+        /// `isCrash` does, the same way. `durationInSeconds` landing on
+        /// the configured allowance is available as corroboration where
+        /// the batch path already has it for free, but is never required:
+        /// a native timeout must never be downgraded to an ordinary
+        /// failure over a duration mismatch (rounding, clock skew, a
+        /// caller that forgot to pass the allowance through) when the
+        /// structured failure text already proves what happened.
+        var isNativeTimeout: Bool {
+            failureText.hasPrefix("Test exceeded execution time allowance")
         }
 
         /// Whether this is the test runner itself failing to install or launch,

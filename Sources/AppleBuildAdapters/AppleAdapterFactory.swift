@@ -82,7 +82,8 @@ public enum AppleAdapterFactory {
         for detection: ProjectDetection,
         configuration: Configuration,
         projectRoot: URL,
-        resolvedDestination: ResolvedDestination? = nil
+        resolvedDestination: ResolvedDestination? = nil,
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
     ) -> any ProjectAdapter {
         switch detection.kind {
         case .swiftPackageMacOS:
@@ -94,7 +95,8 @@ public enum AppleAdapterFactory {
                 kind: detection.kind,
                 projectFile: detection.projectFile,
                 projectRoot: projectRoot,
-                resolvedDestination: resolvedDestination
+                resolvedDestination: resolvedDestination,
+                workerDevicesByWorkspace: workerDevicesByWorkspace
             )
 
         case .auto:

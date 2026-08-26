@@ -1,5 +1,15 @@
 # MutantBench-Swift — real-corpus run report
 
+**Correction (2026-08-27):** the original text asserted the two Muter
+compile failures shared "the same root cause (Muter's own
+`swift-tools-version:5.9` vs. this machine's Swift 6.3)" and that
+MutantKit has "better current-toolchain compatibility than Muter" as a
+standalone finding. Neither claim was supported by this report's own
+evidence — the second failure's root cause was explicitly recorded
+elsewhere in this same document as "not traced further," and the
+toolchain-version hypothesis was, and remains, unproven. Both passages
+below are corrected to state only what was actually observed.
+
 Generated 2026-08-04. Hand-assembled from real command output and from the
 real `BenchmarkPreflightResult` JSON artifacts under
 `Benchmarks/results/current/<environment-id>/preflight/*.json` (BenchmarkRunner's
@@ -286,24 +296,28 @@ What is real and ready for the moment a compatible toolchain exists:
 ```
 
 Two independent failures do not prove every remaining project would also
-fail — that stronger claim is not made here. Further project attempts
-under this toolchain were stopped because another project-level attempt
-would not answer the remaining performance question without first
-resolving the known toolchain compatibility boundary — the same root cause
-(Muter's own `swift-tools-version:5.9` vs. this machine's Swift 6.3) has
-already been independently observed twice, and a third or Nth repetition
-would exercise the same known boundary rather than resolve it.
+fail — that stronger claim is not made here. Both failures occurred under
+Swift 6.3.3, but their common root cause was not established: the first
+was a stale absolute module cache path error, and the second was a
+compile-time `fatalError` not traced further given the time already spent
+(A.4). A Swift toolchain compatibility boundary remained a plausible
+hypothesis — consistent with, though not proven by, Muter's own
+`swift-tools-version:5.9` manifest declaration (A.6) — and required a
+compatible-toolchain lane to actually test, not a third or Nth repetition
+of the same untraced failures.
 
 ---
 
 ## Conclusions kept separate, on purpose
 
-- **Part A conclusion**: MutantKit has better current-toolchain
-  compatibility than Muter on this machine's real, installed Swift 6.3.3 —
-  MutantKit builds, plans, and begins execution on every corpus project
-  attempted; Muter fails to complete a mutation run on both projects
-  attempted, for reasons consistent with Muter's own Swift-5.9 target vs.
-  this toolchain's Swift 6.3. This is a real, standalone finding.
+- **Part A conclusion**: in the two Muter mutation-run attempts completed
+  in this environment, MutantKit progressed further under Swift 6.3.3 —
+  MutantKit built, planned, and began execution on every corpus project
+  attempted; Muter did not complete a mutation run on either project
+  attempted. The common root cause was not established (see A.6); a
+  Swift-5.9-vs-6.3 toolchain boundary is a plausible but unproven
+  explanation. This is a real, standalone finding limited to the sample
+  actually obtained, not a general reliability claim about either tool.
 - **Part B conclusion**: not available this run (`blockedMissingToolchain`).
   MutantKit/Muter performance under a pinned, mutually compatible toolchain
   is **not yet measured** — nothing here should be read as "MutantKit is

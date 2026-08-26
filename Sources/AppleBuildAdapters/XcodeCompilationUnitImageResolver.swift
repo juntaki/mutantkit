@@ -72,14 +72,19 @@ public enum XcodeCompilationUnitImageResolver {
             "-derivedDataPath", context.derivedDataPath.path, "-json"
         ]
         let result: ProcessResult
+        let showBuildSettingsStart = GateTimingRecorder.shared.now()
         do {
             result = try await ProcessSupervisor.run(
                 executable: ToolPaths.xcodebuild, arguments: arguments,
                 workingDirectory: context.workspace, timeoutSeconds: context.timeoutSeconds
             )
         } catch {
+            await GateTimingRecorder.shared.record(
+                "receipt.showBuildSettings.failed", chunkID: target, start: showBuildSettingsStart
+            )
             throw XcodeImageResolutionError.showBuildSettingsFailed(target: target, diagnosis: "\(error)")
         }
+        await GateTimingRecorder.shared.record("receipt.showBuildSettings", chunkID: target, start: showBuildSettingsStart)
         guard result.succeeded else {
             throw XcodeImageResolutionError.showBuildSettingsFailed(
                 target: target, diagnosis: String(decoding: result.standardError, as: UTF8.self)
@@ -122,7 +127,30 @@ public enum XcodeCompilationUnitImageResolver {
         guard FileManager.default.fileExists(atPath: binaryPath.path) else {
             throw XcodeImageResolutionError.builtArtifactMissing(target: target, path: binaryPath.path)
         }
+
+        // Xcode's "debug executable is a dylib" optimization
+        // (`ENABLE_DEBUG_DYLIB`, on by default for Debug/Simulator app
+        // targets) turns the on-disk main executable into a thin stub that
+        // immediately loads a sibling `<executable>.debug.dylib` — every
+        // compiled Swift/ObjC symbol, including whatever calls the schemata
+        // runtime's `mutantkit_register_unit_v3`, actually executes from
+        // that dylib, not the stub. `dladdr` on the runtime's own caller
+        // therefore always resolves to the dylib's loaded image at test
+        // time, so the receipt must record *that* file's `LC_UUID`, never
+        // the stub's — otherwise this resolver would hand the verifier an
+        // image identity the runtime can never actually report, no matter
+        // how correct the build was (confirmed against a real app target:
+        // the stub and its debug dylib carry two entirely different, real
+        // `LC_UUID`s). Detected by real on-disk presence, not by trusting
+        // `ENABLE_DEBUG_DYLIB`'s reported value — the naming convention
+        // Xcode's own build system uses for this file is authoritative
+        // over a build setting a caller could fail to thread through
+        // correctly.
+        let debugDylibPath = binaryPath.deletingLastPathComponent()
+            .appendingPathComponent(binaryPath.lastPathComponent + ".debug.dylib")
+        let resolvedBinaryPath = FileManager.default.fileExists(atPath: debugDylibPath.path) ? debugDylibPath : binaryPath
+
         let bundleName = URL(fileURLWithPath: wrapperName).deletingPathExtension().lastPathComponent
-        return (binaryPath, bundleName)
+        return (resolvedBinaryPath, bundleName)
     }
 }

@@ -41,4 +41,23 @@ struct MutantKitBenchmarkToolTests {
         #expect(config.contains(#"include: ["Sources/IntegerUtilities/**"]"#))
         #expect(config.contains("strategy: isolated"))
     }
+
+    /// B3.4 (rigorous-benchmark program): pinning `workers: 1` for an
+    /// "ENGINE/CONTROLLED" measurement, distinct from this repo's own
+    /// shipped `workers: 2` production default — never omitted, and never
+    /// silently coerced to the default, since the whole point is a caller
+    /// being able to choose deliberately.
+    @Test("workers, when given, is written into execution: explicitly")
+    func workersOverrideIsWrittenExplicitly() {
+        let tool = MutantKitBenchmarkTool(binaryURL: URL(fileURLWithPath: "/bin/true"), toolchainProfile: Self.profile, workers: 1)
+        let config = tool.defaultConfiguration(for: Self.project)
+        #expect(config.contains("workers: 1"))
+    }
+
+    @Test("With no workers override, the generated config omits the key entirely, matching the real CLI's own auto default")
+    func noWorkersOverrideOmitsTheKey() {
+        let tool = MutantKitBenchmarkTool(binaryURL: URL(fileURLWithPath: "/bin/true"), toolchainProfile: Self.profile)
+        let config = tool.defaultConfiguration(for: Self.project)
+        #expect(!config.contains("workers:"))
+    }
 }

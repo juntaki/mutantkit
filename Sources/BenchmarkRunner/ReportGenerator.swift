@@ -41,28 +41,55 @@ public enum ReportGenerator {
             lines.append("")
             lines.append(measurementsTable(project.muterMeasurements, toolLabel: "Muter"))
             lines.append("")
-            if let comparison = project.comparison {
-                lines.append("### Cross-tool mutant comparison")
+            lines.append(comparisonSection(
+                title: "Cross-tool mutant comparison (vs. Muter)", comparison: project.comparison,
+                otherOnlyLabel: "Muter-only"
+            ))
+            lines.append("")
+            // Phase C13: `ericodx/swift-mutation-testing` — only rendered
+            // when it actually ran for this project, so a report from a
+            // sweep that never configured this optional third tool looks
+            // exactly as it did before this section existed.
+            if !project.swiftMutationTestingMeasurements.isEmpty {
+                lines.append(measurementsTable(project.swiftMutationTestingMeasurements, toolLabel: "swift-mutation-testing"))
                 lines.append("")
-                lines.append("- exactly comparable: \(comparison.exactlyComparable.count)")
-                lines.append("- approximately comparable: \(comparison.approximatelyComparable.count)")
-                lines.append("- MutantKit-only: \(comparison.mutantKitOnly.count)")
-                lines.append("- Muter-only: \(comparison.muterOnly.count)")
-                lines.append("")
-            } else {
-                lines.append("### Cross-tool mutant comparison")
-                lines.append("")
-                lines.append("Not available (one or both tools produced no usable report for this project).")
+                lines.append(comparisonSection(
+                    title: "Cross-tool mutant comparison (vs. swift-mutation-testing)",
+                    comparison: project.comparisonWithSwiftMutationTesting, otherOnlyLabel: "swift-mutation-testing-only"
+                ))
                 lines.append("")
             }
         }
 
         lines.append("## Known limitations")
         lines.append("")
-        lines.append("- Muter has no equivalent of `provenActive`/`provenExecuted` — reported as `nil` (not observable), never `0`.")
-        lines.append("- Cross-tool mutant matching relies on file path + original/replacement text hash + a coarse operator")
-        lines.append("  family, never on line/column alone (Muter's own report carries no UTF-8 byte offset).")
+        lines.append("- Neither Muter nor swift-mutation-testing has an equivalent of `provenActive`/`provenExecuted` —")
+        lines.append("  reported as `nil` (not observable), never `0`.")
+        lines.append("- Cross-tool mutant matching relies on relative file path + line + column + a coarse operator")
+        lines.append("  family (Phase C13) — not original/replacement text hashes, since a real Muter report never")
+        lines.append("  carries the mutated text at all (see `CrossToolMutationIdentity`'s own doc comment).")
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Factored out of `markdownReport` (Phase C13) so the same rendering
+    /// serves both the Muter comparison (always shown) and the optional
+    /// swift-mutation-testing one (shown only when that tool actually ran)
+    /// identically — one comparison section was never meant to look
+    /// structurally different from another just because of which second
+    /// tool it is against.
+    private static func comparisonSection(title: String, comparison: CrossToolComparison?, otherOnlyLabel: String) -> String {
+        var lines: [String] = []
+        lines.append("### \(title)")
+        lines.append("")
+        if let comparison {
+            lines.append("- exactly comparable: \(comparison.exactlyComparable.count)")
+            lines.append("- approximately comparable: \(comparison.approximatelyComparable.count)")
+            lines.append("- MutantKit-only: \(comparison.mutantKitOnly.count)")
+            lines.append("- \(otherOnlyLabel): \(comparison.muterOnly.count)")
+        } else {
+            lines.append("Not available (one or both tools produced no usable report for this project).")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func measurementsTable(_ byMode: [BenchmarkMode: MutationBenchmarkMeasurement], toolLabel: String) -> String {

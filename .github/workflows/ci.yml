@@ -273,3 +273,51 @@ jobs:
           path: |
             build.log
             acceptance.log
+
+  # Separate from both `acceptance` and `ror-schemata-differential` for the same
+  # reason as the latter: it needs a real, non-default
+  # MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE layout that the plain matrix build+test
+  # steps never produce — here, BOTH the macOS archive (`swift build`'s normal
+  # product, needed as this suite's negative control) AND the iOS-Simulator archive
+  # (produced only by scripts/build-schemata-runtime.sh, which nothing else in CI
+  # runs) living side by side under one override directory, exactly the shape
+  # SchemataRuntimeLibraryLocator expects. An earlier draft of this feature had no
+  # job that actually exercised this combination in CI at all — the new acceptance
+  # suites existed but nothing wired MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE for
+  # them, so they would have failed closed with `missingOverride` the first time
+  # anyone ran them here, silently never proving anything past a developer's own
+  # laptop. This job is that wiring.
+  ios-simulator-schemata-runtime:
+    name: iOS-Simulator schemata runtime (build + link viability)
+    runs-on: macos-15
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Build the macOS schemata runtime static library (this suite's negative control)
+        run: swift build -c release --product MutantKitSchemataRuntime
+      - name: Build the iOS-Simulator schemata runtime static library
+        run: scripts/build-schemata-runtime.sh "$GITHUB_WORKSPACE/.build/release"
+      - name: Build tests
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      - name: iOS-Simulator runtime acceptance
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
+        run: |
+          set -o pipefail
+          swift test --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 | tee acceptance.log
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-schemata-runtime-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance.log

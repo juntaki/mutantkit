@@ -62,9 +62,13 @@ struct XcodeCoverageSelectionAcceptanceTests {
             $0.point.enclosingDeclaration.path.last == "canApplyCoupon(subtotal:)"
         }
         #expect(covered.count == 2)
+        // Phase C13: `onlyTestingArgument` now always appends the trailing
+        // `()` (required for `xcodebuild` to match a Swift Testing `@Test`
+        // function at all; tolerated either way for XCTest, confirmed by
+        // this exact test still passing unchanged in outcome).
         let expected = Set([
-            "-only-testing:CheckoutTests/CheckoutTests/testCouponAboveMinimum",
-            "-only-testing:CheckoutTests/CheckoutTests/testCouponAtMinimum"
+            "-only-testing:CheckoutTests/CheckoutTests/testCouponAboveMinimum()",
+            "-only-testing:CheckoutTests/CheckoutTests/testCouponAtMinimum()"
         ])
         for mutant in covered {
             let args = mutant.evidence?.testCommand?.arguments ?? []

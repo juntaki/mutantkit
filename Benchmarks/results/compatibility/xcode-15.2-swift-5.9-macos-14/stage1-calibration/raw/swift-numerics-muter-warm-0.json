@@ -1,0 +1,50 @@
+{
+  "timeElapsed" : "00:01:28.012",
+  "globalMutationScore" : 66,
+  "numberOfKilledMutants" : 2,
+  "totalAppliedMutationOperators" : 3,
+  "fileReports" : [
+    {
+      "appliedOperators" : [
+        {
+          "mutationPoint" : {
+            "position" : {
+              "utf8Offset" : 1198,
+              "line" : 29,
+              "column" : 18
+            },
+            "mutationOperatorId" : "RelationalOperatorReplacement",
+            "filePath" : "\/private\/var\/folders\/g3\/pffjr_y96bq06blnkf72x_hw0000gn\/T\/mutantbench-swift-numerics-muter-warm-shared_mutated\/Sources\/IntegerUtilities\/GCD.swift"
+          },
+          "testSuiteOutcome" : "passed"
+        },
+        {
+          "mutationPoint" : {
+            "filePath" : "\/private\/var\/folders\/g3\/pffjr_y96bq06blnkf72x_hw0000gn\/T\/mutantbench-swift-numerics-muter-warm-shared_mutated\/Sources\/IntegerUtilities\/GCD.swift",
+            "position" : {
+              "utf8Offset" : 1295,
+              "column" : 18,
+              "line" : 31
+            },
+            "mutationOperatorId" : "RelationalOperatorReplacement"
+          },
+          "testSuiteOutcome" : "failed"
+        },
+        {
+          "testSuiteOutcome" : "runtimeError",
+          "mutationPoint" : {
+            "position" : {
+              "line" : 35,
+              "utf8Offset" : 1530,
+              "column" : 11
+            },
+            "mutationOperatorId" : "RelationalOperatorReplacement",
+            "filePath" : "\/private\/var\/folders\/g3\/pffjr_y96bq06blnkf72x_hw0000gn\/T\/mutantbench-swift-numerics-muter-warm-shared_mutated\/Sources\/IntegerUtilities\/GCD.swift"
+          }
+        }
+      ],
+      "fileName" : "GCD.swift",
+      "mutationScore" : 66
+    }
+  ]
+}

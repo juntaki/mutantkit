@@ -174,7 +174,7 @@ struct LogicalConnectorSchemataIsolatedDifferentialAcceptanceTests {
         let runner = SchemataMutationRunner(
             planID: "plan-logical-connector-differential-schemata", workUnitID: "plan-logical-connector-differential-schemata",
             programs: programs, points: pointsByID, originalSources: [Self.relativePath: Data(Self.librarySource.utf8)],
-            build: adapter, test: adapter, workspaces: workspaces, timeoutSeconds: 180,
+            build: adapter, test: adapter, workspaces: workspaces, timeouts: TimeoutSettings(baselineSeconds: 180),
             toolchainHash: "test-toolchain", buildArgumentsHash: "test-build-arguments", policy: policy
         )
         let outcome = try await runner.run()
@@ -201,12 +201,7 @@ struct LogicalConnectorSchemataIsolatedDifferentialAcceptanceTests {
         return (isolated, schemata)
     }
 
-    @Test(
-        """
-        The same MutationID, outcome, scorability, and failing tests come from both backends, \
-        for &&/|| over identifiers and self. member access
-        """
-    )
+    @Test("The same MutationID, outcome, scorability, and failing tests come from both backends, for &&/|| over identifiers and self. member access")
     func isolatedAndSchemataAgree() async throws {
         let projectDirectory = try stagePackage()
         defer { try? FileManager.default.removeItem(at: projectDirectory) }

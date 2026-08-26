@@ -7,10 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		026D3A2B300C50DA7B83B75A /* SwiftTestingBillingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD31BF89986F667299BAD4B3 /* SwiftTestingBillingTests.swift */; };
+		0E2A9D3A90DFC8B26C5A8B56 /* Billing.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 86427FAD2073E08D970889E9 /* Billing.framework */; };
 		29EA77A7952CC1E61A9B790D /* Billing.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 86427FAD2073E08D970889E9 /* Billing.framework */; };
 		2FA124468D27A9F900174DB5 /* Billing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80CEAFD1B91EAAB8948624E3 /* Billing.swift */; };
 		A7FA02FAF8F9CB68B201B6DD /* BillingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6D98D611FFFFA027777AA1 /* BillingTests.swift */; };
 		BA37E6375D5468E6F24395BC /* Billing.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 86427FAD2073E08D970889E9 /* Billing.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		D1D21E4881B42FA61FC91860 /* Billing.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 86427FAD2073E08D970889E9 /* Billing.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -21,9 +24,27 @@
 			remoteGlobalIDString = 9EFF214C664C31D9A451940A;
 			remoteInfo = Billing;
 		};
+		E88D1BDF901C2010DCFF6264 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 51B7E571948E0F928640D740 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9EFF214C664C31D9A451940A;
+			remoteInfo = Billing;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		577BE48066D5D9898D8FFFEC /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				D1D21E4881B42FA61FC91860 /* Billing.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F414F3A423F3FFD441158342 /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -41,10 +62,20 @@
 		758C9B4C04537946BA1048F3 /* BillingTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BillingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		80CEAFD1B91EAAB8948624E3 /* Billing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Billing.swift; sourceTree = "<group>"; };
 		86427FAD2073E08D970889E9 /* Billing.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Billing.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		CD31BF89986F667299BAD4B3 /* SwiftTestingBillingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftTestingBillingTests.swift; sourceTree = "<group>"; };
+		E7008484C2363F8F3C1A5689 /* SwiftTestingBillingTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SwiftTestingBillingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		ED6D98D611FFFFA027777AA1 /* BillingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		2EF713C25FB2507E2530797A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0E2A9D3A90DFC8B26C5A8B56 /* Billing.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F6F04D4ECD4EE85204BB92FF /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -72,11 +103,20 @@
 			path = Tests;
 			sourceTree = "<group>";
 		};
+		551733E5D8F0A95D1FF0112A /* SwiftTestingTests */ = {
+			isa = PBXGroup;
+			children = (
+				CD31BF89986F667299BAD4B3 /* SwiftTestingBillingTests.swift */,
+			);
+			path = SwiftTestingTests;
+			sourceTree = "<group>";
+		};
 		A11BB6DA75AE057ADCC4699B /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				86427FAD2073E08D970889E9 /* Billing.framework */,
 				758C9B4C04537946BA1048F3 /* BillingTests.xctest */,
+				E7008484C2363F8F3C1A5689 /* SwiftTestingBillingTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -85,6 +125,7 @@
 			isa = PBXGroup;
 			children = (
 				04BB68EC3E1D47A8139F93F6 /* Sources */,
+				551733E5D8F0A95D1FF0112A /* SwiftTestingTests */,
 				28B1A00F53D542B7AEAFFF53 /* Tests */,
 				A11BB6DA75AE057ADCC4699B /* Products */,
 			);
@@ -93,6 +134,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		027828E7E2ABF09506A7B824 /* SwiftTestingBillingTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AF76D939ECB58B3D6FE55EEC /* Build configuration list for PBXNativeTarget "SwiftTestingBillingTests" */;
+			buildPhases = (
+				A5A6A4C530982E74DF9AAD0C /* Sources */,
+				2EF713C25FB2507E2530797A /* Frameworks */,
+				577BE48066D5D9898D8FFFEC /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				00BD020BC60228959D6EDC86 /* PBXTargetDependency */,
+			);
+			name = SwiftTestingBillingTests;
+			packageProductDependencies = (
+			);
+			productName = SwiftTestingBillingTests;
+			productReference = E7008484C2363F8F3C1A5689 /* SwiftTestingBillingTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		9EFF214C664C31D9A451940A /* Billing */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 28BA425C1343D71C2C4E5A1B /* Build configuration list for PBXNativeTarget "Billing" */;
@@ -157,6 +218,7 @@
 			targets = (
 				9EFF214C664C31D9A451940A /* Billing */,
 				C39D68F5443911DBDE638C97 /* BillingTests */,
+				027828E7E2ABF09506A7B824 /* SwiftTestingBillingTests */,
 			);
 		};
 /* End PBXProject section */
@@ -178,9 +240,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5A6A4C530982E74DF9AAD0C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				026D3A2B300C50DA7B83B75A /* SwiftTestingBillingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		00BD020BC60228959D6EDC86 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9EFF214C664C31D9A451940A /* Billing */;
+			targetProxy = E88D1BDF901C2010DCFF6264 /* PBXContainerItemProxy */;
+		};
 		5290DE53C758CB7FEFA4EB55 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 9EFF214C664C31D9A451940A /* Billing */;
@@ -199,7 +274,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.BillingTests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.BillingTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -220,11 +295,27 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.Billing;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.Billing;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		985BF796BA8336481E494E07 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.SwiftTestingBillingTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -243,7 +334,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.Billing;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.Billing;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -314,6 +405,22 @@
 			};
 			name = Debug;
 		};
+		E8069B8B4A573506A90B183B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.SwiftTestingBillingTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		F114E8EDA78990264F265FC2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -380,7 +487,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.BillingTests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.BillingTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -394,6 +501,15 @@
 			buildConfigurations = (
 				4CB9704BB9D65642E49DA7FD /* Debug */,
 				DC20FE457A22C6FF73DF0273 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AF76D939ECB58B3D6FE55EEC /* Build configuration list for PBXNativeTarget "SwiftTestingBillingTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				985BF796BA8336481E494E07 /* Debug */,
+				E8069B8B4A573506A90B183B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

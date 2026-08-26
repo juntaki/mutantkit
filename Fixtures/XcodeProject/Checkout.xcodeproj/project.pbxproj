@@ -8,13 +8,43 @@
 
 /* Begin PBXBuildFile section */
 		0C12ACD4D74373B361AF75C6 /* CheckoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A879EBBE21E2A8972993B0B /* CheckoutTests.swift */; };
+		1825FE335EF7B4CA48EE307A /* Checkout.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF2C5657C4186EB516F0B832 /* Checkout.framework */; };
 		551CFEFD987DFEC088D3B545 /* Checkout.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DF2C5657C4186EB516F0B832 /* Checkout.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		5D2E9A03E946C26AE633D231 /* HangAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64583F5E548EBE06FDCCCBDB /* HangAppApp.swift */; };
+		695866D73F8FD7E9931651FA /* Checkout.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DF2C5657C4186EB516F0B832 /* Checkout.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		70F2FCB61237EE2DFC4485A0 /* Checkout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E79B7E400E4C67CB41C9491 /* Checkout.swift */; };
+		9D78EE509905E64ABF662ACE /* HangContainmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 601F00B3915AD8C06403C04F /* HangContainmentTests.swift */; };
+		A37A8A5861A27235F2DF713D /* HangAppTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A79AAB59DE62295735452ED /* HangAppTests.swift */; };
+		C20D7596CAAB31ADDCE46BFB /* SwiftTestingCheckoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D40DA0F5E9D2508693847C8 /* SwiftTestingCheckoutTests.swift */; };
+		D30655B04B3F18191B36E0B6 /* HangSpikeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B5A937DDE8EA8044DED202 /* HangSpikeTests.swift */; };
+		D66F744E6A4D4E282F091269 /* Checkout.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF2C5657C4186EB516F0B832 /* Checkout.framework */; };
+		E11993E30ED2BACE027FB1BF /* Checkout.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DF2C5657C4186EB516F0B832 /* Checkout.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F406883C7CC829A91AD928A1 /* Checkout.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF2C5657C4186EB516F0B832 /* Checkout.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		00CFA911C38C0A427AA2ACCE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FD85492FBF62FA4214227381 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 633066495C53078BB9860786;
+			remoteInfo = HangApp;
+		};
+		55A13DE27FB63BF5623A63B3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FD85492FBF62FA4214227381 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A96974617BAC783684CFFAC;
+			remoteInfo = Checkout;
+		};
 		81F4769D8ED24A028E8BE518 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FD85492FBF62FA4214227381 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A96974617BAC783684CFFAC;
+			remoteInfo = Checkout;
+		};
+		B51C9CE06A079147190C1E23 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = FD85492FBF62FA4214227381 /* Project object */;
 			proxyType = 1;
@@ -35,11 +65,42 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6ECBF1BC27B9053B9849AF73 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				695866D73F8FD7E9931651FA /* Checkout.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		78503C2CB277FFAC40235DBF /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				E11993E30ED2BACE027FB1BF /* Checkout.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		0A879EBBE21E2A8972993B0B /* CheckoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckoutTests.swift; sourceTree = "<group>"; };
+		1D40DA0F5E9D2508693847C8 /* SwiftTestingCheckoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftTestingCheckoutTests.swift; sourceTree = "<group>"; };
 		3E79B7E400E4C67CB41C9491 /* Checkout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Checkout.swift; sourceTree = "<group>"; };
+		3F5403690899F4211EF3789D /* HangApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = HangApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A79AAB59DE62295735452ED /* HangAppTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HangAppTests.swift; sourceTree = "<group>"; };
+		601F00B3915AD8C06403C04F /* HangContainmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HangContainmentTests.swift; sourceTree = "<group>"; };
+		64583F5E548EBE06FDCCCBDB /* HangAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HangAppApp.swift; sourceTree = "<group>"; };
+		81BE9E8455D1793BE4EB8EBF /* SwiftTestingCheckoutTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SwiftTestingCheckoutTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		92B5A937DDE8EA8044DED202 /* HangSpikeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HangSpikeTests.swift; sourceTree = "<group>"; };
+		9E82E2730567FE3732B5C735 /* HangContainmentTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HangContainmentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C73B75214A1A9E7859ABF00D /* HangAppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HangAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF2C5657C4186EB516F0B832 /* Checkout.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Checkout.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		E36445031D2E5491FCBA6E4C /* CheckoutTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CheckoutTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -53,16 +114,44 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		8EEFD63D16ED83BD19DEAEB5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1825FE335EF7B4CA48EE307A /* Checkout.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B2649B04F583E82402FB5F7C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D66F744E6A4D4E282F091269 /* Checkout.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		3BC3C45690C8D4BD059CABC6 = {
 			isa = PBXGroup;
 			children = (
+				A74F5B61F65E1864F6EB54D1 /* HangApp */,
+				A8FC9C35F929207B5307421C /* HangAppTests */,
+				A21CD2DA4044BDABE6E2AED4 /* HangContainmentTests */,
 				EF0F47D192159B1CCD711B89 /* Sources */,
+				573BAB1626BF1E4B460C90F3 /* SwiftTestingCheckoutTests */,
 				C697A0576C7082DD42CECD94 /* Tests */,
 				84CABA8A8CD37E9BC38BD688 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		573BAB1626BF1E4B460C90F3 /* SwiftTestingCheckoutTests */ = {
+			isa = PBXGroup;
+			children = (
+				1D40DA0F5E9D2508693847C8 /* SwiftTestingCheckoutTests.swift */,
+			);
+			path = SwiftTestingCheckoutTests;
 			sourceTree = "<group>";
 		};
 		84CABA8A8CD37E9BC38BD688 /* Products */ = {
@@ -70,14 +159,43 @@
 			children = (
 				DF2C5657C4186EB516F0B832 /* Checkout.framework */,
 				E36445031D2E5491FCBA6E4C /* CheckoutTests.xctest */,
+				3F5403690899F4211EF3789D /* HangApp.app */,
+				C73B75214A1A9E7859ABF00D /* HangAppTests.xctest */,
+				9E82E2730567FE3732B5C735 /* HangContainmentTests.xctest */,
+				81BE9E8455D1793BE4EB8EBF /* SwiftTestingCheckoutTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A21CD2DA4044BDABE6E2AED4 /* HangContainmentTests */ = {
+			isa = PBXGroup;
+			children = (
+				601F00B3915AD8C06403C04F /* HangContainmentTests.swift */,
+			);
+			path = HangContainmentTests;
+			sourceTree = "<group>";
+		};
+		A74F5B61F65E1864F6EB54D1 /* HangApp */ = {
+			isa = PBXGroup;
+			children = (
+				64583F5E548EBE06FDCCCBDB /* HangAppApp.swift */,
+			);
+			path = HangApp;
+			sourceTree = "<group>";
+		};
+		A8FC9C35F929207B5307421C /* HangAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				4A79AAB59DE62295735452ED /* HangAppTests.swift */,
+			);
+			path = HangAppTests;
 			sourceTree = "<group>";
 		};
 		C697A0576C7082DD42CECD94 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
 				0A879EBBE21E2A8972993B0B /* CheckoutTests.swift */,
+				92B5A937DDE8EA8044DED202 /* HangSpikeTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -93,6 +211,44 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1A679FA091647325AF2237F6 /* HangAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1239D7AB972572E23B066626 /* Build configuration list for PBXNativeTarget "HangAppTests" */;
+			buildPhases = (
+				F38102F410EDBA9F573886C1 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2CC11B5888BDC3AEF5215400 /* PBXTargetDependency */,
+			);
+			name = HangAppTests;
+			packageProductDependencies = (
+			);
+			productName = HangAppTests;
+			productReference = C73B75214A1A9E7859ABF00D /* HangAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		2DA59D81D77617467B8E3734 /* HangContainmentTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EB1DFDF1FA0BBFB539696A3C /* Build configuration list for PBXNativeTarget "HangContainmentTests" */;
+			buildPhases = (
+				DDE709DEE389A1E694969BC4 /* Sources */,
+				B2649B04F583E82402FB5F7C /* Frameworks */,
+				78503C2CB277FFAC40235DBF /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A874676C0B34151381E3AE7C /* PBXTargetDependency */,
+			);
+			name = HangContainmentTests;
+			packageProductDependencies = (
+			);
+			productName = HangContainmentTests;
+			productReference = 9E82E2730567FE3732B5C735 /* HangContainmentTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		4A96974617BAC783684CFFAC /* Checkout */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8AA6AA60C0B1B9F9929D18AD /* Build configuration list for PBXNativeTarget "Checkout" */;
@@ -109,6 +265,43 @@
 			productName = Checkout;
 			productReference = DF2C5657C4186EB516F0B832 /* Checkout.framework */;
 			productType = "com.apple.product-type.framework";
+		};
+		633066495C53078BB9860786 /* HangApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2D284B9B63214B8C738C8214 /* Build configuration list for PBXNativeTarget "HangApp" */;
+			buildPhases = (
+				868077C3167BB851C2080971 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = HangApp;
+			packageProductDependencies = (
+			);
+			productName = HangApp;
+			productReference = 3F5403690899F4211EF3789D /* HangApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		7D27DFE02B1553E17350EB61 /* SwiftTestingCheckoutTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A53DF40F5DFD1FCD26C30C0 /* Build configuration list for PBXNativeTarget "SwiftTestingCheckoutTests" */;
+			buildPhases = (
+				AFC557A3E4D60D6758E852DD /* Sources */,
+				8EEFD63D16ED83BD19DEAEB5 /* Frameworks */,
+				6ECBF1BC27B9053B9849AF73 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B3CB2BEA212895B21812DDCA /* PBXTargetDependency */,
+			);
+			name = SwiftTestingCheckoutTests;
+			packageProductDependencies = (
+			);
+			productName = SwiftTestingCheckoutTests;
+			productReference = 81BE9E8455D1793BE4EB8EBF /* SwiftTestingCheckoutTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		998F184285875DF45B31F1E3 /* CheckoutTests */ = {
 			isa = PBXNativeTarget;
@@ -157,11 +350,31 @@
 			targets = (
 				4A96974617BAC783684CFFAC /* Checkout */,
 				998F184285875DF45B31F1E3 /* CheckoutTests */,
+				633066495C53078BB9860786 /* HangApp */,
+				1A679FA091647325AF2237F6 /* HangAppTests */,
+				2DA59D81D77617467B8E3734 /* HangContainmentTests */,
+				7D27DFE02B1553E17350EB61 /* SwiftTestingCheckoutTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
+		868077C3167BB851C2080971 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5D2E9A03E946C26AE633D231 /* HangAppApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AFC557A3E4D60D6758E852DD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C20D7596CAAB31ADDCE46BFB /* SwiftTestingCheckoutTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CCDCD85C338C8AD0D7C2005B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -170,21 +383,53 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DDE709DEE389A1E694969BC4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9D78EE509905E64ABF662ACE /* HangContainmentTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F1C1866C538B1361C6D30009 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				0C12ACD4D74373B361AF75C6 /* CheckoutTests.swift in Sources */,
+				D30655B04B3F18191B36E0B6 /* HangSpikeTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F38102F410EDBA9F573886C1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A37A8A5861A27235F2DF713D /* HangAppTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		2CC11B5888BDC3AEF5215400 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 633066495C53078BB9860786 /* HangApp */;
+			targetProxy = 00CFA911C38C0A427AA2ACCE /* PBXContainerItemProxy */;
+		};
 		8157DB1464B02CF7DEA014C6 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 4A96974617BAC783684CFFAC /* Checkout */;
 			targetProxy = 81F4769D8ED24A028E8BE518 /* PBXContainerItemProxy */;
+		};
+		A874676C0B34151381E3AE7C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4A96974617BAC783684CFFAC /* Checkout */;
+			targetProxy = B51C9CE06A079147190C1E23 /* PBXContainerItemProxy */;
+		};
+		B3CB2BEA212895B21812DDCA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4A96974617BAC783684CFFAC /* Checkout */;
+			targetProxy = 55A13DE27FB63BF5623A63B3 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -252,6 +497,38 @@
 			};
 			name = Debug;
 		};
+		12C5E0216B23542321C04747 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.SwiftTestingCheckoutTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		284F2A3938FC1CD4090E324F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.SwiftTestingCheckoutTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		43ABAAE2B0D42DB5B40207A6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -262,7 +539,23 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.CheckoutTests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.CheckoutTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		50DC3D965667B5F191C38997 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.HangContainmentTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -334,11 +627,44 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.CheckoutTests;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.CheckoutTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		6CBC90A971EADBA73A5087B9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.HangContainmentTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		8EE66E7ED84AB7B2B4E1AB72 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.HangAppTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HangApp.app/HangApp";
+			};
+			name = Debug;
 		};
 		BCD213E855C12A99ACC95CE6 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -355,7 +681,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.Checkout;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.Checkout;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -378,7 +704,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mutare.fixture.Checkout;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.Checkout;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -386,9 +712,85 @@
 			};
 			name = Release;
 		};
+		D301087CFFEB5C79D3CEBFAE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.HangApp;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E09A2731722224E259CC6557 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.HangApp;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FF2A8EB63DDA021F9B7851D0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mutantkit.fixture.HangAppTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HangApp.app/HangApp";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1239D7AB972572E23B066626 /* Build configuration list for PBXNativeTarget "HangAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8EE66E7ED84AB7B2B4E1AB72 /* Debug */,
+				FF2A8EB63DDA021F9B7851D0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		1A53DF40F5DFD1FCD26C30C0 /* Build configuration list for PBXNativeTarget "SwiftTestingCheckoutTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				284F2A3938FC1CD4090E324F /* Debug */,
+				12C5E0216B23542321C04747 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		2D284B9B63214B8C738C8214 /* Build configuration list for PBXNativeTarget "HangApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E09A2731722224E259CC6557 /* Debug */,
+				D301087CFFEB5C79D3CEBFAE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		8AA6AA60C0B1B9F9929D18AD /* Build configuration list for PBXNativeTarget "Checkout" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -403,6 +805,15 @@
 			buildConfigurations = (
 				1093920576C7AC5431793498 /* Debug */,
 				61370C29ECC852E03B8CAB96 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EB1DFDF1FA0BBFB539696A3C /* Build configuration list for PBXNativeTarget "HangContainmentTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				50DC3D965667B5F191C38997 /* Debug */,
+				6CBC90A971EADBA73A5087B9 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

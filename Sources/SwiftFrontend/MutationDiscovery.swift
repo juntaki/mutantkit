@@ -24,9 +24,11 @@ public enum DiscoveryError: Error, CustomStringConvertible {
 /// nothing downstream ever refers to a node again.
 public struct MutationDiscovery {
     private let operators: [any MutationOperator]
+    private let excludedCallNames: Set<String>
 
-    public init(operators: [any MutationOperator]) {
+    public init(operators: [any MutationOperator], excludedCallNames: Set<String> = []) {
         self.operators = operators
+        self.excludedCallNames = excludedCallNames
     }
 
     /// Discovers every mutation in one file. The tree does not outlive the call.
@@ -54,7 +56,8 @@ public struct MutationDiscovery {
             sourceFile: sourceFile,
             sourceBytes: bytes,
             sourceFileHash: sourceFileHash,
-            locationConverter: converter
+            locationConverter: converter,
+            excludedCallNames: excludedCallNames
         )
 
         var drafts: [Draft] = []

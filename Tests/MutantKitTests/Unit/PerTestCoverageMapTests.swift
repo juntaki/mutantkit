@@ -60,9 +60,14 @@ struct PerTestCoverageMapTests {
         #expect(aggregate.source == "xcodebuild-xccov-per-test")
     }
 
-    @Test("onlyTestingArgument joins target and qualified name with a slash")
+    @Test("onlyTestingArgument joins target and qualified name with a slash, and appends the trailing ()")
     func onlyTestingArgumentShape() {
-        #expect(addTest.onlyTestingArgument == "FooTests/AddTests/testAdd")
+        // Phase C13: the trailing `()` is required for `xcodebuild` to
+        // match a Swift Testing `@Test` function via `-only-testing:` at
+        // all (confirmed by direct reproduction: omitting it silently
+        // matches zero tests) -- XCTest tolerates it either way, so it is
+        // always appended rather than only for one framework's shape.
+        #expect(addTest.onlyTestingArgument == "FooTests/AddTests/testAdd()")
     }
 
     @Test("An empty map is empty")

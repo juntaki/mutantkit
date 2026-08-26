@@ -471,4 +471,125 @@ struct XCResultAdapterBatchTests {
         #expect(outcomes["mut_b"]?.summary.failed == 0)
         #expect(outcomes["mut_b"]?.summary.failingTests.isEmpty == true)
     }
+
+    // MARK: - Native XCTest timeout inside a batch (Gate 3 Phase H2)
+
+    /// The exact A/pass, B/native-timeout, C/pass shape confirmed for real
+    /// against `xcodebuild -test-timeouts-enabled YES
+    /// -maximum-test-execution-time-allowance 60`
+    /// (`XcodeBatchHangTimeoutSpikeAcceptanceTests`), captured here as a
+    /// fast unit-level pin so the classification path doesn't need a
+    /// simulator to stay covered.
+    private static let nativeTimeoutBatchSummary = Data("""
+    {
+        "devicesAndConfigurations": [
+            {
+                "expectedFailures": 0,
+                "failedTests": 0,
+                "passedTests": 1,
+                "skippedTests": 0,
+                "testPlanConfiguration": { "configurationId": "1", "configurationName": "A" }
+            },
+            {
+                "expectedFailures": 0,
+                "failedTests": 1,
+                "passedTests": 0,
+                "skippedTests": 0,
+                "testPlanConfiguration": { "configurationId": "2", "configurationName": "B" }
+            },
+            {
+                "expectedFailures": 0,
+                "failedTests": 0,
+                "passedTests": 1,
+                "skippedTests": 0,
+                "testPlanConfiguration": { "configurationId": "3", "configurationName": "C" }
+            }
+        ]
+    }
+    """.utf8)
+
+    private static let nativeTimeoutBatchTree = Data("""
+    {
+        "testNodes": [
+            {
+                "name": "CheckoutDemo",
+                "nodeType": "Test Plan",
+                "children": [
+                    {
+                        "name": "CheckoutTests",
+                        "nodeType": "Unit test bundle",
+                        "children": [
+                            {
+                                "name": "CheckoutTests",
+                                "nodeType": "Test Suite",
+                                "children": [
+                                    {
+                                        "name": "testCouponAboveMinimum()",
+                                        "nodeType": "Test Case",
+                                        "nodeIdentifier": "CheckoutTests/testCouponAboveMinimum()",
+                                        "children": [
+                                            { "name": "A", "nodeType": "Test Plan Configuration", "result": "Passed", "durationInSeconds": 0.007 }
+                                        ]
+                                    },
+                                    {
+                                        "name": "testCouponAtMinimum()",
+                                        "nodeType": "Test Case",
+                                        "nodeIdentifier": "CheckoutTests/testCouponAtMinimum()",
+                                        "children": [
+                                            { "name": "C", "nodeType": "Test Plan Configuration", "result": "Passed", "durationInSeconds": 0.001 }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "HangSpikeTests",
+                                "nodeType": "Test Suite",
+                                "children": [
+                                    {
+                                        "name": "testIntentionalHang()",
+                                        "nodeType": "Test Case",
+                                        "nodeIdentifier": "HangSpikeTests/testIntentionalHang()",
+                                        "children": [
+                                            {
+                                                "name": "B",
+                                                "nodeType": "Test Plan Configuration",
+                                                "result": "Failed",
+                                                "durationInSeconds": 60,
+                                                "children": [
+                                                    {
+                                                        "name": "Test exceeded execution time allowance of 1 minute. The test may have hung; check Xcode's test report for additional diagnostics.",
+                                                        "nodeType": "Failure Message"
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    """.utf8)
+
+    @Test("A batch with one hanging configuration classifies A/passed, B/timedOut, C/passed")
+    func nativeTimeoutInABatchIsClassifiedTimedOutWithoutAffectingSiblings() throws {
+        let batch = try JSONDecoder().decode(BatchTestSummaryJSON.self, from: Self.nativeTimeoutBatchSummary)
+        let tree = try JSONDecoder().decode(BatchTestNodesJSON.self, from: Self.nativeTimeoutBatchTree)
+        let outcomes = XCResultAdapter().classify(
+            batch: batch,
+            tree: tree,
+            configurationTestIdentifiers: [
+                "A": ["CheckoutTests/CheckoutTests/testCouponAboveMinimum"],
+                "B": ["CheckoutTests/HangSpikeTests/testIntentionalHang"],
+                "C": ["CheckoutTests/CheckoutTests/testCouponAtMinimum"]
+            ]
+        )
+
+        #expect(outcomes["A"]?.status == .passed)
+        #expect(outcomes["B"]?.status == .timedOut)
+        #expect(outcomes["C"]?.status == .passed)
+    }
 }

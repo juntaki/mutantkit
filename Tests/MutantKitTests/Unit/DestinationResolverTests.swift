@@ -149,4 +149,94 @@ struct DestinationResolverTests {
         let decoded = try JSONDecoder().decode(ResolvedDestination.self, from: data)
         #expect(decoded == resolved)
     }
+
+    // MARK: - tvOS/watchOS/visionOS (Phase C10, competitive-parity program)
+
+    private static func device(_ name: String, platformRuntimeIdentifier: String, udid: String? = nil) -> SimulatorDevice {
+        SimulatorDevice(
+            udid: udid ?? "\(name)-\(platformRuntimeIdentifier)".replacingOccurrences(of: " ", with: "-"),
+            name: name,
+            runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.\(platformRuntimeIdentifier)",
+            state: "Shutdown"
+        )
+    }
+
+    /// Before this phase, a `tvOS Simulator`/`watchOS Simulator`/`visionOS
+    /// Simulator` destination never reached this type's name/UDID pinning
+    /// logic at all -- `isSimulatorDestination` only recognized `"iOS
+    /// Simulator"`, so every one of these fell through to `device: nil`,
+    /// silently reintroducing the exact per-invocation "OS:latest" ambiguity
+    /// this type exists to eliminate for iOS.
+    @Test("A tvOS Simulator destination is now pinned by name, exactly like iOS")
+    func tvOSDestinationIsPinned() throws {
+        let target = Self.device("Apple TV 4K (3rd generation)", platformRuntimeIdentifier: "tvOS-18-0")
+        let resolved = try DestinationResolver.resolve(
+            "platform=tvOS Simulator,name=Apple TV 4K (3rd generation)", against: [target]
+        )
+        #expect(resolved.device?.udid == target.udid)
+    }
+
+    @Test("A watchOS Simulator destination is now pinned by name, exactly like iOS")
+    func watchOSDestinationIsPinned() throws {
+        let target = Self.device("Apple Watch Series 10 (46mm)", platformRuntimeIdentifier: "watchOS-11-0")
+        let resolved = try DestinationResolver.resolve(
+            "platform=watchOS Simulator,name=Apple Watch Series 10 (46mm)", against: [target]
+        )
+        #expect(resolved.device?.udid == target.udid)
+    }
+
+    /// visionOS's own `SimRuntime` identifier segment is `xrOS`, not
+    /// `visionOS` -- real Apple naming this resolver must translate, not a
+    /// typo either direction.
+    @Test("A visionOS Simulator destination resolves against its xrOS-prefixed runtime identifier")
+    func visionOSDestinationIsPinnedDespiteXROSRuntimeToken() throws {
+        let target = Self.device("Apple Vision Pro", platformRuntimeIdentifier: "xrOS-2-0")
+        let resolved = try DestinationResolver.resolve(
+            "platform=visionOS Simulator,name=Apple Vision Pro", against: [target]
+        )
+        #expect(resolved.device?.udid == target.udid)
+    }
+
+    /// The core soundness fix: "latest installed runtime" must be scoped to
+    /// the *requested platform*, not computed across every simulator
+    /// platform installed on the machine. A tvOS 26 runtime numerically
+    /// outranks an iOS 18 one, but resolving an unqualified iOS destination
+    /// must never let that tvOS runtime win "latest" and produce an
+    /// `ambiguousAcrossRuntimes`/wrong-device result for a plain iOS ask.
+    @Test("Latest-runtime resolution for an iOS destination ignores a numerically newer tvOS runtime")
+    func latestRuntimeIsScopedToRequestedPlatformNotGlobalMax() throws {
+        let iphone = Self.device("iPhone 16", platformRuntimeIdentifier: "iOS-18-0")
+        let appleTV = Self.device("Apple TV 4K (3rd generation)", platformRuntimeIdentifier: "tvOS-26-0")
+
+        let resolved = try DestinationResolver.resolve(
+            "platform=iOS Simulator,name=iPhone 16", against: [iphone, appleTV]
+        )
+
+        #expect(resolved.device?.udid == iphone.udid, "a numerically-newer tvOS runtime must never be selected as \"latest\" for an iOS request")
+    }
+
+    /// The mirror of the test above, from the tvOS side: resolving an
+    /// unqualified tvOS destination among two tvOS runtime versions must
+    /// pick the newer tvOS one, not be confused by a coexisting iOS runtime
+    /// of either version.
+    @Test("Latest-runtime resolution for a tvOS destination picks the newer tvOS runtime, ignoring iOS runtimes entirely")
+    func latestRuntimeForTVOSIgnoresCoexistingIOSRuntimes() throws {
+        let oldAppleTV = Self.device("Apple TV 4K (3rd generation)", platformRuntimeIdentifier: "tvOS-17-0")
+        let newAppleTV = Self.device("Apple TV 4K (3rd generation)", platformRuntimeIdentifier: "tvOS-18-0")
+        let iphone = Self.device("Apple TV 4K (3rd generation)", platformRuntimeIdentifier: "iOS-26-5")
+
+        let resolved = try DestinationResolver.resolve(
+            "platform=tvOS Simulator,name=Apple TV 4K (3rd generation)", against: [oldAppleTV, newAppleTV, iphone]
+        )
+
+        #expect(resolved.device?.udid == newAppleTV.udid)
+    }
+
+    @Test("SimulatorDevice.destination reports the device's own real platform, not a hardcoded iOS Simulator")
+    func destinationStringReportsRealPlatform() {
+        #expect(Self.device("Apple TV", platformRuntimeIdentifier: "tvOS-18-0").destination.hasPrefix("platform=tvOS Simulator,id="))
+        #expect(Self.device("Apple Watch", platformRuntimeIdentifier: "watchOS-11-0").destination.hasPrefix("platform=watchOS Simulator,id="))
+        #expect(Self.device("Vision Pro", platformRuntimeIdentifier: "xrOS-2-0").destination.hasPrefix("platform=visionOS Simulator,id="))
+        #expect(Self.device("iPhone", platformRuntimeIdentifier: "iOS-26-5").destination.hasPrefix("platform=iOS Simulator,id="))
+    }
 }

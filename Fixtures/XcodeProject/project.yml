@@ -33,6 +33,65 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
 
+  # Gate 3 Phase H3: a dedicated, unconditionally-hanging test — safe only
+  # because it belongs to its own scheme below, never the "Checkout" one
+  # every other acceptance suite (and mutantkit's own baseline
+  # establishment) uses. `HangSpikeTests.testIntentionalHang` in
+  # CheckoutTests is env-var-gated instead, precisely because it *does*
+  # share the "Checkout" scheme's test action.
+  HangContainmentTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [HangContainmentTests]
+    dependencies:
+      - target: Checkout
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  # Gate 3 Phase H8: a real, launchable iOS app — not a bare framework —
+  # so HangAppTests can be an *app-hosted* unit test bundle
+  # (`IsAppHostedTestBundle: true`), the structural property confirmed to
+  # distinguish a real, large production iOS app (whose own unit-test
+  # bundle is hosted by its own app binary) from every earlier synthetic
+  # hang fixture above (hosted by the generic `xctest` runner, no real
+  # app process at all).
+  HangApp:
+    type: application
+    platform: iOS
+    sources: [HangApp]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  HangAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [HangAppTests]
+    dependencies:
+      - target: HangApp
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/HangApp.app/HangApp"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  # Phase C2 (competitive-parity program): proves Swift Testing support
+  # under an Xcode *project* (not just SwiftPM) is real, not just parser-
+  # level. Isolated on its own scheme for the same reason
+  # HangContainmentTests/HangAppTests are: `xcodebuild -scheme Checkout
+  # ...` — every other suite sharing this fixture — must never build or
+  # run it.
+  SwiftTestingCheckoutTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [SwiftTestingCheckoutTests]
+    dependencies:
+      - target: Checkout
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Checkout:
     build:
@@ -41,3 +100,32 @@ schemes:
         CheckoutTests: [test]
     test:
       targets: [CheckoutTests]
+
+  # Isolated on purpose (see HangContainmentTests' own doc comment above):
+  # a completely separate scheme so `xcodebuild -scheme Checkout ...` —
+  # every other suite sharing this fixture — never builds or runs it.
+  HangContainmentDemo:
+    build:
+      targets:
+        Checkout: all
+        HangContainmentTests: [test]
+    test:
+      targets: [HangContainmentTests]
+
+  # Isolated the same way HangContainmentDemo is above.
+  HangAppDemo:
+    build:
+      targets:
+        HangApp: all
+        HangAppTests: [test]
+    test:
+      targets: [HangAppTests]
+
+  # Isolated the same way HangContainmentDemo is above.
+  SwiftTestingCheckoutDemo:
+    build:
+      targets:
+        Checkout: all
+        SwiftTestingCheckoutTests: [test]
+    test:
+      targets: [SwiftTestingCheckoutTests]

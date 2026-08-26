@@ -52,10 +52,12 @@ struct XcodeProjectAcceptanceTests {
         let run = try self.run()
 
         #expect(run.report.baseline.passed)
-        // Two test methods by design (see `CheckoutTests.swift`'s doc comment:
-        // wave-based early kill needs one mutant the first test alone can't
-        // catch, caught by the second).
-        #expect(run.report.baseline.testSummary?.total == 2)
+        // Two test methods in `CheckoutTests` by design (see its own doc
+        // comment: wave-based early kill needs one mutant the first test
+        // alone can't catch, caught by the second), plus one in
+        // `HangSpikeTests` (Gate 3 Phase H1 fixture — a no-op unless
+        // `MUTANTKIT_SPIKE_HANG` is set, so it always passes here).
+        #expect(run.report.baseline.testSummary?.total == 3)
 
         let integrity = run.report.integrity
         #expect(integrity.violations.isEmpty, "\(integrity.violations.map(\.detail))")

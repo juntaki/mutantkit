@@ -31,6 +31,31 @@ public enum ShardingError: Error, CustomStringConvertible {
     }
 }
 
+/// Everything `PlanSharding.subset` can refuse to do.
+public enum PlanSubsetError: Error, CustomStringConvertible {
+    /// A `MutationID` named more than once in the requested subset. Silently
+    /// de-duplicating would make the derived plan's membership depend on
+    /// caller sloppiness rather than being an exact, auditable echo of what
+    /// was asked for.
+    case duplicateRequestedID(MutationID)
+    /// A requested `MutationID` that is not present in the parent plan's own
+    /// `mutations`. Silently dropping it would make the derived plan smaller
+    /// than the caller intended without any signal that anything was lost.
+    case missingFromParent([MutationID])
+
+    public var description: String {
+        switch self {
+        case let .duplicateRequestedID(id):
+            "MutationID \(id) was requested more than once; a subset selection must name each mutation exactly once."
+        case let .missingFromParent(ids):
+            """
+            \(ids.count) requested MutationID(s) are not present in the parent plan: \
+            \(ids.map(\.rawValue).sorted().joined(separator: ", "))
+            """
+        }
+    }
+}
+
 /// Splits a plan across machines and puts the results back together.
 ///
 /// Sharding is a pure function of the plan. No shard knows about any other, no
@@ -95,6 +120,55 @@ public enum PlanSharding {
     public static func index(of id: MutationID, count: Int) -> Int {
         precondition(count >= 1, "Shard count must be at least 1.")
         return Int(StableHash.fnv1a64(id.rawValue) % UInt64(count))
+    }
+
+    /// Derives a plan containing exactly `mutationIDs`' mutations, in the same
+    /// `planID`/`toolchain`/`configurationHash`/`sourceFileHashes`/`operators`
+    /// context as `plan` — a subset plan is a view of `plan`, not a new plan,
+    /// on the same terms a shard is (see `shard`'s doc comment): same
+    /// provenance identity, same operator/source-file context, so a real
+    /// `mutantkit run`/`verify` against the derived plan is genuinely
+    /// standalone-runnable rather than partial.
+    ///
+    /// Unlike `shard`, a subset is not required to partition the parent:
+    /// everything not named in `mutationIDs` is simply dropped from
+    /// `mutations`/`skipped`/`budgetInclusionReasons`, not preserved in some
+    /// complementary plan.
+    ///
+    /// Fails closed on either malformed input, rather than silently producing
+    /// a plan smaller or differently-shaped than the caller asked for:
+    /// - a duplicate ID in `mutationIDs` (`.duplicateRequestedID`)
+    /// - an ID not present in `plan.mutations` (`.missingFromParent`, naming
+    ///   every offending ID so the caller can tell exactly which)
+    ///
+    /// Does not mutate `plan` — a fresh `MutationPlan` is constructed and
+    /// returned, the same way `shard` never mutates its input.
+    public static func subset(of plan: MutationPlan, mutationIDs: [MutationID]) throws -> MutationPlan {
+        var requested = Set<MutationID>()
+        for id in mutationIDs {
+            guard requested.insert(id).inserted else {
+                throw PlanSubsetError.duplicateRequestedID(id)
+            }
+        }
+
+        let parentIDs = Set(plan.mutations.map(\.id))
+        let missing = requested.subtracting(parentIDs)
+        guard missing.isEmpty else {
+            throw PlanSubsetError.missingFromParent(missing.sorted { $0.rawValue < $1.rawValue })
+        }
+
+        return MutationPlan(
+            planID: plan.planID,
+            createdAt: plan.createdAt,
+            projectRoot: plan.projectRoot,
+            toolchain: plan.toolchain,
+            configurationHash: plan.configurationHash,
+            sourceFileHashes: plan.sourceFileHashes,
+            mutations: plan.mutations.filter { requested.contains($0.id) },
+            skipped: plan.skipped.filter { requested.contains($0.id) },
+            operators: plan.operators,
+            budgetInclusionReasons: plan.budgetInclusionReasons.filter { requested.contains($0.mutationID) }
+        )
     }
 
     /// Combines shard reports into one report for the whole plan.

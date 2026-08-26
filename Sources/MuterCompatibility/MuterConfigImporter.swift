@@ -75,11 +75,13 @@ public struct MuterConfigImporter: Sendable {
         let project = translateProject(muter, into: &entries)
         let sources = translateSources(muter, into: &entries)
         let timeouts = translateTimeouts(muter, into: &entries)
+        let operators = translateOperators(muter, into: &entries)
         recordUnmappable(muter, into: &entries)
 
         let configuration = Configuration(
             project: project,
             sources: sources,
+            operators: operators,
             timeouts: timeouts
         )
 
@@ -318,6 +320,56 @@ public struct MuterConfigImporter: Sendable {
         )
     }
 
+    // MARK: - Operators
+
+    /// Muter's `excludeCalls` names functions its own `RemoveSideEffects`
+    /// operator must never remove. The direct analogue here is
+    /// `swift.core.side-effect-call-removal`'s own
+    /// `operators.sideEffectCallRemoval.excludeCalls` — mapped straight
+    /// across rather than dropped, with the one real semantic gap called
+    /// out explicitly: Muter's list can, in principle, exclude a specific
+    /// receiver's method (its own README documents that it currently does
+    /// not — "Doesn't support overloading currently" — but the *option* to
+    /// tighten that exists on Muter's side), while this tool's own
+    /// exclusion matches on the called name alone, with no receiver
+    /// distinction at all. A user relying on Muter's per-receiver behavior
+    /// (if any future Muter version added it) would see a broader
+    /// exclusion here than intended — worth a `needsReview` note, not a
+    /// silent one-to-one translation.
+    ///
+    /// `swift.core.side-effect-call-removal` also stays `experimental`
+    /// (not `defaultEnabled`) regardless of this import: migrating a
+    /// config must never itself promote an operator past what this
+    /// catalog's own evidence bar allows — see the operator's own doc
+    /// comment for why. A user who wants parity with Muter's own
+    /// always-on `RemoveSideEffects` still needs `operators.profile:
+    /// experimental` or an explicit `operators.enable` entry.
+    private func translateOperators(
+        _ muter: MuterConfigurationFile,
+        into entries: inout [ImportReport.Entry]
+    ) -> OperatorSettings {
+        guard !muter.excludeCalls.isEmpty else { return OperatorSettings() }
+
+        entries.append(ImportReport.Entry(
+            field: "excludeCalls",
+            disposition: .partiallyTranslated,
+            muterValue: muter.excludeCalls.joined(separator: ", "),
+            mutantkitValue: "operators.sideEffectCallRemoval.excludeCalls: [\(muter.excludeCalls.joined(separator: ", "))]",
+            detail: """
+            Maps onto swift.core.side-effect-call-removal's own excludeCalls, matched on the \
+            called name alone (no receiver distinction, the same limitation Muter's own docs \
+            note for its equivalent list). That operator is experimental, not enabled by \
+            default here — add operators.profile: experimental or an explicit \
+            operators.enable: [swift.core.side-effect-call-removal] to actually reach it; \
+            importing this list alone does not turn the operator on.
+            """
+        ))
+
+        return OperatorSettings(
+            sideEffectCallRemoval: SideEffectCallRemovalSettings(excludeCalls: muter.excludeCalls)
+        )
+    }
+
     // MARK: - What we cannot carry
 
     private func recordUnmappable(
@@ -334,21 +386,6 @@ public struct MuterConfigImporter: Sendable {
                 No equivalent. Muter fails a run when line coverage falls below this number; \
                 this tool reports a mutation score and does not gate on line coverage at all. \
                 Keep the check in CI if you need it.
-                """
-            ))
-        }
-
-        if !muter.excludeCalls.isEmpty {
-            entries.append(ImportReport.Entry(
-                field: "excludeCalls",
-                disposition: .dropped,
-                muterValue: muter.excludeCalls.joined(separator: ", "),
-                mutantkitValue: nil,
-                detail: """
-                No equivalent. This list tells Muter's Remove Side Effects operator which calls \
-                to leave alone. There is no such operator here and no per-call exclusion \
-                mechanism, so the list has nothing to apply to. Nothing is lost today: no \
-                operator in this release removes calls.
                 """
             ))
         }

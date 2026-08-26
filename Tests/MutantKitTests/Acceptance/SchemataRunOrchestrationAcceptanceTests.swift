@@ -1,5 +1,6 @@
 import Foundation
 import MutationModel
+import SwiftCoreOperators
 import Testing
 
 /// `mutantkit run` itself, with `execution.strategy: schemata` in the
@@ -78,6 +79,35 @@ struct SchemataRunOrchestrationAcceptanceTests {
         #expect(
             strategy.effectiveCount + strategy.fallbackCount == result.report.results.count,
             "every result must be attributed to exactly one of the two backends"
+        )
+    }
+
+    @Test("""
+    Gate 3 Phase H19: the planner-time fallback (sum's arithmetic operator, never embedded at all) is named in \
+    plannerFallbackReasonCounts, and the two reason histograms together sum to the full fallbackCount
+    """)
+    func plannerFallbackReasonCountsAccountForTheWholeFallbackCount() throws {
+        let result = try run()
+        let strategy = try #require(result.report.executionStrategy)
+
+        let plannerReasons = try #require(
+            strategy.plannerFallbackReasonCounts,
+            "a schemata run that genuinely classified candidates must report this, even if empty"
+        )
+        #expect(
+            plannerReasons["operatorNotYetLowered.\(ArithmeticOperatorReplacementOperator.descriptor.id)"] == 1,
+            "sum's arithmetic operator has no registered lowerer — a planner-time exclusion, not a dynamic one: \(plannerReasons)"
+        )
+
+        // The invariant this phase exists to establish: before it, only
+        // `fallbackReasonCounts` (dynamic-only) was reported, and it alone
+        // never summed to `fallbackCount` for a run with any planner-time
+        // exclusion at all — exactly this fixture's own shape.
+        let dynamicTotal = (strategy.fallbackReasonCounts ?? [:]).values.reduce(0, +)
+        let plannerTotal = plannerReasons.values.reduce(0, +)
+        #expect(
+            dynamicTotal + plannerTotal == strategy.fallbackCount,
+            "dynamic (\(dynamicTotal)) + planner-time (\(plannerTotal)) reasons must together account for the whole fallbackCount (\(strategy.fallbackCount))"
         )
     }
 

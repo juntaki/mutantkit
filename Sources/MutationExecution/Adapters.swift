@@ -181,12 +181,102 @@ public protocol TestAdapter: Sendable {
 /// variables set and report the test outcome, exactly like `runMutant`
 /// does for isolated mode, just without a build in between calls.
 public protocol SchemataTestable: TestAdapter {
+    /// - Parameter selectedTests: the same convention `TestSelecting
+    ///   .runMutant` establishes: `nil` and an empty set both mean "no
+    ///   narrowing, run the full configured test list" — an adapter must
+    ///   never turn an empty selection into a filter that runs nothing.
+    ///   Populated by the caller from a `PerTestCoverageMap` lookup when
+    ///   `execution.selectCoveringTests` is enabled and the adapter also
+    ///   conforms to `TestSelecting`; `nil` otherwise, which reproduces the
+    ///   exact unrestricted behaviour schemata mode always had before this
+    ///   parameter existed.
     func runSchemataToken(
         _ artifact: BuildArtifact,
         in workspace: URL,
         timeoutSeconds: Double,
-        environment: [String: String]
+        environment: [String: String],
+        selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult
+}
+
+/// One already-built schemata token's slot in a batched test run — the
+/// schemata counterpart to `BatchMutantItem`. No `artifact` field: unlike
+/// isolated mode, every token in a schemata chunk shares the *same* build
+/// (the chunk's own), so the batch as a whole carries one artifact, not
+/// one per item.
+public struct SchemataBatchTokenItem: Sendable {
+    public let mutationID: MutationID
+    /// This token's own `EnvironmentVariables` (token/runID/transcript
+    /// path — `SchemataEvidenceCollector`'s own env vars), merged into its
+    /// `TestConfigurations` entry so each configuration in the shared
+    /// batch activates and reports evidence for a different mutation
+    /// despite all sharing one binary.
+    public let environment: [String: String]
+    /// Same meaning and same fallback as `SchemataTestable.runSchemataToken`'s:
+    /// `nil` or empty runs the full configured test list. Unlike isolated's
+    /// `BatchMutantItem`, an item with `nil`/empty `selectedTests` is never
+    /// handed to `runSchemataTokenBatch` at all — see that method's own doc
+    /// comment for why an unnarrowed configuration cannot share a batch.
+    public let selectedTests: Set<TestIdentifier>?
+
+    public init(mutationID: MutationID, environment: [String: String], selectedTests: Set<TestIdentifier>?) {
+        self.mutationID = mutationID
+        self.environment = environment
+        self.selectedTests = selectedTests
+    }
+}
+
+/// An adapter that can test several already-built schemata tokens — all
+/// sharing one chunk build — in a single process instead of one process
+/// per token. The schemata counterpart to `BatchTestable`; see that
+/// protocol's own doc comment for what "batched" empirically costs and
+/// recovers from (confirmed there for isolated mode's own per-mutant
+/// artifacts; schemata batching reuses the identical `.xctestrun`
+/// `TestConfigurations` mechanism, just against one shared artifact
+/// instead of several separate ones).
+///
+/// Conformance is optional, the same shape as `BatchTestable`: an adapter
+/// that does not conform simply never gets asked, and every token runs the
+/// unbatched way via `SchemataTestable.runSchemataToken`.
+public protocol SchemataBatchTestable: SchemataTestable {
+    /// Tests every item in one process, against the one already-built
+    /// chunk `artifact`. Returns exactly one result per item's
+    /// `mutationID` — a batch-level failure reports that item
+    /// `.infrastructureFailure` rather than omitting it, the same
+    /// never-drop-a-handed-in-item contract `BatchTestable.runBatch`
+    /// makes. Every item's `selectedTests` must be non-`nil` and
+    /// non-empty (the caller's responsibility, not this method's to
+    /// enforce) — an unnarrowed configuration cannot be told apart from
+    /// its batch-mates afterward, the identical reason `runBatch` never
+    /// batches an unnarrowed `BatchMutantItem` either.
+    ///
+    /// - Parameter nativeTimeoutAllowanceSeconds: same meaning as
+    ///   `BatchTestable.runBatch`'s parameter of the same name (Gate 3
+    ///   Phase H3) — when non-`nil`, enables XCTest's own per-test
+    ///   execution-time allowance for every configuration in the batch, so
+    ///   one hanging token cannot hold the whole batch's outer,
+    ///   aggregate `timeoutSeconds` hostage. `nil` (the default, via the
+    ///   protocol-extension overload below) is a complete no-op.
+    func runSchemataTokenBatch(
+        _ artifact: BuildArtifact,
+        in workspace: URL,
+        items: [SchemataBatchTokenItem],
+        timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
+    ) async -> [MutationID: TestRunResult]
+}
+
+extension SchemataBatchTestable {
+    public func runSchemataTokenBatch(
+        _ artifact: BuildArtifact,
+        in workspace: URL,
+        items: [SchemataBatchTokenItem],
+        timeoutSeconds: Double
+    ) async -> [MutationID: TestRunResult] {
+        await runSchemataTokenBatch(
+            artifact, in: workspace, items: items, timeoutSeconds: timeoutSeconds, nativeTimeoutAllowanceSeconds: nil
+        )
+    }
 }
 
 /// An adapter that can measure line coverage on the baseline run.
@@ -288,11 +378,34 @@ public protocol BatchTestable: TestAdapter {
     /// bundle even though others in the same batch succeeded) reports that
     /// item `.infrastructureFailure` rather than omitting it: every mutant
     /// handed in must come back out, proven or not.
+    ///
+    /// - Parameter nativeTimeoutAllowanceSeconds: When non-`nil`, enables
+    ///   XCTest's own per-test execution-time allowance
+    ///   (`-test-timeouts-enabled`) at this value for every configuration in
+    ///   the batch — confirmed (Gate 3 Phase H1/H2) to cut a single hanging
+    ///   configuration off without killing the shared `xcodebuild`
+    ///   invocation or losing its siblings' results. This is *containment*,
+    ///   layered underneath — never a replacement for — `timeoutSeconds`,
+    ///   which remains the outer, aggregate fail-safe for the whole
+    ///   invocation exactly as before. `nil` (the default) is a complete
+    ///   no-op: every caller that does not pass it gets today's behavior
+    ///   unchanged.
     func runBatch(
         _ items: [BatchMutantItem],
         in workspace: URL,
-        timeoutSeconds: Double
+        timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
     ) async -> [MutationID: TestRunResult]
+}
+
+extension BatchTestable {
+    public func runBatch(
+        _ items: [BatchMutantItem],
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async -> [MutationID: TestRunResult] {
+        await runBatch(items, in: workspace, timeoutSeconds: timeoutSeconds, nativeTimeoutAllowanceSeconds: nil)
+    }
 }
 
 /// A build+test pair for one project kind, chosen by detection or configuration.

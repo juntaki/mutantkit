@@ -1,13 +1,33 @@
 import Foundation
 import MutationModel
 
-/// Cross-run result cache for future incremental mutation execution.
+/// Cross-run result cache: incremental mutation execution across commits.
 ///
 /// Unlike checkpoints, which are scoped to one exact `RunContextFingerprint`
 /// and exist only to resume an interrupted run, this cache is explicit about
 /// the proof required to reuse a result: callers supply a context digest that
 /// must already include source/test/toolchain/configuration identity. The
 /// cache never guesses whether two contexts are equivalent.
+///
+/// Reuse rests on two independent checks, and both must pass:
+///
+/// 1. **Per-mutant identity**, enforced here in `load`: the entry's
+///    `mutationID` must equal this point's, *and* its `pointDigest` must
+///    equal `PlannedMutationRef.pointDigest(for: point)`. That digest folds
+///    in the mutated file's own `sourceFileHash` (ADR-0002), so a mutant
+///    whose file changed by even one byte can never be served from cache,
+///    whatever the context digest says.
+/// 2. **Per-context identity**, enforced by the caller's digest. Since
+///    `RunContextProbe.computeContextDigest` became content-addressed rather
+///    than commit-addressed, that digest is a function of the bytes of every
+///    non-ignored file in the worktree and of nothing else — so an entry
+///    written at one commit is reusable at another commit whose relevant
+///    content is byte-identical, and is *not* reusable when any of it moved.
+///    Transitive-dependency scoping (reusing across a commit that changed
+///    some unrelated file) is deliberately not attempted: MutantKit has no
+///    per-file dependency graph, so it cannot prove which other files a
+///    mutant's verdict depends on, and a guess there would be a false hit.
+///    See `Research/cache-key-granularity/README.md`.
 public actor MutationResultCache {
     public struct Key: Codable, Sendable, Hashable {
         public let mutationID: MutationID

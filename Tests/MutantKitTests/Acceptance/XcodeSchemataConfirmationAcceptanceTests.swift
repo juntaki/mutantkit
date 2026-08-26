@@ -151,7 +151,7 @@ struct XcodeSchemataConfirmationAcceptanceTests {
         let runner = SchemataMutationRunner(
             planID: "plan-xcode-schemata-confirm", workUnitID: "plan-xcode-schemata-confirm",
             programs: [program], points: pointsByID, originalSources: originalSources,
-            build: adapter, test: adapter, workspaces: workspaces, timeoutSeconds: 180,
+            build: adapter, test: adapter, workspaces: workspaces, timeouts: TimeoutSettings(baselineSeconds: 180),
             toolchainHash: "test-toolchain", buildArgumentsHash: "test-build-arguments", policy: policy
         )
 

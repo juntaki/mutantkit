@@ -28,8 +28,8 @@ a reference asset in the ways its authors' licence permits:
     the regression tests in `Tests/MutantKitTests/Regression`. The tests are
     original; the failure modes they encode are observations about Muter.
 
-MutantKit does not aim for behavioural compatibility with Muter, and specifically
-does not reproduce Muter's misclassifications or phantom mutants. See ADR-0001.
+MutantKit uses a different evidence and scoring model from Muter and does not
+aim to reproduce Muter's classification semantics. See ADR-0001.
 
 If Muter source is vendored in future, this notice must be updated to name the
 specific files, and the MIT notice below must additionally be reproduced at the

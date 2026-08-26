@@ -37,5 +37,34 @@ public struct TimeoutController: Sendable {
         return settings.mutant.resolve(baselineDuration: baselineDurationSeconds)
     }
 
+    /// The limit for one mutant's test run. Test *selection* is unaffected —
+    /// callers still run only `selectedTests` when they have a known,
+    /// non-empty set — this only decides how long that run is allowed to
+    /// take, and for now always answers with the whole-suite-scaled
+    /// `mutantLimitSeconds`, the same number every mutant gets regardless of
+    /// selection width.
+    ///
+    /// A `10...30` second, `selectedTests.count`-scaled clamp lived here
+    /// previously — the intent being that a confirmed hang held by only a
+    /// handful of selected tests should cost far less than the whole-suite
+    /// number before it is declared hung. Gate 3's real-iOS-project run
+    /// (a real, large production iOS app,
+    /// `Research/benchmarks/gate3-ios-schemata-2026-08-23`) found it
+    /// uncalibrated for Xcode/Simulator's fixed per-invocation overhead: a
+    /// 129-test selection and an 8-test selection both hit the same 30s
+    /// ceiling and were killed and misclassified `verifiedTimeout`, even
+    /// though the 129-test case alone needs ~100s (this project's whole
+    /// suite takes ~100s) and the 8-test case's true cost was never
+    /// distinguished from a real hang. `count * 5` does not model that fixed
+    /// overhead, and the 30s ceiling saturates for any selection past 6
+    /// tests regardless of how much larger it gets — not a value to bump
+    /// (30 → 120 would not have saved the 129-test case either), a model to
+    /// replace. Reverting to the safe, whole-suite number here — the same
+    /// fallback this function already used for `nil`/empty selections —
+    /// until a properly calibrated replacement exists.
+    public func mutantLimitSeconds(selectedTests _: Set<TestIdentifier>?) -> Double {
+        mutantLimitSeconds
+    }
+
     public var terminationGracePeriodSeconds: Double { settings.terminationGracePeriodSeconds }
 }

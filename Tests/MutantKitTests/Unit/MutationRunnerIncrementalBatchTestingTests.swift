@@ -165,13 +165,18 @@ struct MutationRunnerIncrementalBatchTestingTests {
         )
     }
 
-    @Test("A mutant missing from the batch's returned results is still infrastructureFailure, not dropped")
-    func missingFromBatchResultsIsInfrastructureFailure() async throws {
+    @Test("A mutant missing from the batch's returned results is recovered via a fresh, individual standalone reverify, not left infrastructureFailure (Gate 3 Phase H15C)")
+    func missingFromBatchResultsIsRecoveredStandalone() async throws {
+        // `SpyIncrementalBatchAdapter.runMutant`'s own individual-dispatch
+        // default is `.passed` when unscripted, so the recovered result
+        // here is a real, freshly-observed pass, not a fabricated one —
+        // same discipline `MutationRunnerBatchTestingTests`'s identical
+        // fix already established for the non-incremental batch path.
         let (report, _, _, points, _) = try await run(batchOutcomeOverrides: [0: .passed])
 
         let sorted = report.results.sorted { $0.id < $1.id }
-        let missing = try #require(sorted.first { $0.id == points[1].id })
-        #expect(missing.outcome == .infrastructureFailure)
+        let recovered = try #require(sorted.first { $0.id == points[1].id })
+        #expect(recovered.outcome == .survived, "the recovered pass must settle survived, not infrastructureFailure")
     }
 
     @Test("A cloneProducts failure for one mutant doesn't stall or lose the rest of the worker's queue")
@@ -356,7 +361,8 @@ private actor SpyIncrementalBatchAdapter: TestSelecting, BatchTestable {
     /// than joining the batch, mirroring `XcodeBuildAdapter.runBatch`'s
     /// real behavior.
     func runBatch(
-        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double
+        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
     ) async -> [MutationID: TestRunResult] {
         // The direct, on-disk check for the sandbox-lifetime bug: by this
         // point (batching only starts once every build on every worker has

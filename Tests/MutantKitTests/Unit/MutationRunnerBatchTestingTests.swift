@@ -10,9 +10,11 @@ import Testing
 /// with a known, narrowed test selection into `runBatch` calls, does a
 /// mutant with no known selection still run individually rather than being
 /// silently dropped, does a mutant missing from a batch's returned results
-/// become `.infrastructureFailure` rather than vanishing, and does a
-/// batched mutant's crash confirmation still get its own independent,
-/// unbatched rebuild.
+/// get recovered via a fresh, individual standalone reverify rather than
+/// being terminally marked `.infrastructureFailure` or dropped (Gate 3
+/// Phase H15C — mirrors `testWaveChunk`'s identical, earlier fix for the
+/// wave path), and does a batched mutant's crash confirmation still get its
+/// own independent, unbatched rebuild.
 @Suite("Mutation runner: batch testing")
 struct MutationRunnerBatchTestingTests {
     private let root: URL = Self.makeTempDir(prefix: "mutantkit-batch-project")
@@ -52,7 +54,8 @@ struct MutationRunnerBatchTestingTests {
     private func run(
         testBatchSize: Int,
         batchOutcomeOverrides: [Int: TestRunStatus] = [:],
-        confirmCrashKills: Bool = false
+        confirmCrashKills: Bool = false,
+        mutantTimeoutSeconds: Double? = nil
     ) async throws -> (RunReport, SpyBatchAdapter) {
         try writeThreeMutantProject()
 
@@ -62,7 +65,14 @@ struct MutationRunnerBatchTestingTests {
                 confirmCrashKills: confirmCrashKills,
                 selectCoveringTests: true,
                 testBatchSize: testBatchSize
-            )
+            ),
+            timeouts: {
+                var timeouts = TimeoutSettings()
+                if let mutantTimeoutSeconds {
+                    timeouts.mutant = MutantTimeoutSettings(strategy: .fixed, maximumSeconds: mutantTimeoutSeconds)
+                }
+                return timeouts
+            }()
         )
         let plan = try await MutationPlanner().makePlan(
             configuration: configuration, projectRoot: root, toolchain: toolchain, diffScope: nil
@@ -110,7 +120,14 @@ struct MutationRunnerBatchTestingTests {
 
     @Test("Narrowed mutants are grouped into one batch; the unnarrowed one runs individually")
     func narrowedMutantsAreBatchedUnnarrowedRunsAlone() async throws {
-        let (report, adapter) = try await run(testBatchSize: 10)
+        // Both narrowed mutants must have a scripted batch outcome here —
+        // an unscripted one is `SpyBatchAdapter`'s own way of simulating a
+        // batch member missing from the returned results (see its own doc
+        // comment), which Gate 3 Phase H15C now recovers via an individual
+        // standalone reverify. Leaving these unscripted would make this
+        // test about that recovery path instead of the batching/grouping
+        // mechanics it actually means to verify.
+        let (report, adapter) = try await run(testBatchSize: 10, batchOutcomeOverrides: [0: .passed, 1: .passed])
 
         #expect(report.results.count == 3)
         #expect(report.integrity.violations.isEmpty)
@@ -123,6 +140,40 @@ struct MutationRunnerBatchTestingTests {
         #expect(individualCalls.count == 1, "expected exactly one individually-run mutant")
     }
 
+    // MARK: - Native XCTest timeout containment (Gate 3 Phase H3)
+    //
+    // This is the actual default, non-wave batching path (`testOneBatch`,
+    // dispatched whenever `earlyAbortSelectedTests` is left at its default
+    // `false`) — the one Gate 3's own real-production-app run used, and the one the
+    // original batch-hang-containment finding (a hang's own summed
+    // `batchTimeout` share holding an entire multi-mutant batch hostage)
+    // came from. `testWaveChunk` (`MutationRunnerWaveEarlyKillTests`) gets
+    // the identical wiring for the separate wave-based-early-kill path.
+
+    @Test("A multi-mutant batch call requests native timeout containment, sized from the resolved mutant limit")
+    func nativeTimeoutAllowanceIsSetForMultiMutantBatches() async throws {
+        let (_, adapter) = try await run(testBatchSize: 10, mutantTimeoutSeconds: 90)
+
+        let allowances = await adapter.runBatchNativeTimeoutAllowances
+        #expect(allowances == [90])
+    }
+
+    @Test("A batch call with exactly one batchable mutant does not request native timeout containment")
+    func nativeTimeoutAllowanceIsNilForASingleMutantBatch() async throws {
+        let (_, adapter) = try await run(testBatchSize: 1, mutantTimeoutSeconds: 90)
+
+        let allowances = await adapter.runBatchNativeTimeoutAllowances
+        #expect(allowances == [nil, nil])
+    }
+
+    @Test("A multi-mutant batch call below Phase H1's validated floor does not request native timeout containment")
+    func nativeTimeoutAllowanceIsNilBelowThePhaseH1Floor() async throws {
+        let (_, adapter) = try await run(testBatchSize: 10, mutantTimeoutSeconds: 45)
+
+        let allowances = await adapter.runBatchNativeTimeoutAllowances
+        #expect(allowances == [nil])
+    }
+
     @Test("A batch size smaller than the batchable count splits into multiple batch calls")
     func batchSizeSplitsIntoMultipleCalls() async throws {
         let (_, adapter) = try await run(testBatchSize: 1)
@@ -132,16 +183,48 @@ struct MutationRunnerBatchTestingTests {
         #expect(batchCalls.allSatisfy { $0.count == 1 })
     }
 
-    @Test("A mutant missing from the batch's returned results is infrastructureFailure, not dropped")
-    func missingFromBatchResultsIsInfrastructureFailure() async throws {
+    // MARK: - Batched-result ambiguity recovery (Gate 3 Phase H15C)
+
+    @Test("A mutant missing from the batch's returned results is recovered via a fresh, individual standalone reverify, not dropped or left infrastructureFailure")
+    func missingFromBatchResultsIsRecoveredStandalone() async throws {
         // batchOutcomeOverrides intentionally covers only mutant 0 — mutant
         // 1 is batchable but the fake never reports a result for it, the
         // same shape a real batch losing a configuration would produce.
-        let (report, _) = try await run(testBatchSize: 10, batchOutcomeOverrides: [0: .passed])
+        // `SpyBatchAdapter.runMutant`'s own individual-dispatch default is
+        // `.passed` when unscripted, so the recovered result here is a real,
+        // freshly-observed pass, not a fabricated one.
+        let (report, adapter) = try await run(testBatchSize: 10, batchOutcomeOverrides: [0: .passed])
+
+        let sorted = report.results.sorted { $0.id < $1.id }
+        #expect(sorted[0].outcome == .survived)
+        #expect(sorted[1].outcome == .survived, "the recovered pass must settle survived, not infrastructureFailure")
+
+        // Two individual dispatches: mutant 2 (always unnarrowed, runs
+        // individually regardless — see `writeThreeMutantProject`'s own doc
+        // comment) plus mutant 1's own recovery retry. Mutant 0's batch
+        // result was directly usable and never individually re-dispatched.
+        let individualCalls = await adapter.individualRunMutantCalls
+        #expect(individualCalls.count == 2)
+    }
+
+    @Test("A batch member whose standalone recovery also fails is final — infrastructureFailure, no second retry")
+    func missingFromBatchResultsRecoveryThatAlsoFailsIsFinal() async throws {
+        // Mutant 1's individual recovery is scripted to fail too, via the
+        // same `batchOutcomes` map `runMutant`'s own individual dispatch
+        // reads — one genuine, unrecoverable infrastructure problem, not
+        // this fixture's usual "unscripted means passed" default.
+        let (report, adapter) = try await run(
+            testBatchSize: 10, batchOutcomeOverrides: [0: .passed, 1: .infrastructureFailure]
+        )
 
         let sorted = report.results.sorted { $0.id < $1.id }
         #expect(sorted[0].outcome == .survived)
         #expect(sorted[1].outcome == .infrastructureFailure)
+
+        // Mutant 2 (always unnarrowed) plus mutant 1's own single recovery
+        // attempt — never a second retry of the retry.
+        let individualCalls = await adapter.individualRunMutantCalls
+        #expect(individualCalls.count == 2, "expected exactly one recovery attempt, never a retry of the retry")
     }
 
     @Test("A batched mutant's crash confirmation still gets its own independent, unbatched rebuild")
@@ -407,6 +490,7 @@ private actor SpyBatchAdapter: TestSelecting, BatchTestable {
     /// returned dictionary, simulating a batch that lost a configuration.
     private let batchOutcomes: [MutationID: TestRunStatus]
     private(set) var runBatchCalls: [[MutationID]] = []
+    private(set) var runBatchNativeTimeoutAllowances: [Double?] = []
     private(set) var individualRunMutantCalls: [MutationID] = []
 
     init(perTestCoverage: PerTestCoverageMap?, batchOutcomes: [MutationID: TestRunStatus]) {
@@ -452,7 +536,8 @@ private actor SpyBatchAdapter: TestSelecting, BatchTestable {
     /// cannot be batched safely. A fake that skipped this split would not
     /// be exercising what this suite means to test.
     func runBatch(
-        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double
+        _ items: [BatchMutantItem], in workspace: URL, timeoutSeconds: Double,
+        nativeTimeoutAllowanceSeconds: Double?
     ) async -> [MutationID: TestRunResult] {
         let batchable = items.filter { $0.selectedTests?.isEmpty == false }
         let individual = items.filter { $0.selectedTests?.isEmpty != false }
@@ -465,6 +550,7 @@ private actor SpyBatchAdapter: TestSelecting, BatchTestable {
 
         guard !batchable.isEmpty else { return results }
         runBatchCalls.append(batchable.map(\.id))
+        runBatchNativeTimeoutAllowances.append(nativeTimeoutAllowanceSeconds)
         for item in batchable {
             guard let status = batchOutcomes[item.id] else { continue }
             results[item.id] = Self.result(status)

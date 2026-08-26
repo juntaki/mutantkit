@@ -1,0 +1,84 @@
+# Composite GitHub Action wrapping the exact tarball-install recipe the
+# README's "In CI" section documents (curl the release tarball + SHA256SUMS,
+# verify, extract, add to PATH) — so a consumer writes
+#
+#     - uses: juntaki/mutantkit@v1
+#
+# instead of copy-pasting that shell recipe into every workflow. Schema per
+# GitHub's "Metadata syntax for GitHub Actions" docs
+# (https://docs.github.com/en/actions/sharing-automations/creating-actions/metadata-syntax-for-github-actions):
+# a composite action's top-level keys are name/description/inputs/outputs/
+# runs, and `runs.using: composite` requires every `run` step to declare its
+# own `shell`.
+name: "Setup MutantKit"
+description: >-
+  Installs the MutantKit Swift mutation-testing CLI from a signed release
+  tarball (no Homebrew, no repo checkout) and adds it to PATH.
+author: "juntaki"
+
+inputs:
+  version:
+    description: >-
+      MutantKit release to install. "latest" (the default) tracks the
+      newest GitHub Release; pin to an exact tag (e.g. "v0.1.0") for a job
+      that should not change behavior mid-week on its own — see the
+      README's "In CI" section for the same tradeoff spelled out for the
+      manual recipe this action wraps.
+    required: false
+    default: "latest"
+
+outputs:
+  version:
+    description: "The mutantkit version string reported by `mutantkit --version` after install."
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: "composite"
+  steps:
+    # The prebuilt binary this action installs is macOS arm64 only (see the
+    # README's "Install" section: "Requires macOS 14+ on Apple Silicon") —
+    # failing here with a clear message beats an opaque 404 a few lines
+    # down when a workflow accidentally targets ubuntu-latest or an Intel
+    # runner.
+    - name: Check platform support
+      shell: bash
+      run: |
+        set -euo pipefail
+        os="$(uname -s)"
+        arch="$(uname -m)"
+        if [ "$os" != "Darwin" ] || [ "$arch" != "arm64" ]; then
+          echo "::error::juntaki/mutantkit only ships a macOS arm64 binary (got $os/$arch). Run this action on a macos-* Apple Silicon runner (e.g. macos-14 or macos-15)." >&2
+          exit 1
+        fi
+
+    - name: Install mutantkit ${{ inputs.version }}
+      id: install
+      shell: bash
+      env:
+        MUTANTKIT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        if [ "$MUTANTKIT_VERSION" = "latest" ]; then
+          base_url="https://github.com/juntaki/mutantkit/releases/latest/download"
+        else
+          base_url="https://github.com/juntaki/mutantkit/releases/download/${MUTANTKIT_VERSION}"
+        fi
+
+        install_dir="$RUNNER_TEMP/mutantkit-install"
+        mkdir -p "$install_dir"
+        cd "$install_dir"
+
+        # Same recipe the README documents for "In CI", plus -f so a bad
+        # URL (e.g. a mistyped version tag) fails the curl step loudly
+        # instead of silently downloading a GitHub 404 HTML page that then
+        # fails confusingly at `shasum -c` or `tar` a few lines later.
+        curl -fLO "$base_url/mutantkit-macos-arm64.tar.gz"
+        curl -fLO "$base_url/SHA256SUMS"
+        shasum -a 256 -c SHA256SUMS
+        tar xzf mutantkit-macos-arm64.tar.gz
+        echo "$install_dir/mutantkit-macos-arm64" >> "$GITHUB_PATH"
+
+        installed_version="$("$install_dir/mutantkit-macos-arm64/mutantkit" --version)"
+        echo "version=$installed_version" >> "$GITHUB_OUTPUT"
+        echo "Installed mutantkit $installed_version"

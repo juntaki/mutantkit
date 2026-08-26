@@ -14,17 +14,28 @@ public struct AggregateProjectResult: Sendable {
     /// .passed` itself was `true`, since that flag is exactly one of the
     /// things being cross-checked, not trusted at face value.
     public let mutantKitCorrectnessPassed: Bool
+    /// Phase C13: `ericodx/swift-mutation-testing`, the third comparison
+    /// target named from the start of the competitive-parity program.
+    /// Both default to empty/`nil` (added at the end, defaulted) so every
+    /// existing caller that never runs this optional third tool is
+    /// unaffected.
+    public let swiftMutationTestingMeasurements: [BenchmarkMode: MutationBenchmarkMeasurement]
+    public let comparisonWithSwiftMutationTesting: CrossToolComparison?
 
     public init(
         projectID: String, mutantKitMeasurements: [BenchmarkMode: MutationBenchmarkMeasurement],
         muterMeasurements: [BenchmarkMode: MutationBenchmarkMeasurement], comparison: CrossToolComparison?,
-        mutantKitCorrectnessPassed: Bool
+        mutantKitCorrectnessPassed: Bool,
+        swiftMutationTestingMeasurements: [BenchmarkMode: MutationBenchmarkMeasurement] = [:],
+        comparisonWithSwiftMutationTesting: CrossToolComparison? = nil
     ) {
         self.projectID = projectID
         self.mutantKitMeasurements = mutantKitMeasurements
         self.muterMeasurements = muterMeasurements
         self.comparison = comparison
         self.mutantKitCorrectnessPassed = mutantKitCorrectnessPassed
+        self.swiftMutationTestingMeasurements = swiftMutationTestingMeasurements
+        self.comparisonWithSwiftMutationTesting = comparisonWithSwiftMutationTesting
     }
 }
 

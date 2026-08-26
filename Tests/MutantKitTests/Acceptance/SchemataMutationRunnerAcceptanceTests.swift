@@ -114,7 +114,7 @@ struct SchemataMutationRunnerAcceptanceTests {
         let runner = SchemataMutationRunner(
             planID: "plan-schemata-acceptance", workUnitID: "plan-schemata-acceptance",
             programs: [program], points: pointsByID, originalSources: originalSources,
-            build: adapter, test: adapter, workspaces: workspaces, timeoutSeconds: 120,
+            build: adapter, test: adapter, workspaces: workspaces, timeouts: TimeoutSettings(baselineSeconds: 120),
             toolchainHash: "test-toolchain", buildArgumentsHash: "test-build-arguments", policy: .permissive
         )
 

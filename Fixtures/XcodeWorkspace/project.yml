@@ -38,6 +38,20 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
 
+  # Phase C2 (competitive-parity program): proves Swift Testing support
+  # under an Xcode *workspace* is real, not just parser-level. Isolated on
+  # its own scheme so `xcodebuild -scheme Billing ...` — every other suite
+  # sharing this fixture — never builds or runs it.
+  SwiftTestingBillingTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [SwiftTestingTests]
+    dependencies:
+      - target: Billing
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Billing:
     build:
@@ -46,3 +60,12 @@ schemes:
         BillingTests: [test]
     test:
       targets: [BillingTests]
+
+  # Isolated the same way as the extra target above.
+  SwiftTestingBillingDemo:
+    build:
+      targets:
+        Billing: all
+        SwiftTestingBillingTests: [test]
+    test:
+      targets: [SwiftTestingBillingTests]
