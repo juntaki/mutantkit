@@ -415,18 +415,20 @@ extension MutationPoint {
     func with(
         id: MutationID? = nil,
         utf8Range: ByteRange? = nil,
-        occurrenceIndex: Int? = nil
+        occurrenceIndex: Int? = nil,
+        operatorVersion: Int? = nil,
+        replacementText: String? = nil
     ) -> MutationPoint {
         MutationPoint(
             id: id ?? self.id,
             file: file,
             enclosingDeclaration: enclosingDeclaration,
             operatorID: operatorID,
-            operatorVersion: operatorVersion,
+            operatorVersion: operatorVersion ?? self.operatorVersion,
             occurrenceIndex: occurrenceIndex ?? self.occurrenceIndex,
             utf8Range: utf8Range ?? self.utf8Range,
             originalText: originalText,
-            replacementText: replacementText,
+            replacementText: replacementText ?? self.replacementText,
             prefixTokenFingerprint: prefixTokenFingerprint,
             suffixTokenFingerprint: suffixTokenFingerprint,
             sourceFileHash: sourceFileHash,

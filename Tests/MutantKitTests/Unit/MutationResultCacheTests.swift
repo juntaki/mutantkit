@@ -440,14 +440,119 @@ struct MutationResultCacheTests {
         ContentHash.shortDigest(of: key.mutationID.rawValue + "\u{1F}" + key.contextDigest, length: 32) + ".json"
     }
 
-    private func writeRawCacheRecord(key: MutationResultCache.Key, observations: MutationObservations, verificationVersion: Int) throws {
+    private func writeRawCacheRecord(
+        key: MutationResultCache.Key, observations: MutationObservations,
+        verificationVersion: Int, executionVersion: Int = ExecutionImplementationVersion.current
+    ) throws {
         struct RawCacheRecord: Codable {
+            let key: MutationResultCache.Key
+            let observations: MutationObservations
+            let verificationVersion: Int
+            let executionVersion: Int
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(
+            RawCacheRecord(
+                key: key, observations: observations,
+                verificationVersion: verificationVersion, executionVersion: executionVersion
+            )
+        )
+        try data.write(to: root.appendingPathComponent(storageName(for: key)))
+    }
+}
+
+/// Split from the primary suite above purely to stay under this project's
+/// `type_body_length` SwiftLint limit, not because these tests belong to a
+/// different feature — the P4 (cache soundness) gap-fix regressions for
+/// `ExecutionImplementationVersion`.
+extension MutationResultCacheTests {
+    // MARK: - P4 cache-soundness gap fix: executionVersion gating
+
+    /// Mirrors `staleVerificationVersionMisses` exactly, for the sibling
+    /// mechanism `ExecutionImplementationVersion` adds: a record stamped by
+    /// a superseded execution-implementation version must never be served,
+    /// the same "no migration" convention `verificationVersion` already
+    /// established.
+    @Test("A record stamped by an older execution-implementation version is a miss, not served stale")
+    func staleExecutionVersionMisses() async throws {
+        let point = try makeAnchoredPoint()
+        let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "digest-execversion")
+        let observations = makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID)
+
+        try writeRawCacheRecord(
+            key: key, observations: observations,
+            verificationVersion: MutationVerdictVerifier.currentVersion, executionVersion: ExecutionImplementationVersion.current - 1
+        )
+
+        let cache = MutationResultCache(root: root, policy: .permissive)
+        let loaded = await load(cache, key, point: point)
+
+        #expect(loaded == nil, "a superseded execution-implementation version must not be served")
+    }
+
+    @Test("A legacy record with no executionVersion field at all is a miss, not migrated")
+    func legacyRecordWithoutExecutionVersionFieldMisses() async throws {
+        let point = try makeAnchoredPoint()
+        let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "digest-legacy-execversion")
+        let observations = makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID)
+
+        // Simulate a cache file written before `executionVersion` existed —
+        // the exact on-disk shape this whole change ships as a migration
+        // target for: `verificationVersion` present (an older field), but
+        // no `executionVersion` key at all.
+        struct PreExecutionVersionCacheRecord: Codable {
             let key: MutationResultCache.Key
             let observations: MutationObservations
             let verificationVersion: Int
         }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(RawCacheRecord(key: key, observations: observations, verificationVersion: verificationVersion))
+        let data = try JSONEncoder().encode(
+            PreExecutionVersionCacheRecord(
+                key: key, observations: observations, verificationVersion: MutationVerdictVerifier.currentVersion
+            )
+        )
         try data.write(to: root.appendingPathComponent(storageName(for: key)))
+
+        let cache = MutationResultCache(root: root, policy: .permissive)
+        let loaded = await load(cache, key, point: point)
+
+        #expect(loaded == nil, "a pre-executionVersion record must be discarded, not silently trusted")
+    }
+
+    /// The real-world adversarial scenario `ExecutionImplementationVersion`'s
+    /// own doc comment describes is one *shape* of a broader, already-real
+    /// risk this test targets directly: an operator's replacement-text logic
+    /// changing for an *unchanged* site, without a corresponding
+    /// `operatorVersion` bump. `MutationID` alone (`operatorID` +
+    /// `operatorVersion` + site identity, never `replacementText` itself)
+    /// cannot tell the old and new replacements apart — this is exactly why
+    /// `PlannedMutationRef.pointDigest` hashes `replacementText` directly,
+    /// and this test proves that protection holds end to end through the
+    /// real cache, not just as a hash-computation fact in isolation: a
+    /// verdict cached against the *old* replacement text must never be
+    /// served for the *same* `MutationID` once the candidate's own
+    /// replacement text has changed.
+    @Test("A stale verdict under an operator's old replacement text is not served once the text changes, same MutationID")
+    func operatorReplacementTextChangeInvalidatesTheStaleVerdict() async throws {
+        let oldPoint = try makeAnchoredPoint()
+        // Same MutationID on purpose (the operator's own `operatorVersion`
+        // was not bumped) — a different replacement text is the only thing
+        // that changed, simulating exactly the "bug fixed, version bump
+        // forgotten" shape this mechanism must not depend on to stay sound.
+        let newPoint = oldPoint.with(replacementText: "REPLACEMENT_TEXT_AFTER_THE_OPERATOR_BUG_FIX")
+        #expect(oldPoint.id == newPoint.id, "an unbumped operatorVersion keeps the MutationID identical — that is what makes this adversarial")
+        #expect(oldPoint.replacementText != newPoint.replacementText, "the fixture must actually change what the operator now proposes")
+
+        let cache = MutationResultCache(root: makeScratch(), policy: .permissive)
+        let key = MutationResultCache.Key(mutationID: oldPoint.id, contextDigest: "identical-context")
+        // Cached under the *old* point — a verdict about the old replacement.
+        let observations = makeObservations(point: oldPoint, outcome: .survived, planID: planID, workUnitID: workUnitID)
+        await store(cache, observations: observations, for: key)
+
+        // Queried with the *new* point: same key (same MutationID, same
+        // context digest), but the candidate's own content has moved.
+        let loaded = await load(cache, key, point: newPoint)
+
+        #expect(loaded == nil, "a verdict measured against a different replacement text must never be served for the new one")
     }
 }

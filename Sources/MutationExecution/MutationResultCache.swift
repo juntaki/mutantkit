@@ -111,6 +111,16 @@ public actor MutationResultCache {
               // previous convention of hand-bumping a cache-namespace string
               // (e.g. `resultCache2`) whenever cache-trust rules changed.
               record.verificationVersion == MutationVerdictVerifier.currentVersion,
+              // P4 cache-soundness gap fix: independent of the verifier's own
+              // version above, and independent of `RunContextProbe`'s context
+              // digest (whose `toolVersion`/`toolCommitSHA` inputs are
+              // hardcoded development-build placeholders until a release
+              // substitutes them — see `ExecutionImplementationVersion`'s own
+              // doc comment for the real gap this closes). A record stamped
+              // by a superseded execution-implementation version is
+              // discarded, not migrated, the same convention
+              // `verificationVersion` already established.
+              record.executionVersion == ExecutionImplementationVersion.current,
               record.observations.plannedMutation.mutationID == point.id,
               record.observations.plannedMutation.pointDigest == PlannedMutationRef.pointDigest(for: point)
         else { return nil }
@@ -167,6 +177,7 @@ public actor MutationResultCache {
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         let cacheRecord = CacheRecord(
             key: key, observations: observations, verificationVersion: record.verificationVersion,
+            executionVersion: ExecutionImplementationVersion.current,
             durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
             testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds
         )
@@ -188,22 +199,31 @@ public actor MutationResultCache {
         /// version-mismatched and is discarded, exactly like a record
         /// stamped by a superseded version.
         static let unknownVerificationVersion = -1
+        /// Same convention as `unknownVerificationVersion`, for the same
+        /// reason: `ExecutionImplementationVersion.current` starts at 1 and
+        /// only increases, so a record missing this field entirely (written
+        /// before it existed) always reads as version-mismatched rather
+        /// than being silently trusted as if execution behavior had never
+        /// changed.
+        static let unknownExecutionVersion = -1
 
         let key: Key
         let observations: MutationObservations
         let verificationVersion: Int
+        let executionVersion: Int
         let durationSeconds: Double
         let buildDurationSeconds: Double?
         let testDurationSeconds: Double?
         let confirmationDurationSeconds: Double?
 
         init(
-            key: Key, observations: MutationObservations, verificationVersion: Int,
+            key: Key, observations: MutationObservations, verificationVersion: Int, executionVersion: Int,
             durationSeconds: Double, buildDurationSeconds: Double?, testDurationSeconds: Double?, confirmationDurationSeconds: Double?
         ) {
             self.key = key
             self.observations = observations
             self.verificationVersion = verificationVersion
+            self.executionVersion = executionVersion
             self.durationSeconds = durationSeconds
             self.buildDurationSeconds = buildDurationSeconds
             self.testDurationSeconds = testDurationSeconds
@@ -211,7 +231,8 @@ public actor MutationResultCache {
         }
 
         enum CodingKeys: String, CodingKey {
-            case key, observations, verificationVersion, durationSeconds, buildDurationSeconds, testDurationSeconds, confirmationDurationSeconds
+            case key, observations, verificationVersion, executionVersion, durationSeconds, buildDurationSeconds, testDurationSeconds,
+                 confirmationDurationSeconds
         }
 
         init(from decoder: Decoder) throws {
@@ -220,6 +241,8 @@ public actor MutationResultCache {
             observations = try container.decode(MutationObservations.self, forKey: .observations)
             verificationVersion = try container.decodeIfPresent(Int.self, forKey: .verificationVersion)
                 ?? Self.unknownVerificationVersion
+            executionVersion = try container.decodeIfPresent(Int.self, forKey: .executionVersion)
+                ?? Self.unknownExecutionVersion
             durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds) ?? 0
             buildDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .buildDurationSeconds)
             testDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .testDurationSeconds)
