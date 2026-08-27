@@ -64,6 +64,33 @@ struct CLICommandsAcceptanceTests {
         #expect(result.output.contains("Pricing.swift"))
     }
 
+    /// P5: `inspect --json` against the real CLI binary and a real report —
+    /// not just the unit-level `InspectCommandAgentJSONTests` — end to end,
+    /// exit 0, valid JSON, and the real verdict/evidence this exact report
+    /// actually recorded, not a placeholder.
+    @Test("inspect --json produces a valid, structured record with the real verdict from a real report")
+    func inspectJSONProducesAStructuredRecord() throws {
+        let dir = try directory()
+        let rep = try report()
+        let firstMutant = try #require(rep.results.first)
+
+        let result = try Acceptance.run(
+            ["inspect", firstMutant.id.rawValue, "--plan", "plan.json", "--report", ".mutantkit/report.json", "--json"],
+            in: dir
+        )
+
+        #expect(result.exitCode == 0)
+        let decoded = try #require(
+            try JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any],
+            "output must be exactly one valid JSON document, nothing else"
+        )
+        #expect(decoded["mutantId"] as? String == firstMutant.id.rawValue)
+        #expect(decoded["verdict"] as? String == firstMutant.outcome.rawValue)
+        #expect(decoded["operator"] != nil, "the operator key, not the Swift property name mutantOperator")
+        let source = try #require(decoded["source"] as? [String: Any])
+        #expect((source["file"] as? String)?.contains("Pricing.swift") == true)
+    }
+
     /// `inspect` with a nonexistent mutation ID exits non-zero.
     @Test("inspect of a missing mutation ID exits non-zero")
     func inspectMissingReportFails() throws {
