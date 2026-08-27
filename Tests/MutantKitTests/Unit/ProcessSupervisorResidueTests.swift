@@ -30,7 +30,28 @@ import Testing
 /// at all — 10/10 raw trials survived — and is what `SchemataCrashResidue
 /// AcceptanceTests` (ADR-0008 §5 item 5(b)) already uses successfully for
 /// the same reason.
-@Suite("Acceptance: ProcessSupervisor reaps descendants regardless of exit status")
+/// `.serialized`: real, direct evidence this suite's own 4 process-spawning
+/// tests running concurrently with *each other* (Swift Testing's default)
+/// is itself the dominant driver of the CI flakiness this file went through
+/// two prior rounds of fixing (`eventuallyNoSurvivors` polling,
+/// `ProcessSupervisor`'s descendant-tracking thread QoS) -- a real public CI
+/// run failed 3 of this suite's own 4 tests simultaneously, on a
+/// GitHub-hosted macOS runner confirmed (via that same run's own "Toolchain"
+/// step) to have exactly 3 vCPUs. Each test here spawns a real `python3`
+/// process that itself forks a background child, and asserts on how quickly
+/// the OS actually reaps/removes a killed descendant from the process
+/// table -- a fundamentally real-wall-clock-dependent measurement that
+/// cannot be made deterministic the way `MutationRunnerWaveEarlyKillTests`'
+/// own doc comment describes doing for *simulated* durations (a fake clock
+/// cannot stand in for "did the kernel actually finish removing this PID").
+/// Four such probes racing each other for 3 real cores is a self-inflicted
+/// worst case none of them individually need to survive to prove their own
+/// claim -- unlike the *separate*, deliberately-concurrent-usage tests
+/// elsewhere in this codebase (e.g. "Under real chunk concurrency
+/// (workers: 2)..."), nothing here is testing `ProcessSupervisor`'s
+/// behavior *under* concurrent invocation, so removing this suite's own
+/// self-contention changes nothing about what it verifies.
+@Suite("Acceptance: ProcessSupervisor reaps descendants regardless of exit status", .serialized)
 struct ProcessSupervisorResidueTests {
     /// The `timeoutSeconds` passed to every `ProcessSupervisor.run` call below
     /// that expects a *prompt* exit. Originally 10 — raised after local
