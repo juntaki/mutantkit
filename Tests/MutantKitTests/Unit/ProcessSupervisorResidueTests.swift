@@ -105,11 +105,37 @@ struct ProcessSupervisorResidueTests {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
         process.arguments = ["-fl", needle]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        // Close-on-exec, immediately: a real CI stack sample caught this
+        // exact function stuck forever in `readDataToEndOfFile()` -- the
+        // identical, already-fixed-elsewhere bug class from
+        // `ProcessSupervisor.swift`/`ToolRunner.swift` (`pipe(2)` does not
+        // set FD_CLOEXEC by default), just never applied to this test
+        // helper's own pipes. This suite spawns several other real
+        // processes (a bystander `tail -f`, `ProcessSupervisor`-managed
+        // `python3` scripts) whose own `posix_spawn` calls, racing on other
+        // threads while this pipe's write end is still open, can inherit a
+        // copy of it -- holding it open long after `pgrep` itself exited
+        // and blocking the read below forever, regardless of how generous
+        // `eventuallyNoSurvivors`'s own timeout is (that timeout bounds
+        // polling *between* calls to this function; it cannot bound a
+        // single call stuck reading a pipe that will never see EOF). Safe
+        // for `pgrep`'s own intended stdout/stderr the same way it is in
+        // `ProcessSupervisor.swift`: POSIX `dup2` always clears close-on-
+        // exec on the *new* descriptor it creates, regardless of the
+        // source's own flag, so `Process.run()`'s own `dup2`-based wiring
+        // of `standardOutput`/`standardError` into `pgrep`'s real fds 1/2
+        // is unaffected by marking these *original* pipe fds here.
+        for handle in [outputPipe.fileHandleForReading, outputPipe.fileHandleForWriting,
+                       errorPipe.fileHandleForReading, errorPipe.fileHandleForWriting] {
+            let flags = fcntl(handle.fileDescriptor, F_GETFD)
+            _ = fcntl(handle.fileDescriptor, F_SETFD, flags | FD_CLOEXEC)
+        }
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
         guard (try? process.run()) != nil else { return [] }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)
             .split(separator: "\n").map(String.init).filter { !$0.contains("pgrep") }

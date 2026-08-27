@@ -1,4 +1,5 @@
 @testable import AppleBuildAdapters
+import Darwin
 import Foundation
 import MutationModel
 import Testing
@@ -68,6 +69,14 @@ struct SchemataRuntimeProtocolV3Tests {
             "-L", libDir.path, "-lMutantKitSchemataRuntime", "-o", binaryURL.path
         ]
         let pipe = Pipe()
+        // Close-on-exec, immediately -- see AcceptanceSupport.cloexecPipe's
+        // own doc comment for why: a real CI stack sample caught the
+        // identical, unprotected-pipe pattern hung forever elsewhere in
+        // this test suite (ProcessSupervisorResidueTests.swift).
+        for handle in [pipe.fileHandleForReading, pipe.fileHandleForWriting] {
+            let flags = fcntl(handle.fileDescriptor, F_GETFD)
+            _ = fcntl(handle.fileDescriptor, F_SETFD, flags | FD_CLOEXEC)
+        }
         compile.standardError = pipe
         compile.standardOutput = pipe
         try compile.run()
@@ -103,6 +112,16 @@ struct SchemataRuntimeProtocolV3Tests {
         process.arguments = arguments
         process.environment = environment
         let pipe = Pipe()
+        // Close-on-exec, immediately -- see AcceptanceSupport.cloexecPipe's
+        // own doc comment for why: a real CI stack sample caught the
+        // identical, unprotected-pipe pattern hung forever elsewhere in
+        // this test suite (ProcessSupervisorResidueTests.swift). This
+        // function runs once per test, unlike the one-time cached compile
+        // above, so it is the higher-frequency exposure of the two here.
+        for handle in [pipe.fileHandleForReading, pipe.fileHandleForWriting] {
+            let flags = fcntl(handle.fileDescriptor, F_GETFD)
+            _ = fcntl(handle.fileDescriptor, F_SETFD, flags | FD_CLOEXEC)
+        }
         process.standardOutput = pipe
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()

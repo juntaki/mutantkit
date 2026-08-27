@@ -1,4 +1,5 @@
 @testable import CLI
+import Darwin
 import Foundation
 
 /// Throwaway git repositories for the tests that need real git behaviour
@@ -59,7 +60,7 @@ enum GitFixture {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = root
-        let standardError = Pipe()
+        let standardError = cloexecPipe()
         process.standardError = standardError
         try process.run()
         let message = String(decoding: standardError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
@@ -80,11 +81,37 @@ enum GitFixture {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = root
-        let standardOutput = Pipe()
+        let standardOutput = cloexecPipe()
         process.standardOutput = standardOutput
         try process.run()
         let data = standardOutput.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A `Pipe()` with both ends marked close-on-exec immediately.
+    ///
+    /// `pipe(2)` does not set `FD_CLOEXEC` by default, so any *other*,
+    /// unrelated `posix_spawn`/`Process.run()` call racing on another
+    /// thread while this pipe's write end is still open can inherit a copy
+    /// of it, holding it open long after the intended child has exited and
+    /// blocking `readDataToEndOfFile()` forever -- the identical bug class
+    /// already fixed in
+    /// `Sources/MutationExecution/ProcessSupervisor.swift`/
+    /// `Sources/BenchmarkRunner/ToolRunner.swift`, caught here too by a
+    /// real CI stack sample stuck in exactly this shape in
+    /// `ProcessSupervisorResidueTests.survivingProcesses(referencing:)`.
+    /// Safe for `git`'s own intended stdout/stderr the same way it is
+    /// there: POSIX `dup2` always clears close-on-exec on the *new*
+    /// descriptor it creates, regardless of the source's own flag, so
+    /// `Process.run()`'s own `dup2`-based wiring into `git`'s real fds 1/2
+    /// is unaffected by marking these *original* pipe fds here.
+    private static func cloexecPipe() -> Pipe {
+        let pipe = Pipe()
+        for handle in [pipe.fileHandleForReading, pipe.fileHandleForWriting] {
+            let flags = fcntl(handle.fileDescriptor, F_GETFD)
+            _ = fcntl(handle.fileDescriptor, F_SETFD, flags | FD_CLOEXEC)
+        }
+        return pipe
     }
 }

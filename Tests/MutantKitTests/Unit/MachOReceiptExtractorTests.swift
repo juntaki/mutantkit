@@ -1,4 +1,5 @@
 @testable import AppleBuildAdapters
+import Darwin
 import Foundation
 import MutationModel
 import Testing
@@ -288,6 +289,14 @@ struct MachOReceiptExtractorTests {
         dwarfdump.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         dwarfdump.arguments = ["dwarfdump", "--uuid", binaryURL.path]
         let pipe = Pipe()
+        // Close-on-exec, immediately -- see AcceptanceSupport.cloexecPipe's
+        // own doc comment for why: a real CI stack sample caught the
+        // identical, unprotected-pipe pattern hung forever elsewhere in
+        // this test suite (ProcessSupervisorResidueTests.swift).
+        for handle in [pipe.fileHandleForReading, pipe.fileHandleForWriting] {
+            let flags = fcntl(handle.fileDescriptor, F_GETFD)
+            _ = fcntl(handle.fileDescriptor, F_SETFD, flags | FD_CLOEXEC)
+        }
         dwarfdump.standardOutput = pipe
         try dwarfdump.run()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)

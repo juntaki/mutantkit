@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import MutationModel
 import Testing
@@ -88,7 +89,7 @@ enum Acceptance {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["simctl", "list", "devices", "available", "--json"]
 
-        let pipe = Pipe()
+        let pipe = cloexecPipe()
         process.standardOutput = pipe
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -126,7 +127,7 @@ enum Acceptance {
         process.arguments = arguments
         process.currentDirectoryURL = directory
 
-        let pipe = Pipe()
+        let pipe = cloexecPipe()
         process.standardOutput = pipe
         process.standardError = pipe
 
@@ -137,6 +138,31 @@ enum Acceptance {
         process.waitUntilExit()
 
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+    }
+
+    /// A `Pipe()` with both ends marked close-on-exec immediately.
+    ///
+    /// `pipe(2)` does not set `FD_CLOEXEC` by default, so any *other*,
+    /// unrelated `posix_spawn`/`Process.run()` call racing on another
+    /// thread while this pipe's write end is still open can inherit a copy
+    /// of it, holding it open long after the intended child has exited and
+    /// blocking `readDataToEndOfFile()` forever — the identical bug class
+    /// already fixed in `Sources/MutationExecution/ProcessSupervisor.swift`/
+    /// `Sources/BenchmarkRunner/ToolRunner.swift`, caught here too by a real
+    /// CI stack sample stuck in exactly this shape inside
+    /// `ProcessSupervisorResidueTests.survivingProcesses(referencing:)`.
+    /// Safe for the intended child's own stdout/stderr the same way it is
+    /// there: POSIX `dup2` always clears close-on-exec on the *new*
+    /// descriptor it creates, regardless of the source's own flag, so
+    /// `Process.run()`'s own `dup2`-based wiring into the child's real fds
+    /// 1/2 is unaffected by marking these *original* pipe fds here.
+    private static func cloexecPipe() -> Pipe {
+        let pipe = Pipe()
+        for handle in [pipe.fileHandleForReading, pipe.fileHandleForWriting] {
+            let flags = fcntl(handle.fileDescriptor, F_GETFD)
+            _ = fcntl(handle.fileDescriptor, F_SETFD, flags | FD_CLOEXEC)
+        }
+        return pipe
     }
 
     /// Plans and runs a fixture, returning the parsed report.
