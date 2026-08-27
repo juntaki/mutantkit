@@ -327,9 +327,28 @@ jobs:
           - fixture: xcode-unlinked-source
             filter: XcodeUnlinkedSourceAcceptanceTests
             simulator: "1"
+          # `simulator: "1"`, not "0": this suite is not purely a host-side
+          # SwiftPM fixture — `CLICommandsAcceptanceTests
+          # .initDetectsXcodeDestinationDespiteSchemeAmbiguity` runs a real
+          # `mutantkit init` against `Fixtures/XcodeProject`, which calls
+          # `XcodeConfigDetector.detectDestination()` -> a real
+          # `xcrun simctl list devices available --json`. Classified "0"
+          # originally, which skips the "Available simulators" preflight
+          # step below (gated on `matrix.simulator == '1'`) — a real CI
+          # failure traced this exactly: `Detected: ...`/`Multiple schemes
+          # found (...)` printed correctly, but `Detected destination: ...`
+          # never appeared, and the test itself reported "failed after
+          # 66.165 seconds" — just past `SimulatorPool`'s 60s default
+          # timeout on `simctl`, on a runner whose CoreSimulator subsystem
+          # this job's own matrix classification told it not to expect to
+          # need. A pre-existing test-topology misclassification P4's own
+          # longer runtime happened to expose, not a P4 product regression
+          # (confirmed: `InitCommand.swift`/`XcodeConfigDetector.swift`/
+          # `SimulatorPool.swift`/this test file are all untouched across
+          # every P4 commit).
           - fixture: cli-commands
             filter: CLICommandsAcceptanceTests
-            simulator: "0"
+            simulator: "1"
           - fixture: process-supervision
             filter: ProcessSupervisionAcceptanceTests
             simulator: "0"
