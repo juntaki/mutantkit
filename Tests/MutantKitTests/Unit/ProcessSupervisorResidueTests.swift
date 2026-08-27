@@ -105,6 +105,42 @@ struct ProcessSupervisorResidueTests {
         }
     }
 
+    /// Terminates a `Foundation.Process` bystander with a bound on how long
+    /// this cleanup itself can take -- never `.terminate()` followed
+    /// unconditionally by `.waitUntilExit()`, which has no timeout parameter
+    /// at all and can block forever.
+    ///
+    /// A real, direct reproduction (a stack sample of a genuinely stuck
+    /// `swiftpm-testing-helper` process, captured while verifying an
+    /// unrelated change against the public tree) caught exactly this: a
+    /// bystander `tail -f` process's `waitUntilExit()` parked indefinitely
+    /// in `mach_msg`, waiting on Foundation's own internal death
+    /// notification for that specific child, with the process's own
+    /// `.terminate()` (SIGTERM) apparently either never delivered or never
+    /// observed as having taken effect. Whichever it was, `waitUntilExit()`
+    /// itself has no way to be told "give up after N seconds" -- the only
+    /// way to bound this from the caller's side is to poll `isRunning` with
+    /// our own deadline and escalate to a raw, uncatchable `SIGKILL` (plus a
+    /// best-effort direct `waitpid` to reap it) if Foundation's own
+    /// bookkeeping never reports the process as gone.
+    private static func terminateBoundedly(_ process: Process, timeoutSeconds: Double = 5) {
+        process.terminate()
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while process.isRunning, Date() < deadline {
+            usleep(10000)
+        }
+        guard process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
+        var status: Int32 = 0
+        // Blocking, not WNOHANG: safe here specifically because SIGKILL
+        // cannot be caught or blocked, so a genuinely still-alive child dies
+        // essentially immediately, and a child some other mechanism already
+        // reaped out from under us returns ECHILD immediately instead of
+        // blocking -- there is no shape of "still alive but never exits"
+        // left for this call to hang on the way `waitUntilExit()` did.
+        _ = waitpid(process.processIdentifier, &status, 0)
+    }
+
     /// Polls `survivingProcesses(referencing:)` until it is empty or
     /// `timeoutSeconds` elapses, instead of a single fixed-delay check.
     ///
@@ -146,8 +182,7 @@ struct ProcessSupervisorResidueTests {
         bystander.standardError = FileHandle.nullDevice
         try bystander.run()
         defer {
-            bystander.terminate()
-            bystander.waitUntilExit()
+            Self.terminateBoundedly(bystander)
             try? FileManager.default.removeItem(atPath: bystanderMarker)
         }
 
@@ -240,8 +275,7 @@ struct ProcessSupervisorResidueTests {
         unrelated.standardError = FileHandle.nullDevice
         try unrelated.run()
         defer {
-            unrelated.terminate()
-            unrelated.waitUntilExit()
+            Self.terminateBoundedly(unrelated)
             try? FileManager.default.removeItem(atPath: unrelatedMarker)
         }
 
