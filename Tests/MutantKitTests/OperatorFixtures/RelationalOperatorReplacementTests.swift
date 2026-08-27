@@ -125,8 +125,16 @@ struct RelationalOperatorReplacementTests {
         #expect(try discover(source, using: Operators.relational).isEmpty)
     }
 
-    @Test("Comparisons inside attribute arguments are not mutated")
-    func attributeArgumentsAreExcluded() throws {
+    /// `@Constrained` is not a known compiler-builtin attribute, so its
+    /// arguments are not compile-time metadata by assumption -- a custom
+    /// attribute is very often a `@propertyWrapper`/attached macro whose
+    /// arguments are ordinary, runtime-evaluated expressions (see
+    /// `OperatorExclusions.compileTimeOnlyAttributeNames`'s own doc comment,
+    /// and the real compiled fixture in `Research/mutation-testing-
+    /// hardening-2026-08/PROGRESS.md` that motivated narrowing this from a
+    /// blanket exclusion).
+    @Test("Comparisons inside a non-compiler-builtin attribute's arguments are still mutated")
+    func customAttributeArgumentsAreNotExcluded() throws {
         let source = """
         struct Config {
             @Constrained(where: 1 < 2)
@@ -134,8 +142,20 @@ struct RelationalOperatorReplacementTests {
         }
         """
 
-        #expect(try discover(source, using: Operators.relational).isEmpty)
+        let points = try discover(source, using: Operators.relational)
+        #expect(points.count == 2)
+        for point in points { #expect(point.originalText == "<") }
+        #expect(Set(points.map(\.replacementText)) == Set(["<=", ">="]))
     }
+
+    // A parallel "known compile-time-only attribute still excludes" case is
+    // not included here: none of the restricted-grammar compiler builtins
+    // on `compileTimeOnlyAttributeNames` (`available`, `_specialize`, ...)
+    // accept an arbitrary comparison expression as an argument in the first
+    // place, unlike a custom attribute's generic argument list — the
+    // allowlist itself, plus `BoolLiteralInversionTests
+    // .compileTimeOnlyAttributeArgumentsAreExcluded` (a real Bool argument
+    // in `@_specialize`'s actual grammar), already cover that side.
 
     @Test("Comparisons inside macro expansions are not mutated")
     func macroExpansionsAreExcluded() throws {

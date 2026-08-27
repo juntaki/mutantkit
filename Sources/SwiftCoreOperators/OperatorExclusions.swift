@@ -7,6 +7,45 @@ import SwiftSyntax
 /// guaranteed to be worthless or broken, and a report full of those is a report
 /// developers stop reading.
 enum OperatorExclusions {
+    /// Compiler-recognized attributes actually proven to take compile-time-
+    /// only arguments — the language itself never generates a code path
+    /// that reads them at runtime, unlike a custom attribute.
+    ///
+    /// This is a closed allowlist, not "every attribute," because a custom
+    /// attribute is very often a `@propertyWrapper` (or an attached macro),
+    /// and those take *ordinary* initializer arguments, evaluated and
+    /// stored at runtime exactly like any other call. Proven wrong with a
+    /// real, compiled, run fixture (`Research/mutation-testing-hardening-
+    /// 2026-08/PROGRESS.md`, P2 exclusion audit): a `@propertyWrapper`
+    /// whose `init` reads an `enabled: Bool` argument and branches on it —
+    /// flipping `enabled: true` to `enabled: false` in the attribute
+    /// changed the compiled program's own printed output. That is the same
+    /// class of silently-erased mutant `irradiate`'s `len(x) > 0` ->
+    /// `len(x) >= 0` equivalence bug already showed once for a different
+    /// operator, just for a blanket exclusion instead of a heuristic one.
+    ///
+    /// No symbol resolution is available during discovery to tell "this
+    /// custom attribute is a property wrapper" from "this custom attribute
+    /// is a compiler plugin that only reads its arguments at compile time"
+    /// in general, so this only special-cases the closed, known set of
+    /// *compiler builtins* actually documented to have no runtime reader.
+    /// Every other attribute name — every property wrapper, every attached
+    /// macro, every result builder used as an attribute — is left to
+    /// mutate as ordinary code, the same knowingly-conservative-toward-
+    /// generating-candidates footing `isControlFlowConstantCondition`'s own
+    /// doc comment already takes for a different exclusion.
+    private static let compileTimeOnlyAttributeNames: Set<String> = [
+        // Platform/version/message tokens; no runtime reader anywhere in
+        // the language.
+        "available", "backDeployed",
+        // Objective-C runtime *name* metadata (a selector/class name
+        // string) — affects symbol lookup, not program logic a test
+        // observes.
+        "objc", "objcMembers", "nonobjc",
+        // Generic-specialization hints consumed entirely by the compiler.
+        "_specialize"
+    ]
+
     /// True when the node sits somewhere no mutation can produce a meaningful
     /// runtime difference.
     static func isExcluded(_ node: some SyntaxProtocol) -> Bool {
@@ -15,10 +54,11 @@ enum OperatorExclusions {
         var cursor: Syntax? = Syntax(node).parent
 
         while let current = cursor {
-            // Attribute arguments are compile-time metadata. Flipping the `true`
-            // in `@available(*, deprecated, message:)` changes no behaviour a
-            // test could observe.
-            if current.is(AttributeSyntax.self) { return true }
+            if let attribute = current.as(AttributeSyntax.self),
+               let name = attribute.attributeName.as(IdentifierTypeSyntax.self),
+               compileTimeOnlyAttributeNames.contains(name.name.text) {
+                return true
+            }
 
             // Only the `#if` *condition* is off limits: mutating it does not test
             // the suite, it compiles a different program. The body is ordinary

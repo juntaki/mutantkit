@@ -102,11 +102,37 @@ struct BoolLiteralInversionTests {
 
     // MARK: - Negatives
 
-    /// Attribute arguments are compile-time metadata. Flipping one changes no
-    /// behaviour a test could observe, so the mutant would always survive and
-    /// always be noise.
-    @Test("Literals inside attribute arguments are not mutated")
-    func attributeArgumentsAreExcluded() throws {
+    /// A closed allowlist of *compiler-builtin* attributes, not "every
+    /// attribute": `@available`'s arguments really are compile-time-only,
+    /// with no code path in the language that reads them at runtime.
+    @Test("Literals inside a known compile-time-only attribute's arguments are not mutated")
+    func compileTimeOnlyAttributeArgumentsAreExcluded() throws {
+        let points = try mutations("""
+        struct Config {
+            @_specialize(exported: true, kind: full, where T == Int)
+            func identity<T>(_ value: T) -> T { value }
+        }
+        """)
+
+        #expect(points.isEmpty)
+    }
+
+    /// `@Wrapped` is not on the compile-time-only allowlist -- deliberately:
+    /// a custom attribute is very often a `@propertyWrapper` (or an
+    /// attached macro), whose arguments are ordinary initializer arguments
+    /// evaluated at runtime like any other call, not compile-time metadata.
+    ///
+    /// Proven with a real, compiled, run fixture rather than assumed
+    /// (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`, P2
+    /// exclusion audit): a `@propertyWrapper` whose `init` branches on an
+    /// `enabled: Bool` argument produced a genuinely different program
+    /// output (`5` vs `0`) when that literal was flipped. Blanket-excluding
+    /// every attribute's arguments was silently erasing this entire class
+    /// of real, useful mutants -- the same shape of bug as `irradiate`'s
+    /// `len(x) > 0` -> `len(x) >= 0` equivalence mistake, just for a
+    /// different operator's exclusion rule.
+    @Test("A literal inside a non-compiler-builtin (property-wrapper-shaped) attribute is still mutated")
+    func customAttributeArgumentsAreNotExcluded() throws {
         let points = try mutations("""
         struct Config {
             @Wrapped(cached: true)
@@ -114,15 +140,18 @@ struct BoolLiteralInversionTests {
         }
         """)
 
-        #expect(points.isEmpty)
+        #expect(points.count == 1)
+        #expect(points[0].originalText == "true")
+        #expect(points[0].replacementText == "false")
     }
 
-    @Test("A literal in an attribute is skipped while a literal beside it is still found")
-    func exclusionIsScopedToTheAttribute() throws {
+    @Test("A literal in a compile-time-only attribute is skipped while a literal beside it is still found")
+    func exclusionIsScopedToTheCompileTimeOnlyAttribute() throws {
         let points = try mutations("""
         struct Config {
-            @Wrapped(cached: true)
-            var value = false
+            @_specialize(exported: true, kind: full, where T == Int)
+            func identity<T>(_ value: T) -> T { value }
+            var flag = false
         }
         """)
 
