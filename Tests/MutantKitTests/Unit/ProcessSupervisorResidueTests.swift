@@ -65,17 +65,22 @@ import Testing
 @Suite("Acceptance: ProcessSupervisor reaps descendants regardless of exit status", .serialized, .subprocessExclusive)
 struct ProcessSupervisorResidueTests {
     /// The `timeoutSeconds` passed to every `ProcessSupervisor.run` call below
-    /// that expects a *prompt* exit. Originally 10 — raised after local
-    /// reproduction (deliberately oversubscribing an 8-core machine with
-    /// dozens of busy-loop processes while running the full suite) showed
-    /// even a normally-instant `python3 -c '...'` invocation's own exit can
-    /// occasionally take upward of 10-13 seconds under severe scheduling
-    /// contention, unrelated to anything `ProcessSupervisor` itself does
-    /// wrong. This has no effect on the passing case — these scripts still
-    /// exit in well under a second on any machine with spare capacity — it
-    /// only widens the ceiling before a genuinely wedged process would be
-    /// misreported as a false timeout.
-    private static let promptExitTimeoutSeconds: Double = 30
+    /// that expects a *prompt* exit. Originally 10, then 30 — raised again
+    /// (to 60) after a real, repeated public-CI failure pattern (not just
+    /// local reproduction this time): a GitHub-hosted macOS runner
+    /// confirmed to have only 3 vCPUs kept intermittently failing this
+    /// suite's own residue checks even after both the cross-suite
+    /// subprocess-exclusion fix and a CI-only Swift Testing concurrency cap
+    /// (`SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH`, see `ci.yml`).
+    /// Treat "the CI machine was briefly under real load" as an expected,
+    /// tolerable condition this suite should be robust to by design — a
+    /// generous poll-until-true ceiling, not something to engineer away
+    /// entirely via scheduling alone. Costs nothing on the passing case:
+    /// these scripts still exit in well under a second on any machine with
+    /// spare capacity, and `eventuallyNoSurvivors` below returns the
+    /// moment survivors actually disappear, never waiting out the full
+    /// ceiling on a genuine pass.
+    private static let promptExitTimeoutSeconds: Double = 60
 
     private func markerPath(_ label: String) -> String {
         FileManager.default.temporaryDirectory.appendingPathComponent("mutantkit-residue-\(label)-\(UUID().uuidString)").path
@@ -171,7 +176,7 @@ struct ProcessSupervisorResidueTests {
     /// 8-core machine) while running the full suite. Polling keeps this fast
     /// on a quiet machine (the common case exits the loop on its first
     /// iteration) while not being a trip wire on a loaded one.
-    private func eventuallyNoSurvivors(referencing needle: String, timeoutSeconds: Double = 10) async -> [String] {
+    private func eventuallyNoSurvivors(referencing needle: String, timeoutSeconds: Double = 60) async -> [String] {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while true {
             let survivors = survivingProcesses(referencing: needle)

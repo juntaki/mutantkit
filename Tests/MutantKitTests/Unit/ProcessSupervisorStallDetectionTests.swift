@@ -64,13 +64,20 @@ struct ProcessSupervisorStallDetectionTests {
         defer { try? FileManager.default.removeItem(at: path) }
 
         let started = Date()
-        // timeoutSeconds (30s) is deliberately generous — if this test ever
+        // timeoutSeconds (60s) is deliberately generous — if this test ever
         // takes anywhere near that long, the stall watchdog did not fire and
         // the absolute timeout caught it instead, which is not what this
-        // test means to prove.
+        // test means to prove. Raised from 30 to 60 (and the assertion
+        // below from 20 to 40, preserving the same ~2/3 margin) after a
+        // real, repeated public-CI failure: a confirmed 3-vCPU runner, even
+        // after both a cross-suite subprocess-exclusion fix and a CI-only
+        // Swift Testing concurrency cap, still occasionally took ~24-25s
+        // here under real load -- uncomfortably close to the old 30s
+        // ceiling. Treat CI slowness as expected and tolerable by design,
+        // not something to precisely engineer away.
         let result = try await ProcessSupervisor.run(
             executable: "/bin/sh", arguments: ["-c", "sleep 30"],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 30,
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 60,
             // Small on purpose — this test isolates stall *detection* speed
             // from termination *grace-period* timing (its own dedicated
             // test below), not the default 5s a caller who cares about the
@@ -81,13 +88,11 @@ struct ProcessSupervisorStallDetectionTests {
         let elapsed = Date().timeIntervalSince(started)
         #expect(result.timedOut)
         // Generous relative to the 0.3s stall/0.2s grace configured above —
-        // the real property under test is "well under the 30s absolute
+        // the real property under test is "well under the 60s absolute
         // timeout", not sub-second precision, which real subprocess
         // scheduling/signal delivery cannot guarantee under full-suite
-        // concurrent test execution (measured: this alone took ~1s
-        // isolated, ~10s under full-suite CPU contention — still nowhere
-        // near 30s either way).
-        #expect(elapsed < 20, "expected the stall watchdog to fire well before the 30s absolute timeout, took \(elapsed)s")
+        // concurrent test execution or real CI contention.
+        #expect(elapsed < 40, "expected the stall watchdog to fire well before the 60s absolute timeout, took \(elapsed)s")
     }
 
     @Test("A stall-killed result reports timedOut the same way an absolute-deadline kill does — no new status for callers to branch on")
@@ -98,7 +103,7 @@ struct ProcessSupervisorStallDetectionTests {
 
         let stalled = try await ProcessSupervisor.run(
             executable: "/bin/sh", arguments: ["-c", "sleep 30"],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 30,
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 60,
             terminationGracePeriodSeconds: 0.2,
             stallDetection: StallDetection(progressFilePath: path, stallTimeoutSeconds: 0.2, checkIntervalSeconds: 0.05)
         )
@@ -132,10 +137,10 @@ struct ProcessSupervisorStallDetectionTests {
         )
         let elapsed = Date().timeIntervalSince(started)
         #expect(result.timedOut)
-        // Generous for the same full-suite-contention reason as above —
-        // the property under test is "well under 100s", not sub-second
-        // precision.
-        #expect(elapsed < 20, "expected the absolute timeout (0.3s) to fire, not stallTimeoutSeconds (100s); took \(elapsed)s")
+        // Generous for the same full-suite/real-CI-contention reason as
+        // above — the property under test is "well under 100s", not
+        // sub-second precision.
+        #expect(elapsed < 40, "expected the absolute timeout (0.3s) to fire, not stallTimeoutSeconds (100s); took \(elapsed)s")
     }
 
     // MARK: - Termination grace period is unchanged for a stall-triggered kill
@@ -152,19 +157,19 @@ struct ProcessSupervisorStallDetectionTests {
         let started = Date()
         let result = try await ProcessSupervisor.run(
             executable: "/bin/sh", arguments: ["-c", script],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 30,
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 60,
             terminationGracePeriodSeconds: 1,
             stallDetection: StallDetection(progressFilePath: path, stallTimeoutSeconds: 0.2, checkIntervalSeconds: 0.05)
         )
         let elapsed = Date().timeIntervalSince(started)
         #expect(result.timedOut)
         // ~0.2s to detect the stall + ~1s grace period before SIGKILL —
-        // comfortably under the 30s absolute timeout, and long enough that
+        // comfortably under the 60s absolute timeout, and long enough that
         // this could only have passed by actually waiting out the grace
         // period rather than killing immediately.
         #expect(elapsed >= 1, "expected the grace period to actually be waited out, took only \(elapsed)s")
-        // Generous for the same full-suite-contention reason as the tests
-        // above.
-        #expect(elapsed < 20, "expected escalation to SIGKILL well before the 30s absolute timeout, took \(elapsed)s")
+        // Generous for the same full-suite/real-CI-contention reason as the
+        // tests above.
+        #expect(elapsed < 40, "expected escalation to SIGKILL well before the 60s absolute timeout, took \(elapsed)s")
     }
 }

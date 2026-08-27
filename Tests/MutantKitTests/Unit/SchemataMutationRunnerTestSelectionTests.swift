@@ -192,7 +192,12 @@ struct SchemataMutationRunnerTestSelectionTests {
         let observed = try #require(adapter.tokenTimeoutSeconds.first)
         // TimeoutSettings(baselineSeconds: 30) with an unmeasured (~0s) fake
         // baseline resolves to ~ the adaptive default's overheadAllowance (60s).
-        #expect(abs(observed - 60) < 1)
+        // The fake baseline's own "measured duration" is real wall-clock time
+        // around instant fake work, not a true ~0 -- under real CI
+        // contention (observed directly, recurring) that measurement can
+        // drift by several seconds. Widened from 1s to 10s: still comfortably
+        // tighter than the 30s gap to the nearest wrong answer.
+        #expect(abs(observed - 60) < 10)
     }
 
     @Test("An unknown/unattributed selection keeps today's whole-suite-scaled timeout, completely unchanged")
@@ -205,7 +210,12 @@ struct SchemataMutationRunnerTestSelectionTests {
         let observed = try #require(adapter.tokenTimeoutSeconds.first)
         // TimeoutSettings(baselineSeconds: 30) with an unmeasured (~0s) fake
         // baseline resolves to ~ the adaptive default's overheadAllowance (60s).
-        #expect(abs(observed - 60) < 1)
+        // The fake baseline's own "measured duration" is real wall-clock time
+        // around instant fake work, not a true ~0 -- under real CI
+        // contention (observed directly, recurring) that measurement can
+        // drift by several seconds. Widened from 1s to 10s: still comfortably
+        // tighter than the 30s gap to the nearest wrong answer.
+        #expect(abs(observed - 60) < 10)
     }
 
     @Test("A confirmation reruns under the exact same resolved limit the primary run used, never a separately-resolved one")

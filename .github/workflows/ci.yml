@@ -134,8 +134,35 @@ jobs:
       # this step just captured. Exiting 124 from inside the step itself
       # makes this an ordinary step failure, which does trigger the
       # upload.
+      #
+      # SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH: CI-only (never set
+      # for local development), added after a real, repeated CI failure
+      # pattern in ProcessSupervisorResidueTests and similar tests that
+      # depend on the OS actually finishing real, timing-sensitive work
+      # (reaping a killed descendant, a stall watchdog's own deadline) in
+      # a bounded window. This runner has confirmed only 3 vCPUs (see the
+      # "Toolchain" step above); Swift Testing schedules every test's own
+      # concurrency onto the cooperative thread pool by default, sized to
+      # the *full* core count with no user-facing throttle -- `swift
+      # test`'s own `--num-workers`/`--parallel` flags were tried first and
+      # confirmed, by direct local experiment, to have zero effect on
+      # Swift Testing's scheduling (they only govern legacy XCTest-style
+      # process-level parallelism). This environment variable is Swift
+      # Testing's own internal mechanism instead -- found via `strings` on
+      # the Testing framework binary (it is not documented public API, and
+      # its own name says "EXPERIMENTAL"), then verified directly, locally,
+      # to actually bound real concurrent test execution before trusting
+      # it here. Set to 2, not 1: leaves the supervisory/monitoring
+      # machinery real headroom rather than fully serializing the whole
+      # suite, which this project's own standing policy is not to do
+      # blindly for a speed-vs-reliability trade this narrow a problem
+      # does not need. If a future toolchain silently drops support for
+      # this variable, the worst case is reverting to today's already-
+      # documented behavior, not a regression beyond it.
       - name: Test
         shell: bash
+        env:
+          SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH: "2"
         run: |
           set -o pipefail
           mkdir -p samples
