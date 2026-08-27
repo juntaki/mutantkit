@@ -276,7 +276,13 @@ struct SideEffectCallRemovalOperatorREDTests {
         // (see scenario 14) -- either alone would already exclude it.
         #expect(!points.contains { $0.originalText == "fatalError()" })
     }
+}
 
+// MARK: - Rule 2/8/9 extensions, the never-returning denylist, result builders, switch cases, config exclusion, comments/trivia, metadata
+
+/// Split from the main suite above purely to keep that struct's body under
+/// SwiftLint's `type_body_length`; same suite in spirit.
+extension SideEffectCallRemovalOperatorREDTests {
     @Test("Rule 2 extension (codex finding): a trailing call to a custom, non-stdlib Never-returning function in a multi-statement non-Void body is not a candidate")
     func trailingCustomNeverReturningCallInMultiStatementBodyExcluded() throws {
         let source = """
@@ -543,8 +549,6 @@ struct SideEffectCallRemovalOperatorREDTests {
         #expect(points.contains { $0.originalText == "notify()" })
     }
 
-    // MARK: - Config exclusion (`operators.sideEffectCallRemoval.excludeCalls`)
-
     @Test("A call named in excludedCallNames is not a candidate, matched by base name")
     func configExcludedCallNameIsNotACandidate() throws {
         let source = """
@@ -560,7 +564,35 @@ struct SideEffectCallRemovalOperatorREDTests {
         #expect(points.contains { $0.originalText == "sideEffect()" })
     }
 
-    // MARK: - Comments/trivia
+    /// Operator-exclusion-soundness audit
+    /// (`Research/operator-catalog/operator-exclusion-policy.md`): the
+    /// coarseness `Sources/MutationModel/Configuration.swift`'s own doc
+    /// comment already admits for `excludeCalls` ("Doesn't support
+    /// overloading currently — all function calls with a matching name will
+    /// be skipped") had no test proving it was real, only prose claiming it.
+    /// Pinned directly here: excluding `"record"` excludes *every* receiver's
+    /// `record()`, not just the one the user had in mind — a real risk a user
+    /// configuring `excludeCalls` should be able to see demonstrated, not
+    /// only read about.
+    @Test("excludeCalls matches by base name alone: excluding one name also excludes an unrelated receiver's same-named method")
+    func configExcludedCallNameAlsoExcludesAnUnrelatedReceiversSameNamedMethod() throws {
+        let source = """
+        func run() {
+            myLogger.record()
+            unrelatedAnalytics.record()
+            myLogger.flush()
+        }
+        """
+        let points = try CoreOperatorExpansionTestSupport.discover(
+            source, operatorID: operatorID, excludedCallNames: ["record"]
+        )
+        #expect(!points.contains { $0.originalText == "myLogger.record()" })
+        #expect(!points.contains { $0.originalText == "unrelatedAnalytics.record()" }, """
+        this is the documented limitation itself: excludeCalls has no receiver/overload resolution, so a name \
+        collision with a completely unrelated type is excluded too
+        """)
+        #expect(points.contains { $0.originalText == "myLogger.flush()" }, "a different name on the same receiver is unaffected")
+    }
 
     @Test("Leading and trailing trivia (comments, blank lines) around the candidate are preserved, not part of the mutation")
     func commentsAndTriviaAreNotPartOfTheCandidate() throws {
@@ -584,8 +616,6 @@ struct SideEffectCallRemovalOperatorREDTests {
         let verification = SourceAnchorVerifier.verify(point, against: Data(source.utf8), depth: .full)
         #expect(verification.isValid, "anchor rejected: \(verification.failures)")
     }
-
-    // MARK: - Metadata / identity
 
     @Test("Every candidate carries the operator's own ID, version and experimental confidence")
     func candidateMetadataIsCorrect() throws {
