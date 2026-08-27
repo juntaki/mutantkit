@@ -232,11 +232,32 @@ struct ProcessSupervisorResidueTests {
     /// 8-core machine) while running the full suite. Polling keeps this fast
     /// on a quiet machine (the common case exits the loop on its first
     /// iteration) while not being a trip wire on a loaded one.
+    ///
+    /// Prints a lightweight progress line every ~10 seconds while polling —
+    /// added after a real CI run showed this specific loop (combined with
+    /// `retryingKnownForkRaceWindow`'s retries, and a *second*,
+    /// independent test hitting the same loop right afterward) can
+    /// legitimately run for minutes with *zero* other output, which the
+    /// CI workflow's own `test.log`-growth-based stall detector cannot
+    /// tell apart from a genuine hang (`ci.yml`'s own "STALL DETECTED"
+    /// diagnostic fired on exactly this — a stack sample confirmed the
+    /// process was still doing ordinary, expected polling work, not
+    /// stuck). This restores the diagnostic's actual signal quality
+    /// (silence really means stuck) instead of only ever raising its
+    /// threshold further, which would need to keep growing indefinitely
+    /// as more of this suite's tests independently hit their own retry
+    /// ceiling in the same run. Purely diagnostic — changes no timing,
+    /// retry, or assertion behavior.
     private func eventuallyNoSurvivors(referencing needle: String, timeoutSeconds: Double = 60) async -> [String] {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var lastProgressPrint = Date()
         while true {
             let survivors = survivingProcesses(referencing: needle)
             if survivors.isEmpty || Date() >= deadline { return survivors }
+            if Date().timeIntervalSince(lastProgressPrint) >= 10 {
+                print("[ProcessSupervisorResidueTests] still polling for \(needle) to disappear (\(survivors.count) survivor(s) remaining)...")
+                lastProgressPrint = Date()
+            }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
     }

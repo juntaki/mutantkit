@@ -57,15 +57,49 @@ import SwiftSyntax
 /// this only needs to run once per chain, at whichever level is being
 /// considered, not separately at each level.
 ///
-/// **Never inside a `@ViewBuilder`-style result-builder body.** A fourth
-/// codex review found this needed regardless of last/non-last position: a
-/// result builder transforms *every* statement, and `if`/`else` there
-/// compiles via `buildEither(first:/second:)`, a different builder method
-/// than the plain `buildOptional(_:)` a resulting else-less `if` would
-/// need — a minimal custom builder can implement one without the other.
-/// See `Visitor.isInsideResultBuilderBody` for the detection approach
-/// (shared with `side-effect-call-removal-design.md`'s identical problem)
-/// and its accepted gaps.
+/// **Excluded inside a result-builder body — except a capability-proven
+/// allowlist, currently `@ViewBuilder` only.** A fourth codex review found
+/// this needed regardless of last/non-last position: a result builder
+/// transforms *every* statement, and `if`/`else` there compiles via
+/// `buildEither(first:/second:)`, a different builder method than the
+/// plain `buildOptional(_:)` a resulting else-less `if` would need — a
+/// minimal custom builder can implement one without the other. See
+/// `OperatorExclusions.isInsideResultBuilderBody` for the general
+/// detection approach (shared with `side-effect-call-removal-design.md`'s
+/// identical problem) and its accepted gaps.
+///
+/// This blanket rule was proven *over*-conservative for at least one real
+/// builder (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`'s
+/// P2.3 entry): a real, compiled, run fixture showed a builder
+/// implementing both `buildEither` *and* `buildOptional` compiles the
+/// else-deleted form fine and produces a genuinely different runtime
+/// result, while a second fixture implementing `buildEither` alone
+/// reproduces the original hazard exactly (a real compile failure,
+/// `swiftc` diagnostic: "add 'buildOptional(_:)' to the result builder").
+/// Real SwiftUI's own `@ViewBuilder` was then confirmed, via a real
+/// `-typecheck` against the iOS SDK, to compile both the with-`else` and
+/// without-`else` forms of `View.body` — i.e. `ViewBuilder` is on the
+/// `buildOptional`-implementing side of that boundary, not the other one.
+///
+/// Whether *any other* builder (`SceneBuilder`, `CommandsBuilder`,
+/// `RegexComponentBuilder`, a custom type, ...) shares this capability is
+/// unproven and not assumed — `isInsideKnownOptionalCapableResultBuilderBody`
+/// below recognizes only an *explicit* `@ViewBuilder` attribute spelling,
+/// deliberately narrower than `OperatorExclusions.hasBuilderAttribute`'s
+/// own multi-name match, and deliberately not the structural
+/// property-name fallback (`var body: some View` with no attribute at
+/// all) either — that fallback only signals "probably some result
+/// builder", never *which one*, so it cannot serve as proof of
+/// `ViewBuilder` specifically and stays conservatively excluded. Broadening
+/// past `ViewBuilder` requires the same fixture-pair proof for each
+/// additional builder family, not a blanket allowlist.
+///
+/// Deliberately local to this operator, not folded into
+/// `OperatorExclusions.isInsideResultBuilderBody` itself: that helper's
+/// other callers (`SideEffectCallRemovalOperator`, every schemata lowerer)
+/// have a different safety concern — any rewrite inside *any* result
+/// builder body risks breaking that builder's own transform in ways this
+/// `buildOptional`-specific proof says nothing about for them.
 ///
 /// **`defaultEnabled: false`, `confidence: .experimental`.** A brand-new
 /// operator with no Muter analogue and no real-project corpus measurement
@@ -108,7 +142,10 @@ public struct ElseClauseDeletionOperator: MutationOperator {
             guard Self.chainIsUsedAsStatement(node) else {
                 return .visitChildren
             }
-            guard !OperatorExclusions.isInsideResultBuilderBody(Syntax(node)) else { return .visitChildren }
+            if OperatorExclusions.isInsideResultBuilderBody(Syntax(node)),
+               !Self.isInsideKnownOptionalCapableResultBuilderBody(Syntax(node)) {
+                return .visitChildren
+            }
 
             record(MutationCandidate(
                 node: node,
@@ -214,20 +251,52 @@ public struct ElseClauseDeletionOperator: MutationOperator {
             return function.signature.returnClause == nil
         }
 
-        /// A fourth codex review found a hazard neither `chainIsUsedAsStatement`
-        /// nor `isSafePosition` catches, regardless of last/non-last
-        /// position: inside a `@ViewBuilder`-style result-builder body,
-        /// *every* statement — not just the last — is rewritten through
-        /// the builder's `buildBlock`/`buildEither`/`buildOptional`
-        /// methods. `if a { X } else { Y }` there compiles via
-        /// `buildEither(first:)`/`buildEither(second:)`; deleting `else`
-        /// changes it to a plain `if` needing `buildOptional(_:)` instead
-        /// — a *different* builder method a minimal custom builder is not
-        /// required to implement, so this can fail to compile even for a
-        /// non-last, otherwise perfectly ordinary-looking statement. See
-        /// `OperatorExclusions.isInsideResultBuilderBody` for the detection
-        /// approach (shared with schemata lowering's identical hazard) and
-        /// its accepted gaps.
+        /// The capability-proven exception to the result-builder exclusion
+        /// above — see the type's own doc comment for the full fixture
+        /// evidence. Climbs every enclosing scope exactly like
+        /// `OperatorExclusions.isInsideResultBuilderBody` does, but only
+        /// ever matches an *explicit* `@ViewBuilder` attribute spelling,
+        /// never the structural property-name fallback (which cannot say
+        /// *which* builder is in play, only that one is likely present).
+        private static func isInsideKnownOptionalCapableResultBuilderBody(_ node: Syntax) -> Bool {
+            var current: Syntax? = node
+            while let scope = current {
+                if Self.hasExplicitViewBuilderAttribute(scope) { return true }
+                current = scope.parent
+            }
+            return false
+        }
+
+        /// Checks the same three declaration shapes
+        /// `OperatorExclusions.hasBuilderAttribute` does (a function, an
+        /// accessor, or the enclosing `VariableDeclSyntax` for an implicit
+        /// getter), but matches only the single name `"ViewBuilder"` —
+        /// proven, not merely assumed, to implement `buildOptional` (real
+        /// SwiftUI `-typecheck` evidence, see the type's own doc comment).
+        /// A module-qualified spelling (`@SwiftUI.ViewBuilder`) is not
+        /// recognized here either, the same accepted gap
+        /// `OperatorExclusions.hasBuilderAttribute` already documents (its
+        /// `attributeName` parses as a `MemberTypeSyntax`, not an
+        /// `IdentifierTypeSyntax`) — missing this only ever costs a safe
+        /// candidate, never admits an unproven one.
+        private static func hasExplicitViewBuilderAttribute(_ node: Syntax) -> Bool {
+            let attributes: AttributeListSyntax
+            if let function = node.as(FunctionDeclSyntax.self) {
+                attributes = function.attributes
+            } else if let accessor = node.as(AccessorDeclSyntax.self) {
+                attributes = accessor.attributes
+            } else if let variable = node.as(VariableDeclSyntax.self) {
+                attributes = variable.attributes
+            } else {
+                return false
+            }
+            return attributes.contains { element in
+                guard let attribute = element.as(AttributeSyntax.self),
+                      let name = attribute.attributeName.as(IdentifierTypeSyntax.self)
+                else { return false }
+                return name.name.text == "ViewBuilder"
+            }
+        }
 
         /// Everything from the node's own start through `body`'s trimmed
         /// end, verbatim — the condition, both braces, and every byte of

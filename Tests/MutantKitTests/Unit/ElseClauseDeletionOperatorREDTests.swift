@@ -182,8 +182,16 @@ struct ElseClauseDeletionOperatorREDTests {
         #expect(verification.isValid, "anchor rejected: \(verification.failures)")
     }
 
-    @Test("An if/else inside a function explicitly attributed with a known result builder is not a candidate")
-    func explicitlyAttributedResultBuilderBodyIsNotACandidate() throws {
+    /// `@ViewBuilder` specifically is a capability-proven exception (real
+    /// SwiftUI confirmed, via a real `-typecheck` against the iOS SDK, to
+    /// implement `buildOptional` — see `Research/mutation-testing-
+    /// hardening-2026-08/PROGRESS.md`'s P2.3 entry for the fixture pair
+    /// that established the boundary), so this candidate is now admitted —
+    /// a real, targeted narrowing of what was previously a blanket
+    /// exclusion, not the removal of the exclusion itself (see the sibling
+    /// tests below for the still-excluded cases).
+    @Test("An if/else inside a function explicitly attributed @ViewBuilder is now a candidate — a proven-capable builder")
+    func explicitlyAttributedViewBuilderBodyIsACandidate() throws {
         let points = try CoreOperatorExpansionTestSupport.discover(
             """
             @ViewBuilder
@@ -199,9 +207,38 @@ struct ElseClauseDeletionOperatorREDTests {
             operatorID: operatorID
         )
 
-        #expect(points.isEmpty)
+        #expect(points.count == 1)
     }
 
+    /// A different, non-`ViewBuilder` explicit attribute has no equivalent
+    /// compile evidence — `buildOptional` support is unproven for it, so it
+    /// stays on the conservative, excluded side of the boundary, same as
+    /// before this narrowing.
+    @Test("An if/else inside a function explicitly attributed with a non-ViewBuilder result builder stays excluded")
+    func explicitlyAttributedNonViewBuilderBodyStaysExcluded() throws {
+        let points = try CoreOperatorExpansionTestSupport.discover(
+            """
+            @SceneBuilder
+            func rows(_ ready: Bool) -> SomeScene {
+                if ready {
+                    ReadyScene()
+                } else {
+                    WaitingScene()
+                }
+            }
+            """,
+            operatorID: operatorID
+        )
+
+        #expect(points.isEmpty)
+    }
+}
+
+/// Split from the primary suite above purely to stay under this project's
+/// `type_body_length` SwiftLint limit, not because these tests belong to a
+/// different feature — same rationale as the second suite further down
+/// this file.
+extension ElseClauseDeletionOperatorREDTests {
     @Test("An if/else inside a var body: SomeView { ... } getter is not a candidate, even when not the last statement")
     func structurallyDetectedBodyPropertyIsNotACandidateEvenWhenNotLast() throws {
         // Non-last position alone would normally make this safe (see
@@ -373,13 +410,18 @@ struct ElseClauseDeletionOperatorREDTests {
 struct ElseClauseDeletionOperatorCompileSafetyExclusionREDTests {
     private let operatorID = "swift.core.else-clause-deletion"
 
-    @Test("An if/else inside an explicitly @ViewBuilder-attributed computed property with a non-standard name is not a candidate")
-    func explicitlyAttributedNonStandardNamedPropertyIsNotACandidate() throws {
+    @Test("An if/else inside an explicitly @ViewBuilder-attributed computed property with a non-standard name is a candidate")
+    func explicitlyAttributedNonStandardNamedViewBuilderPropertyIsACandidate() throws {
         // `rows` is not in the structural name list (`body`, `commands`,
-        // `previews`, `content`), so `isBuilderReturningPropertyDeclaration`
-        // alone would miss it — this only works because `hasBuilderAttribute`
-        // also inspects the enclosing `VariableDeclSyntax`'s own attributes,
-        // not just `FunctionDeclSyntax`/`AccessorDeclSyntax`.
+        // `previews`, `content`), so the structural fallback alone would
+        // miss it — this only works because
+        // `isInsideKnownOptionalCapableResultBuilderBody`'s own
+        // `hasExplicitViewBuilderAttribute` also inspects the enclosing
+        // `VariableDeclSyntax`'s own attributes, not just
+        // `FunctionDeclSyntax`/`AccessorDeclSyntax` (mirroring
+        // `OperatorExclusions.hasBuilderAttribute`'s own three-shape
+        // check). `@ViewBuilder` is proven optional-capable (see the
+        // operator's own doc comment), so this candidate is now admitted.
         let points = try CoreOperatorExpansionTestSupport.discover(
             """
             struct RowList {
@@ -398,7 +440,7 @@ struct ElseClauseDeletionOperatorCompileSafetyExclusionREDTests {
             operatorID: operatorID
         )
 
-        #expect(points.isEmpty)
+        #expect(points.count == 1)
     }
 
     @Test("A module-qualified builder attribute spelling (@SwiftUI.ViewBuilder) is an accepted, known gap")
