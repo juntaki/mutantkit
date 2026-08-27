@@ -404,3 +404,51 @@ extension XCResultAdapterTests {
         #expect(outcome.status == .infrastructureFailure)
     }
 }
+
+// MARK: - expectedTestCount: the zero-work invariant for a narrowed selection
+
+/// Split into its own extension for the same `type_body_length` reason as above.
+extension XCResultAdapterTests {
+    /// A narrowed run (`selectedTests` of 2) whose bundle reports only 1
+    /// test, cleanly "Passed", with nothing else here to explain the
+    /// shortfall — no crash, no timeout, no attributable/system failure.
+    /// This is the shape a target vanishing from the bundle *without even
+    /// a synthetic pseudo-test failure record* would produce: only the
+    /// missing count itself proves something did not run.
+    private static let shortfallWithNoFailureRecordSummary = Data("""
+    {
+        "devicesAndConfigurations": [],
+        "expectedFailures": 0,
+        "failedTests": 0,
+        "passedTests": 1,
+        "result": "Passed",
+        "skippedTests": 0,
+        "testFailures": [],
+        "totalTestCount": 1
+    }
+    """.utf8)
+
+    @Test("A narrowed selection reporting fewer tests than expected, with no failure explaining why, is infrastructureFailure")
+    func narrowedShortfallWithNoExplanationIsInfrastructureFailure() throws {
+        let summary = try JSONDecoder().decode(TestSummaryJSON.self, from: Self.shortfallWithNoFailureRecordSummary)
+        let outcome = XCResultAdapter().classify(summary: summary, expectedTestCount: 2)
+        #expect(outcome.status == .infrastructureFailure)
+    }
+
+    @Test("The same shortfall is not flagged when the caller has no independently-known expected count")
+    func shortfallWithNoExpectedCountIsUnaffected() throws {
+        // An unnarrowed run (nil expectedTestCount) has no exact number to
+        // compare against -- a lower count there can be a legitimate test
+        // plan/filtering difference, not evidence of anything missing.
+        let summary = try JSONDecoder().decode(TestSummaryJSON.self, from: Self.shortfallWithNoFailureRecordSummary)
+        let outcome = XCResultAdapter().classify(summary: summary, expectedTestCount: nil)
+        #expect(outcome.status == .passed)
+    }
+
+    @Test("A narrowed selection whose count matches exactly is an ordinary pass")
+    func narrowedCountMatchIsAnOrdinaryPass() throws {
+        let summary = try JSONDecoder().decode(TestSummaryJSON.self, from: Self.shortfallWithNoFailureRecordSummary)
+        let outcome = XCResultAdapter().classify(summary: summary, expectedTestCount: 1)
+        #expect(outcome.status == .passed)
+    }
+}

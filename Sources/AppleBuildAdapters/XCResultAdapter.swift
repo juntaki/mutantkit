@@ -38,7 +38,12 @@ public struct XCResultAdapter: Sendable {
     /// Never throws: an unreadable bundle is itself a diagnosable outcome
     /// (`.infrastructureFailure`), not an error for the caller to invent a
     /// meaning for.
-    public func classify(resultBundle: URL, workingDirectory: URL) async -> Outcome {
+    ///
+    /// - Parameter expectedTestCount: how many tests this run was narrowed to
+    ///   (`selectedTests.count` at the call site) when the caller knows an exact
+    ///   number in advance — `nil` for an unnarrowed, whole-suite-list run, where
+    ///   no such number is known ahead of time. See `classify(summary:expectedTestCount:)`.
+    public func classify(resultBundle: URL, workingDirectory: URL, expectedTestCount: Int? = nil) async -> Outcome {
         guard FileManager.default.fileExists(atPath: resultBundle.path) else {
             return infrastructure(
                 """
@@ -89,14 +94,29 @@ public struct XCResultAdapter: Sendable {
             )
         }
 
-        return classify(summary: summary)
+        return classify(summary: summary, expectedTestCount: expectedTestCount)
     }
 
     /// Turns a decoded summary into an outcome.
     ///
     /// Separate from the process call so the classification rules are testable
     /// against fixture JSON without an Xcode install.
-    func classify(summary: TestSummaryJSON) -> Outcome {
+    ///
+    /// - Parameter expectedTestCount: when non-`nil`, a run narrowed to exactly
+    ///   this many tests (a known `selectedTests` set, not an unnarrowed whole-
+    ///   target list) that reports *fewer* than this many total tests — with
+    ///   nothing else here (no crash, no timeout, no attributable failure) to
+    ///   explain the shortfall — is `.infrastructureFailure`, never `.passed`.
+    ///   A target whose bundle contributes nothing at all to the summary (the
+    ///   `TargetATests`/`TargetBTests` shape a real reproduction confirmed:
+    ///   see `XCResultAdapterTests`) leaves no failure record of its own kind
+    ///   for `isSystemFailure`/`isCrash`/etc. to catch — only the missing count
+    ///   itself proves something did not run. Never applied when `nil`: an
+    ///   unnarrowed run has no independently-known expected count to compare
+    ///   against, and legitimate test-plan/filtering differences mean a lower
+    ///   count there is not automatically suspicious the way a narrowed
+    ///   selection's own exact, pre-computed count is.
+    func classify(summary: TestSummaryJSON, expectedTestCount: Int? = nil) -> Outcome {
         let failures = summary.testFailures ?? []
         let outcomeSummary = TestOutcomeSummary(
             total: summary.totalTestCount,
@@ -121,39 +141,10 @@ public struct XCResultAdapter: Sendable {
             )
         }
 
-        // The test runner itself can fail to install or launch — a simulator-level
-        // fault (observed: CoreSimulator's SBMainWorkspace refusing a launch as
-        // "Busy" after a rapid preceding install/teardown) that never reached any
-        // test. Apple's result bundle represents this as a synthetic one-"test"
-        // failure ("<App> encountered an error") rather than as a zero-test bundle,
-        // so it does not hit the `totalTestCount == 0` guard above. Scoring it as
-        // `.failed` would report a mutant as caught by a test that never ran. Only
-        // trusted when every *recorded failure* is this synthetic kind — a real
-        // failure alongside it should still be attributed normally.
-        //
-        // Checked against `failures.count`, not `summary.totalTestCount`: a
-        // codex review found the original `== summary.totalTestCount` check
-        // silently missed a real bundle shape — multiple test targets in one
-        // run, where one target's runner fails to install/launch (producing
-        // only a system-failure record) while a sibling target's tests
-        // actually execute and pass. `totalTestCount` there counts the
-        // sibling's passing tests too, so `systemFailures.count` (1) never
-        // equals it, the guard never fires, and the broken target's mutant
-        // fell through to `.failed` — a mutant credited as "caught" by a
-        // test that never ran. Comparing against `failures.count` instead
-        // asks the right question: are *all the failures actually recorded*
-        // explained by a broken runner, regardless of how many unrelated
-        // tests elsewhere in the same bundle happened to pass.
-        let systemFailures = failures.filter(\.isSystemFailure)
-        if !systemFailures.isEmpty, systemFailures.count == failures.count {
-            return Outcome(
-                status: .infrastructureFailure,
-                summary: outcomeSummary,
-                diagnosis: """
-                The test runner failed to install or launch, so no test in the suite ran: \
-                \(systemFailures[0].failureText)
-                """
-            )
+        // See `systemFailureOutcome`'s own doc comment for what this catches
+        // and why it is checked against `failures.count`, not `summary.totalTestCount`.
+        if let outcome = systemFailureOutcome(failures: failures, outcomeSummary: outcomeSummary) {
+            return outcome
         }
 
         // A crash and an assertion failure both land here as "Failed" with a
@@ -190,6 +181,13 @@ public struct XCResultAdapter: Sendable {
         }
 
         if let outcome = failedCountOutcome(summary: summary, failures: failures, outcomeSummary: outcomeSummary) {
+            return outcome
+        }
+
+        // Checked last, immediately before the "Passed" branch it exists to
+        // guard, so every failure-shaped explanation above still takes
+        // precedence. See the function's own doc comment for what this catches.
+        if let outcome = shortfallOutcome(summary: summary, expectedTestCount: expectedTestCount, outcomeSummary: outcomeSummary) {
             return outcome
         }
 
@@ -578,6 +576,75 @@ private extension XCResultAdapter {
             diagnosis: """
             \(summary.failedTests) of \(summary.totalTestCount) tests failed, \
             including \(describe(failures)).
+            """
+        )
+    }
+
+    /// The test runner itself can fail to install or launch — a simulator-level
+    /// fault (observed: CoreSimulator's SBMainWorkspace refusing a launch as
+    /// "Busy" after a rapid preceding install/teardown) that never reached any
+    /// test. Apple's result bundle represents this as a synthetic one-"test"
+    /// failure ("<App> encountered an error") rather than as a zero-test bundle,
+    /// so it does not hit `classify(summary:expectedTestCount:)`'s own
+    /// `totalTestCount == 0` guard. Scoring it as `.failed` would report a
+    /// mutant as caught by a test that never ran. Only trusted when every
+    /// *recorded failure* is this synthetic kind — a real failure alongside it
+    /// should still be attributed normally.
+    ///
+    /// Checked against `failures.count`, not the summary's own
+    /// `totalTestCount`: a codex review found the original
+    /// `== totalTestCount` check silently missed a real bundle shape —
+    /// multiple test targets in one run, where one target's runner fails to
+    /// install/launch (producing only a system-failure record) while a
+    /// sibling target's tests actually execute and pass. `totalTestCount`
+    /// there counts the sibling's passing tests too, so `systemFailures.count`
+    /// (1) never equals it, the guard never fires, and the broken target's
+    /// mutant fell through to `.failed` — a mutant credited as "caught" by a
+    /// test that never ran. Comparing against `failures.count` instead asks
+    /// the right question: are *all the failures actually recorded* explained
+    /// by a broken runner, regardless of how many unrelated tests elsewhere in
+    /// the same bundle happened to pass.
+    func systemFailureOutcome(failures: [TestSummaryJSON.Failure], outcomeSummary: TestOutcomeSummary) -> Outcome? {
+        let systemFailures = failures.filter(\.isSystemFailure)
+        guard !systemFailures.isEmpty, systemFailures.count == failures.count else { return nil }
+        return Outcome(
+            status: .infrastructureFailure,
+            summary: outcomeSummary,
+            diagnosis: """
+            The test runner failed to install or launch, so no test in the suite ran: \
+            \(systemFailures[0].failureText)
+            """
+        )
+    }
+
+    /// The zero-work invariant for a narrowed selection: a run narrowed to
+    /// an exact, pre-computed `selectedTests` count (never an unnarrowed
+    /// whole-target list, which has no independently-known expected count
+    /// to compare against) that reports *fewer* tests than that, with
+    /// nothing else in `classify(summary:expectedTestCount:)` already
+    /// explaining why — no crash, no timeout, no attributable failure, not
+    /// even the "runner never started" system-failure shape — must not read
+    /// as a pass. A target contributing nothing at all to the summary (the
+    /// `TargetATests`/`TargetBTests` shape a real reproduction confirmed:
+    /// see `XCResultAdapterTests`) leaves no failure record of its own kind
+    /// for any check above to catch — only the missing count itself proves
+    /// something did not run. `nil` `expectedTestCount` is a no-op:
+    /// legitimate test-plan/filtering differences make a lower count
+    /// unsuspicious for an unnarrowed run the way it is not for a narrowed
+    /// one with an exact, known-in-advance expectation.
+    func shortfallOutcome(
+        summary: TestSummaryJSON,
+        expectedTestCount: Int?,
+        outcomeSummary: TestOutcomeSummary
+    ) -> Outcome? {
+        guard let expectedTestCount, summary.totalTestCount < expectedTestCount else { return nil }
+        return Outcome(
+            status: .infrastructureFailure,
+            summary: outcomeSummary,
+            diagnosis: """
+            This run was narrowed to \(expectedTestCount) test(s), but the result bundle \
+            records only \(summary.totalTestCount). Something in the selection did not run \
+            and left no failure record explaining why, so the shortfall is not scored as a pass.
             """
         )
     }

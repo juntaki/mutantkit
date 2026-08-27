@@ -543,19 +543,20 @@ extension XcodeBuildAdapter: TestAdapter {
         label: String,
         timeoutSeconds: Double,
         testFilters: [String]? = nil,
-        enableCoverage: Bool = false
+        enableCoverage: Bool = false,
+        expectedTestCount: Int? = nil
     ) async throws -> TestRunResult {
         guard destinationNeedsSimulatorLease else {
             return try await runTestsOnDestination(
                 destination(), artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
-                testFilters: testFilters, enableCoverage: enableCoverage
+                testFilters: testFilters, enableCoverage: enableCoverage, expectedTestCount: expectedTestCount
             )
         }
 
         do {
             return try await leaseAndRunTests(
                 artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
-                testFilters: testFilters, enableCoverage: enableCoverage
+                testFilters: testFilters, enableCoverage: enableCoverage, expectedTestCount: expectedTestCount
             )
         } catch let error as SimulatorPoolError {
             return TestRunResult(
@@ -601,13 +602,14 @@ extension XcodeBuildAdapter: TestAdapter {
         label: String,
         timeoutSeconds: Double,
         testFilters: [String]? = nil,
-        enableCoverage: Bool = false
+        enableCoverage: Bool = false,
+        expectedTestCount: Int? = nil
     ) async throws -> TestRunResult {
         func run(_ lease: SimulatorLease) async throws -> TestRunResult {
             await uninstallStaleApp(artifact: artifact, from: lease)
             return try await runTestsOnDestination(
                 lease.destination, artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
-                testFilters: testFilters, enableCoverage: enableCoverage
+                testFilters: testFilters, enableCoverage: enableCoverage, expectedTestCount: expectedTestCount
             )
         }
 
@@ -757,7 +759,8 @@ extension XcodeBuildAdapter: TestAdapter {
         label: String,
         timeoutSeconds: Double,
         testFilters: [String]? = nil,
-        enableCoverage: Bool = false
+        enableCoverage: Bool = false,
+        expectedTestCount: Int? = nil
     ) async throws -> TestRunResult {
         guard let xctestrun = artifact.xctestrunPath else {
             return TestRunResult(
@@ -841,7 +844,9 @@ extension XcodeBuildAdapter: TestAdapter {
         // exit code is deliberately not consulted: it reports 65 both for a failing
         // test and for a runner that never started, and only the bundle can tell
         // those apart.
-        let outcome = await resultReader.classify(resultBundle: resultBundle, workingDirectory: workspace)
+        let outcome = await resultReader.classify(
+            resultBundle: resultBundle, workingDirectory: workspace, expectedTestCount: expectedTestCount
+        )
 
         return TestRunResult(
             status: outcome.status,
@@ -1198,7 +1203,16 @@ extension XcodeBuildAdapter: TestSelecting {
             in: workspace,
             label: point.id.description,
             timeoutSeconds: timeoutSeconds,
-            testFilters: filters
+            testFilters: filters,
+            // Only meaningful when the selection is truly narrowed: each
+            // identifier in `selectedTests` names exactly one test, so its
+            // count is the exact number of tests this run is expected to
+            // execute. `configuration.tests.targets`, `filters`' own
+            // fallback whenever `selectedTests` is nil/empty, names targets
+            // (whole suites) instead — its count is not a test count at
+            // all, so this must stay nil in that case rather than pass a
+            // number that would misfire the zero-work invariant below.
+            expectedTestCount: filters?.count
         )
     }
 
