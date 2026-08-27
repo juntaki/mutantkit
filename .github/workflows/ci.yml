@@ -101,24 +101,49 @@ jobs:
         run: |
           set -o pipefail
           swift build --build-tests 2>&1 | tee build.log
-      # `--num-workers 2`: diagnostic step for the same real CI hang this
-      # job's own `timeout-minutes` above exists for. The hang's own
-      # signature (a burst of ~90 concurrently-"started" Swift Testing
-      # tests across many unrelated files, then total synchronized
-      # silence) is a known shape for the cooperative thread pool getting
-      # exhausted/starved when far more concurrent tasks are scheduled
-      # than this runner's real core count — a GitHub-hosted macOS
-      # runner has meaningfully fewer cores than a typical development
-      # machine, which is exactly the kind of gap that stays invisible
-      # locally. Explicitly bounding worker concurrency is also a
-      # reasonable, low-risk CI setting on its own merits regardless of
-      # whether it turns out to be the fix: it changes how many tests run
-      # at once, never what is tested.
+      # Diagnostic instrumentation for the same real CI hang this job's
+      # own `timeout-minutes` above exists for. Capping worker
+      # concurrency (`--parallel --num-workers 2`, tried in a prior
+      # commit) did NOT resolve the hang — the job still ran the full
+      # 15-minute ceiling — which argues against cooperative-thread-pool
+      # exhaustion and leaves two real possibilities open: (1) `swift
+      # test`'s own process genuinely deadlocks/stalls, or (2) the
+      # process keeps making real progress but the `... | tee test.log`
+      # pipe (or GitHub's own log-streaming of it) is what stalls,
+      # falsely looking identical to a hung test from the Actions UI
+      # alone. This step distinguishes the two directly: `swift test`
+      # runs in the background writing straight to a file (never through
+      # a pipe `tee` could stall on), while a separate loop — never
+      # blocked by anything `swift test` itself might block on — reports
+      # that file's own growth and the process's own CPU/memory every 30
+      # seconds. If the log stays frozen while CPU stays near 0%, that is
+      # direct proof of a real stall inside `swift test` itself, not a
+      # reporting artifact; if CPU stays high or the log keeps growing
+      # despite looking "stuck" from a plain `tee`-based view, that
+      # points at the pipe/log-streaming layer instead.
       - name: Test
         shell: bash
         run: |
           set -o pipefail
-          swift test --parallel --num-workers 2 2>&1 | tee test.log
+          swift test > test.log 2>&1 &
+          test_pid=$!
+          echo "swift test started, pid=$test_pid"
+          while kill -0 "$test_pid" 2>/dev/null; do
+            sleep 30
+            lines=$(wc -l < test.log | tr -d ' ')
+            echo "--- heartbeat $(date -u +%H:%M:%S) --- test.log lines: $lines ---"
+            # The real work happens in child processes (swiftpm-testing-helper,
+            # swift-package) the parent `swift` pid's own %cpu never reflects —
+            # snapshotting every swift-related process, not just $test_pid,
+            # is what actually shows whether real work is still happening.
+            ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE "swift|xctest" | grep -v grep || true
+            tail -n 5 test.log
+          done
+          wait "$test_pid"
+          exit_code=$?
+          echo "=== swift test exited with code $exit_code ==="
+          cat test.log
+          exit $exit_code
       - name: Upload unit failure logs
         if: failure()
         uses: actions/upload-artifact@v4

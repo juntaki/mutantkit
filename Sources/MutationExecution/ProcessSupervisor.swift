@@ -197,6 +197,42 @@ public enum ProcessSupervisor {
             close(outPipe[0]); close(outPipe[1])
             throw ProcessSupervisorError.pipeCreationFailed(errno: errno)
         }
+        // A real, confirmed cause of a real public-CI hang (a `swift test`
+        // run of nothing but fast unit tests stalling for 68+ minutes,
+        // reproduced 4/4 times in CI and directly, deterministically
+        // locally too — see `ProcessSupervisorFileDescriptorLeakTests`,
+        // written before this fix specifically to pin down the boundary
+        // below): `pipe(2)` does not set close-on-exec, so *any*
+        // concurrently-running `posix_spawn` on another thread — not just
+        // this one's own — inherits copies of these fds into its own
+        // child by default. A long-lived, completely unrelated process
+        // spawned while this pipe is still open (the real window between
+        // this line and this same function's own post-spawn
+        // `close(outPipe[1])`/`close(errPipe[1])` below) can hold this
+        // pipe's write end open for its own entire lifetime, blocking
+        // `drain`'s own read loop long after the intended child has
+        // already exited.
+        //
+        // This does NOT affect the intended child's own `dup2`'d
+        // `STDOUT_FILENO`/`STDERR_FILENO` below: POSIX `dup2` always
+        // clears close-on-exec on the *new* descriptor it creates,
+        // regardless of the source descriptor's own flag, so the
+        // dup'd copies the intended child actually uses as its real
+        // stdout/stderr are never affected by marking the *original*
+        // fd numbers here close-on-exec —
+        // `ProcessSupervisorFileDescriptorLeakTests
+        // .directChildsOwnStandardOutputStillWorksNormally` locks this in
+        // explicitly. It also does not affect a supervised child's own
+        // legitimate escape (forking a background grandchild that leaves
+        // the process group): that grandchild inherits the child's own
+        // *already-dup'd* fd 1/2 via a real `fork()`, which is a
+        // completely different, unaffected descriptor from the ones
+        // marked here — `ProcessSupervisorResidueTests`'s own escape/reap
+        // tests continue to pass after this change.
+        for fd in [outPipe[0], outPipe[1], errPipe[0], errPipe[1]] {
+            let flags = fcntl(fd, F_GETFD)
+            _ = fcntl(fd, F_SETFD, flags | FD_CLOEXEC)
+        }
 
         var fileActions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&fileActions)
