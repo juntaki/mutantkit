@@ -175,6 +175,26 @@ public enum ProcessSupervisor {
                 }
             }
             thread.stackSize = 512 * 1024
+            // `wait(for:...)`'s own doc comment already documents the one gap its
+            // polling design cannot fully close: a descendant forked and its
+            // parent exiting within the same single poll tick. That window is
+            // ~1 ms on an idle machine, but this thread has no scheduling
+            // priority over anything else by default -- under heavy contention
+            // (many concurrent test-spawned processes competing for very few
+            // cores, the exact shape of a GitHub Actions macOS runner under full
+            // Swift Testing parallelism), the OS scheduler can leave this thread
+            // waiting to run for far longer than 1 ms between iterations,
+            // stretching that documented gap wide enough to matter in practice
+            // (observed for real: `ProcessSupervisorResidueTests`'s
+            // process-group-escape scenario intermittently failing in CI even
+            // after the residue-check's own timing was independently hardened).
+            // `.userInteractive` asks the scheduler to run this loop promptly
+            // whenever it is runnable, the same signal used for anything whose
+            // job is to react within a tight latency budget -- it does not
+            // close the gap outright (no polling design can, short of a kernel
+            // event source), but it materially narrows it by keeping this
+            // thread's own scheduling latency out of the equation.
+            thread.qualityOfService = .userInteractive
             thread.start()
         }
     }
