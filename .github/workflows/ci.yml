@@ -110,9 +110,35 @@ jobs:
       # for the full ~12 minutes before timeout), proving a real stall
       # inside the test process itself, not a reporting artifact.
       #
-      # Detection: `test.log` not growing for 75s (five 15s checks) is
+      # Detection: `test.log` not growing for 240s (sixteen 15s checks) is
       # treated as a stall — don't wait for this job's own 15-minute
       # `timeout-minutes` ceiling, which exists as an outer backstop only.
+      #
+      # 240s, not the original 75s: a real CI run on commit 8ed7d31 tripped
+      # this detector, and both a stack sample and the raw heartbeat log
+      # proved it was a false positive, not a real hang. The sample showed
+      # the sole busy thread inside `ProcessSupervisor.wait()`'s own
+      # ordinary poll loop (`usleep`/`nanosleep`), not stuck in any
+      # Foundation-internal call; the heartbeat log showed `test.log`
+      # frozen at a constant line count for exactly the-then-75s threshold
+      # before the kill fired. Root cause: this same investigation's own
+      # earlier widenings this session (`promptExitTimeoutSeconds` and
+      # `eventuallyNoSurvivors`'s timeout, both raised 10-30s -> 60s, plus
+      # `retryingKnownForkRaceWindow`'s up to 3 fresh attempts on the
+      # documented fork-race miss in `ProcessSupervisorResidueTests.swift`)
+      # legitimately raised the worst-case span a single test can run with
+      # zero `test.log` output well past the old 75s threshold — a single
+      # attempt alone can legitimately wait up to
+      # `promptExitTimeoutSeconds` + `eventuallyNoSurvivors`'s ceiling
+      # (60s + 60s = 120s) with no output at all before it either succeeds
+      # or retries. 240s covers two such attempts back to back (a real,
+      # if uncommon, case — not the fully compounded 3-attempt worst case,
+      # which would need multiple independent rare fork-race misses to
+      # land back to back and is treated as astronomically unlikely enough
+      # not to design the stall threshold around) while staying well under
+      # the 900s `timeout-minutes` outer backstop, so a genuine multi-
+      # minute hang is still caught and sampled long before that backstop
+      # would silently discard the evidence.
       #
       # On stall, this samples the *actual* stuck work, not just the
       # parent: `swift-test`'s own process typically shows only "waiting
@@ -188,7 +214,7 @@ jobs:
             ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE "swift|xctest" | grep -v grep || true
             tail -n 5 test.log
 
-            if [ "$stall_seconds" -ge 75 ]; then
+            if [ "$stall_seconds" -ge 240 ]; then
               echo ">>> STALL DETECTED (test.log has not grown in ${stall_seconds}s) — capturing diagnostics <<<"
               ps -ef > samples/ps-tree.txt
 
