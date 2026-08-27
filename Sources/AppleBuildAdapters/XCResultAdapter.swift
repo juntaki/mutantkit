@@ -762,11 +762,28 @@ struct TestSummaryJSON: Decodable {
         /// rather than any test in the suite failing.
         ///
         /// Xcode represents this as a synthetic pseudo-test named "<App> encountered
-        /// an error" whose failure text is a fixed, Xcode-authored sentence — not
-        /// project-specific, so this matches regardless of app name. Read from a
-        /// structured field of the result bundle, the same way `isCrash` is.
+        /// an error" (or "xctest (<pid>) encountered an error" for a plain,
+        /// non-app-hosted bundle) whose failure text is Xcode-authored — not
+        /// project-specific. Read from a structured field of the result bundle, the
+        /// same way `isCrash` is.
+        ///
+        /// Checks the synthetic pseudo-test *name*, not only one fixed `failureText`
+        /// sentence: a real capture (a `__attribute__((constructor))`-forced crash
+        /// during dyld image load, simulating a mutation that breaks a static/global
+        /// initializer rather than causing a compile error) produced a completely
+        /// different failureText — "Early unexpected exit, operation never finished
+        /// bootstrapping..." — for the exact same synthetic-pseudo-test shape this
+        /// property's own doc comment already described. Under the failureText-only
+        /// check, that bundle fell through to `failedCountOutcome` and was
+        /// classified `.failed`: a mutant credited as "caught" by a record that
+        /// never ran a single real assertion. `testName` ending in "encountered an
+        /// error" is the stable signal across both wordings — no real XCTest method
+        /// identifier can contain a space, so this cannot collide with an actual
+        /// test's own name. Both checks are kept (`||`, not replaced) so neither
+        /// wording variant regresses the other.
         var isSystemFailure: Bool {
             failureText.hasPrefix("Failed to install or launch the test runner.")
+                || testName.hasSuffix("encountered an error")
         }
     }
 }

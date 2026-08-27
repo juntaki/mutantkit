@@ -345,3 +345,62 @@ struct XCResultAdapterTests {
         #expect(XCResultAdapter().classify(summary: summary).status == .timedOut)
     }
 }
+
+// MARK: - A different real failureText wording for the same synthetic-pseudo-test shape
+
+/// Split from the main suite above purely to keep that struct's body under
+/// SwiftLint's `type_body_length`; same suite in spirit.
+extension XCResultAdapterTests {
+    /// Captured from a real two-independent-target Xcode project (Xcode
+    /// 26.6.0): `TargetA`'s bundle crashed at *launch* (a C
+    /// `__attribute__((constructor))` calling `abort()`, simulating a
+    /// mutation that breaks a static/global initializer rather than causing
+    /// a compile error) while independent `TargetBTests` ran normally in
+    /// the same `xcodebuild test` invocation. Same *shape* as
+    /// `partialTargetLaunchFailureSummary` above, but a **different, real**
+    /// `failureText` wording than the one fixed prefix `isSystemFailure`
+    /// used to check — see that property's own doc comment for why this
+    /// fixture is what proved the fix necessary.
+    private static let earlyBootstrapFailureSummary = Data("""
+    {
+        "devicesAndConfigurations": [
+            {
+                "expectedFailures": 0,
+                "failedTests": 1,
+                "passedTests": 1,
+                "skippedTests": 0,
+                "testPlanConfiguration": {
+                    "configurationId": "1",
+                    "configurationName": "Test Scheme Action"
+                }
+            }
+        ],
+        "expectedFailures": 0,
+        "failedTests": 1,
+        "passedTests": 1,
+        "result": "Failed",
+        "skippedTests": 0,
+        "testFailures": [
+            {
+                "failureText": "Early unexpected exit, operation never finished bootstrapping - no restart will be attempted. (Underlying Error: The test runner crashed while preparing to run tests: xctest at <external symbol>)",
+                "targetName": "TargetATests",
+                "testIdentifier": 1,
+                "testIdentifierString": "xctest (88732) encountered an error",
+                "testName": "xctest (88732) encountered an error"
+            }
+        ],
+        "totalTestCount": 2
+    }
+    """.utf8)
+
+    @Test(
+        """
+        A target crashing at launch (a different real failureText wording than "Failed to install or launch") is \
+        still infrastructureFailure, never a kill credited to the synthetic runner-crash pseudo-test
+        """
+    )
+    func earlyBootstrapFailureIsInfrastructureFailureNotAFabricatedKill() throws {
+        let outcome = try classify(Self.earlyBootstrapFailureSummary)
+        #expect(outcome.status == .infrastructureFailure)
+    }
+}
