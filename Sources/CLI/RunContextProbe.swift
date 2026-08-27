@@ -70,6 +70,8 @@ enum RunContextProbe {
             "swiftVersion=\(toolchain.swiftVersion)",
             "swiftSyntaxVersion=\(toolchain.swiftSyntaxVersion)",
             "xcodeVersion=\(toolchain.xcodeVersion ?? "unknown")",
+            "buildSDKIdentity=\(toolchain.buildSDKIdentity ?? "unknown")",
+            "destinationRuntimeIdentity=\(toolchain.destinationRuntimeIdentity ?? "unknown")",
             "worktreeContentState=\(git)"
         ]
 
@@ -96,19 +98,22 @@ enum RunContextProbe {
     /// shape bump should not also invalidate every cached result) — maintain
     /// independent invalidation timelines under one shared computation.
     ///
-    /// ## Why the version marker reads `v3`
+    /// ## Why the version marker reads `v4`
     ///
     /// `v1` keyed on *commit identity* (`git rev-parse HEAD` plus
     /// `git diff HEAD`); `v2` moved to *content identity* — see
     /// `worktreeContentState`. `v3` additionally scopes out
-    /// `execution.workers` (see below) — every pre-existing entry on disk
-    /// was written under a digest scheme whose inputs no longer match, so it
-    /// misses cleanly and is recomputed. There is deliberately no migration:
-    /// a cache entry is a claim about a context, and a context computed by a
-    /// scheme this build no longer implements is a claim this build cannot
-    /// check. Bumping the shared marker rather than each `purpose` tag is
-    /// exact — the change is to the scheme both purposes share, not to what
-    /// makes either one's payload trustworthy.
+    /// `execution.workers` (see below). `v4` (P4 cache-soundness gap fix)
+    /// adds `toolchain.buildSDKIdentity`/`.destinationRuntimeIdentity` to
+    /// the inputs below — every
+    /// pre-existing entry on disk was written under a digest scheme whose
+    /// inputs no longer match, so it misses cleanly and is recomputed. There
+    /// is deliberately no migration: a cache entry is a claim about a
+    /// context, and a context computed by a scheme this build no longer
+    /// implements is a claim this build cannot check. Bumping the shared
+    /// marker rather than each `purpose` tag is exact — the change is to the
+    /// scheme both purposes share, not to what makes either one's payload
+    /// trustworthy.
     static func computeContextDigest(
         projectRoot: URL,
         configuration: Configuration,
@@ -131,13 +136,15 @@ enum RunContextProbe {
         scopedConfiguration.execution.workers = nil
 
         let components = [
-            "\(purpose)=v3",
+            "\(purpose)=v4",
             "configurationHash=\(scopedConfiguration.configurationHash)",
             "toolVersion=\(toolchain.toolVersion)",
             "toolCommitSHA=\(toolchain.toolCommitSHA ?? "unknown")",
             "swiftVersion=\(toolchain.swiftVersion)",
             "swiftSyntaxVersion=\(toolchain.swiftSyntaxVersion)",
             "xcodeVersion=\(toolchain.xcodeVersion ?? "unknown")",
+            "buildSDKIdentity=\(toolchain.buildSDKIdentity ?? "unknown")",
+            "destinationRuntimeIdentity=\(toolchain.destinationRuntimeIdentity ?? "unknown")",
             "worktreeContentState=\(worktree)"
         ]
 

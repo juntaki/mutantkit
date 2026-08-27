@@ -203,6 +203,80 @@ final class RunContextProbeTests: XCTestCase {
         )
     }
 
+    // MARK: - P4 cache-soundness gap 2: build SDK / destination runtime identity
+
+    /// Adversarial test A: identical everything except the *build* SDK
+    /// identity must miss. `xcodeVersion` alone cannot distinguish two SDKs
+    /// installed under one Xcode version — this is the exact class of false
+    /// hit the gap-2 investigation confirmed as independently variable on a
+    /// real machine (two iOS simulator runtimes/SDK builds coexisting under
+    /// one Xcode install).
+    func testDifferentBuildSDKIdentityMovesTheDigest() async throws {
+        let (repo, _) = try await committedBaseline()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let digestA = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: Configuration(),
+            toolchain: makeToolchain(buildSDKIdentity: "sdk:iphonesimulator:26.3(23D8133)"), purpose: "resultCache2"
+        )
+        let digestB = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: Configuration(),
+            toolchain: makeToolchain(buildSDKIdentity: "sdk:iphonesimulator:26.5(23F77)"), purpose: "resultCache2"
+        )
+
+        XCTAssertNotEqual(digestA, digestB, "a different build SDK identity must never be served from a cache entry written under another")
+    }
+
+    /// Adversarial test B: identical everything except the *destination*
+    /// simulator runtime identity must miss — the same real-machine finding
+    /// as test A, for the test-execution side rather than the build side.
+    func testDifferentDestinationRuntimeIdentityMovesTheDigest() async throws {
+        let (repo, _) = try await committedBaseline()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let digestA = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: Configuration(),
+            toolchain: makeToolchain(destinationRuntimeIdentity: "simulator:com.apple.CoreSimulator.SimRuntime.iOS-26-3"),
+            purpose: "resultCache2"
+        )
+        let digestB = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: Configuration(),
+            toolchain: makeToolchain(destinationRuntimeIdentity: "simulator:com.apple.CoreSimulator.SimRuntime.iOS-26-5"),
+            purpose: "resultCache2"
+        )
+
+        XCTAssertNotEqual(
+            digestA, digestB, "a different destination runtime identity must never be served from a cache entry written under another"
+        )
+    }
+
+    /// Adversarial test D: the specific real-machine shape that motivated
+    /// gap 2 — an *identical* `xcodeVersion` string is not enough on its
+    /// own to prove two environments are interchangeable. Pins that
+    /// `xcodeVersion` staying fixed while `buildSDKIdentity` moves still
+    /// changes the digest, so `xcodeVersion`'s own presence in the digest
+    /// can never mask this axis.
+    func testIdenticalXcodeVersionWithDifferentSDKIdentityStillMovesTheDigest() async throws {
+        let (repo, _) = try await committedBaseline()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let digestA = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: Configuration(),
+            toolchain: makeToolchain(xcodeVersion: "Xcode 26.6", buildSDKIdentity: "sdk:iphonesimulator:26.3(23D8133)"),
+            purpose: "resultCache2"
+        )
+        let digestB = try await RunContextProbe.computeContextDigest(
+            projectRoot: repo, configuration: Configuration(),
+            toolchain: makeToolchain(xcodeVersion: "Xcode 26.6", buildSDKIdentity: "sdk:iphonesimulator:26.5(23F77)"),
+            purpose: "resultCache2"
+        )
+
+        XCTAssertNotEqual(
+            digestA, digestB,
+            "two SDKs coexisting under the identical Xcode version string must not collapse to the same, falsely-reusable digest"
+        )
+    }
+
     // MARK: - Helpers
 
     //

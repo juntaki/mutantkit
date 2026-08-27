@@ -249,7 +249,9 @@ struct RunCommand: AsyncParsableCommand {
         // run itself see the identical toolchain — a probe taken after some
         // mutants had already built would date the run by whichever mutant
         // happened to be in flight when it ran.
-        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root)
+        let toolchain = await ToolchainProbe.fingerprint(
+            workingDirectory: root, resolvedDestination: (resolution.adapter as? XcodeBuildProjectAdapter)?.resolvedDestination
+        )
 
         for issue in PlanCompatibilityValidator.check(loadedPlan, against: settings, toolchain: toolchain) {
             print(issue.description)

@@ -22,13 +22,19 @@ extension MutationApplicationEvidence {
 // actually about, so a reader can see the property being protected instead of
 // twenty lines of unrelated setup.
 
-func makeToolchain() -> ToolchainFingerprint {
+func makeToolchain(
+    xcodeVersion: String? = nil,
+    buildSDKIdentity: String? = nil,
+    destinationRuntimeIdentity: String? = nil
+) -> ToolchainFingerprint {
     ToolchainFingerprint(
         toolVersion: "0.1.0",
         toolCommitSHA: "0000000000000000000000000000000000000000",
         swiftVersion: "6.3.3",
         swiftSyntaxVersion: "603.0.2",
-        xcodeVersion: nil
+        xcodeVersion: xcodeVersion,
+        buildSDKIdentity: buildSDKIdentity,
+        destinationRuntimeIdentity: destinationRuntimeIdentity
     )
 }
 

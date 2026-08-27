@@ -11,19 +11,66 @@ public struct ToolchainFingerprint: Codable, Sendable, Hashable {
     public let swiftVersion: String
     public let swiftSyntaxVersion: String
     public let xcodeVersion: String?
+    /// The SDK this run actually built against — `"sdk:<xcrun canonical
+    /// platform name>:<version>(<build>)"` (e.g.
+    /// `"sdk:iphonesimulator:26.5(23F77)"`), derived from the destination's
+    /// own platform (`macosx`/`iphoneos`/`iphonesimulator`/`appletvos`/
+    /// `appletvsimulator`/`watchos`/`watchsimulator`/`xros`/`xrsimulator`),
+    /// never a hardcoded one — a build-environment identity, deliberately
+    /// kept separate from `destinationRuntimeIdentity` below (a *test*-
+    /// destination identity). `nil` when no destination has been resolved
+    /// yet (plan time) or the platform/SDK could not be determined
+    /// (matching `xcodeVersion`'s own "unreadable is worse than guessed"
+    /// convention).
+    ///
+    /// P4 cache-soundness gap fix (`Research/mutation-testing-hardening-
+    /// 2026-08/PROGRESS.md`): `xcodeVersion` alone cannot distinguish two
+    /// installed SDKs/simulator runtimes under one Xcode version —
+    /// confirmed independently variable on a single real machine (one
+    /// Xcode installation with iOS 26.3 and iOS 26.5 simulator runtimes,
+    /// and their own distinct SDK build numbers, coexisting).
+    public let buildSDKIdentity: String?
+    /// The specific simulator runtime this run's *test* destination
+    /// actually resolved to — `"simulator:<CoreSimulator runtime
+    /// identifier>"` (e.g.
+    /// `"simulator:com.apple.CoreSimulator.SimRuntime.iOS-26-5"`). `nil`
+    /// for a destination with no simulator device at all (macOS host, a
+    /// physical device) or no destination resolved yet (plan time) —
+    /// legitimately nothing to report, not an unreadable-value placeholder.
+    ///
+    /// Deliberately the runtime identity only, never the device's own UDID
+    /// or clone identity: two clones under the *identical* runtime are
+    /// expected, by this tool's own isolation design, to produce identical
+    /// verdicts — keying on UDID would paper over a real isolation defect
+    /// with a cache miss instead of surfacing it. `xcodebuild`'s own
+    /// destination resolution is itself ambiguous without a concretely
+    /// resolved device (see `ResolvedDestination`'s own doc comment), so
+    /// only the specific runtime this run actually picked is trustworthy
+    /// here — never a generic "some runtime the machine happens to have
+    /// installed" guess.
+    public let destinationRuntimeIdentity: String?
 
+    /// A synthesized `Decodable` treats a missing key as `nil` for an
+    /// `Optional` property, so a plan/fingerprint written before either of
+    /// these two fields existed decodes cleanly with both reading `nil` —
+    /// never a decode failure, and never confused with a real "unknown" a
+    /// live probe reported, since both already collapse to the same `nil`.
     public init(
         toolVersion: String,
         toolCommitSHA: String?,
         swiftVersion: String,
         swiftSyntaxVersion: String,
-        xcodeVersion: String?
+        xcodeVersion: String?,
+        buildSDKIdentity: String? = nil,
+        destinationRuntimeIdentity: String? = nil
     ) {
         self.toolVersion = toolVersion
         self.toolCommitSHA = toolCommitSHA
         self.swiftVersion = swiftVersion
         self.swiftSyntaxVersion = swiftSyntaxVersion
         self.xcodeVersion = xcodeVersion
+        self.buildSDKIdentity = buildSDKIdentity
+        self.destinationRuntimeIdentity = destinationRuntimeIdentity
     }
 }
 

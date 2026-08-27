@@ -220,7 +220,11 @@ public enum DestinationResolver {
 
     // MARK: - Destination string parsing
 
-    static func field(named field: String, inDestination destination: String) -> String? {
+    /// `public`, not just module-internal: `ToolchainProbe` (in the `CLI`
+    /// module) reuses this exact, already-tested destination-string parser
+    /// to determine which SDK a run actually built against, rather than
+    /// duplicating the same `key=value` splitting logic a second time.
+    public static func field(named field: String, inDestination destination: String) -> String? {
         for component in destination.split(separator: ",") {
             let parts = component.split(separator: "=", maxSplits: 1)
             guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == field else { continue }
