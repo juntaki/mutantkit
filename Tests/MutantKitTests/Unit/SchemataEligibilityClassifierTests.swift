@@ -47,7 +47,7 @@ struct SchemataEligibilityClassifierTests {
     }
 
     @Test("An invalid plan (duplicate MutationID) is rejected, not silently accepted by a permissive decoder")
-    func invalidPlanRejected() throws {
+    func invalidPlanRejected() async throws {
         let source = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
         let points = try discoverPoints(source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
         let point = try #require(points.first)
@@ -62,13 +62,11 @@ struct SchemataEligibilityClassifierTests {
         let registry = try SchemataLowererRegistry()
 
         do {
-            _ = try blocking {
-                try await EligibilityClassifier.classify(
-                    planData: planData, planPath: "plan.json", projectRoot: root,
-                    operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
-                    resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
-                )
-            }
+            _ = try await EligibilityClassifier.classify(
+                planData: planData, planPath: "plan.json", projectRoot: root,
+                operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
+                resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
+            )
             Issue.record("expected classify to throw on a plan with a duplicate MutationID")
         } catch is PlanError {
             // Expected: MutationPlan.decode's own integrity check caught it.
@@ -76,7 +74,7 @@ struct SchemataEligibilityClassifierTests {
     }
 
     @Test("A source file whose on-disk content no longer matches the plan's recorded hash is a run-level failure")
-    func sourceDriftRejected() throws {
+    func sourceDriftRejected() async throws {
         let originalSource = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
         let points = try discoverPoints(originalSource, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
         let mutationPlan = makePlan(mutations: points, sourceFileHashes: ["Widget.swift": ContentHash.of(originalSource)])
@@ -90,13 +88,11 @@ struct SchemataEligibilityClassifierTests {
         let registry = try SchemataLowererRegistry()
 
         do {
-            _ = try blocking {
-                try await EligibilityClassifier.classify(
-                    planData: planData, planPath: "plan.json", projectRoot: root,
-                    operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
-                    resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
-                )
-            }
+            _ = try await EligibilityClassifier.classify(
+                planData: planData, planPath: "plan.json", projectRoot: root,
+                operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
+                resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
+            )
             Issue.record("expected classify to throw on source drift")
         } catch let EligibilityClassificationError.sourceDrift(file, _, _) {
             #expect(file == "Widget.swift")
@@ -104,7 +100,7 @@ struct SchemataEligibilityClassifierTests {
     }
 
     @Test("A mutation candidate file with no entry in sourceFileHashes is a run-level failure, not silently unverified")
-    func missingSourceHashRejected() throws {
+    func missingSourceHashRejected() async throws {
         let source = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
         let points = try discoverPoints(source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
         // sourceFileHashes deliberately omits "Widget.swift" — legal under
@@ -116,13 +112,11 @@ struct SchemataEligibilityClassifierTests {
         let registry = try SchemataLowererRegistry()
 
         do {
-            _ = try blocking {
-                try await EligibilityClassifier.classify(
-                    planData: planData, planPath: "plan.json", projectRoot: root,
-                    operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
-                    resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
-                )
-            }
+            _ = try await EligibilityClassifier.classify(
+                planData: planData, planPath: "plan.json", projectRoot: root,
+                operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
+                resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
+            )
             Issue.record("expected classify to throw on a candidate file missing from sourceFileHashes")
         } catch let EligibilityClassificationError.missingSourceHash(file) {
             #expect(file == "Widget.swift")
@@ -130,7 +124,7 @@ struct SchemataEligibilityClassifierTests {
     }
 
     @Test("A target-resolution failure surfaces as a thrown error before any classification is produced")
-    func targetResolutionFailureSurfaces() throws {
+    func targetResolutionFailureSurfaces() async throws {
         let source = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
         let points = try discoverPoints(source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
         let mutationPlan = makePlan(mutations: points, sourceFileHashes: ["Widget.swift": ContentHash.of(source)])
@@ -141,13 +135,11 @@ struct SchemataEligibilityClassifierTests {
         struct FakeResolutionFailure: Error {}
 
         do {
-            _ = try blocking {
-                try await EligibilityClassifier.classify(
-                    planData: planData, planPath: "plan.json", projectRoot: root,
-                    operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
-                    resolveTargetInfo: { _ in throw FakeResolutionFailure() }
-                )
-            }
+            _ = try await EligibilityClassifier.classify(
+                planData: planData, planPath: "plan.json", projectRoot: root,
+                operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, registry: registry,
+                resolveTargetInfo: { _ in throw FakeResolutionFailure() }
+            )
             Issue.record("expected classify to throw on target resolution failure")
         } catch EligibilityClassificationError.targetResolutionFailed {
             // Expected — matches a real production app checkout's own failure mode
@@ -203,7 +195,7 @@ struct SchemataEligibilityClassifierTests {
     }
 
     @Test("A mutation that analyze() clears but whose batch fails to lower is NOT reported plannerEmbedded")
-    func analyzeEligibleButPlannerFallbackNotReportedEmbedded() throws {
+    func analyzeEligibleButPlannerFallbackNotReportedEmbedded() async throws {
         let source = """
         func flagA() -> Bool { true }
         func flagB() -> Bool { true }
@@ -222,13 +214,11 @@ struct SchemataEligibilityClassifierTests {
         // and healthy never share a batch, matching
         // `SchemataChunkPlannerBatchFailureRecoveryTests`'s own setup, so
         // this isolates the recovery to exactly the batch that failed.
-        let result = try blocking {
-            try await EligibilityClassifier.classify(
-                planData: planData, planPath: "plan.json", projectRoot: root,
-                operatorID: BoolLiteralInversionOperator.descriptor.id, registry: registry, maxChunkSize: 1,
-                resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
-            )
-        }
+        let result = try await EligibilityClassifier.classify(
+            planData: planData, planPath: "plan.json", projectRoot: root,
+            operatorID: BoolLiteralInversionOperator.descriptor.id, registry: registry, maxChunkSize: 1,
+            resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
+        )
 
         let byID = Dictionary(uniqueKeysWithValues: result.classifications.map { ($0.mutationID, $0) })
         let poisonedClassification = try #require(byID[poisoned.id.rawValue])
@@ -247,7 +237,7 @@ struct SchemataEligibilityClassifierTests {
     }
 
     @Test("Classifying the same plan twice produces the identical plannerEmbedded set")
-    func embeddedMembershipIsDeterministic() throws {
+    func embeddedMembershipIsDeterministic() async throws {
         let source = "func flag() -> Bool { true }\n"
         let points = try discoverPoints(source, operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: "Widget.swift")
         let mutationPlan = makePlan(mutations: points, sourceFileHashes: ["Widget.swift": ContentHash.of(source)])
@@ -255,18 +245,16 @@ struct SchemataEligibilityClassifierTests {
         let root = try makeProjectRoot(files: ["Widget.swift": source])
         let registry = try SchemataLowererRegistry()
 
-        func classifyOnce() throws -> Set<String> {
-            try blocking {
-                try await EligibilityClassifier.classify(
-                    planData: planData, planPath: "plan.json", projectRoot: root,
-                    operatorID: BoolLiteralInversionOperator.descriptor.id, registry: registry,
-                    resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
-                )
-            }.plannerEmbeddedMutationIDs
+        func classifyOnce() async throws -> Set<String> {
+            try await EligibilityClassifier.classify(
+                planData: planData, planPath: "plan.json", projectRoot: root,
+                operatorID: BoolLiteralInversionOperator.descriptor.id, registry: registry,
+                resolveTargetInfo: self.literalTargetResolver(["Widget.swift": [Self.appTarget]])
+            ).plannerEmbeddedMutationIDs
         }
 
-        let first = try classifyOnce()
-        let second = try classifyOnce()
+        let first = try await classifyOnce()
+        let second = try await classifyOnce()
         #expect(first == second)
         #expect(!first.isEmpty, "sanity: this fixture is genuinely embeddable, not vacuously equal empty sets")
     }
@@ -285,5 +273,48 @@ struct SchemataEligibilityClassifierTests {
     func crossArmComparisonPassesOnMatch() throws {
         let ids: Set = ["mut_a", "mut_b"]
         try EligibilityClassifier.assertIdenticalAcrossArms(present: ids, absent: ids)
+    }
+
+    // MARK: - Regression: the sync-bridge sync/async deadlock this suite once caused
+
+    /// `EligibilityClassification.swift`'s sync-bridge helper exists for exactly one
+    /// legitimate caller: `SchemataEligibilityClassifier/main.swift`, a plain synchronous
+    /// CLI entry point that has no other way to call into `async` code. This suite used to
+    /// call that same helper from inside its own test bodies to avoid marking them `async`
+    /// — but Swift Testing schedules test bodies onto its own cooperative thread pool, and
+    /// the helper parks its *calling* thread on a semaphore until an inner `Task` it spawns
+    /// signals it. With enough tests reaching the helper concurrently (trivially reached on
+    /// a CI runner with few cores), every pool thread ends up parked on that semaphore
+    /// simultaneously, leaving no thread free to ever run the pending inner `Task`s — a
+    /// permanent deadlock. That was the actual, confirmed cause of a real public-CI hang
+    /// (a stack sample of the stuck worker process showed every thread waiting inside the
+    /// helper). The fix was simply to make the test functions `async` and call the `async`
+    /// API directly; this test pins that nothing under `Tests/` regresses back to the
+    /// sync-bridge pattern.
+    @Test("Nothing under Tests/ calls the production-only sync-bridge helper that once deadlocked CI")
+    func nothingUnderTestsCallsTheProductionOnlySyncBridge() throws {
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let testsRoot = testFileURL
+            .deletingLastPathComponent() // Unit/
+            .deletingLastPathComponent() // MutantKitTests/
+            .deletingLastPathComponent() // Tests/
+        let forbiddenCallSyntax = "blocking" + " {" // split so this very file doesn't self-match the scan below
+        var offenders: [String] = []
+        let enumerator = FileManager.default.enumerator(at: testsRoot, includingPropertiesForKeys: nil)
+        while let url = enumerator?.nextObject() as? URL {
+            guard url.pathExtension == "swift", url.path != testFileURL.path else { continue }
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            if contents.contains(forbiddenCallSyntax) {
+                offenders.append(url.path)
+            }
+        }
+        #expect(
+            offenders.isEmpty,
+            """
+            found the sync-bridge trailing-closure call pattern under Tests/ — this deadlocks Swift Testing's \
+            cooperative thread pool under load; use an async test function and call the async API directly \
+            instead: \(offenders)
+            """
+        )
     }
 }
