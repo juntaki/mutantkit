@@ -8,7 +8,7 @@ import Testing
 /// Covered here as well as in the acceptance suite because the acceptance suite
 /// takes a minute and this takes milliseconds — and because these assert the
 /// mechanism directly rather than through a whole mutation run.
-@Suite("Process tree")
+@Suite("Process tree", .subprocessExclusive)
 struct ProcessTreeTests {
     /// Spawns `/bin/sh -c 'sleep 30 & sleep 30'`, giving a child with a child.
     ///

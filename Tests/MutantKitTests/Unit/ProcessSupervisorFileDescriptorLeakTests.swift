@@ -59,7 +59,7 @@ import Testing
 /// with no dependency on `ProcessSupervisor`'s own internal structure, no
 /// injected test-only hooks in production code, and no reliance on
 /// winning a real thread race to reproduce the leak.
-@Suite("ProcessSupervisor file descriptor lifecycle (close-on-exec regression)")
+@Suite("ProcessSupervisor file descriptor lifecycle (close-on-exec regression)", .subprocessExclusive)
 struct ProcessSupervisorFileDescriptorLeakTests {
     /// Spawns `/bin/echo` with its stdout dup'd to `pipeWriteEnd`, exactly
     /// the way `ProcessSupervisor.runBlocking` spawns the process it

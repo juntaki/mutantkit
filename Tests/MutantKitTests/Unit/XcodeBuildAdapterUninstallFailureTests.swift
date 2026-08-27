@@ -72,7 +72,10 @@ struct XcodeBuildAdapterUninstallFailureTests {
 
     // MARK: - Real simctl failure is reported, never thrown
 
-    @Test("A real simctl uninstall failure is reported through the injected callback, and the call still completes without throwing")
+    @Test(
+        "A real simctl uninstall failure is reported through the injected callback, and the call still completes without throwing",
+        .subprocessExclusive
+    )
     func realUninstallFailureIsReported() async throws {
         let xctestrun = try makeXCTestRun()
         defer { try? FileManager.default.removeItem(at: xctestrun) }
@@ -110,7 +113,7 @@ struct XcodeBuildAdapterUninstallFailureTests {
     /// the real stderr of the test process is otherwise unobservable from
     /// inside the test itself, and does not need to be: the injected-callback
     /// tests above already pin the exact behavior this default wraps).
-    @Test("The default report callback (real stderr) does not crash when invoked")
+    @Test("The default report callback (real stderr) does not crash when invoked", .subprocessExclusive)
     func defaultReportCallbackDoesNotCrash() async throws {
         let xctestrun = try makeXCTestRun()
         defer { try? FileManager.default.removeItem(at: xctestrun) }

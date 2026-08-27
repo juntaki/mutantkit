@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 
-@Suite("ToolRunner")
+@Suite("ToolRunner", .subprocessExclusive)
 struct ToolRunnerTests {
     @Test("A process that exits cleanly is reported with its own exit code, not timed out")
     func cleanExitIsReported() async throws {

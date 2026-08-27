@@ -51,7 +51,18 @@ import Testing
 /// (workers: 2)..."), nothing here is testing `ProcessSupervisor`'s
 /// behavior *under* concurrent invocation, so removing this suite's own
 /// self-contention changes nothing about what it verifies.
-@Suite("Acceptance: ProcessSupervisor reaps descendants regardless of exit status", .serialized)
+///
+/// `.serialized` alone was not the end of the story: this suite kept
+/// failing in CI even after adopting it, because Swift Testing schedules
+/// every *other* suite fully concurrently by default -- these tests were
+/// still racing `XcodeConfigDetectorTests`/
+/// `XcodeBuildAdapterUninstallFailureTests` (different suites, same 3 real
+/// cores). `.subprocessExclusive` (`Tests/MutantKitTests/Support/
+/// SubprocessTestGate.swift`) is the real, cross-suite fix -- `.serialized`
+/// is kept alongside it as a harmless, redundant-in-one-direction
+/// documentation of this suite's own internal self-contention history,
+/// not because it is still load-bearing on its own.
+@Suite("Acceptance: ProcessSupervisor reaps descendants regardless of exit status", .serialized, .subprocessExclusive)
 struct ProcessSupervisorResidueTests {
     /// The `timeoutSeconds` passed to every `ProcessSupervisor.run` call below
     /// that expects a *prompt* exit. Originally 10 — raised after local

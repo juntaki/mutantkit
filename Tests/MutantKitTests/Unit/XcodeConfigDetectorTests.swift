@@ -179,7 +179,7 @@ struct XcodeConfigDetectorTests {
 
     // MARK: - Destination detection, against a real simctl device list
 
-    @Test("detectDestination finds a real, currently-available iPhone simulator on this machine")
+    @Test("detectDestination finds a real, currently-available iPhone simulator on this machine", .subprocessExclusive)
     func detectsRealDestination() async throws {
         let destination = await XcodeConfigDetector.detectDestination(projectRoot: Acceptance.packageRoot)
         let resolved = try #require(destination, "expected at least one real iOS Simulator on this machine")
@@ -264,7 +264,7 @@ struct XcodeConfigDetectorTests {
     /// case -- confirmed still ambiguous below to make sure this test is
     /// actually exercising the multi-scheme path, not one that happens to
     /// have shrunk to one scheme since this was written.
-    @Test("A real destination is still detected even when the scheme is ambiguous")
+    @Test("A real destination is still detected even when the scheme is ambiguous", .subprocessExclusive)
     func destinationIsDetectedIndependentlyOfSchemeAmbiguity() async {
         let projectFile = Acceptance.packageRoot.appendingPathComponent("Fixtures/XcodeProject/Checkout.xcodeproj")
         let detection = await XcodeConfigDetector.detect(kind: .xcodeProject, projectFile: projectFile, projectRoot: projectFile.deletingLastPathComponent())

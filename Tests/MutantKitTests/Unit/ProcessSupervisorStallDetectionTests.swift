@@ -8,7 +8,7 @@ import Testing
 /// (`/bin/sh -c`), the same discipline `ProcessSupervisorResidueTests` uses —
 /// the mechanism under test is a real polling loop watching a real file's
 /// real size on disk, not something a fake clock can stand in for.
-@Suite("ProcessSupervisor: stall watchdog (Gate 3 Phase H10)")
+@Suite("ProcessSupervisor: stall watchdog (Gate 3 Phase H10)", .subprocessExclusive)
 struct ProcessSupervisorStallDetectionTests {
     private func progressFilePath(_ label: String) -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("mutantkit-stall-\(label)-\(UUID().uuidString)")

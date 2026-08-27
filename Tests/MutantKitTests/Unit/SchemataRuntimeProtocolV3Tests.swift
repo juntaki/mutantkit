@@ -17,7 +17,7 @@ import Testing
 /// real-binary cross-check (here: the harness's own `LC_UUID`, parsed
 /// independently by `MachOReceiptExtractor`, must match what the C runtime
 /// itself recorded for the same image).
-@Suite("Schemata runtime protocol v3: real compiled runtime")
+@Suite("Schemata runtime protocol v3: real compiled runtime", .subprocessExclusive)
 struct SchemataRuntimeProtocolV3Tests {
     private static let sourceEmbeddingHex = String(repeating: "ab", count: 32) // 64 hex chars
     private static let compilationUnitHex = String(repeating: "cd", count: 32) // 64 hex chars

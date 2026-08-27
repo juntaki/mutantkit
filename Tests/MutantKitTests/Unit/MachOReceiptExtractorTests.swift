@@ -264,7 +264,7 @@ struct MachOReceiptExtractorTests {
     /// against `dwarfdump --uuid`'s own independent reading of the same
     /// file -- two different tools agreeing on the same bytes is the
     /// closest this test can get to ground truth.
-    @Test("a real swiftc-built binary's LC_UUID matches dwarfdump's own reading")
+    @Test("a real swiftc-built binary's LC_UUID matches dwarfdump's own reading", .subprocessExclusive)
     func realBuiltBinaryUUIDMatchesDwarfdump() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("macho-fixture-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

@@ -11,7 +11,7 @@ import Testing
 /// discovery/refusal behavior directly against a fabricated products
 /// directory containing a real compiled binary (built with the `swiftc` on
 /// this machine, the same technique `MachOReceiptExtractorTests` uses).
-@Suite("Schemata built image inspection")
+@Suite("Schemata built image inspection", .subprocessExclusive)
 struct SchemataBuiltImageInspectionTests {
     /// Compiles a trivial real binary once and reuses it across tests —
     /// building it is a real `swiftc` invocation, not free.
