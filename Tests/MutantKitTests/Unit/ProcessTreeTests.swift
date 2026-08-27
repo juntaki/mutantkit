@@ -30,7 +30,12 @@ struct ProcessTreeTests {
                 let survivors = ProcessTree.descendants(of: process.processIdentifier)
                 kill(process.processIdentifier, SIGKILL)
                 ProcessTree.forceKill(survivors)
-                process.waitUntilExit()
+                // Bounded, not a bare `waitUntilExit()` -- see
+                // `BoundedProcessWait`'s own doc comment: a real stack
+                // sample caught Foundation's own internal death-
+                // notification bookkeeping fail to fire promptly even
+                // after the process was already killed.
+                BoundedProcessWait.wait(process)
             }
         )
     }

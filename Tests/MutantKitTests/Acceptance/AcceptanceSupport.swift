@@ -93,7 +93,7 @@ enum Acceptance {
         process.standardOutput = pipe
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        BoundedProcessWait.wait(process)
 
         struct Listing: Decodable {
             struct Device: Decodable {
@@ -135,7 +135,7 @@ enum Acceptance {
         // Read before waiting: a full pipe blocks the child, and these commands
         // are verbose enough to fill one.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        BoundedProcessWait.wait(process)
 
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }

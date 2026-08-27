@@ -80,7 +80,7 @@ struct SchemataRuntimeProtocolV3Tests {
         compile.standardError = pipe
         compile.standardOutput = pipe
         try compile.run()
-        compile.waitUntilExit()
+        BoundedProcessWait.wait(compile)
         guard compile.terminationStatus == 0 else {
             let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             throw HarnessCompileError.failed(output)
@@ -125,7 +125,7 @@ struct SchemataRuntimeProtocolV3Tests {
         process.standardOutput = pipe
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        BoundedProcessWait.wait(process)
 
         let transcript = transcriptURL.flatMap { try? Data(contentsOf: $0) }
         return (String(decoding: data, as: UTF8.self), transcript)

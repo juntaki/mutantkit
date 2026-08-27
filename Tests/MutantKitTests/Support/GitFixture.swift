@@ -64,7 +64,7 @@ enum GitFixture {
         process.standardError = standardError
         try process.run()
         let message = String(decoding: standardError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
+        BoundedProcessWait.wait(process)
         guard process.terminationStatus == 0 else {
             throw NSError(
                 domain: "GitFixture",
@@ -85,7 +85,7 @@ enum GitFixture {
         process.standardOutput = standardOutput
         try process.run()
         let data = standardOutput.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        BoundedProcessWait.wait(process)
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

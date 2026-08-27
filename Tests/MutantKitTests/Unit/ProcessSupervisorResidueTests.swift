@@ -136,7 +136,17 @@ struct ProcessSupervisorResidueTests {
         process.standardError = errorPipe
         guard (try? process.run()) != nil else { return [] }
         let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        // Bounded, not a bare `waitUntilExit()`: a *second*, independent real
+        // CI stack sample (captured after the CLOEXEC fix above already
+        // shipped) caught this exact call stuck in `waitUntilExit()`'s own
+        // `mach_msg` wait, downstream of `readDataToEndOfFile()` already
+        // having returned -- proof this is the same Foundation-internal
+        // death-notification hazard `terminateBoundedly` below already
+        // documents for the bystander cleanup, not something EOF on the
+        // pipe rules out. `pgrep` should never legitimately take anywhere
+        // near this long, so a generous bound only ever fires on a genuine
+        // Foundation-internal miss.
+        Self.waitBoundedly(process)
         return String(decoding: data, as: UTF8.self)
             .split(separator: "\n").map(String.init).filter { !$0.contains("pgrep") }
     }
@@ -180,6 +190,26 @@ struct ProcessSupervisorResidueTests {
         // reaped out from under us returns ECHILD immediately instead of
         // blocking -- there is no shape of "still alive but never exits"
         // left for this call to hang on the way `waitUntilExit()` did.
+        _ = waitpid(process.processIdentifier, &status, 0)
+    }
+
+    /// Waits for `process` to exit on its own, bounded -- never a bare
+    /// `Process.waitUntilExit()`, which has no timeout parameter and can
+    /// block forever. Unlike `terminateBoundedly` above, this never signals
+    /// the process first: the caller expects it to exit promptly by itself
+    /// (`pgrep` finishing its own query), so sending it anything before
+    /// that would be interfering with a legitimate, still-finishing process
+    /// rather than terminating a stuck one. Escalates to a raw, uncatchable
+    /// `SIGKILL` (plus a best-effort direct `waitpid` to reap it) only if
+    /// still running well past when it should ever legitimately be.
+    private static func waitBoundedly(_ process: Process, timeoutSeconds: Double = 10) {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while process.isRunning, Date() < deadline {
+            usleep(10000)
+        }
+        guard process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
+        var status: Int32 = 0
         _ = waitpid(process.processIdentifier, &status, 0)
     }
 

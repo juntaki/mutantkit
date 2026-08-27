@@ -47,7 +47,7 @@ struct SchemataBuiltImageInspectionTests {
         compile.standardError = pipe
         compile.standardOutput = pipe
         try compile.run()
-        compile.waitUntilExit()
+        BoundedProcessWait.wait(compile)
         guard compile.terminationStatus == 0 else {
             let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             throw CompileError.failed(output)

@@ -279,7 +279,7 @@ struct MachOReceiptExtractorTests {
         compile.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         compile.arguments = ["swiftc", sourceURL.path, "-o", binaryURL.path]
         try compile.run()
-        compile.waitUntilExit()
+        BoundedProcessWait.wait(compile)
         try #require(compile.terminationStatus == 0, "swiftc must be available to build the real fixture")
 
         let image = try MachOReceiptExtractor().inspectImage(at: binaryURL)
@@ -300,7 +300,7 @@ struct MachOReceiptExtractorTests {
         dwarfdump.standardOutput = pipe
         try dwarfdump.run()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        dwarfdump.waitUntilExit()
+        BoundedProcessWait.wait(dwarfdump)
         try #require(dwarfdump.terminationStatus == 0, "dwarfdump must be available to cross-check the fixture")
 
         // dwarfdump prints one "UUID: <hyphenated> (<arch>) path" line per slice.
