@@ -197,12 +197,19 @@ public enum ProcessSupervisor {
             close(outPipe[0]); close(outPipe[1])
             throw ProcessSupervisorError.pipeCreationFailed(errno: errno)
         }
-        // A real, confirmed cause of a real public-CI hang (a `swift test`
-        // run of nothing but fast unit tests stalling for 68+ minutes,
-        // reproduced 4/4 times in CI and directly, deterministically
-        // locally too — see `ProcessSupervisorFileDescriptorLeakTests`,
+        // A real file-descriptor inheritance bug discovered while
+        // investigating a public-CI hang (a `swift test` run of nothing
+        // but fast unit tests stalling for 68+ minutes). A deterministic
+        // regression test — `ProcessSupervisorFileDescriptorLeakTests`,
         // written before this fix specifically to pin down the boundary
-        // below): `pipe(2)` does not set close-on-exec, so *any*
+        // below — proves that unrelated, concurrently-spawned execs
+        // could inherit copies of this function's own raw pipe
+        // descriptors. Subsequent CI evidence (the same hang recurring
+        // on the exact commit containing this fix) showed this was not,
+        // by itself, the root cause of the full-suite stall — that
+        // investigation continued separately. The bug fixed here is
+        // real and worth fixing regardless: `pipe(2)` does not set
+        // close-on-exec, so *any*
         // concurrently-running `posix_spawn` on another thread — not just
         // this one's own — inherits copies of these fds into its own
         // child by default. A long-lived, completely unrelated process

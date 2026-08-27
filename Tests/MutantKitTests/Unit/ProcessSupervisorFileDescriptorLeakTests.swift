@@ -3,16 +3,22 @@ import Foundation
 @testable import MutationExecution
 import Testing
 
-/// A deterministic, syscall-level regression test for the real CI hang
-/// traced to `ProcessSupervisor.swift`: its own raw `pipe(2)`-created file
-/// descriptors are never marked close-on-exec, so *any* concurrently-running
+/// A deterministic, syscall-level regression test for a real file-descriptor
+/// inheritance bug discovered while investigating a public CI hang:
+/// `ProcessSupervisor.swift`'s own raw `pipe(2)`-created file descriptors
+/// are never marked close-on-exec, so *any* concurrently-running
 /// `posix_spawn` on another thread — not just the one that created them —
 /// inherits copies of them into its own child by default. A long-lived,
 /// completely unrelated process spawned while a fast process's pipe is still
 /// open can hold that pipe's write end open for its own entire lifetime,
 /// blocking the fast process's own drain long after its own child has
 /// already exited. This is the identical bug class already found and fixed
-/// in `Sources/BenchmarkRunner/ToolRunner.swift`.
+/// in `Sources/BenchmarkRunner/ToolRunner.swift`. Subsequent CI evidence
+/// (the same hang recurring on the exact commit that applied this fix)
+/// showed this was not, by itself, the root cause of the full-suite stall
+/// — this test and the fix it drives remain correct and worth keeping
+/// regardless; the search for the actual dominant cause continued
+/// separately.
 ///
 /// Written *before* touching `ProcessSupervisor.swift`, per the explicit
 /// instruction that produced it: a naive close-on-exec fix applied there
