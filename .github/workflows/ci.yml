@@ -125,27 +125,53 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          mkdir -p samples
           swift test > test.log 2>&1 &
           test_pid=$!
           echo "swift test started, pid=$test_pid"
+          elapsed=0
+          sampled=0
           while kill -0 "$test_pid" 2>/dev/null; do
             sleep 30
+            elapsed=$((elapsed + 30))
             lines=$(wc -l < test.log | tr -d ' ')
-            echo "--- heartbeat $(date -u +%H:%M:%S) --- test.log lines: $lines ---"
+            echo "--- heartbeat $(date -u +%H:%M:%S) (elapsed ${elapsed}s) --- test.log lines: $lines ---"
             # The real work happens in child processes (swiftpm-testing-helper,
             # swift-package) the parent `swift` pid's own %cpu never reflects —
             # snapshotting every swift-related process, not just $test_pid,
             # is what actually shows whether real work is still happening.
             ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE "swift|xctest" | grep -v grep || true
             tail -n 5 test.log
+            # 12 minutes in, 3 minutes before this job's own 15-minute
+            # ceiling: if still running, capture a real per-thread stack
+            # trace from every swift-related process on THIS runner,
+            # directly, rather than continuing to infer what a hang looks
+            # like from log silence and imperfect local reproduction (a
+            # real, confirmed gap: a fix verified clean across 12
+            # consecutive local runs still did not resolve this hang in
+            # CI). `sample` needs no special privileges for a process this
+            # same user already owns.
+            if [ "$elapsed" -ge 720 ] && [ "$sampled" -eq 0 ]; then
+              echo ">>> 12 minutes elapsed and still running — capturing stack samples <<<"
+              sampled=1
+              for pid in $(pgrep -f "swift-test|swiftpm-testing-helper|swift-package"); do
+                sample "$pid" 5 -file "samples/sample-${pid}.txt" 2>&1 | tail -n 3 || true
+              done
+            fi
           done
           wait "$test_pid"
           exit_code=$?
           echo "=== swift test exited with code $exit_code ==="
           cat test.log
           exit $exit_code
+      # `always()`, not `failure()`: a job that hits its own
+      # `timeout-minutes` is reported as *cancelled*, not failed, and
+      # `if: failure()` does not run for a cancelled job's steps — the
+      # exact scenario this whole diagnostic exists to capture evidence
+      # from. Uploading unconditionally is the only way the stack
+      # samples and logs from a timeout are ever actually retained.
       - name: Upload unit failure logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: unit-failure-logs
@@ -153,6 +179,7 @@ jobs:
           path: |
             build.log
             test.log
+            samples/
       - name: Publish unit failure excerpt
         if: failure() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
