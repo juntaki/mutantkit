@@ -32,6 +32,19 @@ import Testing
 /// the same reason.
 @Suite("Acceptance: ProcessSupervisor reaps descendants regardless of exit status")
 struct ProcessSupervisorResidueTests {
+    /// The `timeoutSeconds` passed to every `ProcessSupervisor.run` call below
+    /// that expects a *prompt* exit. Originally 10 — raised after local
+    /// reproduction (deliberately oversubscribing an 8-core machine with
+    /// dozens of busy-loop processes while running the full suite) showed
+    /// even a normally-instant `python3 -c '...'` invocation's own exit can
+    /// occasionally take upward of 10-13 seconds under severe scheduling
+    /// contention, unrelated to anything `ProcessSupervisor` itself does
+    /// wrong. This has no effect on the passing case — these scripts still
+    /// exit in well under a second on any machine with spare capacity — it
+    /// only widens the ceiling before a genuinely wedged process would be
+    /// misreported as a false timeout.
+    private static let promptExitTimeoutSeconds: Double = 30
+
     private func markerPath(_ label: String) -> String {
         FileManager.default.temporaryDirectory.appendingPathComponent("mutantkit-residue-\(label)-\(UUID().uuidString)").path
     }
@@ -68,6 +81,34 @@ struct ProcessSupervisorResidueTests {
     private func killByMarker(_ marker: String) {
         for line in survivingProcesses(referencing: marker) {
             if let pid = Int32(line.split(separator: " ").first ?? "") { kill(pid, SIGKILL) }
+        }
+    }
+
+    /// Polls `survivingProcesses(referencing:)` until it is empty or
+    /// `timeoutSeconds` elapses, instead of a single fixed-delay check.
+    ///
+    /// `ProcessSupervisor.run` sends the reaping kill synchronously, before it
+    /// ever returns to its caller — but the kernel actually removing a killed
+    /// process from the process table (what `pgrep`, and therefore
+    /// `survivingProcesses`, observes) is a separate step on the kernel's own
+    /// schedule, not something the caller can force to complete by any
+    /// particular deadline. A single fixed sleep-then-check (originally
+    /// 300 ms here) assumes a latency ceiling that only holds on an
+    /// uncontended machine: under real GitHub Actions macOS-runner
+    /// concurrency (a handful of vCPUs running this entire suite's own
+    /// Swift-Testing-level parallelism, each test here itself spawning
+    /// `python3`/`tail`/`pgrep` subprocesses), this reliably fired as a false
+    /// failure — reproduced locally too, deterministically, by adding
+    /// artificial CPU oversubscription (dozens of busy-loop processes on an
+    /// 8-core machine) while running the full suite. Polling keeps this fast
+    /// on a quiet machine (the common case exits the loop on its first
+    /// iteration) while not being a trip wire on a loaded one.
+    private func eventuallyNoSurvivors(referencing needle: String, timeoutSeconds: Double = 10) async -> [String] {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while true {
+            let survivors = survivingProcesses(referencing: needle)
+            if survivors.isEmpty || Date() >= deadline { return survivors }
+            try? await Task.sleep(nanoseconds: 20_000_000)
         }
     }
 
@@ -120,13 +161,12 @@ struct ProcessSupervisorResidueTests {
         // descendant tracking can catch this one.
         let result = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: marker)],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 10
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
         )
         #expect(result.exitCode == 1)
         #expect(!result.timedOut)
 
-        try await Task.sleep(nanoseconds: 300_000_000)
-        let survivors = survivingProcesses(referencing: marker)
+        let survivors = await eventuallyNoSurvivors(referencing: marker)
         defer { killByMarker(marker); try? FileManager.default.removeItem(atPath: marker) }
         #expect(survivors.isEmpty, "residue left behind by a prompt exit: \(survivors)")
     }
@@ -152,13 +192,12 @@ struct ProcessSupervisorResidueTests {
         """
         let result = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", script], workingDirectory: FileManager.default.temporaryDirectory,
-            timeoutSeconds: 10
+            timeoutSeconds: Self.promptExitTimeoutSeconds
         )
         #expect(result.exitCode == 1)
         #expect(!result.timedOut)
 
-        try await Task.sleep(nanoseconds: 300_000_000)
-        let survivors = survivingProcesses(referencing: marker)
+        let survivors = await eventuallyNoSurvivors(referencing: marker)
         defer { killByMarker(marker); try? FileManager.default.removeItem(atPath: marker) }
         #expect(survivors.isEmpty, "a process-group-escaped descendant survived a prompt exit: \(survivors)")
     }
@@ -191,13 +230,13 @@ struct ProcessSupervisorResidueTests {
         let ownMarker = markerPath("own")
         _ = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: ownMarker)],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 10
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
         )
         defer { killByMarker(ownMarker); try? FileManager.default.removeItem(atPath: ownMarker) }
 
-        try await Task.sleep(nanoseconds: 300_000_000)
+        let ownSurvivors = await eventuallyNoSurvivors(referencing: ownMarker)
         #expect(unrelated.isRunning, "an unrelated process must never be killed just because it shares an executable name")
-        #expect(survivingProcesses(referencing: ownMarker).isEmpty, "the supervised process's own descendant should have been reaped")
+        #expect(ownSurvivors.isEmpty, "the supervised process's own descendant should have been reaped")
     }
 
     // MARK: - Item 7: repeated invocations do not leak provenance between runs
@@ -209,25 +248,23 @@ struct ProcessSupervisorResidueTests {
 
         let resultA = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: markerA)],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 10
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
         )
         #expect(resultA.exitCode == 1)
-        try await Task.sleep(nanoseconds: 300_000_000)
-        #expect(survivingProcesses(referencing: markerA).isEmpty, "run A's own descendant must be reaped after run A")
+        let survivorsA = await eventuallyNoSurvivors(referencing: markerA)
+        #expect(survivorsA.isEmpty, "run A's own descendant must be reaped after run A")
 
         let resultB = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: markerB)],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 10
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
         )
         #expect(resultB.exitCode == 1)
-        try await Task.sleep(nanoseconds: 300_000_000)
+        let survivorsB = await eventuallyNoSurvivors(referencing: markerB)
         defer {
             killByMarker(markerA); killByMarker(markerB)
             try? FileManager.default.removeItem(atPath: markerA)
             try? FileManager.default.removeItem(atPath: markerB)
         }
-        #expect(
-            survivingProcesses(referencing: markerB).isEmpty, "run B's own descendant must be reaped after run B, independently of run A"
-        )
+        #expect(survivorsB.isEmpty, "run B's own descendant must be reaped after run B, independently of run A")
     }
 }
