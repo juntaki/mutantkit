@@ -25,9 +25,20 @@ public enum XcodeConfigDetector {
         /// when the scheme's `.xcscheme` file could not be found/parsed.
         public let testTargets: [String]
         /// A real, currently-available simulator destination string, or
-        /// `nil` when this project kind needs none (macOS) or none could
-        /// be found.
+        /// `nil` when this project kind needs none (macOS), none could be
+        /// found, or discovery itself failed (see
+        /// `destinationDiscoveryFailed` for which).
         public let destination: String?
+        /// `true` only when destination discovery was actually attempted
+        /// and could not complete (a real `simctl` call failing to launch,
+        /// timing out, or returning unparseable output) — never set for the
+        /// ordinary, expected "no simulator runtime installed" case, and
+        /// never set when discovery was not attempted at all (e.g. a
+        /// non-Xcode project kind). A caller that only checked `destination
+        /// == nil` could not tell "genuinely no simulator" apart from
+        /// "could not ask" — this field exists so it can, and can warn
+        /// accordingly instead of silently falling back to a placeholder.
+        public let destinationDiscoveryFailed: Bool
     }
 
     /// - Parameters:
@@ -40,7 +51,7 @@ public enum XcodeConfigDetector {
         projectRoot: URL
     ) async -> Detection {
         guard kind == .xcodeProject || kind == .xcodeWorkspace, let projectFile else {
-            return Detection(scheme: nil, schemeCandidates: [], testTargets: [], destination: nil)
+            return Detection(scheme: nil, schemeCandidates: [], testTargets: [], destination: nil, destinationDiscoveryFailed: false)
         }
 
         let adapter = XcodeBuildAdapter(
@@ -60,16 +71,40 @@ public enum XcodeConfigDetector {
         // *which* scheme -- `<TestAction><Testables>` belongs to one
         // specific scheme document, so that part stays gated on having
         // resolved exactly one.
-        let destination = await detectDestination(projectRoot: projectRoot)
+        //
+        // Uses `detectDestinationOutcome` directly, not the collapsing
+        // `detectDestination` wrapper: a discovery failure here must reach
+        // the caller as `destinationDiscoveryFailed`, not disappear into
+        // the same `nil` an ordinary "no simulator installed" produces.
+        let destinationOutcome = await detectDestinationOutcome(projectRoot: projectRoot)
+        let destination: String?
+        let destinationDiscoveryFailed: Bool
+        switch destinationOutcome {
+        case let .detected(value):
+            destination = value
+            destinationDiscoveryFailed = false
+        case .unavailable:
+            destination = nil
+            destinationDiscoveryFailed = false
+        case .discoveryFailed:
+            destination = nil
+            destinationDiscoveryFailed = true
+        }
 
         guard schemes.count == 1 else {
-            return Detection(scheme: nil, schemeCandidates: schemes, testTargets: [], destination: destination)
+            return Detection(
+                scheme: nil, schemeCandidates: schemes, testTargets: [],
+                destination: destination, destinationDiscoveryFailed: destinationDiscoveryFailed
+            )
         }
         let scheme = schemes[0]
 
         let testTargets = await testTargets(forScheme: scheme, projectRoot: projectRoot)
 
-        return Detection(scheme: scheme, schemeCandidates: schemes, testTargets: testTargets, destination: destination)
+        return Detection(
+            scheme: scheme, schemeCandidates: schemes, testTargets: testTargets,
+            destination: destination, destinationDiscoveryFailed: destinationDiscoveryFailed
+        )
     }
 
     // MARK: - Test targets, from the scheme's own .xcscheme
@@ -190,10 +225,63 @@ public enum XcodeConfigDetector {
     /// platform label is safe to hardcode here specifically *because*
     /// `candidates` is already restricted to real iOS-runtime devices
     /// above — never true before that filter existed.
+    /// Why destination discovery failed, or that it did not. Introduced
+    /// after a real CI run showed `detectDestination`'s old `try?` treating
+    /// three different situations as one identical `nil`: no usable
+    /// simulator actually installed, `simctl` itself failing to launch, and
+    /// `simctl` timing out against a cold CoreSimulator subsystem (this
+    /// project's own `SimulatorPool` default timeout — the exact mechanism
+    /// already root-caused for a real, once-shipped `cli-commands` CI
+    /// matrix misclassification). `.unavailable` is an ordinary, expected
+    /// outcome on a machine with no simulator runtimes installed; a caller
+    /// has no reason to warn about it. `.discoveryFailed` means the
+    /// question was never actually answered — a caller that silently
+    /// treated this the same as `.unavailable` would misreport "no
+    /// simulator" when the truth is "could not ask."
+    public enum SimulatorDestinationDiscovery: Sendable, Equatable {
+        case detected(String)
+        case unavailable
+        case discoveryFailed
+    }
+
+    /// Seam for injecting a fake device list in tests without a real
+    /// `simctl` call — `SimulatorPool` conforms below. Not a general
+    /// abstraction over `SimulatorPool`'s full surface, just the one method
+    /// this file needs.
+    protocol AvailableDevicesProviding: Sendable {
+        func availableDevices() async throws -> [SimulatorDevice]
+    }
+
+    /// Real, typed destination discovery: distinguishes "asked and got a
+    /// real answer" from "the question itself could not be asked" rather
+    /// than collapsing both into one `nil`. `poolFactory` defaults to the
+    /// real `SimulatorPool`; tests inject a fake that throws (to prove
+    /// `.discoveryFailed`) or returns a non-iOS/empty list (to prove
+    /// `.unavailable`) without ever touching real `simctl`.
+    static func detectDestinationOutcome(
+        projectRoot: URL,
+        poolFactory: (URL) -> any AvailableDevicesProviding = { SimulatorPool(workingDirectory: $0) }
+    ) async -> SimulatorDestinationDiscovery {
+        do {
+            let devices = try await poolFactory(projectRoot).availableDevices()
+            guard let destination = selectDestination(from: devices) else { return .unavailable }
+            return .detected(destination)
+        } catch {
+            return .discoveryFailed
+        }
+    }
+
+    /// Thin, backward-compatible wrapper collapsing `.unavailable` and
+    /// `.discoveryFailed` to `nil` alike — for a caller that only needs a
+    /// destination string and has no way to act differently on the
+    /// distinction. `detect(kind:projectFile:projectRoot:)` below does *not*
+    /// use this: it needs the distinction to report a discovery failure as
+    /// an observable warning rather than silently.
     static func detectDestination(projectRoot: URL) async -> String? {
-        let pool = SimulatorPool(workingDirectory: projectRoot)
-        guard let devices = try? await pool.availableDevices(), !devices.isEmpty else { return nil }
-        return selectDestination(from: devices)
+        if case let .detected(destination) = await detectDestinationOutcome(projectRoot: projectRoot) {
+            return destination
+        }
+        return nil
     }
 
     /// The pure selection logic, factored out of `detectDestination` so it
@@ -225,3 +313,5 @@ public enum XcodeConfigDetector {
         return runtimeIdentifier[range.upperBound...].split(separator: "-").compactMap { Int($0) }
     }
 }
+
+extension SimulatorPool: XcodeConfigDetector.AvailableDevicesProviding {}

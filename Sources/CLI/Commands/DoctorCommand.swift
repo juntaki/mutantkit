@@ -268,6 +268,11 @@ struct DoctorCommand: AsyncParsableCommand {
         }
         if let destination = xcodeDetection.destination {
             lines.append("Detected a real available destination: \(destination)\(configuration.project.destination != nil ? " — update `project.destination` to this" : " — set `project.destination` to this").")
+        } else if xcodeDetection.destinationDiscoveryFailed {
+            lines.append("""
+            Could not query the simulator subsystem (a real `simctl` call failed or timed out) — \
+            this is not the same as "no simulator installed"; retry once Xcode/CoreSimulator has settled.
+            """)
         }
 
         guard !lines.isEmpty else { return fallback }

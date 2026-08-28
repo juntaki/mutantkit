@@ -349,6 +349,17 @@ jobs:
           - fixture: cli-commands
             filter: CLICommandsAcceptanceTests
             simulator: "1"
+          # Real-machine XcodeConfigDetector coverage (a real `simctl` call
+          # finding a real destination, including against a real
+          # ambiguous-scheme project), relocated out of the always-run unit
+          # suite: these are integration tests, not deterministic unit
+          # tests, and CI must explicitly declare a simulator dependency for
+          # them rather than run them unconditionally with no such
+          # declaration at all. See `XcodeConfigDetectorAcceptanceTests.swift`'s
+          # own header comment.
+          - fixture: xcode-config-detector
+            filter: XcodeConfigDetectorAcceptanceTests
+            simulator: "1"
           - fixture: process-supervision
             filter: ProcessSupervisionAcceptanceTests
             simulator: "0"

@@ -56,6 +56,18 @@ struct InitCommand: AsyncParsableCommand {
             print("Detected test target(s): \(xcodeTestTargets.joined(separator: ", "))")
         }
 
+        // A discovery *failure* (a real `simctl` call that could not launch,
+        // timed out, or returned unparseable output) is not the same fact
+        // as "no simulator is installed" — the placeholder fallback below
+        // still applies either way, but only a genuine failure warrants
+        // telling the user discovery itself did not run to completion.
+        if xcodeDetection.destinationDiscoveryFailed {
+            print("""
+            warning: could not query the simulator subsystem (a real `simctl` call failed or timed out) — \
+            falling back to a placeholder destination. Run `mutantkit doctor`, or retry once Xcode/CoreSimulator has settled.
+            """)
+        }
+
         let resolvedDestination = xcodeDetection.destination ?? detection.map(defaultDestination(for:)) ?? nil
         if let resolvedDestination, xcodeDetection.destination != nil {
             print("Detected destination: \(resolvedDestination)")

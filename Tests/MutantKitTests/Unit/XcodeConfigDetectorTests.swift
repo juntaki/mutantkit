@@ -7,10 +7,17 @@ import Testing
 /// workspace auto-detection used to leave `tests.targets: []`, `scheme:
 /// nil`, and a hardcoded `iPhone 16` destination for every non-SwiftPM
 /// project -- the exact gap the C0-C12 closeout review correctly rejected
-/// as "not Xcode-competitive." These tests exercise the real detection
-/// logic against real, committed fixture data (a real `.xcscheme` file,
-/// a real `simctl` device list) -- never a hand-built double for either,
-/// since the whole point is what the real tools actually report.
+/// as "not Xcode-competitive."
+///
+/// This suite is deterministic unit coverage only: `.xcscheme` XML
+/// parsing against real, committed fixture data; `selectDestination(from:)`'s
+/// pure selection logic against hand-built device lists; and
+/// `detectDestinationOutcome`'s `.detected`/`.unavailable`/`.discoveryFailed`
+/// classification against an injected fake device provider -- never a real
+/// `simctl` call. Real, machine-dependent destination discovery (an actual
+/// `simctl` call finding an actual simulator) is an integration concern and
+/// lives in `XcodeConfigDetectorAcceptanceTests.swift` instead, gated on
+/// `Acceptance.simulatorEnabled` with its own explicit CI matrix entry.
 @Suite("Xcode config auto-detection (Phase C13)")
 struct XcodeConfigDetectorTests {
     // MARK: - Test-target extraction from a real .xcscheme
@@ -179,12 +186,14 @@ struct XcodeConfigDetectorTests {
 
     // MARK: - Destination detection, against a real simctl device list
 
-    @Test("detectDestination finds a real, currently-available iPhone simulator on this machine", .subprocessExclusive)
-    func detectsRealDestination() async throws {
-        let destination = await XcodeConfigDetector.detectDestination(projectRoot: Acceptance.packageRoot)
-        let resolved = try #require(destination, "expected at least one real iOS Simulator on this machine")
-        #expect(resolved.hasPrefix("platform=iOS Simulator,name=iPhone"))
-    }
+    //
+    // Real, machine-dependent detectDestination()/detect() acceptance
+    // coverage (a real simctl call, a real ambiguous-scheme project) lives
+    // in XcodeConfigDetectorAcceptanceTests.swift, gated behind
+    // Acceptance.simulatorEnabled — see that file's own header comment for
+    // why (P8, CI Safe-Skip Policy: these are integration tests, not
+    // deterministic unit tests, and belong in a suite CI explicitly
+    // declares a simulator dependency for).
 
     private static func device(_ name: String, runtime: String, state: String = "Shutdown") -> SimulatorDevice {
         SimulatorDevice(udid: UUID().uuidString, name: name, runtimeIdentifier: runtime, state: state)
@@ -253,25 +262,62 @@ struct XcodeConfigDetectorTests {
         #expect(detection.destination == nil)
     }
 
-    /// Regression test for a real bug caught by manual end-to-end testing,
-    /// not by the unit tests above alone: `detect()`'s first version
-    /// computed the destination only *after* confirming exactly one scheme
-    /// existed, so an ambiguous-scheme project (the common case for
-    /// anything beyond a single-target toy -- `Fixtures/XcodeProject`
-    /// itself has 4 real schemes) silently lost the destination suggestion
-    /// too, even though a destination has nothing to do with scheme
-    /// resolution. `Fixtures/XcodeProject` is exactly this real, ambiguous
-    /// case -- confirmed still ambiguous below to make sure this test is
-    /// actually exercising the multi-scheme path, not one that happens to
-    /// have shrunk to one scheme since this was written.
-    @Test("A real destination is still detected even when the scheme is ambiguous", .subprocessExclusive)
-    func destinationIsDetectedIndependentlyOfSchemeAmbiguity() async {
-        let projectFile = Acceptance.packageRoot.appendingPathComponent("Fixtures/XcodeProject/Checkout.xcodeproj")
-        let detection = await XcodeConfigDetector.detect(kind: .xcodeProject, projectFile: projectFile, projectRoot: projectFile.deletingLastPathComponent())
+    // MARK: - detectDestinationOutcome, with an injected fake device provider
 
-        #expect(detection.scheme == nil)
-        #expect(detection.schemeCandidates.count > 1, "expected this fixture to still have more than one scheme")
-        #expect(detection.testTargets.isEmpty, "test targets genuinely cannot be resolved without knowing which scheme")
-        #expect(detection.destination?.hasPrefix("platform=iOS Simulator,name=") == true, "a destination must still be found despite the scheme ambiguity")
+    //
+    // Pure, deterministic unit coverage for the typed distinction itself —
+    // no real simctl call. The real-machine acceptance coverage (a real
+    // simctl call actually finding a real destination) lives in
+    // XcodeConfigDetectorAcceptanceTests.swift.
+
+    private struct FakeDevicesProvider: XcodeConfigDetector.AvailableDevicesProviding {
+        let result: Result<[SimulatorDevice], Error>
+        func availableDevices() async throws -> [SimulatorDevice] { try result.get() }
+    }
+
+    private struct FakeDiscoveryFailure: Error {}
+
+    @Test("A known device list resolves to the correct .detected destination")
+    func knownDeviceListResolvesToDetected() async {
+        let devices = [Self.device("iPhone 16", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-0")]
+        let outcome = await XcodeConfigDetector.detectDestinationOutcome(
+            projectRoot: Acceptance.packageRoot,
+            poolFactory: { _ in FakeDevicesProvider(result: .success(devices)) }
+        )
+        #expect(outcome == .detected("platform=iOS Simulator,name=iPhone 16"))
+    }
+
+    @Test("No iOS device in a successfully-fetched list resolves to .unavailable, not .discoveryFailed")
+    func noIOSDeviceResolvesToUnavailable() async {
+        let devices = [Self.device("Apple TV 4K", runtime: "com.apple.CoreSimulator.SimRuntime.tvOS-17-0")]
+        let outcome = await XcodeConfigDetector.detectDestinationOutcome(
+            projectRoot: Acceptance.packageRoot,
+            poolFactory: { _ in FakeDevicesProvider(result: .success(devices)) }
+        )
+        #expect(outcome == .unavailable)
+    }
+
+    @Test("An empty device list resolves to .unavailable, not .discoveryFailed")
+    func emptyDeviceListResolvesToUnavailable() async {
+        let outcome = await XcodeConfigDetector.detectDestinationOutcome(
+            projectRoot: Acceptance.packageRoot,
+            poolFactory: { _ in FakeDevicesProvider(result: .success([])) }
+        )
+        #expect(outcome == .unavailable)
+    }
+
+    /// The regression this whole typed distinction exists for: a real CI
+    /// run showed a `simctl` call that failed to complete (a cold
+    /// CoreSimulator subsystem timing out) collapsing into the exact same
+    /// `nil` as "no simulator installed" — this proves an injected
+    /// discovery failure is reported as `.discoveryFailed`, distinguishably
+    /// from `.unavailable`, never silently masquerading as "no simulator."
+    @Test("An injected discovery failure resolves to .discoveryFailed, never .unavailable")
+    func injectedFailureResolvesToDiscoveryFailed() async {
+        let outcome = await XcodeConfigDetector.detectDestinationOutcome(
+            projectRoot: Acceptance.packageRoot,
+            poolFactory: { _ in FakeDevicesProvider(result: .failure(FakeDiscoveryFailure())) }
+        )
+        #expect(outcome == .discoveryFailed)
     }
 }
