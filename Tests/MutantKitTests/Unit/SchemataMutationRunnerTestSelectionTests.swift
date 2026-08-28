@@ -226,7 +226,11 @@ struct SchemataMutationRunnerTestSelectionTests {
         )
 
         #expect(outcome.results.count == 1)
-        #expect(adapter.tokenTimeoutSeconds.count == 2)
+        // `#require`, not `#expect`: this exact assertion has been observed
+        // to crash the whole test process (unguarded
+        // `adapter.tokenTimeoutSeconds[0]`/`[1]` below trapping) under
+        // severe machine contention. Fail cleanly instead.
+        try #require(adapter.tokenTimeoutSeconds.count == 2)
         #expect(
             abs(adapter.tokenTimeoutSeconds[0] - adapter.tokenTimeoutSeconds[1]) < 0.001,
             "primary and confirmation must resolve to the identical limit, got \(adapter.tokenTimeoutSeconds)"

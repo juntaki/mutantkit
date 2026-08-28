@@ -179,8 +179,15 @@ struct MutationRunnerWaveEarlyKillTests {
 
         // Only one wave ran, and it ran only testA — testB, the mutant's
         // second covering test, was never reached.
+        //
+        // `#require` here, not `#expect`: this exact assertion has been
+        // observed to crash the whole test process (`Array.subscript`
+        // trapping on an out-of-bounds index below) under severe machine
+        // contention, when `#expect`'s non-fatal failure let execution
+        // fall through to `calls[0]` with `calls` shorter than expected.
+        // Fail the test cleanly instead of taking the process down with it.
         let calls = await adapter.runBatchCalls
-        #expect(calls.count == 1, "expected exactly one wave, got \(calls.count)")
+        try #require(calls.count == 1, "expected exactly one wave, got \(calls.count)")
         #expect(calls[0].map(\.id) == [points[0].id])
         #expect(calls[0][0].selectedTests == [testA])
 
@@ -252,8 +259,14 @@ struct MutationRunnerWaveEarlyKillTests {
         // If this configuration had been silently routed through the
         // pipelined path instead, the mutant would run all three covering
         // tests in one shot (no early abort) rather than one wave per test.
+        //
+        // `#require`, not `#expect`: this exact assertion has been observed
+        // to crash the whole test process (unguarded `calls[0]` below
+        // trapping on an out-of-bounds index) under severe machine
+        // contention, when `#expect`'s non-fatal failure let execution fall
+        // through with `calls` shorter than expected. Fail cleanly instead.
         let calls = await adapter.runBatchCalls
-        #expect(calls.count == 3, "expected one wave per covering test up to the kill, got \(calls.count)")
+        try #require(calls.count == 3, "expected one wave per covering test up to the kill, got \(calls.count)")
         #expect(calls[0][0].selectedTests == [testA])
         #expect(calls[1][0].selectedTests == [testB])
         #expect(calls[2][0].selectedTests == [testC])
@@ -496,7 +509,10 @@ struct MutationRunnerWaveEarlyKillTests {
         )
 
         let timeouts = await adapter.runBatchTimeouts
-        #expect(timeouts.count == 2)
+        // `#require`, not `#expect`: observed to crash the whole test
+        // process (unguarded `timeouts[0]`/`timeouts[1]` below trapping)
+        // under severe machine contention. Fail cleanly instead.
+        try #require(timeouts.count == 2)
         // A fixed 10s mutant timeout (`mutantTimeoutSeconds: 10` above) —
         // `TimeoutController.mutantLimitSeconds(selectedTests:)` no longer
         // narrows by selection size (Gate 3 found that uncalibrated for

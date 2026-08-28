@@ -138,6 +138,35 @@ struct MutationVerdictVerifierTests {
         #expect(!record.outcome.isCacheableResult)
     }
 
+    /// Found by this project's own P7 self-mutation audit
+    /// (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`):
+    /// `executionEvidenceProblem`'s own build-product-hash guard (the one
+    /// right above the isolated-activation checks the three tests above
+    /// exercise) had no dedicated test. Mutating its `return` to `return
+    /// nil` survived the whole suite untouched — with that guard silenced,
+    /// a build product hash the source evidence never claimed would flow
+    /// straight through to `classify(...)` and could be scored as a real,
+    /// trusted verdict instead of being rejected as inconsistent.
+    @Test("Source evidence's build product hash disagreeing with the observed build is rejected")
+    func sourceEvidenceBuildHashDisagreesWithObservedBuild() throws {
+        // Both copies of applicationEvidence agree with each other (so the
+        // cross-copy check above does not catch this, and this guard never
+        // even reaches the isolated-activation checks below it) — only the
+        // source evidence's own recorded build product hash disagrees with
+        // what the build actually produced.
+        let record = try verify { ref in
+            MutationObservations(
+                plannedMutation: ref,
+                sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
+                build: BuildObservation(outcome: .succeeded(buildProductHash: "h2", command: nil)),
+                test: SingleTestObservation(run: run(status: .passed), applicationEvidence: .isolated(provenIsolated))
+            )
+        }
+        #expect(record.outcome == .infrastructureFailure)
+        #expect(!record.outcome.isScorable)
+        #expect(!record.outcome.isCacheableResult)
+    }
+
     // MARK: - Coverage fast path
 
     @Test("noCoverage fast path: applied, no build, coverage says uncovered")

@@ -140,6 +140,36 @@ struct SourceAnchorVerifierTests {
         }
     }
 
+    /// Found by this project's own P7 self-mutation audit
+    /// (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`):
+    /// `matchedNode` re-implements `verify`'s own `range.end <= bytes.count`
+    /// bounds guard independently (line 152 vs. line 86) rather than sharing
+    /// it, and nothing exercised the boundary where a mutation's range ends
+    /// on the file's very last byte. Mutating that guard's `<=` to `<`
+    /// survived the whole suite untouched — every schemata lowerer that
+    /// calls `matchedNode` (`Sources/SwiftCoreOperators/*SchemataLowerer.swift`)
+    /// would silently fall back to isolated execution for any mutation
+    /// candidate whose range happens to reach exactly to EOF, with nothing
+    /// to say so.
+    @Test("matchedNode accepts a point whose range ends on the file's exact last byte")
+    func matchedNodeFindsAPointAtTheExactEndOfFile() throws {
+        // No trailing newline: the discovered `true` literal's range ends
+        // exactly at `data.count`, the boundary `verify`/`matchedNode`'s
+        // bounds guards must both treat as in-range.
+        let source = "let flag = true"
+        let points = try discover(source, using: Operators.boolLiteral)
+        let point = try #require(points.first)
+        let data = Data(source.utf8)
+
+        #expect(
+            point.utf8Range.end == data.count,
+            "fixture must place the mutation's end exactly at EOF for this regression to be meaningful"
+        )
+
+        let node = SourceAnchorVerifier.matchedNode(for: point, in: data)
+        #expect(node != nil, "a range ending exactly at EOF is in bounds, not out of bounds")
+    }
+
     @Test("A rejected anchor explains itself in one sentence")
     func rejectionProducesAReadableDiagnosis() throws {
         let (point, _) = try anchoredPoint()

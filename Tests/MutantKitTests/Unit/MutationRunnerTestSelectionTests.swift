@@ -194,7 +194,11 @@ struct MutationRunnerTestSelectionTests {
 
         #expect(report.results.first?.outcome == .killedByCrash)
         let observed = await adapter.recordedTimeoutSeconds
-        #expect(observed.count == 2)
+        // `#require`, not `#expect`: this exact assertion has been observed
+        // to crash the whole test process (unguarded `observed[0]`/
+        // `observed[1]` below trapping) under severe machine contention.
+        // Fail cleanly instead.
+        try #require(observed.count == 2)
         #expect(
             abs(observed[0] - observed[1]) < 0.001,
             "the original observation and its confirmation must resolve to the identical limit, got \(observed)"
