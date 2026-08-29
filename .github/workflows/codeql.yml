@@ -44,6 +44,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same rationale as ci.yml's identical step: SwiftPM independently
+      # re-clones swift-argument-parser/swift-syntax/Yams and re-runs version
+      # resolution on every run today, with zero caching -- this is the same
+      # cost class, not a CodeQL-specific restriction (CodeQL's own build
+      # tracing has no documented issue with pre-populated dependency
+      # checkouts; it only observes the compiler invocations `swift build`
+      # below actually makes).
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
       - name: Toolchain
         run: swift --version && xcodebuild -version
 

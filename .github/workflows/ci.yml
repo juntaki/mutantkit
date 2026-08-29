@@ -4,6 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `labeled` added (default is only opened/synchronize/reopened) so a
+    # coordinator can apply `ci:full`/`ci:merge-ready` to an already-pushed
+    # HEAD and get a fresh CI run reflecting it immediately, without needing
+    # an empty commit to re-trigger anything. See the `route` job below for
+    # what these labels actually do.
+    types: [opened, synchronize, reopened, labeled]
+  # The deliberate "run the complete merge gate right now" trigger (see the
+  # `route` job's `workflow_dispatch` handling below) -- a human/coordinator
+  # picks the branch/PR ref in the Actions UI ("Run workflow") once review
+  # has converged, rather than paying full-matrix cost on every intermediate
+  # review-round push. No inputs: dispatching this workflow at all always
+  # means "run everything."
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +26,28 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  # The exact suites tagged `.subprocessExclusive` under
+  # Tests/MutantKitTests/Unit/ -- see Tests/MutantKitTests/Support/
+  # SubprocessTestGate.swift's own doc comment. Every one of them spawns a
+  # real OS subprocess, and several exercise genuinely timing-sensitive
+  # machinery (the stall watchdog, real descendant reaping, fd-inheritance
+  # races) that no fake clock or fake process can stand in for -- exactly
+  # the `unit-system` bucket below. This project already curated and
+  # maintains this exact list for its own subprocess-contention-avoidance
+  # reasons; reusing it as the unit-fast/unit-system boundary means there is
+  # one place that decides "this is a real-process/timing test," not two
+  # independently-maintained lists that can silently drift apart.
+  #
+  # `swift test` only supports regex `--filter`/`--skip` (no CLI tag-based
+  # selection -- confirmed against this toolchain's own `swift test --help`),
+  # so this is a maintained, explicit suite-name list, not a generated one.
+  # Update it if a suite gains or loses `.subprocessExclusive` under
+  # Tests/MutantKitTests/Unit/ (Tests/MutantKitTests/Acceptance/ and
+  # Tests/BenchmarkRunnerTests/ also use the trait, but those live in a
+  # different job/target already and are out of scope for this split).
+  UNIT_SYSTEM_SUITE_REGEX: "SchemataRuntimeProtocolV3Tests|SchemataBuiltImageInspectionTests|ProcessTreeTests|XcodeBuildAdapterUninstallFailureTests|ProcessSupervisorResidueTests|ProcessSupervisorOutputCompletenessTests|RunContextProbeOutputCompletenessTests|ProcessSupervisorStallDetectionTests|MachOReceiptExtractorTests|ProcessSupervisorFileDescriptorLeakTests"
 
 jobs:
   # Fastest feedback of all: static analysis needs no build. SwiftLint and
@@ -47,7 +82,7 @@ jobs:
     runs-on: macos-15
     # Generous relative to observed reality (~20-25s on this exact job) —
     # bounds a hang (a stuck `brew install`/download, say) rather than
-    # tuning for the common case. See the `unit` job's own comment for
+    # tuning for the common case. See the `unit-fast` job's own comment for
     # why every job here now has an explicit ceiling.
     timeout-minutes: 10
     env:
@@ -74,33 +109,403 @@ jobs:
       - name: SwiftFormat (check only)
         run: swiftformat --lint --config .swiftformat .
 
-  # Fast feedback: everything that does not build another project.
-  unit:
-    name: Unit tests
+  # Staged-merge-gate routing: decides, once per push/PR event, whether this
+  # run gets the full matrix or a narrower, path-targeted slice of it. Runs
+  # on a plain Linux runner (no Swift/Xcode toolchain needed -- this job
+  # only reads `git diff` output and PR label metadata) and finishes in
+  # seconds, so gating the ~20 acceptance jobs behind `needs: route` does
+  # not recreate the sequential bottleneck this restructuring exists to
+  # remove (that bottleneck was every acceptance job waiting on a full
+  # `unit` build+test run, ~15+ minutes; this is a `git diff` and some
+  # `grep`, not a rebuild of anything).
+  #
+  # Every branch below that is not a deliberate "run everything" signal
+  # (push to main, workflow_dispatch, an override label, the trust-critical
+  # path group) still ends by checking for changed paths outside every known
+  # targeted group, and fails toward `run_full=true` if it finds any --
+  # this project's own established "unknown -> run" CI-safe-skip principle
+  # (see e.g. `scripts/assert-tests-ran.sh`'s own doc comment for the same
+  # stance applied to a filter matching zero tests). A classifier's job here
+  # is never to make a false skip look like a pass.
+  route:
+    name: Route CI scope (full vs. targeted)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_full: ${{ steps.classify.outputs.run_full }}
+      run_schemata_targeted: ${{ steps.classify.outputs.run_schemata_targeted }}
+      selected_fixtures: ${{ steps.classify.outputs.selected_fixtures }}
+      # A real, already-filtered `{"include": [...]}` GitHub Actions matrix
+      # object -- see Scripts/ci-route.sh's own header comment and the
+      # `acceptance` job's `strategy.matrix` below. Built from the single
+      # source of truth at Scripts/ci-fixtures.json, so an unselected
+      # fixture never creates a runner job at all (rather than creating one
+      # whose steps are merely skipped) and the full-matrix case is never a
+      # second, independently-maintained copy of the fixture list.
+      acceptance_matrix: ${{ steps.classify.outputs.acceptance_matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone: classification
+          # needs a real `git diff` between the PR's base and head commits,
+          # both of which must actually be present locally to diff at all.
+          fetch-depth: 0
+
+      - name: Classify changed paths -> full matrix or a targeted acceptance slice
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          changed=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+            if [ -n "$changed" ]; then
+              echo "Changed files (base $BASE_SHA -> head $HEAD_SHA):"
+              echo "$changed"
+            fi
+          fi
+
+          # The actual group-to-fixture classification logic lives in
+          # Scripts/ci-route.sh, not here -- see that script's own header
+          # comment, and Tests/MutantKitTests/Unit/CIRouteClassificationTests.swift
+          # for its regression coverage. This step is now just plumbing:
+          # gather the two real signals (changed paths, PR labels) and hand
+          # them to the script exactly as it expects them.
+          result="$(printf '%s' "$changed" | Scripts/ci-route.sh "$EVENT_NAME" "$LABELS_JSON")"
+          echo "Routing result: $result"
+
+          run_full="$(printf '%s' "$result" | jq -r '.run_full')"
+          run_schemata_targeted="$(printf '%s' "$result" | jq -r '.run_schemata_targeted')"
+          selected_fixtures="$(printf '%s' "$result" | jq -c '.selected_fixtures')"
+          acceptance_matrix="$(printf '%s' "$result" | jq -c '.acceptance_matrix')"
+          reason="$(printf '%s' "$result" | jq -r '.reason')"
+
+          echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
+          echo "run_schemata_targeted=$run_schemata_targeted" >> "$GITHUB_OUTPUT"
+          echo "selected_fixtures=$selected_fixtures" >> "$GITHUB_OUTPUT"
+          echo "acceptance_matrix=$acceptance_matrix" >> "$GITHUB_OUTPUT"
+          echo "::notice::CI routing decision: run_full=$run_full, run_schemata_targeted=$run_schemata_targeted, selected_fixtures=$selected_fixtures -- $reason"
+
+  # Build once, shared by every job below that runs `swift test` against the
+  # same debug `--build-tests` output: unit-fast, unit-system, every
+  # acceptance matrix entry, and (for their shared debug portion only)
+  # ror-schemata-differential / ios-simulator-schemata-runtime. Before this
+  # job existed, each of those ~19-20 job/matrix-entry instances ran its own
+  # byte-identical `swift build --build-tests` from scratch in parallel --
+  # under GitHub-hosted macOS runners' real, constrained concurrency, that
+  # many redundant from-scratch builds queues in concurrency-limited waves,
+  # paying full build cost in every wave rather than once. Building it here,
+  # exactly once, and having every consumer download the result and run
+  # `swift test --skip-build` instead turns that into one build plus N cheap
+  # skip-build test runs.
+  #
+  # Validated locally before wiring this in: `swift test --skip-build`
+  # against a `.build` produced by a *different* `swift build --build-tests`
+  # invocation -- same path, a different path, and a real zip round-trip --
+  # never recompiles anything and never produces a stale or incorrect
+  # result. It does not even revalidate the build database against the
+  # extraction path; it just runs whatever binary already sits at the
+  # conventional `.build/<triple>/debug` location. The artifact packaged
+  # below carries exactly the subset that trial found load-bearing: the
+  # built products directory, the `.build/debug` symlink pointing at it, and
+  # the three small SwiftPM state files -- not `checkouts/`, `repositories/`,
+  # `artifacts/`, `plugins/`, or `prebuilts/`, which are the large majority
+  # of `.build`'s size and are regenerated for free (no network) from each
+  # consuming job's own "Cache SwiftPM dependencies" step below, which every
+  # job here already has.
+  #
+  # Runs unconditionally rather than gated on `route`'s own full-vs-targeted
+  # decision: `unit-fast` and `acceptance` both run on every single push/PR
+  # event regardless of that routing, so at least one real consumer always
+  # needs this build's output anyway. Conditionally gating this job would
+  # only reproduce `route`'s own branching a second time for no actual
+  # savings, in exchange for a strictly more complex `if:` to get right.
+  build:
+    name: Build (debug, --build-tests)
     runs-on: macos-15
-    # A real, reproducible hang (this job's own `Test` step sitting for
-    # 68+ minutes with no completion, versus ~15-20s for the identical
-    # `swift test` locally) burned real Actions minutes on this account
-    # before three compounding process-handling bugs were found and
-    # fixed (Sources/BenchmarkRunner/ToolRunner.swift). This ceiling is
-    # this project's own "nothing runs unbounded" principle applied to
-    # its own CI: generous relative to known-good local runtime (cold
-    # build + full unit suite) so it never fires on a real, if slow, run,
-    # but bounded so a recurrence (this exact class of bug, or a new one)
-    # fails fast and visibly instead of silently burning an hour+ again.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
-        shell: bash
-        run: |
-          swift --version && xcodebuild -version
-          echo "CPU count: $(sysctl -n hw.ncpu)"
+        run: swift --version && xcodebuild -version
       - name: Build
         shell: bash
         run: |
           set -o pipefail
           swift build --build-tests 2>&1 | tee build.log
+      # Only the pieces a downstream `swift test --skip-build` actually
+      # needs in order to run without recompiling anything -- see this job's
+      # own comment above for how that subset was determined. A tar archive
+      # (not a raw upload-artifact directory upload) specifically to carry
+      # `.build/debug`'s symlink and every binary's executable bit through
+      # the upload/download round-trip intact and unambiguous.
+      - name: Package build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf build-tests.tar.gz \
+            .build/debug \
+            .build/*-apple-macosx/debug \
+            .build/build.db \
+            .build/debug.yaml \
+            .build/workspace-state.json
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tests
+          path: build-tests.tar.gz
+          retention-days: 1
+      - name: Upload build failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          if-no-files-found: ignore
+          path: build.log
+
+  # Fast feedback: everything that does not spawn a real, long-lived
+  # subprocess and does not depend on real OS timing -- pure model/parser/
+  # planner/classifier/CLI-decision-logic tests and deterministic fixtures.
+  # Always runs, on every push and every PR review-round push, with no
+  # dependency on `route`'s classification: this is the "ordinary per-push"
+  # gate item D describes, deliberately unconditional so it never waits on
+  # anything slower than itself.
+  #
+  # Split out of the former single `unit` job specifically so this job's
+  # own runtime is not held hostage by `unit-system`'s real-subprocess,
+  # real-timing suites (see that job's own comment for the incident history
+  # that makes those suites slow and occasionally flaky under contention).
+  # This job keeps the exact same build+test+stall-watchdog shape the
+  # former `unit` job had -- defensively, not because the originating hang
+  # incident lived here (it did not; see `unit-system`) but because a
+  # regression of the same *class* is not provably impossible here either,
+  # and the watchdog is cheap insurance either way.
+  unit-fast:
+    name: Unit tests (fast)
+    runs-on: macos-15
+    needs: build
+    # Generous relative to known-good local runtime, bounded so a hang
+    # fails fast and visibly instead of silently burning CI minutes. See
+    # `unit-system`'s own comment for the full "why every job here has an
+    # explicit ceiling" history.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # SwiftPM re-clones swift-argument-parser/swift-syntax/Yams and
+      # re-resolves their versions from scratch on every job today -- no
+      # caching existed anywhere before this. These are immutable dependency
+      # snapshots once resolved, so caching them by Package.resolved's own
+      # hash is safe: a version change naturally busts the key. This same
+      # block is repeated (not shared via a composite action, to keep this
+      # single-file workflow's diff obvious) on every job here that actually
+      # builds, and on codeql.yml's own build step.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Toolchain
+        shell: bash
+        run: |
+          swift --version && xcodebuild -version
+          echo "CPU count: $(sysctl -n hw.ncpu)"
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
+        shell: bash
+        run: tar -xzf build-tests.tar.gz
+      # Same stall-watchdog mechanism as `unit-system`'s own `Test` step --
+      # see there for the full incident history and the reasoning behind
+      # every constant below (240s stall threshold, the two-sample capture,
+      # exiting 124 instead of relying on `timeout-minutes`, etc). Kept
+      # identical here rather than factored into a composite action because
+      # this repo has no existing composite-action-reuse precedent for its
+      # own CI steps (each acceptance-family job below already duplicates
+      # its own Toolchain/Build/Upload steps the same way).
+      #
+      # The one real difference: `--skip "$UNIT_SYSTEM_SUITE_REGEX"` (defined
+      # at workflow level, top of this file) excludes exactly the suites
+      # `unit-system` runs instead, so no test runs in both jobs and none
+      # falls through the gap between them.
+      - name: Test
+        shell: bash
+        env:
+          SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH: "2"
+        run: |
+          set -o pipefail
+          mkdir -p samples
+          swift test --skip-build --skip "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
+          test_pid=$!
+          echo "swift test started, pid=$test_pid"
+          last_lines=0
+          stall_seconds=0
+          while kill -0 "$test_pid" 2>/dev/null; do
+            sleep 15
+            lines=$(wc -l < test.log | tr -d ' ')
+            if [ "$lines" -eq "$last_lines" ]; then
+              stall_seconds=$((stall_seconds + 15))
+            else
+              stall_seconds=0
+            fi
+            last_lines=$lines
+            echo "--- heartbeat $(date -u +%H:%M:%S) --- test.log lines: $lines (no growth for ${stall_seconds}s) ---"
+            ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE "swift|xctest" | grep -v grep || true
+            tail -n 5 test.log
+
+            if [ "$stall_seconds" -ge 240 ]; then
+              echo ">>> STALL DETECTED (test.log has not grown in ${stall_seconds}s) — capturing diagnostics <<<"
+              ps -ef > samples/ps-tree.txt
+
+              parent_pid=$(pgrep -f "swift-test" | head -1)
+              if [ -n "$parent_pid" ]; then
+                echo "sampling parent swift-test pid=$parent_pid (for completeness — the real work is in the helper below)"
+                sample "$parent_pid" 5 -file "samples/sample-parent-${parent_pid}.txt" 2>&1 | tail -n 3 || true
+              fi
+
+              for helper_pid in $(pgrep -f "swiftpm-testing-helper"); do
+                echo "sampling swiftpm-testing-helper pid=$helper_pid — the actual test-worker process"
+                sample "$helper_pid" 5 -file "samples/sample-helper-${helper_pid}.txt" 2>&1 | tail -n 3 || true
+                lsof -p "$helper_pid" > "samples/lsof-helper-${helper_pid}.txt" 2>&1 || true
+              done
+
+              echo ">>> killing the stuck process tree and failing this step (exit 124) so the job registers as an ordinary failure, not a GitHub-initiated cancellation <<<"
+              kill -9 "$test_pid" 2>/dev/null
+              pkill -9 -f swiftpm-testing-helper 2>/dev/null
+              pkill -9 -f "swift-test" 2>/dev/null
+              cat test.log
+              exit 124
+            fi
+          done
+          wait "$test_pid"
+          exit_code=$?
+          echo "=== swift test exited with code $exit_code ==="
+          # A filter/skip matching zero tests must fail this job, not pass
+          # it silently -- see scripts/assert-tests-ran.sh. A real test
+          # failure above must still win even if the count check passes.
+          scripts/assert-tests-ran.sh test.log "unit-fast (all suites except: \$UNIT_SYSTEM_SUITE_REGEX)" || exit_code=1
+          cat test.log
+          exit $exit_code
+      - name: Upload unit-fast failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-fast-failure-logs
+          if-no-files-found: ignore
+          path: |
+            test.log
+            samples/
+      - name: Publish unit-fast failure excerpt
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- mutantkit-ci-unit-fast-failure -->';
+            const readTail = (path) => {
+              if (!fs.existsSync(path)) return '';
+              const lines = fs.readFileSync(path, 'utf8').split('\n');
+              return lines.slice(-180).join('\n');
+            };
+            // No build.log here anymore -- `swift build --build-tests` now
+            // runs once in the shared `build` job (see its own failure-log
+            // upload for that), not in this job, which only downloads the
+            // already-built output and runs `swift test --skip-build`.
+            const test = readTail('test.log');
+            const excerpt = (test || 'No captured test log was available.').slice(-30000);
+            const body = `${marker}\n### Latest unit-fast CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  # The other half of the former `unit` job: real-process ProcessSupervisor
+  # tests, fd-inheritance, residue/reaping, and the drain-timeout/stall-
+  # detector machinery -- exactly the suites tagged `.subprocessExclusive`
+  # under Tests/MutantKitTests/Unit/ (`$UNIT_SYSTEM_SUITE_REGEX`, defined at
+  # the top of this file).
+  #
+  # Deliberately NOT part of the ordinary per-push gate: unlike `unit-fast`,
+  # this only runs when `route` says the full matrix is in play (push to
+  # main, a `ci:full`/`ci:merge-ready` label, workflow_dispatch, or a
+  # trust-critical/unclassified path match) -- see the `route` job above.
+  # These are exactly the tests item F's "merge-candidate full CI" is meant
+  # to still guarantee run before merge; they are not skipped, only moved
+  # off the fast per-review-round-push path.
+  #
+  # A real, reproducible hang (this job's own `Test` step sitting for
+  # 68+ minutes with no completion, versus ~15-20s for the identical
+  # `swift test` locally) burned real Actions minutes on this account
+  # before three compounding process-handling bugs were found and
+  # fixed (Sources/BenchmarkRunner/ToolRunner.swift). This ceiling is
+  # this project's own "nothing runs unbounded" principle applied to
+  # its own CI: generous relative to known-good local runtime (cold
+  # build + full unit suite) so it never fires on a real, if slow, run,
+  # but bounded so a recurrence (this exact class of bug, or a new one)
+  # fails fast and visibly instead of silently burning an hour+ again.
+  unit-system:
+    name: Unit tests (system / real-process)
+    runs-on: macos-15
+    needs:
+      - route
+      - build
+    if: success() && needs.route.outputs.run_full == 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Toolchain
+        shell: bash
+        run: |
+          swift --version && xcodebuild -version
+          echo "CPU count: $(sysctl -n hw.ncpu)"
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
+        shell: bash
+        run: tar -xzf build-tests.tar.gz
       # Diagnostic instrumentation for the same real CI hang this job's
       # own `timeout-minutes` above exists for. `swift test` runs in the
       # background, writing straight to a file (never through a pipe
@@ -154,12 +559,11 @@ jobs:
       # (the conventional "timed out" exit code) — deliberately *not*
       # left to this job's own `timeout-minutes`, which marks a job
       # `cancelled`, not `failed`; `if: failure()` (the existing
-      # "Upload unit failure logs" step's own condition before this
-      # comment was written) does not run on a `cancelled` job, so a
-      # GitHub-initiated timeout would silently discard every sample
-      # this step just captured. Exiting 124 from inside the step itself
-      # makes this an ordinary step failure, which does trigger the
-      # upload.
+      # "Upload unit-system failure logs" step's own condition) does not
+      # run on a `cancelled` job, so a GitHub-initiated timeout would
+      # silently discard every sample this step just captured. Exiting
+      # 124 from inside the step itself makes this an ordinary step
+      # failure, which does trigger the upload.
       #
       # SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH: CI-only (never set
       # for local development), added after a real, repeated CI failure
@@ -192,7 +596,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p samples
-          swift test > test.log 2>&1 &
+          swift test --skip-build --filter "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
           test_pid=$!
           echo "swift test started, pid=$test_pid"
           last_lines=0
@@ -241,6 +645,10 @@ jobs:
           wait "$test_pid"
           exit_code=$?
           echo "=== swift test exited with code $exit_code ==="
+          # A filter matching zero tests must fail this job, not pass it
+          # silently -- see scripts/assert-tests-ran.sh (same policy the
+          # acceptance jobs below already apply to their own --filter).
+          scripts/assert-tests-ran.sh test.log "unit-system (\$UNIT_SYSTEM_SUITE_REGEX)" || exit_code=1
           cat test.log
           exit $exit_code
       # `always()`, not `failure()`: a job that hits its own
@@ -249,32 +657,34 @@ jobs:
       # exact scenario this whole diagnostic exists to capture evidence
       # from. Uploading unconditionally is the only way the stack
       # samples and logs from a timeout are ever actually retained.
-      - name: Upload unit failure logs
+      - name: Upload unit-system failure logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-failure-logs
+          name: unit-system-failure-logs
           if-no-files-found: ignore
           path: |
-            build.log
             test.log
             samples/
-      - name: Publish unit failure excerpt
+      - name: Publish unit-system failure excerpt
         if: failure() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const marker = '<!-- mutantkit-ci-unit-failure -->';
+            const marker = '<!-- mutantkit-ci-unit-system-failure -->';
             const readTail = (path) => {
               if (!fs.existsSync(path)) return '';
               const lines = fs.readFileSync(path, 'utf8').split('\n');
               return lines.slice(-180).join('\n');
             };
-            const build = readTail('build.log');
+            // No build.log here anymore -- `swift build --build-tests` now
+            // runs once in the shared `build` job (see its own failure-log
+            // upload for that), not in this job, which only downloads the
+            // already-built output and runs `swift test --skip-build`.
             const test = readTail('test.log');
-            const excerpt = (test || build || 'No captured build/test log was available.').slice(-30000);
-            const body = `${marker}\n### Latest unit CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
+            const excerpt = (test || 'No captured test log was available.').slice(-30000);
+            const body = `${marker}\n### Latest unit-system CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
@@ -290,121 +700,109 @@ jobs:
   # project has had — a sandbox handed the wrong excludes, xcodebuild pointed at
   # unmutated sources, concurrent mutants fighting over one simulator — was
   # invisible to the unit tests and produced a confident, wrong score.
+  #
+  # `needs: build` (in addition to `route`, for the matrix itself): every
+  # fixture in this matrix downloads and replays the one shared debug
+  # `--build-tests` output the `build` job produces instead of each running
+  # its own independent `swift build --build-tests` from scratch, which is
+  # what every fixture here used to do (see `build`'s own comment above for
+  # why, and this file's own history/git blame for the prior per-fixture
+  # from-scratch build this replaced). There is still no dependency on
+  # `unit-fast`/`unit-system`'s own results -- only on `build`'s compiled
+  # output, downloaded fresh by every matrix entry, never on those two jobs
+  # having run or passed.
+  #
+  # `needs: route` + `strategy.matrix: fromJSON(needs.route.outputs.acceptance_matrix)`:
+  # a REAL dynamic matrix, not a step-level shortcut on a fixed list. The
+  # `route` job (a few-second classification job, not a rebuild) already
+  # decided exactly which fixtures this run needs and handed back a
+  # ready-to-use `{"include": [...]}` matrix object -- see
+  # Scripts/ci-route.sh's own header comment and
+  # Scripts/ci-fixtures.json (the single source of truth for every
+  # fixture's `fixture`/`filter`/`simulator`/`wave` fields, read by that
+  # script for both the full-matrix and the targeted case). An unselected
+  # fixture therefore never creates a runner job at all -- it does not
+  # occupy a runner slot only to skip every step, and a `skipped` acceptance
+  # entry in the Actions UI now genuinely means "this fixture's steps were
+  # conditional and didn't run this time" never applies, because no such
+  # entry exists to begin with. Per-fixture rationale that used to live
+  # inline on each matrix row now lives on the row's own data in
+  # Scripts/ci-fixtures.json's header comment plus the notes below, since
+  # JSON itself has no comment syntax:
+  #   - `cli-commands` is `simulator: "1"`, not "0", despite looking like a
+  #     host-only SwiftPM fixture: `CLICommandsAcceptanceTests
+  #     .initDetectsXcodeDestinationDespiteSchemeAmbiguity` runs a real
+  #     `mutantkit init` against `Fixtures/XcodeProject`, which calls
+  #     `XcodeConfigDetector.detectDestination()` -> a real `xcrun simctl
+  #     list devices available --json`. Classified "0" originally, which
+  #     skipped the "Available simulators" preflight step below (gated on
+  #     `matrix.simulator == '1'`) -- a real CI failure traced this exactly:
+  #     `Detected: ...`/`Multiple schemes found (...)` printed correctly,
+  #     but `Detected destination: ...` never appeared, and the test itself
+  #     reported "failed after 66.165 seconds" -- just past `SimulatorPool`'s
+  #     60s default timeout on `simctl`, on a runner whose CoreSimulator
+  #     subsystem this fixture's own classification told it not to expect to
+  #     need.
+  #   - `xcode-config-detector` is real-machine `XcodeConfigDetector`
+  #     coverage (a real `simctl` call finding a real destination, including
+  #     against a real ambiguous-scheme project), relocated out of the
+  #     always-run unit suite: these are integration tests, not
+  #     deterministic unit tests. See
+  #     `XcodeConfigDetectorAcceptanceTests.swift`'s own header comment.
+  #   - `xcode-batch-testing`, `xcode-batch-testing-ui-target`,
+  #     `xcode-coverage-selection`, and `xcode-incremental-batch-testing`
+  #     all build the same real `.xcodeproj` through the
+  #     batching/incremental/coverage-selection paths that a 100-mutant
+  #     benchmark against a real external project found broken while every
+  #     unit test (all fakes, no real xcodebuild invocation or `.xctestrun`)
+  #     stayed green. They are the whole reason this job exists rather than
+  #     trusting `unit-fast`/`unit-system` alone.
+  #   - `ror-schemata-compile` is a real `swiftc -typecheck` proof that
+  #     RelationalOperatorReplacementSchemataLowerer's ternary lowering
+  #     type-checks at every eligible operand shape -- the same discipline
+  #     as the batch/incremental fixtures above, applied to a lowerer still
+  #     gated out of `SchemataLowererRegistry.builtIn`. No schemata runtime
+  #     binary involved (see the `ror-schemata-differential` job below for
+  #     that), so it fits this matrix's plain build+test shape.
+  #   - `xcode-wave-early-kill` sets `wave: "1"` because
+  #     `Acceptance.waveEnabled`
+  #     (`Tests/MutantKitTests/Acceptance/AcceptanceWaveSupport.swift`)
+  #     gates `XcodeWaveEarlyKillAcceptanceTests` behind
+  #     `MUTANTKIT_WAVE_ACCEPTANCE`, which no workflow set before this
+  #     fixture existed, so this real, differential, Xcode acceptance gate
+  #     for wave-based early kill had never executed in CI. Reuses the same
+  #     `XcodeProject` fixture the `xcode-project` entry already builds --
+  #     no new fixture, no new infra, just the missing opt-in.
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
-    needs: unit
+    needs:
+      - route
+      - build
     # Generous: real xcodebuild/simulator work, legitimately slower than
-    # `unit`'s own plain unit suite — but still bounded, per the same
-    # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
+    # `unit-fast`'s own plain unit suite — but still bounded, per the same
+    # "nothing runs unbounded" reasoning as `unit-system`'s own ceiling above.
     timeout-minutes: 30
     strategy:
       # Never cancel siblings: which fixtures fail together is a diagnosis.
       fail-fast: false
-      matrix:
-        include:
-          - fixture: swift-package
-            filter: SwiftPackageMacOSAcceptanceTests
-            simulator: "0"
-          - fixture: swift-package-coverage
-            filter: SwiftPackageMacOSCoverageAcceptanceTests
-            simulator: "0"
-          - fixture: shard-merge
-            filter: ShardMergeAcceptanceTests
-            simulator: "0"
-          - fixture: swift-package-ios
-            filter: SwiftPackageIOSAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-project
-            filter: XcodeProjectAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-workspace
-            filter: XcodeWorkspaceAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-app-debug-dylib
-            filter: XcodeAppDebugDylibAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-unlinked-source
-            filter: XcodeUnlinkedSourceAcceptanceTests
-            simulator: "1"
-          # `simulator: "1"`, not "0": this suite is not purely a host-side
-          # SwiftPM fixture — `CLICommandsAcceptanceTests
-          # .initDetectsXcodeDestinationDespiteSchemeAmbiguity` runs a real
-          # `mutantkit init` against `Fixtures/XcodeProject`, which calls
-          # `XcodeConfigDetector.detectDestination()` -> a real
-          # `xcrun simctl list devices available --json`. Classified "0"
-          # originally, which skips the "Available simulators" preflight
-          # step below (gated on `matrix.simulator == '1'`) — a real CI
-          # failure traced this exactly: `Detected: ...`/`Multiple schemes
-          # found (...)` printed correctly, but `Detected destination: ...`
-          # never appeared, and the test itself reported "failed after
-          # 66.165 seconds" — just past `SimulatorPool`'s 60s default
-          # timeout on `simctl`, on a runner whose CoreSimulator subsystem
-          # this job's own matrix classification told it not to expect to
-          # need. A pre-existing test-topology misclassification P4's own
-          # longer runtime happened to expose, not a P4 product regression
-          # (confirmed: `InitCommand.swift`/`XcodeConfigDetector.swift`/
-          # `SimulatorPool.swift`/this test file are all untouched across
-          # every P4 commit).
-          - fixture: cli-commands
-            filter: CLICommandsAcceptanceTests
-            simulator: "1"
-          # Real-machine XcodeConfigDetector coverage (a real `simctl` call
-          # finding a real destination, including against a real
-          # ambiguous-scheme project), relocated out of the always-run unit
-          # suite: these are integration tests, not deterministic unit
-          # tests, and CI must explicitly declare a simulator dependency for
-          # them rather than run them unconditionally with no such
-          # declaration at all. See `XcodeConfigDetectorAcceptanceTests.swift`'s
-          # own header comment.
-          - fixture: xcode-config-detector
-            filter: XcodeConfigDetectorAcceptanceTests
-            simulator: "1"
-          - fixture: process-supervision
-            filter: ProcessSupervisionAcceptanceTests
-            simulator: "0"
-          # The four below all build the same real .xcodeproj through the
-          # batching/incremental/coverage-selection paths that a 100-mutant
-          # benchmark against a real external project found broken while
-          # every unit test (all fakes, no real xcodebuild invocation or
-          # .xctestrun) stayed green. They are the whole reason this job
-          # exists rather than trusting `unit` alone.
-          - fixture: xcode-batch-testing
-            filter: XcodeBatchTestingAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-batch-testing-ui-target
-            filter: XcodeBatchTestingUITargetAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-coverage-selection
-            filter: XcodeCoverageSelectionAcceptanceTests
-            simulator: "1"
-          - fixture: xcode-incremental-batch-testing
-            filter: XcodeIncrementalBatchTestingAcceptanceTests
-            simulator: "1"
-          # Real `swiftc -typecheck` proof that RelationalOperatorReplacement-
-          # SchemataLowerer's ternary lowering type-checks at every eligible
-          # operand shape — the same discipline as the batch/incremental
-          # fixtures above, applied to a lowerer still gated out of
-          # SchemataLowererRegistry.builtIn. No schemata runtime binary
-          # involved (see the ror-schemata-differential job below for that),
-          # so it fits this matrix's plain build+test shape.
-          - fixture: ror-schemata-compile
-            filter: RORSchemataCompileViabilityAcceptanceTests
-            simulator: "0"
-          # `Acceptance.waveEnabled`
-          # (`Tests/MutantKitTests/Acceptance/AcceptanceWaveSupport.swift`)
-          # gates `XcodeWaveEarlyKillAcceptanceTests` behind
-          # `MUTANTKIT_WAVE_ACCEPTANCE`, which no workflow ever set, so this
-          # real, differential, Xcode acceptance gate for wave-based early
-          # kill had never executed in CI. Reuses the same `XcodeProject`
-          # fixture the `xcode-project` entry above already builds — no new
-          # fixture, no new infra, just the missing opt-in.
-          - fixture: xcode-wave-early-kill
-            filter: XcodeWaveEarlyKillAcceptanceTests
-            simulator: "1"
-            wave: "1"
+      # See this job's own comment above -- `route` already filtered this
+      # down to exactly the fixtures this run needs (or every fixture, on a
+      # full run), reading Scripts/ci-fixtures.json as its one source of
+      # truth. No static `include:` list here anymore.
+      matrix: ${{ fromJSON(needs.route.outputs.acceptance_matrix) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         run: swift --version && xcodebuild -version
 
@@ -414,11 +812,15 @@ jobs:
         if: matrix.simulator == '1'
         run: xcrun simctl list devices available | grep -i iphone || true
 
-      - name: Build
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
 
       - name: Acceptance
         shell: bash
@@ -428,7 +830,7 @@ jobs:
           MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
         run: |
           set -o pipefail
-          swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
+          swift test --skip-build --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
           test_exit=$?
           # A filter matching zero tests must fail this job, not pass it
           # silently -- see scripts/assert-tests-ran.sh. A real test failure
@@ -442,9 +844,7 @@ jobs:
         with:
           name: acceptance-${{ matrix.fixture }}-failure-logs
           if-no-files-found: ignore
-          path: |
-            build.log
-            acceptance.log
+          path: acceptance.log
 
   # Separate from the `acceptance` matrix above because this suite links and
   # runs the real schemata runtime binary (SchemataMutationRunner drives a
@@ -457,24 +857,50 @@ jobs:
   # (schemata, invoked directly — RelationalOperatorReplacementSchemataLowerer
   # is still not registered in SchemataLowererRegistry.builtIn) and asserts
   # zero disagreement — the real gate before that registration can happen.
+  #
+  # `needs: route` / `if:` below: same routing as the `acceptance` matrix --
+  # runs on the full matrix, or when the `schemata` targeted group matched a
+  # changed path (this job has no matrix entry of its own to key an `if:`
+  # off `matrix.fixture` the way `acceptance` does, hence the separate
+  # `run_schemata_targeted` output).
   ror-schemata-differential:
     name: ROR schemata isolated-vs-schemata differential
     runs-on: macos-15
-    needs: unit
+    needs:
+      - route
+      - build
+    if: success() && (needs.route.outputs.run_full == 'true' || needs.route.outputs.run_schemata_targeted == 'true')
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the schemata runtime static library
         run: swift build -c release --product MutantKitSchemataRuntime
-      - name: Build tests
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here. The
+      # release schemata-runtime build just above is genuinely separate
+      # (different config, different product) and is unaffected -- it still
+      # runs here, on this runner, every time.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
       - name: Differential acceptance
         shell: bash
         env:
@@ -482,7 +908,7 @@ jobs:
           MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
         run: |
           set -o pipefail
-          swift test --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 | tee acceptance.log
+          swift test --skip-build --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 | tee acceptance.log
           test_exit=$?
           # See scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
           scripts/assert-tests-ran.sh acceptance.log "RORSchemataIsolatedDifferentialAcceptanceTests" || test_exit=1
@@ -493,9 +919,7 @@ jobs:
         with:
           name: ror-schemata-differential-failure-logs
           if-no-files-found: ignore
-          path: |
-            build.log
-            acceptance.log
+          path: acceptance.log
 
   # Separate from both `acceptance` and `ror-schemata-differential` for the same
   # reason as the latter: it needs a real, non-default
@@ -510,26 +934,49 @@ jobs:
   # them, so they would have failed closed with `missingOverride` the first time
   # anyone ran them here, silently never proving anything past a developer's own
   # laptop. This job is that wiring.
+  #
+  # `needs: route` / `if:` below: same routing as `ror-schemata-differential`
+  # above -- full matrix, or the `schemata` targeted group.
   ios-simulator-schemata-runtime:
     name: iOS-Simulator schemata runtime (build + link viability)
     runs-on: macos-15
-    needs: unit
+    needs:
+      - route
+      - build
+    if: success() && (needs.route.outputs.run_full == 'true' || needs.route.outputs.run_schemata_targeted == 'true')
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the macOS schemata runtime static library (this suite's negative control)
         run: swift build -c release --product MutantKitSchemataRuntime
       - name: Build the iOS-Simulator schemata runtime static library
         run: scripts/build-schemata-runtime.sh "$GITHUB_WORKSPACE/.build/release"
-      - name: Build tests
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here. The
+      # two release schemata-runtime builds just above are genuinely
+      # separate (different config, different products) and are unaffected
+      # -- they still run here, on this runner, every time.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
       - name: iOS-Simulator runtime acceptance
         shell: bash
         env:
@@ -537,7 +984,7 @@ jobs:
           MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
         run: |
           set -o pipefail
-          swift test --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 | tee acceptance.log
+          swift test --skip-build --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 | tee acceptance.log
           test_exit=$?
           # See scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
           scripts/assert-tests-ran.sh acceptance.log "SchemataIOSSimulatorRuntime*AcceptanceTests" || test_exit=1
@@ -548,6 +995,99 @@ jobs:
         with:
           name: ios-simulator-schemata-runtime-failure-logs
           if-no-files-found: ignore
-          path: |
-            build.log
-            acceptance.log
+          path: acceptance.log
+
+  # A single, stably-named status check that a future required-status-check
+  # / merge-queue setup can point at, instead of enumerating every
+  # individual job above (a list that changes shape as fixtures are added,
+  # split, or renamed) or every acceptance matrix entry directly (a dynamic
+  # matrix built from `route`'s own `acceptance_matrix` output -- see the
+  # `acceptance` job's own comment -- so a routed-away fixture's job simply
+  # does not exist this run rather than existing and reporting `skipped`;
+  # `needs.acceptance.result` below already aggregates correctly either
+  # way). Deciding whether to actually turn on branch protection or a merge
+  # queue against this check is a repo-admin decision and stays out of this
+  # workflow's own scope; this job only guarantees the check exists and
+  # means what its name says.
+  merge-gate:
+    # "Merge gate", not "Full merge gate": this check is meant to be the one
+    # required status for every PR, targeted runs included -- "Full" read as
+    # if it only applied to (or only passed on) a full-matrix run, which is
+    # not the design.
+    name: Merge gate
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - route
+      - build
+      - unit-fast
+      - unit-system
+      - acceptance
+      - ror-schemata-differential
+      - ios-simulator-schemata-runtime
+    # `always()`, not the default `success()`: this job's entire job is to
+    # report on every other job's outcome, including a failure or a
+    # GitHub-initiated cancellation upstream -- the default `if:` would
+    # instead skip this job itself in exactly that case, leaving the one
+    # check meant to be authoritative silently absent instead of reporting
+    # `failure`.
+    if: always()
+    steps:
+      # Fail-closed, not "success|skipped accepted uniformly": that older
+      # form treated an UNEXPECTED skip (e.g. `lint` or `acceptance` never
+      # running at all, from a GitHub-side scheduling problem or a future
+      # accidental `if:` on a job that must always run) exactly the same as
+      # `route`'s own deliberate, intentional skip of `unit-system`/the
+      # schemata jobs on a narrowly-targeted run -- both looked like a
+      # harmless "skipped" to this job, so both passed the gate. This step
+      # instead derives the actual expected result for every dependency from
+      # `route`'s own real output before comparing, so this gate proves the
+      # execution plan `route` declared and what actually happened are the
+      # same thing, not merely that nothing outright failed.
+      - name: Confirm every job matches route's declared execution plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_full="${{ needs.route.outputs.run_full }}"
+          run_schemata_targeted="${{ needs.route.outputs.run_schemata_targeted }}"
+          failed="false"
+
+          check() {
+            local name="$1" actual="$2" expected="$3"
+            echo "$name -> $actual (expected: $expected)"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$name reported '$actual', expected '$expected' per route's own execution plan (run_full=$run_full, run_schemata_targeted=$run_schemata_targeted)"
+              failed="true"
+            fi
+          }
+
+          # Always required to genuinely succeed -- route never skips any of
+          # these regardless of run_full/run_schemata_targeted, so a skip
+          # here is never intentional.
+          check "lint" "${{ needs.lint.result }}" "success"
+          check "route" "${{ needs.route.result }}" "success"
+          check "build" "${{ needs.build.result }}" "success"
+          check "unit-fast" "${{ needs.unit-fast.result }}" "success"
+          check "acceptance" "${{ needs.acceptance.result }}" "success"
+
+          # Gated behind run_full -- route's own `if:` on these jobs.
+          if [ "$run_full" = "true" ]; then
+            check "unit-system" "${{ needs.unit-system.result }}" "success"
+          else
+            check "unit-system" "${{ needs.unit-system.result }}" "skipped"
+          fi
+
+          # Gated behind run_full OR run_schemata_targeted.
+          if [ "$run_full" = "true" ] || [ "$run_schemata_targeted" = "true" ]; then
+            check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}" "success"
+            check "ios-simulator-schemata-runtime" "${{ needs.ios-simulator-schemata-runtime.result }}" "success"
+          else
+            check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}" "skipped"
+            check "ios-simulator-schemata-runtime" "${{ needs.ios-simulator-schemata-runtime.result }}" "skipped"
+          fi
+
+          if [ "$failed" = "true" ]; then
+            echo "::error::merge-gate: at least one job's actual result did not match route's declared execution plan"
+            exit 1
+          fi
+          echo "merge-gate: every job's result matches route's declared execution plan exactly"

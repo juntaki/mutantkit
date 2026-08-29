@@ -7,107 +7,41 @@ import Testing
 /// misclassification): a classifier's job is never to make a false skip
 /// look like a pass.
 ///
-/// This reads the *real*, checked-in `ci.yml` as plain text (no new YAML
-/// dependency — the matrix's own style is simple and consistent enough for
-/// a small line-based parser) and the *real* acceptance test source files,
-/// so a future edit to either one is checked against the other
-/// automatically, without anyone having to remember this file exists.
+/// This reads the *real*, checked-in `Scripts/ci-fixtures.json` — the
+/// single source of truth for the `acceptance` job's dynamic matrix, read
+/// at CI time by both `Scripts/ci-route.sh` (for the filtered/targeted
+/// case) and, via that same script's `acceptance_matrix` output, the
+/// full-matrix case too (see `.github/workflows/ci.yml`'s own comment
+/// directly above the `acceptance` job) — and the *real* acceptance test
+/// source files, so a future edit to either one is checked against the
+/// other automatically, without anyone having to remember this file exists.
 @Suite("CI acceptance matrix classification")
 struct CIAcceptanceMatrixClassificationTests {
-    struct MatrixEntry {
+    struct MatrixEntry: Decodable {
         let fixture: String
         let filter: String
         let simulator: String?
         let wave: String?
     }
 
-    /// `ci.yml` lives at a different relative path depending on which repo
-    /// checkout this runs in: the public repo's root, or the private
-    /// monorepo's `oss-public/` overlay of exactly the paths that differ
-    /// from its own internal layout. Both are real, both must work.
-    private static func ciWorkflowURL() throws -> URL {
+    private struct FixturesFile: Decodable {
+        let fixtures: [MatrixEntry]
+    }
+
+    /// `Scripts/ci-fixtures.json` lives at a different relative path
+    /// depending on which repo checkout this runs in: the public repo's
+    /// root, or the private monorepo's `oss-public/` overlay of exactly the
+    /// paths that differ from its own internal layout. Both are real, both
+    /// must work.
+    private static func fixturesFileURL() throws -> URL {
         let root = Acceptance.packageRoot
         for candidate in [
-            root.appendingPathComponent(".github/workflows/ci.yml"),
-            root.appendingPathComponent("oss-public/.github/workflows/ci.yml")
+            root.appendingPathComponent("Scripts/ci-fixtures.json"),
+            root.appendingPathComponent("oss-public/Scripts/ci-fixtures.json")
         ] where FileManager.default.fileExists(atPath: candidate.path) {
             return candidate
         }
-        throw ClassificationTestError.workflowNotFound(root.path)
-    }
-
-    /// Parses the `acceptance` job's `strategy.matrix.include` list. Not a
-    /// general YAML parser — a small, direct-enough reader for this file's
-    /// own consistent `- fixture: ... / filter: ... / simulator: "..." /
-    /// wave: "..."` shape, so a real structural change to `ci.yml` fails
-    /// this test loudly (via `#require`/an empty result) rather than
-    /// silently parsing nothing.
-    private static func parseAcceptanceMatrix(_ contents: String) -> [MatrixEntry] {
-        var entries: [MatrixEntry] = []
-        var fixture: String?
-        var filter: String?
-        var simulator: String?
-        var wave: String?
-        var inAcceptanceJob = false
-        var inMatrixInclude = false
-
-        func flush() {
-            if let fixture, let filter {
-                entries.append(MatrixEntry(fixture: fixture, filter: filter, simulator: simulator, wave: wave))
-            }
-            fixture = nil
-            filter = nil
-            simulator = nil
-            wave = nil
-        }
-
-        for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            if line.hasPrefix("  acceptance:") {
-                inAcceptanceJob = true
-                continue
-            }
-            // Any other top-level (2-space-indented) job key ends the
-            // acceptance job's own block.
-            if inAcceptanceJob, line.hasPrefix("  "), !line.hasPrefix("   "), !line.hasPrefix("  acceptance:") {
-                flush()
-                inAcceptanceJob = false
-                inMatrixInclude = false
-            }
-            guard inAcceptanceJob else { continue }
-
-            if trimmed == "include:" { inMatrixInclude = true; continue }
-            guard inMatrixInclude else { continue }
-
-            if trimmed.hasPrefix("- fixture:") {
-                flush()
-                fixture = value(after: "- fixture:", in: trimmed)
-            } else if trimmed.hasPrefix("filter:") {
-                filter = value(after: "filter:", in: trimmed)
-            } else if trimmed.hasPrefix("simulator:") {
-                simulator = value(after: "simulator:", in: trimmed)
-            } else if trimmed.hasPrefix("wave:") {
-                wave = value(after: "wave:", in: trimmed)
-            } else if trimmed == "steps:" {
-                // The matrix block itself is over; stop collecting so a
-                // `filter:`/`simulator:` appearing later in the job's real
-                // steps is never mistaken for a matrix row's own field.
-                flush()
-                inMatrixInclude = false
-            }
-        }
-        flush()
-        return entries
-    }
-
-    private static func value(after prefix: String, in line: String) -> String {
-        var remainder = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
-        if remainder.hasPrefix("\""), remainder.hasSuffix("\""), remainder.count >= 2 {
-            remainder = String(remainder.dropFirst().dropLast())
-        }
-        return remainder
+        throw ClassificationTestError.fixturesFileNotFound(root.path)
     }
 
     /// Substrings whose presence in an acceptance test file's own source is
@@ -127,11 +61,11 @@ struct CIAcceptanceMatrixClassificationTests {
     }
 
     private func loadMatrix() throws -> [MatrixEntry] {
-        let url = try Self.ciWorkflowURL()
-        let contents = try String(contentsOf: url, encoding: .utf8)
-        let entries = Self.parseAcceptanceMatrix(contents)
-        try #require(!entries.isEmpty, "parsed zero acceptance matrix entries from \(url.path) -- the parser or the file's structure changed")
-        return entries
+        let url = try Self.fixturesFileURL()
+        let data = try Data(contentsOf: url)
+        let file = try JSONDecoder().decode(FixturesFile.self, from: data)
+        try #require(!file.fixtures.isEmpty, "parsed zero acceptance matrix entries from \(url.path) -- the file's structure changed")
+        return file.fixtures
     }
 
     /// Maps every `struct <Name>` declared anywhere under
@@ -253,12 +187,12 @@ struct CIAcceptanceMatrixClassificationTests {
 }
 
 enum ClassificationTestError: Error, CustomStringConvertible {
-    case workflowNotFound(String)
+    case fixturesFileNotFound(String)
 
     var description: String {
         switch self {
-        case let .workflowNotFound(root):
-            "no ci.yml found under \(root) at either .github/workflows/ or oss-public/.github/workflows/"
+        case let .fixturesFileNotFound(root):
+            "no Scripts/ci-fixtures.json found under \(root) at either Scripts/ or oss-public/Scripts/"
         }
     }
 }
