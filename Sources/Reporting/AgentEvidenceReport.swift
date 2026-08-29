@@ -156,6 +156,11 @@ public struct AgentEvidenceReport: Codable, Sendable {
         }
     }
 
+    /// Set internally to `SchemaVersion.agentEvidenceReport`, never a caller-
+    /// supplied parameter — the same discipline `MutationPlan`/`RunReport`
+    /// already follow for their own `schemaVersion`, so nothing that builds
+    /// this report can accidentally stamp it with the wrong version.
+    public let schemaVersion: Int
     public let mutantId: String
     public let mutantOperator: OperatorInfo
     public let source: SourceInfo
@@ -176,6 +181,7 @@ public struct AgentEvidenceReport: Codable, Sendable {
     public let guidance: GuidanceInfo
 
     enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case mutantId
         case mutantOperator = "operator"
         case source, verdict, verdictUnavailableReason, diagnosis, origin, durationSeconds, tests, execution, evidence
@@ -188,6 +194,7 @@ public struct AgentEvidenceReport: Codable, Sendable {
         diagnosis: String?, origin: String?, durationSeconds: Double?, tests: TestsInfo?, execution: ExecutionInfo?,
         evidence: EvidenceInfo?, reproduceCommand: String, guidance: GuidanceInfo
     ) {
+        schemaVersion = SchemaVersion.agentEvidenceReport
         self.mutantId = mutantId
         self.mutantOperator = mutantOperator
         self.source = source
