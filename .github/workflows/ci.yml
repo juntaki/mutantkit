@@ -856,3 +856,69 @@ jobs:
           path: |
             build.log
             acceptance.log
+
+  # A single, stably-named status check that a future required-status-check
+  # / merge-queue setup can point at, instead of enumerating every
+  # individual job above (a list that changes shape as fixtures are added,
+  # split, or renamed) or every acceptance matrix entry directly (most of
+  # which are intentionally `skipped`, not `success`, on any single
+  # path-targeted run -- see the `route`/`acceptance` jobs' own comments on
+  # why a skipped entry is the steady state for a routed-away fixture, not a
+  # sign anything failed to run at all). Deciding whether to actually turn
+  # on branch protection or a merge queue against this check is a
+  # repo-admin decision and stays out of this workflow's own scope; this
+  # job only guarantees the check exists and means what its name says.
+  merge-gate:
+    name: Full merge gate
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - route
+      - unit-fast
+      - unit-system
+      - acceptance
+      - ror-schemata-differential
+      - ios-simulator-schemata-runtime
+    # `always()`, not the default `success()`: this job's entire job is to
+    # report on every other job's outcome, including a failure or a
+    # GitHub-initiated cancellation upstream -- the default `if:` would
+    # instead skip this job itself in exactly that case, leaving the one
+    # check meant to be authoritative silently absent instead of reporting
+    # `failure`.
+    if: always()
+    steps:
+      - name: Confirm every gate job succeeded or was intentionally routed around
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed="false"
+          for entry in \
+            "lint:${{ needs.lint.result }}" \
+            "route:${{ needs.route.result }}" \
+            "unit-fast:${{ needs.unit-fast.result }}" \
+            "unit-system:${{ needs.unit-system.result }}" \
+            "acceptance:${{ needs.acceptance.result }}" \
+            "ror-schemata-differential:${{ needs.ror-schemata-differential.result }}" \
+            "ios-simulator-schemata-runtime:${{ needs.ios-simulator-schemata-runtime.result }}" \
+          ; do
+            name="${entry%%:*}"
+            result="${entry#*:}"
+            echo "$name -> $result"
+            # `skipped` is the expected, intended outcome for a job gated
+            # behind `route`'s own `if:` on a narrowly-targeted run (e.g.
+            # `unit-system` when only `cli-commands` was selected) -- never
+            # treated as a failure here. Anything else other than `success`
+            # (`failure`, `cancelled`, `timed_out`) fails this gate.
+            case "$result" in
+              success|skipped) ;;
+              *)
+                echo "::error::$name reported '$result', not success or an intentional skip"
+                failed="true"
+                ;;
+            esac
+          done
+          if [ "$failed" = "true" ]; then
+            echo "::error::merge-gate: at least one required job did not succeed"
+            exit 1
+          fi
+          echo "merge-gate: every required job succeeded or was intentionally routed around"
