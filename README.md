@@ -101,16 +101,44 @@ accumulated — nothing is written outside the project directory.
 
 MutantKit ships a ready-to-use skill file at
 [`skills/mutantkit/SKILL.md`](skills/mutantkit/SKILL.md) — practical
-operating knowledge for an agent driving the CLI: doctor-first discipline,
+operating knowledge for an agent driving the CLI: setup-first discipline,
 how to read `integrity` before trusting a score, how to tell a real
 survivor from an unkillable OS/hardware boundary, the suppression and
 CI-gate patterns, and what not to do (report a score without checking
-integrity, run unbudgeted before `doctor`, hand-edit `plan.json`). Point an
+integrity, run unbudgeted before `setup`, hand-edit `plan.json`). Point an
 agent at it instead of re-deriving MutantKit's CLI surface from `--help`
 output every session.
 
-**Claude Code**: skills are auto-discovered from `.claude/skills/<name>/SKILL.md`
-— personal (all projects) or project-scoped (this repo only):
+**Claude Code — install as a plugin (recommended)**: this repo is itself a
+self-hosted plugin marketplace
+([`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)) for a
+single plugin ([`.claude-plugin/plugin.json`](.claude-plugin/plugin.json))
+that wraps the same `skills/mutantkit/SKILL.md` — no separate copy of the
+skill is maintained. Add the marketplace once, then install:
+
+```bash
+claude plugin marketplace add juntaki/mutantkit
+claude plugin install mutantkit@mutantkit
+```
+
+or, from inside an interactive session:
+
+```
+/plugin marketplace add juntaki/mutantkit
+/plugin install mutantkit@mutantkit
+```
+
+This gets you the skill plus automatic updates (`claude plugin marketplace
+update mutantkit` / `claude plugin update mutantkit`) through Claude Code's
+normal plugin lifecycle, without hand-copying a file. (This is unrelated to
+`claude plugin init`, which scaffolds a brand-new personal plugin under
+`~/.claude/skills/` — that command is for authoring a plugin from scratch,
+not for installing this one.)
+
+**Claude Code — manual fallback**: skills are also auto-discovered from
+`.claude/skills/<name>/SKILL.md` directly, with no plugin involved. Use this
+if you'd rather not add a marketplace — e.g. a one-off personal copy, or a
+locally-edited variant:
 
 ```bash
 # personal — available in every project

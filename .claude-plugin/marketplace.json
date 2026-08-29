@@ -1,0 +1,18 @@
+{
+  "name": "mutantkit",
+  "description": "Self-hosted marketplace for the MutantKit mutation-testing plugin.",
+  "owner": {
+    "name": "juntaki",
+    "url": "https://github.com/juntaki"
+  },
+  "plugins": [
+    {
+      "name": "mutantkit",
+      "source": "./",
+      "displayName": "MutantKit",
+      "description": "Mutation testing for Swift and Apple-platform projects: plan, run, and gate CI on real test-suite strength rather than line coverage.",
+      "homepage": "https://github.com/juntaki/mutantkit",
+      "license": "Apache-2.0"
+    }
+  ]
+}

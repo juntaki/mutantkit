@@ -1,0 +1,20 @@
+{
+  "name": "mutantkit",
+  "displayName": "MutantKit",
+  "version": "1.0.0",
+  "description": "Run and interpret MutantKit mutation testing for Swift and Apple-platform projects: check readiness, plan, run, inspect survivors, and gate CI on real test-suite strength rather than line coverage.",
+  "author": {
+    "name": "juntaki",
+    "url": "https://github.com/juntaki"
+  },
+  "homepage": "https://github.com/juntaki/mutantkit",
+  "repository": "https://github.com/juntaki/mutantkit",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mutation-testing",
+    "swift",
+    "testing",
+    "ci",
+    "test-quality"
+  ]
+}
