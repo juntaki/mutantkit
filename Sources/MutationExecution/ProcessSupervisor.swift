@@ -60,7 +60,7 @@ public struct ProcessResult: Sendable {
         timedOut: Bool,
         terminatingSignal: Int32?,
         stalled: Bool = false,
-        outputComplete: Bool = true
+        outputComplete: Bool
     ) {
         self.exitCode = exitCode
         self.standardOutput = standardOutput

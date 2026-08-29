@@ -40,7 +40,7 @@ struct XcodeBuildAdapterSimulatorPreparationTests {
                         exitCode: 0,
                         standardOutput: Data(deviceJSON.utf8),
                         standardError: Data(),
-                        durationSeconds: 0.01, timedOut: false, terminatingSignal: nil
+                        durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true
                     )
                 }
                 return try respond(arguments)
@@ -62,12 +62,12 @@ struct XcodeBuildAdapterSimulatorPreparationTests {
 
     private func success() -> ProcessResult {
         ProcessResult(exitCode: 0, standardOutput: Data(), standardError: Data(),
-                      durationSeconds: 0.01, timedOut: false, terminatingSignal: nil)
+                      durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true)
     }
 
     private func failure(_ stderr: String) -> ProcessResult {
         ProcessResult(exitCode: 1, standardOutput: Data(), standardError: Data(stderr.utf8),
-                      durationSeconds: 0.01, timedOut: false, terminatingSignal: nil)
+                      durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true)
     }
 
     private var device: SimulatorDevice {
