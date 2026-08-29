@@ -42,6 +42,18 @@ struct GateCommand: ParsableCommand {
     @Option(name: .long, help: "Fail if more than this many mutants survive now but not in --baseline.")
     var newSurvivorsMaximum: Int?
 
+    /// `QualityGateResult` is already exactly the shape a CI script wants —
+    /// `passed` plus a `kind`-tagged `violations` list, fully computed
+    /// before either output path renders it — so this serializes it
+    /// directly (with `schemaVersion` added, see `QualityGateResult`'s own
+    /// doc comment) rather than mapping it into a separate envelope type.
+    /// Exit codes stay identical to the text path: `--json` still throws
+    /// `MutantKitExit.qualityGateFailure` on a failing gate, after emitting
+    /// the JSON document, so a CI script can rely on the exit code alone
+    /// without parsing output, or parse `--json` and get the same verdict.
+    @Flag(name: .long, help: "Emit the quality-gate result as JSON instead of the text summary below.")
+    var json = false
+
     func run() throws {
         let runReport = try decode(reportPath: report)
         let baselineReport = try baseline.map { try decode(reportPath: $0) }
@@ -55,16 +67,20 @@ struct GateCommand: ParsableCommand {
 
         let result = QualityGate.evaluate(report: runReport, thresholds: thresholds, baseline: baselineReport)
 
-        if result.passed {
+        if json {
+            try JSONOutput.emit(result)
+        } else if result.passed {
             print("Mutation quality gate passed.")
-            return
+        } else {
+            print("Mutation quality gate failed:")
+            for violation in result.violations {
+                print("  - \(violation.detail)")
+            }
         }
 
-        print("Mutation quality gate failed:")
-        for violation in result.violations {
-            print("  - \(violation.detail)")
+        if !result.passed {
+            throw ExitCode(MutantKitExit.qualityGateFailure)
         }
-        throw ExitCode(MutantKitExit.qualityGateFailure)
     }
 
     private func decode(reportPath: String) throws -> RunReport {

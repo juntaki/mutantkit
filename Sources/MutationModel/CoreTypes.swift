@@ -156,4 +156,5 @@ public enum SchemaVersion {
     public static let agentEvidenceReport = 1
     public static let runHistoryRecord = 1
     public static let operatorCatalogEntry = 1
+    public static let qualityGateResult = 1
 }
