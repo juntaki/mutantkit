@@ -12,11 +12,14 @@ struct MutantKit: AsyncParsableCommand {
         notice. Every mutant it reports can be proven to have been applied and executed; \
         when that cannot be proven, MutantKit reports no score rather than a misleading one.
 
-        Start with `mutantkit doctor` — it checks your environment before you write any \
-        configuration.
+        Start with `mutantkit setup` — it detects your project, checks your environment, and \
+        writes a starting `mutantkit.yml` in one step. Prefer to go one step at a time? \
+        `mutantkit doctor` checks the environment alone, and `mutantkit init` writes the \
+        config alone.
         """,
         version: ToolVersion.summary,
         subcommands: [
+            SetupCommand.self,
             InitCommand.self,
             DoctorCommand.self,
             ConfigCommand.self,

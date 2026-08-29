@@ -216,7 +216,7 @@ enum Diagnostics {
         // `ConfigurationValidator` rejects an absolute or `..`-escaping
         // `project.derivedDataPath` as an error, but `doctor` diagnoses the
         // environment even when the configuration failed that check (see
-        // `DoctorCommand.loadConfiguration`), so this can still be asked to
+        // `ReadinessCheck.loadConfiguration`), so this can still be asked to
         // report on a path outside the sandbox. Only claim the isolation
         // guarantee when the resolved path is actually inside this workspace.
         //
