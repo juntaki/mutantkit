@@ -15,7 +15,7 @@ import MutationModel
 /// wrapper: print the header, call `ReadinessCheck.run`, render, decide the
 /// exit code.
 enum ReadinessCheck {
-    struct Outcome {
+    struct Outcome: Codable {
         let configuration: Configuration
         let diagnosis: BuildDiagnosis
     }

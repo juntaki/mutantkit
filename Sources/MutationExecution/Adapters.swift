@@ -34,8 +34,8 @@ public struct BuildArtifact: Sendable {
 }
 
 /// One `doctor` check.
-public struct DiagnosisItem: Sendable {
-    public enum Status: String, Sendable {
+public struct DiagnosisItem: Codable, Sendable {
+    public enum Status: String, Codable, Sendable {
         case ok
         case warning
         case failure
@@ -55,14 +55,23 @@ public struct DiagnosisItem: Sendable {
     }
 }
 
-public struct BuildDiagnosis: Sendable {
+/// `doctor`'s fully-computed verdict — every check already run, `canProceed`
+/// already decided — mirroring `QualityGateResult`'s own shape (`gate`'s
+/// analogous decision-before-render result): a stored `schemaVersion` set
+/// internally, never a caller-supplied init param, and `canProceed` stored
+/// rather than left purely computed so `mutantkit doctor --json` exposes the
+/// same verdict `DoctorCommand` itself branches its exit code on, the same
+/// way `QualityGateResult.passed` does for `gate --json`.
+public struct BuildDiagnosis: Codable, Sendable {
+    public let schemaVersion: Int
     public let items: [DiagnosisItem]
+    public let canProceed: Bool
 
     public init(items: [DiagnosisItem]) {
+        schemaVersion = SchemaVersion.buildDiagnosis
         self.items = items
+        canProceed = !items.contains { $0.status == .failure }
     }
-
-    public var canProceed: Bool { !items.contains { $0.status == .failure } }
 }
 
 /// Builds baselines and mutants.
