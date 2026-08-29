@@ -96,10 +96,10 @@ struct SetupCommand: AsyncParsableCommand {
             schemeAmbiguous: plan.schemeAmbiguous,
             environmentReady: readiness.diagnosis.canProceed
         )
-        print("\n\(Self.message(for: step, configPath: destination.path))")
+        print("\n\(Self.message(for: step, configPath: destination.path, configFlag: common.configPath))")
 
         switch step {
-        case .environmentNotReady, .previewNotReady:
+        case .environmentNotReady, .previewNotReady, .previewNeedsManualCompletion:
             throw ExitCode(MutantKitExit.operationalError)
         case .previewOnly, .needsManualCompletion, .ready:
             break
@@ -112,7 +112,8 @@ struct SetupCommand: AsyncParsableCommand {
     /// trial build.
     enum NextStep: Equatable {
         /// `--dry-run` was passed and the previewed config — the exact one
-        /// that would be written — already passes readiness.
+        /// that would be written — already passes readiness, with no
+        /// unresolved scheme or test-target ambiguity either.
         case previewOnly
         /// `--dry-run` was passed, nothing was written, and the previewed
         /// config would *not* pass readiness. Distinct from `.previewOnly`:
@@ -120,6 +121,29 @@ struct SetupCommand: AsyncParsableCommand {
         /// genuine would-fail diagnosis here, not a blanket "preview done"
         /// that reads the same whether the previewed config works or not.
         case previewNotReady
+        /// `--dry-run` was passed and the previewed config has an unresolved
+        /// ambiguous scheme or missing test target(s) — regardless of what
+        /// the readiness diagnosis of that same preview says. These two can
+        /// disagree: an ambiguous scheme or an empty `tests.targets` does
+        /// not reliably show up as a `doctor`-style failure on its own (an
+        /// adapter can still resolve *a* scheme/target and report ready),
+        /// so treating `environmentReady` as the only signal let a preview
+        /// with a genuinely unresolved choice report `.previewOnly` —
+        /// implying "safe to write and proceed" — which is exactly the
+        /// guess `setup` documents itself as never making.
+        ///
+        /// Deliberately distinct from `.needsManualCompletion` (the
+        /// non-dry-run case) in more than name: this exits non-zero, that
+        /// does not. `.needsManualCompletion` still exits 0 because it
+        /// mirrors `init`'s own established contract — a file was actually
+        /// written, so leaving the user a starting point outweighs failing
+        /// the command outright. A dry-run preview writes nothing, so that
+        /// tradeoff does not apply: the only thing `--dry-run`'s exit code
+        /// exists to answer is "would committing this leave the project
+        /// ready", and an unresolved scheme/test-target choice means the
+        /// honest answer is no — an agent deciding whether to proceed from
+        /// dry-run's exit code alone must not be told this is fine.
+        case previewNeedsManualCompletion(details: [String])
         /// A human still has to resolve an ambiguous scheme or fill in a
         /// test target by hand. Matches `init`'s own existing behavior for
         /// the identical scenario — it still writes the file and still
@@ -134,36 +158,54 @@ struct SetupCommand: AsyncParsableCommand {
     }
 
     static func nextStep(dryRun: Bool, hasTestTargets: Bool, schemeAmbiguous: Bool, environmentReady: Bool) -> NextStep {
-        // Preview mode's only question is "would the previewed config pass
-        // readiness" — an ambiguous scheme or empty test-target list already
-        // shows up as part of that same diagnosis (an adapter cannot resolve
-        // without a scheme, and `doctor`'s own checks warn on an empty
-        // `tests.targets`), so it does not need a second, separately-gated
-        // bucket the way the non-dry-run path below does.
-        if dryRun { return environmentReady ? .previewOnly : .previewNotReady }
-
+        // Computed unconditionally, dry-run or not: an unresolved scheme or
+        // missing test target(s) is a fact about the previewed/written
+        // config itself, independent of whatever `environmentReady` (a
+        // `doctor`-style diagnosis of the same config) happens to say — the
+        // two can disagree, and unresolved detection must win either way
+        // (mirrors the non-dry-run path's own "unresolved detection
+        // outranks a failed readiness check" rule below).
         var unresolved: [String] = []
         if schemeAmbiguous { unresolved.append("the ambiguous Xcode scheme") }
         if !hasTestTargets { unresolved.append("the missing test target(s)") }
-        guard unresolved.isEmpty else { return .needsManualCompletion(details: unresolved) }
 
+        if dryRun {
+            guard unresolved.isEmpty else { return .previewNeedsManualCompletion(details: unresolved) }
+            return environmentReady ? .previewOnly : .previewNotReady
+        }
+
+        guard unresolved.isEmpty else { return .needsManualCompletion(details: unresolved) }
         return environmentReady ? .ready : .environmentNotReady
     }
 
-    static func message(for step: NextStep, configPath: String) -> String {
-        switch step {
+    /// - Parameter configFlag: the raw `--config` value this `setup`
+    ///   invocation was given, if any (`common.configPath`, not the resolved
+    ///   destination path). Appended to every suggested command below so a
+    ///   custom `--config` actually survives into the *next* command an
+    ///   agent or user is told to run — `mutantkit dry-run`/`plan`/`doctor`
+    ///   all default to `<projectRoot>/mutantkit.yml` when `--config` is
+    ///   omitted, so a suggestion that dropped it would send a custom
+    ///   `setup --config foo.yml` straight into a next command that looks at
+    ///   the wrong file.
+    static func message(for step: NextStep, configPath: String, configFlag: String? = nil) -> String {
+        let suffix = configFlag.map { " --config \($0)" } ?? ""
+        return switch step {
         case .previewOnly:
-            "This was a preview — nothing was written. Re-run without --dry-run to write \(configPath)."
+            "This was a preview — nothing was written. Re-run without --dry-run\(suffix) to write \(configPath)."
         case .previewNotReady:
             "This was a preview — nothing was written, and the previewed \(configPath) would not be ready. "
-                + "Fix the failures above, then re-run --dry-run to confirm before writing for real."
+                + "Fix the failures above, then re-run --dry-run\(suffix) to confirm before writing for real."
+        case let .previewNeedsManualCompletion(details):
+            "This was a preview — nothing was written, and \(details.joined(separator: " and ")) would still be "
+                + "unresolved in \(configPath). Resolve \(details.count > 1 ? "them" : "it") by hand, then re-run "
+                + "--dry-run\(suffix) to confirm before writing for real."
         case let .needsManualCompletion(details):
-            "Resolve \(details.joined(separator: " and ")) in \(configPath), then run `mutantkit doctor` to confirm."
+            "Resolve \(details.joined(separator: " and ")) in \(configPath), then run `mutantkit doctor\(suffix)` to confirm."
         case .environmentNotReady:
-            "Not ready. Fix the failures above, then run `mutantkit setup` (or `mutantkit doctor`) again."
+            "Not ready. Fix the failures above, then run `mutantkit setup\(suffix)` (or `mutantkit doctor\(suffix)`) again."
         case .ready:
-            "Ready. Next: `mutantkit dry-run` to verify the baseline builds and tests once, then `mutantkit plan` "
-                + "and `mutantkit run --fail-on-survivors` for a CI-meaningful run."
+            "Ready. Next: `mutantkit dry-run\(suffix)` to verify the baseline builds and tests once, then `mutantkit plan\(suffix)` "
+                + "and `mutantkit run --fail-on-survivors\(suffix)` for a CI-meaningful run."
         }
     }
 }

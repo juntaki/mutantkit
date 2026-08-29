@@ -49,17 +49,37 @@ struct SetupCommandDryRunReadinessTests {
 
         // A minimal, real SwiftPM package: `ProjectDetectionPlan` detects
         // `swiftPackageMacOS` explicitly, which resolves without touching
-        // `xcodebuild`/`simctl` at all, so this stays fast and hermetic.
+        // `xcodebuild`/`simctl` at all, so this stays fast and hermetic. It
+        // needs a real test target too — a preview with no detected test
+        // targets is exactly the unresolved case `nextStep` must now report
+        // as `.previewNeedsManualCompletion`, not the genuinely-resolved
+        // "does not fail spuriously" case this test means to cover.
         try Data("""
         // swift-tools-version:5.9
         import PackageDescription
-        let package = Package(name: "Bare", targets: [.target(name: "Bare")])
+        let package = Package(
+            name: "Bare",
+            targets: [
+                .target(name: "Bare"),
+                .testTarget(name: "BareTests", dependencies: ["Bare"])
+            ]
+        )
         """.utf8).write(to: directory.appendingPathComponent("Package.swift"), options: .atomic)
         try FileManager.default.createDirectory(
             at: directory.appendingPathComponent("Sources/Bare"), withIntermediateDirectories: true
         )
         try Data("public func bare() {}".utf8)
             .write(to: directory.appendingPathComponent("Sources/Bare/Bare.swift"), options: .atomic)
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("Tests/BareTests"), withIntermediateDirectories: true
+        )
+        try Data("""
+        import XCTest
+
+        final class BareTests: XCTestCase {
+            func testExample() {}
+        }
+        """.utf8).write(to: directory.appendingPathComponent("Tests/BareTests/BareTests.swift"), options: .atomic)
 
         let command = try SetupCommand.parse(["--dry-run", "--skip-build", "--project-root", directory.path])
         try await command.run()

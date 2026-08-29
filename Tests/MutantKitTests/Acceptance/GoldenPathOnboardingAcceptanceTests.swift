@@ -123,4 +123,78 @@ struct GoldenPathOnboardingAcceptanceTests {
         // gate the product itself uses, not a separate check invented here.
         #expect(report.score != nil, "integrity passed but no score was computed")
     }
+
+    /// A custom `--config` must survive into `setup`'s own suggested next
+    /// commands, not just into the write path. `setup --config custom.yml`
+    /// writes to `custom.yml` instead of the default `mutantkit.yml` — but
+    /// every command it tells you to run next (`dry-run`, `doctor`, `plan`,
+    /// ...) defaults to looking for `<projectRoot>/mutantkit.yml` when
+    /// `--config` is omitted, so a suggestion that dropped the flag would
+    /// send a working `setup --config custom.yml` straight into a next
+    /// command that silently looks in the wrong place. This drives the
+    /// literal commands `setup` prints, through the real binary, end to end
+    /// — proving they actually work when followed as written, not just that
+    /// the printed text happens to contain the substring `--config`.
+    @Test("setup --config custom.yml's own suggested next commands work when followed literally")
+    func customConfigSuggestedCommandsWorkEndToEnd() throws {
+        let dir = try Acceptance.stageFixture("SwiftPackageMacOS")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let configName = "custom.yml"
+        let configPath = dir.appendingPathComponent(configName)
+        #expect(
+            !FileManager.default.fileExists(atPath: configPath.path),
+            "fixture must start without the custom config, or this test proves nothing"
+        )
+
+        // 1. `mutantkit setup --config custom.yml` — the destination the
+        // config gets written to, and every next-step message it prints,
+        // must both honor the custom path.
+        //
+        // The "Wrote ..." line is matched by directory-name + filename
+        // rather than the full absolute path: `setup` resolves a relative
+        // `--config` through the process's real (symlink-resolved) cwd,
+        // e.g. `/private/var/...`, while `dir` here is built from
+        // `FileManager.default.temporaryDirectory`'s un-resolved `/var/...`
+        // spelling — the same macOS `/private` aliasing `standardizedFileURL`
+        // elsewhere collapses back, and orthogonal to what this test checks.
+        let setup = try Acceptance.run(["setup", "--config", configName], in: dir)
+        #expect(setup.exitCode == 0, "\(setup.output)")
+        #expect(setup.output.contains("Wrote"), "\(setup.output)")
+        #expect(setup.output.contains("\(dir.lastPathComponent)/\(configName)"), "\(setup.output)")
+        #expect(setup.output.contains("Ready."), "\(setup.output)")
+        #expect(setup.output.contains("--config \(configName)"), "\(setup.output)")
+        #expect(
+            FileManager.default.fileExists(atPath: configPath.path),
+            "setup reported success but wrote no \(configName)"
+        )
+        #expect(
+            !FileManager.default.fileExists(atPath: dir.appendingPathComponent("mutantkit.yml").path),
+            "a custom --config must not also leave a default mutantkit.yml behind"
+        )
+
+        // 2. `mutantkit dry-run --config custom.yml`, typed exactly as
+        // `setup` just suggested. Before the fix, `dry-run` (with no
+        // `--config` of its own) would default to the missing
+        // `mutantkit.yml` and fail — this is the failure this test exists
+        // to catch.
+        let dryRun = try Acceptance.run(["dry-run", "--config", configName], in: dir)
+        #expect(dryRun.exitCode == 0, "\(dryRun.output)")
+        #expect(dryRun.output.contains("Dry run passed"), "\(dryRun.output)")
+
+        // 3. `mutantkit doctor --config custom.yml`, likewise.
+        let doctor = try Acceptance.run(["doctor", "--config", configName], in: dir)
+        #expect(doctor.exitCode == 0, "\(doctor.output)")
+
+        // 4. `mutantkit plan --config custom.yml`, likewise — proves the
+        // whole suggested chain works, not just its first hop.
+        let plan = try Acceptance.run(
+            ["plan", "--config", configName, "--output", "plan.json", "--max-mutants", "3"], in: dir
+        )
+        #expect(plan.exitCode == 0, "\(plan.output)")
+
+        let planData = try Data(contentsOf: dir.appendingPathComponent("plan.json"))
+        let decodedPlan = try MutationPlan.decode(from: planData)
+        #expect(!decodedPlan.mutations.isEmpty, "a real, parseable plan.json needs at least one mutation point")
+    }
 }
