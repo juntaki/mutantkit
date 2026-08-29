@@ -270,6 +270,21 @@ extension ProcessResult {
     }
 }
 
+/// A production call to `ProcessSupervisor.run`, injectable — mirrors
+/// `RunContextProbe.ProcessRunner` for the identical reason: a test can
+/// substitute a real `ProcessResult` (e.g. one with `outputComplete ==
+/// false`) without reproducing the real subprocess condition that produces
+/// it. `XcodeBuildAdapter.uninstallStaleApp` is the one caller today.
+typealias ProcessRunner = @Sendable (
+    _ executable: String, _ arguments: [String], _ workingDirectory: URL, _ timeoutSeconds: Double
+) async throws -> ProcessResult
+
+let defaultProcessRunner: ProcessRunner = { executable, arguments, workingDirectory, timeoutSeconds in
+    try await ProcessSupervisor.run(
+        executable: executable, arguments: arguments, workingDirectory: workingDirectory, timeoutSeconds: timeoutSeconds
+    )
+}
+
 /// Free space on the volume holding `url`, in bytes.
 func availableDiskSpace(at url: URL) -> Int64? {
     let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])

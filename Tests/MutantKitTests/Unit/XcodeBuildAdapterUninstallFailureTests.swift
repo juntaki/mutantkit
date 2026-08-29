@@ -112,6 +112,41 @@ struct XcodeBuildAdapterUninstallFailureTests {
         )
     }
 
+    /// The direct counterpart to `realUninstallFailureIsReported`'s loosened
+    /// assertion above: rather than accepting either outcome depending on
+    /// real CI timing, this forces `ProcessResult.outputComplete == false`
+    /// deterministically via the injected `processRunner` seam and pins the
+    /// exact diagnosis text a truncated capture must produce.
+    @Test("An incomplete-but-failed simctl result is reported with the exact 'subprocess output incomplete' diagnosis")
+    func incompleteOutputProducesTheExactDiagnosis() async throws {
+        let xctestrun = try makeXCTestRun()
+        defer { try? FileManager.default.removeItem(at: xctestrun) }
+
+        var reported: [String] = []
+        await adapter().uninstallStaleApp(
+            artifact: artifact(xctestrunPath: xctestrun),
+            from: lease(udid: Self.bogusUDID),
+            report: { reported.append($0) },
+            processRunner: { _, _, _, _ in
+                ProcessResult(
+                    exitCode: 148,
+                    standardOutput: Data(),
+                    standardError: Data(),
+                    durationSeconds: 1,
+                    timedOut: false,
+                    terminatingSignal: nil,
+                    outputComplete: false
+                )
+            }
+        )
+
+        let message = try #require(reported.first)
+        #expect(reported.count == 1)
+        #expect(message.contains(Self.bundleID))
+        #expect(message.contains(Self.bogusUDID))
+        #expect(message.contains("subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"))
+    }
+
     @Test("A build with no .xctestrun reports nothing and returns immediately")
     func noXCTestRunReportsNothing() async {
         var reported: [String] = []
