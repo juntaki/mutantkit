@@ -433,25 +433,28 @@ public enum ConfigurationValidator {
 /// `ConfigurationSchemaParityTests`'s drift guard fails the build the moment
 /// the two disagree (on the `$id` line or anything else).
 ///
-/// `$id` points at a `raw.githubusercontent.com` URL pinned to this
-/// repository's most recent release tag (see `git tag --list`) rather than
-/// `main`: `main` is served live, so a schema fetched or cached from a
-/// branch URL can change shape underneath a consumer with no warning,
-/// whereas a tag is expected to stay put once cut. That gets a stable,
-/// effectively-versioned, publicly resolvable `$id` for free — no server, no
-/// Pages deploy, no CI job; GitHub already serves the raw bytes of any
-/// tagged ref. Bump the tag component here (and in
-/// `Schema/mutantkit-v1.json`) as part of any release whose changes touch
-/// this document. Config format version 1 (`Configuration.version`) has
-/// never changed shape, so no bump has been needed yet; if an incompatible
-/// version 2 ever ships, it gets its own file (`mutantkit-v2.json`) and its
-/// own `$id` rather than mutating this one out from under existing
-/// consumers.
+/// `$id` points at a `raw.githubusercontent.com` URL pinned to `main`, not to
+/// a release tag. This file (`Schema/mutantkit-v1.json`) is new in this same
+/// body of work and does not exist on the last cut tag (`v0.2.0`, predating
+/// it) — a tag-pinned `$id` would 404 for every consumer from the moment
+/// this merges, defeating the point of hosting an editor-facing schema at
+/// all. Pinning to `main` instead resolves immediately on merge, since
+/// `main` is served live: a branch URL's content can in principle drift out
+/// from under a consumer with no version bump to warn them, but that risk is
+/// accepted here because config format version 1 (`Configuration.version`)
+/// has never changed shape and drift would require an actual shape change to
+/// this document, not just any commit to `main`. Re-pin `$id` to the next
+/// real release tag once one ships that includes this file (bump both here
+/// and in `Schema/mutantkit-v1.json`, and in `ConfigurationLoader.schemaURL`)
+/// to regain the stronger, tag-pinned guarantee described above. If an
+/// incompatible version 2 ever ships, it gets its own file
+/// (`mutantkit-v2.json`) and its own `$id` rather than mutating this one out
+/// from under existing consumers.
 public enum ConfigurationJSONSchema {
     public static let document = #"""
     {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/v0.2.0/Schema/mutantkit-v1.json",
+      "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/main/Schema/mutantkit-v1.json",
       "title": "MutantKit configuration",
       "type": "object",
       "additionalProperties": false,
@@ -459,6 +462,7 @@ public enum ConfigurationJSONSchema {
         "version": { "type": "integer", "const": 1 },
         "project": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": { "enum": ["auto", "swiftPackageMacOS", "swiftPackageApple", "xcodeProject", "xcodeWorkspace"] },
             "path": { "type": ["string", "null"] },
@@ -469,6 +473,7 @@ public enum ConfigurationJSONSchema {
         },
         "sources": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "include": { "type": "array", "items": { "type": "string" } },
             "exclude": { "type": "array", "items": { "type": "string" } }
@@ -476,6 +481,7 @@ public enum ConfigurationJSONSchema {
         },
         "tests": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "targets": { "type": "array", "items": { "type": "string" } },
             "extraArguments": { "type": "array", "items": { "type": "string" } },
@@ -484,6 +490,7 @@ public enum ConfigurationJSONSchema {
         },
         "operators": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "profile": { "enum": ["conservative", "default", "experimental"] },
             "disable": { "type": "array", "items": { "type": "string" } },
@@ -492,11 +499,13 @@ public enum ConfigurationJSONSchema {
         },
         "execution": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "strategy": { "enum": ["isolated", "schemata"] },
             "workers": { "type": ["integer", "null"], "minimum": 1 },
             "budget": {
               "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "maxMutants": { "type": ["integer", "null"], "minimum": 1 },
                 "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
@@ -526,10 +535,12 @@ public enum ConfigurationJSONSchema {
         },
         "timeouts": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "baseline": { "type": ["number", "string"] },
             "mutant": {
               "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "strategy": { "enum": ["fixed", "adaptive"] },
                 "multiplier": { "type": "number" },
@@ -548,25 +559,31 @@ public enum ConfigurationJSONSchema {
         },
         "qualityGate": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "testedScore": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "minimum": { "type": ["number", "null"] } }
             },
             "effectiveScore": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "minimum": { "type": ["number", "null"] } }
             },
             "regression": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "maximumDrop": { "type": ["number", "null"] } }
             },
             "survived": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "newMaximum": { "type": ["integer", "null"] } }
             },
             "integrityViolations": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "maximum": { "type": ["integer", "null"] } }
             }
           }

@@ -118,6 +118,95 @@ struct ConfigurationSchemaParityTests {
         #expect(fileCanonical == embeddedCanonical)
     }
 
+    /// A schema whose root alone rejects unknown keys still lets an editor
+    /// silently accept a typo'd nested key (e.g. `execution.workerz`) —
+    /// exactly the gap a hosted, editor-facing schema exists to close. This
+    /// walks every object node that declares `properties` (root included)
+    /// and requires `additionalProperties: false` on each one. The one
+    /// object in this schema that does *not* get it — `execution.budget
+    /// .weight` — is a deliberately open string-keyed map (operator/stratum
+    /// IDs aren't known ahead of time) and is recognized here by having no
+    /// `properties` key at all, so it is never visited by this walk in the
+    /// first place.
+    @Test("Every object with `properties` in the schema also sets additionalProperties: false")
+    func everyNestedObjectRejectsUnknownProperties() throws {
+        let schema = try schema
+        var offenders: [String] = []
+
+        func walk(_ node: [String: Any], path: String) {
+            guard let properties = node["properties"] as? [String: Any] else { return }
+            if node["additionalProperties"] as? Bool != false {
+                offenders.append(path.isEmpty ? "$root" : path)
+            }
+            for (key, subschema) in properties {
+                guard let subschemaObject = subschema as? [String: Any] else { continue }
+                walk(subschemaObject, path: path.isEmpty ? key : "\(path).\(key)")
+            }
+        }
+        walk(schema, path: "")
+
+        #expect(offenders.isEmpty, "Missing additionalProperties: false at: \(offenders.sorted().joined(separator: ", "))")
+    }
+
+    /// Structural check above proves the schema is *shaped* to reject
+    /// unknown nested keys; this proves it actually does, by running a
+    /// minimal `additionalProperties`-only validator (this schema never
+    /// needs more than `properties`/`additionalProperties` to decide that
+    /// one question) against a real encoded `Configuration` and against the
+    /// same document with a typo'd key injected two levels deep — the exact
+    /// `execution.workerz`-for-`execution.workers` mistake this schema
+    /// exists to catch.
+    @Test("A typo'd nested key (execution.workerz) is rejected; a real config is not")
+    func typoNestedKeyIsRejectedByTheSchema() throws {
+        let schema = try schema
+        let configuration = Configuration(
+            version: 1, project: ProjectSettings(), sources: SourceSettings(),
+            tests: TestSettings(), operators: OperatorSettings(),
+            execution: ExecutionSettings(), timeouts: TimeoutSettings(), reports: [.console]
+        )
+        var document = try #require(
+            try JSONSerialization.jsonObject(with: try JSONEncoder().encode(configuration)) as? [String: Any]
+        )
+
+        #expect(unknownPropertyPaths(document: document, schema: schema).isEmpty)
+
+        var execution = try #require(document["execution"] as? [String: Any])
+        execution["workerz"] = 4
+        document["execution"] = execution
+
+        #expect(unknownPropertyPaths(document: document, schema: schema) == ["execution.workerz"])
+    }
+
+    /// Minimal `additionalProperties`-only JSON Schema check: not a general
+    /// validator (no type/enum/range checks), just enough of the 2020-12
+    /// semantics — at each object node, a document key absent from
+    /// `properties` is only legal when `additionalProperties` is not `false`
+    /// — to prove the one thing this schema's nested objects need proving.
+    private func unknownPropertyPaths(
+        document: [String: Any],
+        schema: [String: Any],
+        path: String = ""
+    ) -> [String] {
+        guard let properties = schema["properties"] as? [String: Any] else { return [] }
+        let additionalPropertiesAllowed = schema["additionalProperties"] as? Bool != false
+
+        var violations: [String] = []
+        for key in document.keys where properties[key] == nil {
+            if !additionalPropertiesAllowed {
+                violations.append(path.isEmpty ? key : "\(path).\(key)")
+            }
+        }
+        for (key, subschema) in properties {
+            guard let subschemaObject = subschema as? [String: Any],
+                  let subdocument = document[key] as? [String: Any] else { continue }
+            violations += unknownPropertyPaths(
+                document: subdocument, schema: subschemaObject,
+                path: path.isEmpty ? key : "\(path).\(key)"
+            )
+        }
+        return violations
+    }
+
     @Test("qualityGate matches QualityGateSettings")
     func qualityGateSection() throws {
         let schema = try schema
