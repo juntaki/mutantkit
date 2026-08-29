@@ -24,8 +24,21 @@
 #     "run_full": true|false,
 #     "run_schemata_targeted": true|false,
 #     "selected_fixtures": ["fixture-a", "fixture-b", ...],
+#     "acceptance_matrix": {"include": [{"fixture": ..., "filter": ..., "simulator": ..., ["wave": ...]}, ...]},
 #     "reason": "human-readable explanation"
 #   }
+#
+# `acceptance_matrix` is a real, already-filtered GitHub Actions matrix
+# object -- `run_full=true` means it contains every fixture from
+# Scripts/ci-fixtures.json (the single source of truth for the full fixture
+# list, read by this script both for that full case and to look up the
+# filter/simulator/wave fields of a targeted selection); otherwise it
+# contains only the entries whose `fixture` name appears in
+# `selected_fixtures`. The `route` job's workflow step feeds this straight
+# into the `acceptance` job's `strategy.matrix: ${{ fromJSON(...) }}` -- see
+# ci.yml's own comment there -- so an unselected fixture never creates a
+# runner job at all, rather than creating one whose steps are merely
+# skipped.
 #
 # Every branch that is not a deliberate "run everything" signal (push to
 # main, workflow_dispatch, an override label, the trust-critical path group)
@@ -39,6 +52,13 @@ set -euo pipefail
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "::error::ci-route.sh requires jq, which was not found on PATH" >&2
+  exit 1
+fi
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fixtures_file="$script_dir/ci-fixtures.json"
+if [ ! -f "$fixtures_file" ]; then
+  echo "::error::ci-route.sh requires $fixtures_file (the fixture source of truth), which was not found" >&2
   exit 1
 fi
 
@@ -187,9 +207,25 @@ else
   fixtures_json="[]"
 fi
 
+# `acceptance_matrix`: the real, already-filtered GitHub Actions matrix
+# object -- see this script's own header comment. Built from
+# Scripts/ci-fixtures.json (the one source of truth for fixture
+# definitions) in both branches, so the full-matrix case and the targeted
+# case can never drift into two independently-maintained fixture lists.
+if [ "$run_full" = "true" ]; then
+  acceptance_matrix="$(jq -c '{include: .fixtures}' "$fixtures_file")"
+else
+  acceptance_matrix="$(
+    jq -c --argjson names "$fixtures_json" \
+      '{include: [.fixtures[] | select(.fixture as $f | ($names | index($f)) != null)]}' \
+      "$fixtures_file"
+  )"
+fi
+
 jq -n -c \
   --argjson run_full "$run_full" \
   --argjson run_schemata_targeted "$schemata_targeted" \
   --argjson selected_fixtures "$fixtures_json" \
+  --argjson acceptance_matrix "$acceptance_matrix" \
   --arg reason "$reason" \
-  '{run_full: $run_full, run_schemata_targeted: $run_schemata_targeted, selected_fixtures: $selected_fixtures, reason: $reason}'
+  '{run_full: $run_full, run_schemata_targeted: $run_schemata_targeted, selected_fixtures: $selected_fixtures, acceptance_matrix: $acceptance_matrix, reason: $reason}'

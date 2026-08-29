@@ -20,14 +20,30 @@ struct CIRouteClassificationTests {
         let runFull: Bool
         let runSchemataTargeted: Bool
         let selectedFixtures: [String]
+        let acceptanceMatrix: AcceptanceMatrix
         let reason: String
 
         enum CodingKeys: String, CodingKey {
             case runFull = "run_full"
             case runSchemataTargeted = "run_schemata_targeted"
             case selectedFixtures = "selected_fixtures"
+            case acceptanceMatrix = "acceptance_matrix"
             case reason
         }
+    }
+
+    /// Mirrors the `{"include": [...]}` shape GitHub Actions'
+    /// `fromJSON(...)` expects for `strategy.matrix` — see this script's own
+    /// header comment and `.github/workflows/ci.yml`'s `acceptance` job.
+    struct AcceptanceMatrix: Decodable, Equatable {
+        struct Entry: Decodable, Equatable {
+            let fixture: String
+            let filter: String
+            let simulator: String?
+            let wave: String?
+        }
+
+        let include: [Entry]
     }
 
     private static var scriptURL: URL {
@@ -231,6 +247,61 @@ struct CIRouteClassificationTests {
         #expect(Set(result.selectedFixtures) == ["swift-package", "swift-package-coverage", "swift-package-ios", "shard-merge"])
     }
 
+    // MARK: - acceptance_matrix
+
+    // `acceptance_matrix` is the real, already-filtered GitHub Actions
+    // matrix object -- see Scripts/ci-route.sh's own header comment and
+    // .github/workflows/ci.yml's `acceptance` job, which now reads this
+    // field directly via `strategy.matrix: fromJSON(...)` instead of a
+    // static `include:` list.
+
+    @Test("a targeted run's acceptance_matrix contains only the selected fixtures' full entries")
+    func targetedAcceptanceMatrixContainsOnlySelectedFixtures() throws {
+        let result = try route(
+            event: "pull_request",
+            changedFiles: ["Sources/CLI/Commands/InspectCommand.swift"]
+        )
+        #expect(!result.runFull)
+        #expect(result.acceptanceMatrix.include == [
+            AcceptanceMatrix.Entry(fixture: "cli-commands", filter: "CLICommandsAcceptanceTests", simulator: "1", wave: nil)
+        ])
+    }
+
+    @Test("a targeted run's acceptance_matrix never includes a fixture pending on another branch")
+    func targetedAcceptanceMatrixExcludesPendingFixture() throws {
+        let result = try route(
+            event: "pull_request",
+            changedFiles: ["Sources/CLI/Commands/SetupCommand.swift"]
+        )
+        #expect(!result.runFull)
+        // `golden-path-onboarding` is in `selectedFixtures` (see
+        // `setupCommandSelectsOnboardingSet` above) but does not exist in
+        // Scripts/ci-fixtures.json yet -- it must never appear in the real,
+        // ready-to-use matrix object, only in the informational
+        // `selectedFixtures` list.
+        let matrixFixtures = Set(result.acceptanceMatrix.include.map(\.fixture))
+        #expect(matrixFixtures == ["cli-commands", "xcode-config-detector"])
+        #expect(!matrixFixtures.contains("golden-path-onboarding"))
+    }
+
+    @Test("an xcode-adapter path's acceptance_matrix carries wave: \"1\" on xcode-wave-early-kill")
+    func targetedAcceptanceMatrixCarriesWaveField() throws {
+        let result = try route(
+            event: "pull_request",
+            changedFiles: ["Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"]
+        )
+        let entry = try #require(result.acceptanceMatrix.include.first { $0.fixture == "xcode-wave-early-kill" })
+        #expect(entry.wave == "1")
+    }
+
+    @Test("push's acceptance_matrix contains every real fixture, not a second hardcoded copy")
+    func fullRunAcceptanceMatrixContainsEveryRealFixture() throws {
+        let result = try route(event: "push")
+        #expect(result.runFull)
+        let matrixFixtures = Set(result.acceptanceMatrix.include.map(\.fixture))
+        #expect(matrixFixtures == (try realMatrixFixtureNames()))
+    }
+
     // MARK: - Unknown paths -> fail toward the full matrix
 
     @Test("a mix of a known group path and an unknown path runs the full matrix")
@@ -284,47 +355,35 @@ struct CIRouteClassificationTests {
         "Sources/AppleBuildAdapters/SwiftPackageMacOSAdapter.swift" // swift-package
     ]
 
-    /// Parses the acceptance job's real `- fixture: <name>` matrix entries
-    /// out of the checked-in `ci.yml`, the same source of truth
-    /// `CIAcceptanceMatrixClassificationTests` cross-checks against. Kept
-    /// intentionally narrow (fixture names only, scoped to the `acceptance:`
-    /// job's own `include:` block) rather than sharing that file's private
-    /// parser, since this test only ever needs the name column.
+    /// Reads the acceptance job's real fixture names out of the checked-in
+    /// `Scripts/ci-fixtures.json` — the single source of truth both
+    /// `Scripts/ci-route.sh` and `.github/workflows/ci.yml`'s own
+    /// full-matrix case read (see that script's header comment), and the
+    /// same source `CIAcceptanceMatrixClassificationTests` cross-checks
+    /// against. Handles the same `oss-public/` overlay path that file's own
+    /// loader does.
     private func realMatrixFixtureNames() throws -> Set<String> {
-        let url = Acceptance.packageRoot.appendingPathComponent(".github/workflows/ci.yml")
-        let contents = try String(contentsOf: url, encoding: .utf8)
-
-        var names: Set<String> = []
-        var inAcceptanceJob = false
-        var inMatrixInclude = false
-
-        for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            if line.hasPrefix("  acceptance:") {
-                inAcceptanceJob = true
-                continue
-            }
-            if inAcceptanceJob, line.hasPrefix("  "), !line.hasPrefix("   "), !line.hasPrefix("  acceptance:") {
-                break // left the acceptance job's own block entirely
-            }
-            guard inAcceptanceJob else { continue }
-
-            if trimmed == "include:" { inMatrixInclude = true; continue }
-            guard inMatrixInclude else { continue }
-            if trimmed == "steps:" { break }
-
-            if trimmed.hasPrefix("- fixture:") {
-                var value = String(trimmed.dropFirst("- fixture:".count)).trimmingCharacters(in: .whitespaces)
-                if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
-                    value = String(value.dropFirst().dropLast())
-                }
-                names.insert(value)
-            }
+        struct FixturesFile: Decodable {
+            struct Entry: Decodable { let fixture: String }
+            let fixtures: [Entry]
         }
 
-        try #require(!names.isEmpty, "parsed zero acceptance matrix fixture names from \(url.path)")
+        let root = Acceptance.packageRoot
+        var url: URL?
+        for candidate in [
+            root.appendingPathComponent("Scripts/ci-fixtures.json"),
+            root.appendingPathComponent("oss-public/Scripts/ci-fixtures.json")
+        ] where FileManager.default.fileExists(atPath: candidate.path) {
+            url = candidate
+            break
+        }
+        let resolvedURL = try #require(url, "no Scripts/ci-fixtures.json found under \(root.path)")
+
+        let data = try Data(contentsOf: resolvedURL)
+        let file = try JSONDecoder().decode(FixturesFile.self, from: data)
+        let names = Set(file.fixtures.map(\.fixture))
+
+        try #require(!names.isEmpty, "parsed zero acceptance matrix fixture names from \(resolvedURL.path)")
         return names
     }
 
