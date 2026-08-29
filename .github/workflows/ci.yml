@@ -290,10 +290,18 @@ jobs:
   # project has had — a sandbox handed the wrong excludes, xcodebuild pointed at
   # unmutated sources, concurrent mutants fighting over one simulator — was
   # invisible to the unit tests and produced a confident, wrong score.
+  #
+  # No `needs: unit`: every one of these ~20 acceptance-family fixtures
+  # builds its own test target independently (see each job's own "Build"
+  # step) and consumes no artifact the `unit` job produces -- the previous
+  # `needs: unit` was pure ordering, not a real dependency, and serialized
+  # every push through a full unit run before any acceptance job could even
+  # start. Removing it lets `unit` and every acceptance fixture run in
+  # parallel; nothing here changes what eventually gets verified before
+  # merge, only when each check starts.
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
-    needs: unit
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit`'s own plain unit suite — but still bounded, per the same
     # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
@@ -460,7 +468,6 @@ jobs:
   ror-schemata-differential:
     name: ROR schemata isolated-vs-schemata differential
     runs-on: macos-15
-    needs: unit
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
@@ -513,7 +520,6 @@ jobs:
   ios-simulator-schemata-runtime:
     name: iOS-Simulator schemata runtime (build + link viability)
     runs-on: macos-15
-    needs: unit
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
