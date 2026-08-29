@@ -23,6 +23,26 @@ public struct ProcessResult: Sendable {
     public let stalled: Bool
     /// Set when the process died from a signal rather than exiting normally.
     public let terminatingSignal: Int32?
+    /// `false` whenever the bounded post-exit drain wait (see `runBlocking`'s
+    /// own `drainGroup.wait(timeout:)` call) did not confirm that *both*
+    /// stdout and stderr had been fully read to EOF before this result was
+    /// built — `true` otherwise. This is a fact about *evidence*, orthogonal
+    /// to `exitCode`/`timedOut`/`terminatingSignal`: a process can exit
+    /// cleanly (even successfully) while something other than the process
+    /// itself — a descendant that escaped reaping, a slow/contended drain
+    /// thread — still holds a pipe open, in which case `standardOutput`/
+    /// `standardError` may be truncated relative to what the process
+    /// actually wrote. A caller that only checks `succeeded`/`exitCode`
+    /// cannot tell "this failure reason is what the output says" apart from
+    /// "the output might be missing the very evidence that would explain
+    /// this failure" — which is exactly what let a real `simctl uninstall`
+    /// failure reach a caller with an empty detail string on one real CI
+    /// run, while the identical failing invocation immediately afterward
+    /// captured the real "Invalid device: ..." text in full. Every consumer
+    /// that derives a cache-identity fact or a failure classification from a
+    /// `ProcessResult` must check this field and fail closed when it is
+    /// `false`, never treat partial bytes as if they were the whole story.
+    public let outputComplete: Bool
 
     public var succeeded: Bool { exitCode == 0 && !timedOut && terminatingSignal == nil }
 
@@ -33,7 +53,8 @@ public struct ProcessResult: Sendable {
         durationSeconds: Double,
         timedOut: Bool,
         terminatingSignal: Int32?,
-        stalled: Bool = false
+        stalled: Bool = false,
+        outputComplete: Bool = true
     ) {
         self.exitCode = exitCode
         self.standardOutput = standardOutput
@@ -42,6 +63,7 @@ public struct ProcessResult: Sendable {
         self.timedOut = timedOut
         self.terminatingSignal = terminatingSignal
         self.stalled = stalled
+        self.outputComplete = outputComplete
     }
 }
 
@@ -323,8 +345,15 @@ public enum ProcessSupervisor {
         // unbounded wait makes a single surviving grandchild hang the supervisor
         // permanently. That is the failure this type exists to prevent, so it must
         // not be reachable from inside it. Anything not drained by now is output
-        // from a process that outlived a SIGKILL, and is not worth waiting on.
-        _ = drainGroup.wait(timeout: .now() + drainGracePeriodSeconds)
+        // from a process that outlived a SIGKILL, and is not worth waiting on —
+        // but whether that happened must never be discarded the way a bare
+        // `_ = ...wait(...)` would: `.success` is the only outcome that proves
+        // `outBox`/`errBox` below hold everything the process wrote: a
+        // `.timedOut` outcome means some writer — the process itself or
+        // something else still holding its pipe open — had not been drained to
+        // EOF when this deadline passed, so whatever bytes were captured so far
+        // must be treated as possibly truncated, not as the complete record.
+        let drainOutcome = drainGroup.wait(timeout: .now() + drainGracePeriodSeconds)
 
         let exitCode: Int32
         var terminatingSignal: Int32?
@@ -343,7 +372,8 @@ public enum ProcessSupervisor {
             durationSeconds: Date().timeIntervalSince(started),
             timedOut: timedOut,
             terminatingSignal: terminatingSignal,
-            stalled: stalled
+            stalled: stalled,
+            outputComplete: drainOutcome == .success
         )
     }
 
