@@ -120,7 +120,17 @@ enum ToolchainProbe {
                 // waiting longer will not make it answer.
                 timeoutSeconds: 30
             )
-            guard result.succeeded else { return nil }
+            // `outputComplete` gets the identical fail-closed treatment as
+            // `succeeded`: every value this feeds (`swiftVersion`,
+            // `xcodeVersion`, `buildSDKIdentity` via the SDK/build-version
+            // probes below) is cache-identity-relevant, and a truncated
+            // capture can read as a plausible-but-wrong version string just
+            // as easily as a merely-failed probe reads as "unknown" — see
+            // `ProcessResult.outputComplete`'s own doc comment for the real
+            // incident (a non-zero exit reaching its caller with output
+            // silently missing) this guards the identical class of mistake
+            // against here.
+            guard result.succeeded, result.outputComplete else { return nil }
             return String(decoding: result.standardOutput, as: UTF8.self)
                 .split(separator: "\n")
                 .first

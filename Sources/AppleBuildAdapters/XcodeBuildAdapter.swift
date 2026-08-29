@@ -714,11 +714,11 @@ extension XcodeBuildAdapter: TestAdapter {
                 result = nil
             }
             if let result, !result.succeeded {
-                report(Self.uninstallFailureWarning(
-                    bundleID: bundleID, udid: lease.device.udid,
-                    detail: OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                ))
+                // See `ProcessResult.outputComplete`: truncated output on a real failure must say so, not report an empty detail.
+                let detail = result.outputComplete
+                    ? OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400).trimmingCharacters(in: .whitespacesAndNewlines)
+                    : "subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"
+                report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: detail))
             }
         }
     }

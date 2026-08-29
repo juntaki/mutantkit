@@ -59,6 +59,30 @@ enum BuildClassifier {
             )
         }
 
+        // Checked before any marker/diagnostic search below: those searches
+        // treat "the marker is absent" as meaningful evidence ("not an
+        // infrastructure failure", "not a compiler error"), which only holds
+        // if `output` is actually everything the build wrote. Truncated
+        // output can omit the very diagnostic or marker that would have
+        // explained the failure, making a real compiler error read as an
+        // unattributable one, or worse, letting a truncated-but-coincidental
+        // string match invent a classification from partial evidence — see
+        // `ProcessResult.outputComplete`'s own doc comment for the real
+        // incident this guards against. `.infrastructure`, never
+        // `.compilationError`: this is a statement that the evidence cannot
+        // be trusted, not a claim that the mutated source is fine.
+        guard result.outputComplete else {
+            return BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                The build's output could not be fully captured before the subprocess exited, so the \
+                actual failure reason cannot be reliably determined. No mutant can be scored from this build.
+                """,
+                command: command,
+                output: redacted
+            )
+        }
+
         let haystack = output.lowercased()
 
         // Checked before compiler diagnostics: a failing build prints cascading

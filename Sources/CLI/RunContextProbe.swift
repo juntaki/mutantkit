@@ -38,6 +38,22 @@ enum RunContextProbeError: Error, CustomStringConvertible {
 /// and testable against fixtures, and only the CLI actually knows this is a
 /// git checkout.
 enum RunContextProbe {
+    /// Runs a subprocess and returns its result — the route every production
+    /// call below uses by default. Injectable (mirroring `SimulatorPool`'s
+    /// own `ProcessRunner` seam, for the identical reason) so a test can
+    /// substitute a real `ProcessResult` with `outputComplete == false`
+    /// without needing to reproduce that exact drain-timeout condition
+    /// against a real `git` invocation on every machine and every run.
+    typealias ProcessRunner = @Sendable (
+        _ executable: String, _ arguments: [String], _ workingDirectory: URL, _ timeoutSeconds: Double
+    ) async throws -> ProcessResult
+
+    private static let defaultProcessRunner: ProcessRunner = { executable, arguments, workingDirectory, timeoutSeconds in
+        try await ProcessSupervisor.run(
+            executable: executable, arguments: arguments, workingDirectory: workingDirectory, timeoutSeconds: timeoutSeconds
+        )
+    }
+
     /// Bumped whenever `ResultClassifier`'s outcome-producing logic changes
     /// in a way that could make a previously-checkpointed `MutationResult`
     /// wrong under the new rules — most recently when a scorable outcome
@@ -57,9 +73,10 @@ enum RunContextProbe {
         projectRoot: URL,
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
-        workUnitID: String
+        workUnitID: String,
+        processRunner: ProcessRunner = defaultProcessRunner
     ) async throws -> RunContextFingerprint {
-        let git = try await worktreeContentState(in: projectRoot)
+        let git = try await worktreeContentState(in: projectRoot, processRunner: processRunner)
 
         let components = [
             "classificationRulesVersion=\(classificationRulesVersion)",
@@ -118,9 +135,10 @@ enum RunContextProbe {
         projectRoot: URL,
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
-        purpose: String
+        purpose: String,
+        processRunner: ProcessRunner = defaultProcessRunner
     ) async throws -> String {
-        let worktree = try await worktreeContentState(in: projectRoot)
+        let worktree = try await worktreeContentState(in: projectRoot, processRunner: processRunner)
 
         // `execution.workers` bounds chunk/mutant-level *parallelism* only —
         // it has no bearing on what a baseline build produces, what per-test
@@ -211,7 +229,7 @@ enum RunContextProbe {
     /// changing the digest every run and silently defeating both caches.
     /// `.mutare/` is the prior tool name and is excluded for the same reason
     /// during any mixed-version transition.
-    static func worktreeContentState(in root: URL) async throws -> String {
+    static func worktreeContentState(in root: URL, processRunner: ProcessRunner = defaultProcessRunner) async throws -> String {
         // Both listings are made repository-root-relative and resolved
         // against the repository root, not against `root`. `git ls-files`
         // reports paths relative to the working directory while
@@ -219,14 +237,14 @@ enum RunContextProbe {
         // repository root, so without `--full-name` the two disagree the
         // moment the project root is a subdirectory of its repository —
         // and one of them would then be resolved against the wrong base.
-        let toplevel = URL(fileURLWithPath: try await run(["rev-parse", "--show-toplevel"], in: root))
+        let toplevel = URL(fileURLWithPath: try await run(["rev-parse", "--show-toplevel"], in: root, processRunner: processRunner))
 
         // `-z` on both: NUL-separated output is not C-quoted, so a path with
         // a quote, a newline or a non-ASCII byte in it arrives verbatim
         // instead of arriving escaped and needing to be unescaped correctly
         // to be compared correctly.
-        let tracked = try await runRaw(["ls-files", "--full-name", "-z"], in: root)
-        let status = try await runRaw(["status", "--porcelain=v1", "--untracked-files=all", "-z"], in: root)
+        let tracked = try await runRaw(["ls-files", "--full-name", "-z"], in: root, processRunner: processRunner)
+        let status = try await runRaw(["status", "--porcelain=v1", "--untracked-files=all", "-z"], in: root, processRunner: processRunner)
 
         var paths = Set<String>()
         // A path in a merge conflict is listed once per stage; the set
@@ -376,26 +394,39 @@ enum RunContextProbe {
     /// harmless — but a path may legitimately *end* in a space or a newline,
     /// and trimming the last record's trailing bytes would silently rename
     /// it. Splitting on NUL is the only framing this output has.
-    private static func runRaw(_ arguments: [String], in root: URL) async throws -> String {
-        String(decoding: try await runBytes(arguments, in: root), as: UTF8.self)
+    private static func runRaw(_ arguments: [String], in root: URL, processRunner: ProcessRunner) async throws -> String {
+        String(decoding: try await runBytes(arguments, in: root, processRunner: processRunner), as: UTF8.self)
     }
 
-    private static func run(_ arguments: [String], in root: URL) async throws -> String {
-        String(decoding: try await runBytes(arguments, in: root), as: UTF8.self)
+    private static func run(_ arguments: [String], in root: URL, processRunner: ProcessRunner) async throws -> String {
+        String(decoding: try await runBytes(arguments, in: root, processRunner: processRunner), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func runBytes(_ arguments: [String], in root: URL) async throws -> Data {
+    private static func runBytes(_ arguments: [String], in root: URL, processRunner: ProcessRunner) async throws -> Data {
         let result: ProcessResult
         do {
-            result = try await ProcessSupervisor.run(
-                executable: "/usr/bin/git",
-                arguments: arguments,
-                workingDirectory: root,
-                timeoutSeconds: 60
-            )
+            result = try await processRunner("/usr/bin/git", arguments, root, 60)
         } catch {
             throw RunContextProbeError.gitUnavailable("\(error)")
+        }
+        // Checked before `succeeded`, and just as fatal to trust when it exits
+        // 0: an exit code proves nothing about the bytes behind it unless the
+        // drain that captured them is known to have actually finished (see
+        // `ProcessResult.outputComplete`'s own doc comment for the real CI
+        // incident this closes — a non-zero `simctl` exit that reached its
+        // caller with an empty detail string, immediately contradicted by an
+        // identical, fully-captured failure on the very next call). A worktree
+        // digest built from truncated `git` output could look complete and
+        // still silently omit files, which is exactly the false-cache-hit
+        // shape this probe exists to rule out — so incomplete output is
+        // routed into the identical fail-closed path a failed subprocess
+        // already uses, rather than trusted just because the exit succeeded.
+        guard result.outputComplete else {
+            throw RunContextProbeError.gitUnavailable(
+                "git \(arguments.joined(separator: " ")) exited (status \(result.exitCode)) but its output could not be " +
+                    "fully captured before the subprocess ended"
+            )
         }
         guard result.succeeded else {
             throw RunContextProbeError.gitUnavailable(
