@@ -150,9 +150,29 @@ mkdir -p .claude/skills/mutantkit
 cp skills/mutantkit/SKILL.md .claude/skills/mutantkit/SKILL.md
 ```
 
-**Codex CLI**: Codex reads `AGENTS.md` automatically from the project root
-(and parent directories). Fold the skill's contents in directly, or keep it
-as a separate file and reference it:
+**Codex — plugin (recommended)**: this repo also carries a
+[`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) manifest — the
+distribution format ChatGPT and Codex share — whose `skills` field points at
+the same `./skills/` directory used above, so there is still only one copy of
+`SKILL.md`. Add this repo as a marketplace source from the Codex CLI:
+
+```bash
+codex plugin marketplace add juntaki/mutantkit
+```
+
+(`codex plugin marketplace list` / `upgrade` / `remove` manage sources the
+same way `claude plugin marketplace` does.) **Unconfirmed**: as of this
+writing, `codex plugin marketplace add` only registers the source — the
+Codex/ChatGPT docs describe *installing and enabling* a plugin as a ChatGPT
+desktop app action (Settings → Plugins Directory → pick the marketplace →
+install), not a CLI verb. If a `codex plugin install` (or equivalent) lands
+later, prefer it; until then, adding the marketplace from the CLI and
+finishing the install in the desktop app is the documented path.
+
+**Codex CLI — manual fallback (`AGENTS.md`)**: Codex also reads `AGENTS.md`
+automatically from the project root (and parent directories), independent of
+the plugin system above. Fold the skill's contents in directly, or keep it as
+a separate file and reference it:
 
 ```bash
 mkdir -p .codex   # if you keep project-local Codex config here
