@@ -99,19 +99,28 @@ jobs:
           # `mode: install` at all in the first place. `|| true` on `doctor`
           # was an earlier version of this test's own mistake: it proved
           # nothing beyond "the process exited," which a crash also does.
+          #
+          # Deliberately the *text* path, not `--json`: `mode: install` (this
+          # job's matrix) can install any published release, and `doctor
+          # --json` is itself part of the same P9-P12 CLI work `gate --json`/
+          # `run --also-report` came from — it does not exist on `v0.2.0`
+          # (confirmed: `mutantkit doctor --json` there exits 64,
+          # ArgumentParser's own "unknown option," not this tool's
+          # `operationalError`). The text path's exit code and prose have
+          # been stable since this tool's first commit.
           set +e
-          doctor_json="$(mutantkit doctor --json 2>/tmp/doctor.stderr)"
+          doctor_output="$(mutantkit doctor 2>&1)"
           doctor_exit=$?
           set -e
-          echo "$doctor_json"
+          echo "$doctor_output"
           if [ "$doctor_exit" != "1" ]; then
-            echo "::error::expected mutantkit doctor --json to exit 1 (MutantKitExit.operationalError) on an empty directory, got $doctor_exit" >&2
+            echo "::error::expected mutantkit doctor to exit 1 (MutantKitExit.operationalError) on an empty directory, got $doctor_exit" >&2
             exit 1
           fi
-          echo "$doctor_json" | jq -e '.canProceed == false' >/dev/null \
-            || { echo "::error::expected canProceed == false"; exit 1; }
-          echo "$doctor_json" | jq -e '[.items[].code] | contains(["projectResolutionFailed"])' >/dev/null \
-            || { echo "::error::expected a projectResolutionFailed diagnosis item"; exit 1; }
+          echo "$doctor_output" | grep -q 'No Swift project found' \
+            || { echo "::error::expected doctor's own 'No Swift project found' diagnosis"; exit 1; }
+          echo "$doctor_output" | grep -q 'Not ready' \
+            || { echo "::error::expected doctor's own 'Not ready' verdict line"; exit 1; }
 
           # The actual proof this job exists for: mode: install must never
           # itself have run doctor/plan/run — no artifact of a campaign
@@ -302,12 +311,25 @@ jobs:
             || { echo "::error::expected gate to pass against this fixture's known-good baseline"; exit 1; }
           echo "::endgroup::"
 
-          echo "::group::\$GITHUB_STEP_SUMMARY"
-          test -s "$GITHUB_STEP_SUMMARY" || { echo "::error::no job summary was written"; exit 1; }
-          cat "$GITHUB_STEP_SUMMARY"
-          grep -q ':white_check_mark: Mutation quality gate passed' "$GITHUB_STEP_SUMMARY" \
+          echo "::group::job summary"
+          # NOT `test -s "$GITHUB_STEP_SUMMARY"`: that env var names a fresh
+          # temp file *per step* (GitHub concatenates every step's own file
+          # into one Job Summary in the UI afterward) — this step's own copy
+          # of it was never written to, only the composite action's internal
+          # "Write job summary" step's own copy was, and that file is gone
+          # once its step ends. What IS still on disk and shared across
+          # steps is gate-result.json/.mutantkit/summary.md — re-running the
+          # exact same summarize-gate.sh against them here re-proves the
+          # composite step's own rendering, against this real pipeline's
+          # real output, without depending on cross-step $GITHUB_STEP_SUMMARY
+          # sharing that GitHub Actions does not provide.
+          local_summary="$RUNNER_TEMP/reproduced-job-summary.md"
+          : > "$local_summary"
+          GITHUB_STEP_SUMMARY="$local_summary" mutantkit-src/Scripts/action/summarize-gate.sh gate-result.json .mutantkit/summary.md
+          cat "$local_summary"
+          grep -q ':white_check_mark: Mutation quality gate passed' "$local_summary" \
             || { echo "::error::job summary is missing the expected pass banner"; exit 1; }
-          grep -qi 'mutation' "$GITHUB_STEP_SUMMARY" \
+          grep -qi 'mutation' "$local_summary" \
             || { echo "::error::job summary is missing CISummaryReporter's own section (summary.md was not folded in)"; exit 1; }
           echo "::endgroup::"
 
@@ -400,10 +422,21 @@ jobs:
           jq -e '.violations | length > 0' gate-result.json >/dev/null \
             || { echo "::error::expected at least one violation"; exit 1; }
 
-          test -s "$GITHUB_STEP_SUMMARY"
-          grep -q ':x: Mutation quality gate failed' "$GITHUB_STEP_SUMMARY" \
-            || { echo "::error::job summary is missing the expected failure banner"; cat "$GITHUB_STEP_SUMMARY"; exit 1; }
-          grep -q 'effectiveScore' "$GITHUB_STEP_SUMMARY" \
+          # NOT `$GITHUB_STEP_SUMMARY` directly: it is a fresh per-step temp
+          # file (see the happy-path job's own comment on this) — the
+          # composite action's internal "Write job summary" step wrote to
+          # its own copy, already gone by the time this sibling step runs.
+          # Re-running the real summarize-gate.sh against the real
+          # gate-result.json this pipeline produced re-proves the same
+          # rendering without relying on cross-step file sharing GitHub
+          # Actions does not provide.
+          local_summary="$RUNNER_TEMP/reproduced-job-summary.md"
+          : > "$local_summary"
+          GITHUB_STEP_SUMMARY="$local_summary" mutantkit-src/Scripts/action/summarize-gate.sh gate-result.json
+          cat "$local_summary"
+          grep -q ':x: Mutation quality gate failed' "$local_summary" \
+            || { echo "::error::job summary is missing the expected failure banner"; exit 1; }
+          grep -q 'effectiveScore' "$local_summary" \
             || { echo "::error::job summary did not list the effectiveScore violation"; exit 1; }
 
       - name: Artifacts must still be uploaded on a failing gate
