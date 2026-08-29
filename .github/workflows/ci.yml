@@ -219,6 +219,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # SwiftPM re-clones swift-argument-parser/swift-syntax/Yams and
+      # re-resolves their versions from scratch on every job today -- no
+      # caching existed anywhere before this. These are immutable dependency
+      # snapshots once resolved, so caching them by Package.resolved's own
+      # hash is safe: a version change naturally busts the key. This same
+      # block is repeated (not shared via a composite action, to keep this
+      # single-file workflow's diff obvious) on every job here that actually
+      # builds, and on codeql.yml's own build step.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         shell: bash
         run: |
@@ -368,6 +386,16 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         shell: bash
         run: |
@@ -659,6 +687,16 @@ jobs:
       matrix: ${{ fromJSON(needs.route.outputs.acceptance_matrix) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         run: swift --version && xcodebuild -version
 
@@ -727,6 +765,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the schemata runtime static library
@@ -784,6 +832,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the macOS schemata runtime static library (this suite's negative control)
