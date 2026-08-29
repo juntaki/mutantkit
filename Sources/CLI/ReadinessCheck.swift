@@ -23,7 +23,7 @@ enum ReadinessCheck {
     static func run(root: URL, configPath: String?, skipBuild: Bool) async -> Outcome {
         let (configuration, configStatus) = loadConfiguration(configPath: configPath, root: root)
 
-        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root)
+        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root).fingerprint
         var items: [DiagnosisItem] = []
         if let configStatus {
             items.append(configStatus)

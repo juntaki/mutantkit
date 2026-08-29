@@ -668,8 +668,7 @@ extension XcodeBuildAdapter: TestAdapter {
     /// both are the fully-expected, ordinary case this method exists to
     /// handle silently. That means a *non-zero* exit here is never the
     /// ordinary case — it is always a real failure (a busy device, a
-    /// transient CoreSimulator fault, the same class of flake
-    /// `SimulatorPool.prepare`'s own retry logic exists to absorb
+    /// transient CoreSimulator fault, the same class of flake `SimulatorPool.prepare`'s own retry logic exists to absorb
     /// elsewhere), and swallowing it via a bare `try?` (as this method did
     /// before) discarded that fact entirely, with no diagnostic reaching
     /// anyone — a real asymmetry against how this codebase treats the
@@ -682,8 +681,7 @@ extension XcodeBuildAdapter: TestAdapter {
     /// all. Surfaced here as an observable, logged fact (stderr, mirroring
     /// `MutationRunner`'s own established convention for an infrastructure
     /// hiccup that must not vanish silently) rather than fixed outright:
-    /// confirming or refuting the actual correlation needs a real
-    /// Xcode/iOS-Simulator schemata timeout fixture run repeatedly under
+    /// confirming or refuting the actual correlation needs a real Xcode/iOS-Simulator schemata timeout fixture run repeatedly under
     /// load, which is its own, larger, not-yet-scheduled piece of work.
     /// `report` is a seam, not a production knob: every real caller uses the
     /// default (a real `FileHandle.standardError.write`), and
@@ -695,30 +693,32 @@ extension XcodeBuildAdapter: TestAdapter {
     /// to call this directly, bypassing the full `leaseAndRunTests` path
     /// that would otherwise require a real build and a real lease to reach
     /// it at all.
+    /// `processRunner`: `AdapterSupport.swift`'s `ProcessRunner` seam, letting a test force `outputComplete == false` deterministically.
     func uninstallStaleApp(
         artifact: BuildArtifact, from lease: SimulatorLease,
-        report: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) }
+        report: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) },
+        processRunner: ProcessRunner = defaultProcessRunner
     ) async {
         guard let xctestrun = artifact.xctestrunPath else { return }
         for bundleID in Self.bundleIdentifiers(inXCTestRun: xctestrun) {
             let result: ProcessResult?
             do {
-                result = try await ProcessSupervisor.run(
-                    executable: ToolPaths.xcrun,
-                    arguments: ["simctl", "uninstall", lease.device.udid, bundleID],
-                    workingDirectory: FileManager.default.temporaryDirectory,
-                    timeoutSeconds: 30
+                result = try await processRunner(
+                    ToolPaths.xcrun,
+                    ["simctl", "uninstall", lease.device.udid, bundleID],
+                    FileManager.default.temporaryDirectory,
+                    30
                 )
             } catch {
                 report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: "\(error)"))
                 result = nil
             }
             if let result, !result.succeeded {
-                report(Self.uninstallFailureWarning(
-                    bundleID: bundleID, udid: lease.device.udid,
-                    detail: OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                ))
+                // See `ProcessResult.outputComplete`: truncated output on a real failure must say so, not report an empty detail.
+                let detail = result.outputComplete
+                    ? OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400).trimmingCharacters(in: .whitespacesAndNewlines)
+                    : "subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"
+                report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: detail))
             }
         }
     }

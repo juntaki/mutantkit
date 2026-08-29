@@ -94,7 +94,99 @@ struct XcodeBuildAdapterUninstallFailureTests {
         #expect(reported.count == 1)
         #expect(message.contains(Self.bundleID))
         #expect(message.contains(Self.bogusUDID))
-        #expect(message.localizedCaseInsensitiveContains("invalid device"), "expected the real simctl error text to be preserved: \(message)")
+        // Ordinarily `simctl`'s real "Invalid device: ..." text is captured
+        // in full and preserved verbatim. On the rare real-CI occasion where
+        // `ProcessSupervisor`'s bounded post-exit drain wait cannot confirm
+        // stdout/stderr were fully read before this exit was observed
+        // (`ProcessResult.outputComplete == false` — a real, previously
+        // intermittent CI failure this exact assertion used to hit, because
+        // the detail string it was built from could silently be empty), the
+        // contract is instead that the diagnosis says so explicitly rather
+        // than reporting nothing useful — never a blank/empty detail either
+        // way. Both are real, meaningful, non-empty outcomes; the assertion
+        // below is precise about which two, not merely "is non-empty".
+        #expect(
+            message.localizedCaseInsensitiveContains("invalid device")
+                || message.localizedCaseInsensitiveContains("subprocess output incomplete"),
+            "expected either the real simctl error text or an explicit incomplete-output diagnosis, got: \(message)"
+        )
+    }
+
+    /// The direct counterpart to `realUninstallFailureIsReported`'s loosened
+    /// assertion above: rather than accepting either outcome depending on
+    /// real CI timing, this forces `ProcessResult.outputComplete == false`
+    /// deterministically via the injected `processRunner` seam and pins the
+    /// exact diagnosis text a truncated capture must produce.
+    @Test("An incomplete-but-failed simctl result is reported with the exact 'subprocess output incomplete' diagnosis")
+    func incompleteOutputProducesTheExactDiagnosis() async throws {
+        let xctestrun = try makeXCTestRun()
+        defer { try? FileManager.default.removeItem(at: xctestrun) }
+
+        var reported: [String] = []
+        await adapter().uninstallStaleApp(
+            artifact: artifact(xctestrunPath: xctestrun),
+            from: lease(udid: Self.bogusUDID),
+            report: { reported.append($0) },
+            processRunner: { _, _, _, _ in
+                ProcessResult(
+                    exitCode: 148,
+                    standardOutput: Data(),
+                    standardError: Data(),
+                    durationSeconds: 1,
+                    timedOut: false,
+                    terminatingSignal: nil,
+                    outputComplete: false
+                )
+            }
+        )
+
+        let message = try #require(reported.first)
+        #expect(reported.count == 1)
+        #expect(message.contains(Self.bundleID))
+        #expect(message.contains(Self.bogusUDID))
+        #expect(message.contains("subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"))
+    }
+
+    /// The differential-pair counterpart to
+    /// `incompleteOutputProducesTheExactDiagnosis` above: forces
+    /// `ProcessResult.outputComplete == true` with real, specific
+    /// `combinedOutput` content through the identical injected
+    /// `processRunner` seam, and pins that the diagnosis reports *that*
+    /// content — never the incomplete-output message. Without this,
+    /// `incompleteOutputProducesTheExactDiagnosis` alone could not
+    /// distinguish the real fix from a hypothetical implementation that
+    /// always reports the incomplete-output message regardless of
+    /// `outputComplete`; only having both prove the `true`/`false` branches
+    /// are genuinely distinguished.
+    @Test("A complete-but-failed simctl result is reported with the real captured detail, never the incomplete-output diagnosis")
+    func completeOutputProducesTheRealDetail() async throws {
+        let xctestrun = try makeXCTestRun()
+        defer { try? FileManager.default.removeItem(at: xctestrun) }
+
+        var reported: [String] = []
+        await adapter().uninstallStaleApp(
+            artifact: artifact(xctestrunPath: xctestrun),
+            from: lease(udid: Self.bogusUDID),
+            report: { reported.append($0) },
+            processRunner: { _, _, _, _ in
+                ProcessResult(
+                    exitCode: 148,
+                    standardOutput: Data(),
+                    standardError: Data("Invalid device: \(Self.bogusUDID)".utf8),
+                    durationSeconds: 1,
+                    timedOut: false,
+                    terminatingSignal: nil,
+                    outputComplete: true
+                )
+            }
+        )
+
+        let message = try #require(reported.first)
+        #expect(reported.count == 1)
+        #expect(message.contains(Self.bundleID))
+        #expect(message.contains(Self.bogusUDID))
+        #expect(message.contains("Invalid device: \(Self.bogusUDID)"))
+        #expect(!message.contains("subprocess output incomplete"))
     }
 
     @Test("A build with no .xctestrun reports nothing and returns immediately")

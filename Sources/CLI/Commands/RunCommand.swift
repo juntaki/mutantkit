@@ -669,9 +669,10 @@ extension RunCommand {
         root: URL, settings: Configuration, loadedPlan: MutationPlan,
         resolution: AppleAdapterFactory.Resolution, runDirectory: URL, noResume: Bool
     ) async -> RunExecutionContext {
-        let toolchain = await ToolchainProbe.fingerprint(
+        let toolchainProbe = await ToolchainProbe.fingerprint(
             workingDirectory: root, resolvedDestination: (resolution.adapter as? XcodeBuildProjectAdapter)?.resolvedDestination
         )
+        let toolchain = toolchainProbe.fingerprint
 
         for issue in PlanCompatibilityValidator.check(loadedPlan, against: settings, toolchain: toolchain) {
             print(issue.description)
@@ -692,7 +693,8 @@ extension RunCommand {
                 projectRoot: root,
                 configuration: settings,
                 toolchain: toolchain,
-                workUnitID: loadedPlan.workUnitID
+                workUnitID: loadedPlan.workUnitID,
+                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
             )
         } catch {
             print("\(error)")
@@ -729,7 +731,8 @@ extension RunCommand {
         let coverageCacheKey: CoverageProfileCache.Key?
         do {
             let digest = try await RunContextProbe.computeContextDigest(
-                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache"
+                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache",
+                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
             )
             coverageCacheKey = CoverageProfileCache.Key(contextDigest: digest)
         } catch {
@@ -789,7 +792,8 @@ extension RunCommand {
                     projectRoot: root,
                     configuration: settings,
                     toolchain: toolchain,
-                    purpose: "resultCache2"
+                    purpose: "resultCache2",
+                    toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
                 )
             } catch {
                 // Deliberately not printed a second time. This digest and the
