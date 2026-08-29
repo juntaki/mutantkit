@@ -68,8 +68,10 @@ struct GateCommand: ParsableCommand {
     }
 
     private func decode(reportPath: String) throws -> RunReport {
-        let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
-        return try MutationPlan.decoder().decode(RunReport.self, from: data)
+        try MutantKitExit.onFailure {
+            let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
+            return try MutationPlan.decoder().decode(RunReport.self, from: data)
+        }
     }
 
     /// `gate` tolerates having no `mutantkit.yml` at all (CLI flags alone are

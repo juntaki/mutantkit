@@ -42,7 +42,7 @@ struct ReproduceCommand: AsyncParsableCommand {
 
         try ConfigurationPreflight.run(settings)
 
-        let loadedPlan = try MutationPlan.decode(from: Data(contentsOf: URL(fileURLWithPath: plan)))
+        let loadedPlan = try loadPlan()
         let id = MutationID(rawValue: mutationID)
 
         guard let point = loadedPlan.mutations.first(where: { $0.id == id }) else {
@@ -215,5 +215,17 @@ struct ReproduceCommand: AsyncParsableCommand {
 
         Sandbox kept at \(sandbox.path)
         """)
+    }
+
+    /// Pulled out of `run()` purely to keep that function under this
+    /// project's `function_body_length` limit — `MutantKitExit.onFailure`
+    /// is what actually matters here: a malformed or unreadable plan file
+    /// must exit with `MutantKitExit.operationalError` explicitly, not
+    /// whatever `ArgumentParser`'s own default failure handling happens to
+    /// pick.
+    private func loadPlan() throws -> MutationPlan {
+        try MutantKitExit.onFailure {
+            try MutationPlan.decode(from: Data(contentsOf: URL(fileURLWithPath: plan)))
+        }
     }
 }

@@ -26,7 +26,9 @@ struct VerifyCommand: AsyncParsableCommand {
 
     func run() async throws {
         let root = common.resolvedProjectRoot
-        let loadedPlan = try MutationPlan.decode(from: Data(contentsOf: URL(fileURLWithPath: plan)))
+        let loadedPlan = try MutantKitExit.onFailure {
+            try MutationPlan.decode(from: Data(contentsOf: URL(fileURLWithPath: plan)))
+        }
 
         print("Verifying plan \(loadedPlan.planID) — \(loadedPlan.mutations.count) mutation(s)\n")
 

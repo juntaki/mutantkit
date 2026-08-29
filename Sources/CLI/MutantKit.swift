@@ -60,6 +60,27 @@ enum MutantKitExit {
     static let survivorsFound: Int32 = 3
     /// A trusted report missed an explicit CI mutation-quality threshold.
     static let qualityGateFailure: Int32 = 4
+
+    /// Runs `body`, mapping any error it throws — other than one that
+    /// already carries its own deliberate exit code (`ExitCode`) — to
+    /// `operationalError`, explicitly. A JSON decode failure, a
+    /// `ConfigurationLoader` error, or plain file I/O reaching this point
+    /// would otherwise propagate unmapped and fall through to
+    /// `ArgumentParser`'s own default failure exit code, which today
+    /// happens to equal `operationalError` only by coincidence, not by
+    /// design — this tool's exit codes are a stable, deliberate API (see
+    /// this enum's own doc comment), and every path that reaches one should
+    /// say so on purpose rather than by accident.
+    static func onFailure<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let exitCode as ExitCode {
+            throw exitCode
+        } catch {
+            FileHandle.standardError.write(Data("Error: \(error)\n".utf8))
+            throw ExitCode(operationalError)
+        }
+    }
 }
 
 // MARK: - Shared options
@@ -106,9 +127,14 @@ struct OverrideOptions: ParsableArguments {
         if let maxMutants { configuration.execution.budget.maxMutants = maxMutants }
         if let profile {
             guard let parsed = OperatorProfile(rawValue: profile) else {
-                throw ValidationError(
-                    "Unknown operator profile '\(profile)'. Expected: conservative, default, experimental."
-                )
+                // Bad input, not a usage-syntax error `ArgumentParser`'s own
+                // `ValidationError` (exit 64) would suggest: every other bad-
+                // input case in the commands that reach here already throws
+                // `MutantKitExit.operationalError` explicitly, and this one
+                // should be no different (see the CLI's own exit-code
+                // contract, `MutantKitExit`).
+                print("Unknown operator profile '\(profile)'. Expected: conservative, default, experimental.")
+                throw ExitCode(MutantKitExit.operationalError)
             }
             configuration.operators.profile = parsed
         }
