@@ -694,7 +694,7 @@ extension RunCommand {
                 configuration: settings,
                 toolchain: toolchain,
                 workUnitID: loadedPlan.workUnitID,
-                toolchainCacheIdentityComplete: toolchainProbe.cacheIdentityComplete
+                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
             )
         } catch {
             print("\(error)")
@@ -732,7 +732,7 @@ extension RunCommand {
         do {
             let digest = try await RunContextProbe.computeContextDigest(
                 projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache",
-                toolchainCacheIdentityComplete: toolchainProbe.cacheIdentityComplete
+                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
             )
             coverageCacheKey = CoverageProfileCache.Key(contextDigest: digest)
         } catch {
@@ -793,7 +793,7 @@ extension RunCommand {
                     configuration: settings,
                     toolchain: toolchain,
                     purpose: "resultCache2",
-                    toolchainCacheIdentityComplete: toolchainProbe.cacheIdentityComplete
+                    toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
                 )
             } catch {
                 // Deliberately not printed a second time. This digest and the

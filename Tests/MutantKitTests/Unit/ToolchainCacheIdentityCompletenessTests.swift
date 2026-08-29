@@ -17,7 +17,7 @@ import Testing
 /// (unlike `RunContextProbe`'s `git` calls), so this exercises the seam
 /// `ToolchainProbe`'s own incompleteness actually flows through: the
 /// `toolchainCacheIdentityComplete` flag `RunCommand` threads from
-/// `ToolchainProbeResult.cacheIdentityComplete` into `RunContextProbe
+/// `ToolchainProbeResult.identityEvidenceComplete` into `RunContextProbe
 /// .compute`/`.computeContextDigest`. The `false` here is a deliberately
 /// hand-constructed stand-in for what a real incomplete `ToolchainProbe`
 /// subprocess produces — labeled as such, not offered as a substitute for

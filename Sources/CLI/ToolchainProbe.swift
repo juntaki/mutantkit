@@ -15,36 +15,46 @@ import MutationModel
 ///
 /// `fingerprint` alone is never enough to decide whether the *values*
 /// inside it are safe to hash into a cache key: a genuinely unreadable
-/// toolchain (no `swift` on `PATH`, a non-zero `xcodebuild -version`) and a
-/// truncated-but-successful probe (`ProcessResult.outputComplete == false`)
-/// can both leave a field `nil` or "unknown", but only the first is a
-/// reproducible fact about *this machine* — the second is evidence that was
-/// lost, which could just as easily have been a different, real value on a
-/// re-run or on a different machine. Two machines with genuinely different
-/// toolchains, each hitting an incomplete probe on a different field, must
-/// not be able to collapse onto the identical cache identity just because
-/// both fields read "unknown" — see `cacheIdentityComplete` below.
+/// toolchain (no `swift` on `PATH`) and a probe that could not be trusted
+/// (`ProcessResult.outputComplete == false`, a timeout, a signal, a thrown
+/// launch error, or an exit-0 run that printed nothing parseable) can both
+/// leave a field `nil` or "unknown", but only the first is a reproducible
+/// fact about *this machine* — the second is evidence that was lost or
+/// never actually gathered, which could just as easily have been a
+/// different, real value on a re-run or on a different machine. Two
+/// machines with genuinely different toolchains, each hitting an
+/// untrustworthy probe on a different field, must not be able to collapse
+/// onto the identical cache identity just because both fields read
+/// "unknown" — see `identityEvidenceComplete` below.
 struct ToolchainProbeResult: Sendable {
     let fingerprint: ToolchainFingerprint
     /// `false` when any subprocess this probe ran to build `fingerprint`
-    /// exited successfully but could not be proven fully read
-    /// (`ProcessResult.outputComplete == false`) before this result was
-    /// built. Never set by a probe that is simply *unavailable* (missing
-    /// executable, non-zero exit, threw) — that is a legitimate,
-    /// reproducible "unknown" on this machine, not lost evidence, and
-    /// already handled by `fingerprint`'s own `nil`/"unknown" fields.
+    /// either could not be proven fully read (`ProcessResult
+    /// .outputComplete == false`) or ran but could not be trusted as proof
+    /// of anything — timed out, was signalled, threw launching, or exited
+    /// successfully with no parseable version string
+    /// (`VersionProbeOutcome.probeFailed`) — before this result was built.
+    /// Never set by a probe that found a genuinely reproducible absence
+    /// (`VersionProbeOutcome.notPresent`: the executable simply is not on
+    /// this machine) — that is a legitimate, reproducible "unknown" on this
+    /// machine, not lost evidence, and already handled by `fingerprint`'s
+    /// own `nil`/"unknown" fields.
     ///
-    /// A caller computing a cache key from `fingerprint` must treat `false`
-    /// here exactly like `RunContextProbe`'s own git-output incompleteness
-    /// guard: refuse to trust the resulting digest rather than hash a value
-    /// that might silently be wrong.
-    let cacheIdentityComplete: Bool
+    /// Despite the name, this is no longer only a cache-identity concern:
+    /// `PlanCommand`/`VerifyCommand` also read it to decide whether a
+    /// toolchain identity is under-evidenced before writing a plan or
+    /// claiming a compatibility match. A caller computing a cache key from
+    /// `fingerprint` must still treat `false` here exactly like
+    /// `RunContextProbe`'s own git-output incompleteness guard: refuse to
+    /// trust the resulting digest rather than hash a value that might
+    /// silently be wrong.
+    let identityEvidenceComplete: Bool
 }
 
 enum ToolchainProbe {
     /// What a single version-string subprocess probe (`swift --version`,
     /// `xcodebuild -version`, `xcrun --show-sdk-version`/`--show-sdk-build-
-    /// version`) actually found. Internal, not `private`: `combinedCacheIdentityComplete`
+    /// version`) actually found. Internal, not `private`: `combinedIdentityEvidenceComplete`
     /// below is unit-tested directly against real outcome values
     /// (`ToolchainProbeCombinedCompletenessTests`), which needs to
     /// construct them from another file.
@@ -52,18 +62,34 @@ enum ToolchainProbe {
         /// The subprocess ran, exited successfully, and its output was
         /// proven fully captured.
         case value(String)
-        /// The executable is missing, the subprocess could not be
-        /// launched, or it exited non-zero — a genuinely unreadable
-        /// toolchain on this machine, recorded as "unknown" exactly as
-        /// before this type existed. Reproducible: re-running the identical
-        /// probe on the identical machine reports the identical outcome.
-        case unavailable
+        /// The executable simply is not on this machine (`FileManager
+        /// .isExecutableFile` found nothing at the fixed path) — a clean,
+        /// ENOENT-style absence, recorded as "unknown" exactly as before
+        /// this type existed. Reproducible: re-running the identical probe
+        /// on the identical machine reports the identical outcome, because
+        /// nothing was ever launched that could time out, be signalled, or
+        /// answer differently on a retry.
+        case notPresent
+        /// The subprocess was launched but its outcome proves nothing
+        /// reproducible about this machine: it could not be spawned, it
+        /// timed out, it died to a signal, it exited non-zero, or it
+        /// exited `0` with no parseable version line. Every one of these is
+        /// a fact about *this run of the probe*, not a stable fact about
+        /// the machine — the identical probe on the identical, unchanged
+        /// machine could easily answer differently next time (Xcode exists
+        /// but `xcodebuild -version` happened to time out once). Must be
+        /// treated exactly like `.incomplete` for identity-evidence
+        /// purposes: collapsing it into "unknown" the same way
+        /// `.notPresent` is would let a merely-unlucky probe hash
+        /// identically to a machine with no toolchain at all, or to a
+        /// different failed probe on a genuinely different machine.
+        case probeFailed
         /// The subprocess exited successfully but `ProcessResult
         /// .outputComplete` was `false` — evidence that was lost, not a
         /// fact about the machine. Must never be treated as either a real
-        /// value or a plain `.unavailable`: collapsing it into "unknown"
-        /// the same way `.unavailable` is would let a truncated capture
-        /// hash identically to a machine with no toolchain at all, or to a
+        /// value or `.notPresent`: collapsing it into "unknown" the same
+        /// way `.notPresent` is would let a truncated capture hash
+        /// identically to a machine with no toolchain at all, or to a
         /// different truncated capture on a genuinely different machine —
         /// the exact false-cache-hit shape this type exists to close.
         case incomplete
@@ -73,20 +99,27 @@ enum ToolchainProbe {
             return nil
         }
 
-        var isIncomplete: Bool {
-            if case .incomplete = self { return true }
-            return false
+        /// Whether this outcome must veto identity-evidence completeness —
+        /// true for both `.incomplete` (evidence lost after a successful
+        /// exit) and `.probeFailed` (no reproducible fact was ever
+        /// established). `.notPresent` and `.value` never veto: both are
+        /// stable, reproducible outcomes safe to hash.
+        var vetoesIdentityEvidence: Bool {
+            switch self {
+            case .incomplete, .probeFailed: true
+            case .value, .notPresent: false
+            }
         }
     }
 
     /// Whether a set of version-probe outcomes are all safe to treat as part
-    /// of a reproducible cache identity: `true` only when *none* of them is
-    /// `.incomplete` — see `VersionProbeOutcome.incomplete`'s own doc comment
-    /// for why a single incomplete probe (even just the SDK's build-number
-    /// half, with its paired version probe fine) must veto the whole cache
-    /// identity, not just the field it belongs to. `.unavailable` never
-    /// vetoes anything here: it is a genuine, reproducible fact about the
-    /// machine, not lost evidence.
+    /// of a reproducible identity: `true` only when *none* of them
+    /// `.vetoesIdentityEvidence` — see `VersionProbeOutcome`'s own doc
+    /// comments for why a single incomplete-or-failed probe (even just the
+    /// SDK's build-number half, with its paired version probe fine) must
+    /// veto the whole identity, not just the field it belongs to.
+    /// `.notPresent` never vetoes anything here: it is a genuine,
+    /// reproducible fact about the machine, not lost or unproven evidence.
     ///
     /// Split out of `fingerprint`/`buildSDKIdentity`'s own inline boolean
     /// logic purely so it can be pinned by a direct, no-subprocess unit test
@@ -95,8 +128,8 @@ enum ToolchainProbe {
     /// it should have produced — mirrors `ProcessSupervisor
     /// .classify(readResult:errno:)`'s own reason for existing as a
     /// standalone function.
-    static func combinedCacheIdentityComplete(_ outcomes: VersionProbeOutcome...) -> Bool {
-        !outcomes.contains { $0.isIncomplete }
+    static func combinedIdentityEvidenceComplete(_ outcomes: VersionProbeOutcome...) -> Bool {
+        !outcomes.contains { $0.vetoesIdentityEvidence }
     }
 
     /// `resolvedDestination`: the run's own already-resolved destination
@@ -143,7 +176,7 @@ enum ToolchainProbe {
 
         return ToolchainProbeResult(
             fingerprint: fingerprint,
-            cacheIdentityComplete: Self.combinedCacheIdentityComplete(swift, xcode) && sdkResult.complete
+            identityEvidenceComplete: Self.combinedIdentityEvidenceComplete(swift, xcode) && sdkResult.complete
         )
     }
 
@@ -158,14 +191,14 @@ enum ToolchainProbe {
     /// linking purpose.
     /// `complete` is `true` whenever there was nothing to probe at all (no
     /// destination, an unmodeled platform, the Catalyst-variant carve-out)
-    /// or every probe actually run was `.value`/`.unavailable` — never
-    /// `.incomplete`. `false` the moment either the version *or* the build-
-    /// number probe comes back `.incomplete`: a truncated build-number
-    /// capture must not be allowed to silently degrade `identity` to a
-    /// coarser-but-plausible-looking string (missing only its `(build)`
-    /// suffix) the way an `.unavailable` build probe legitimately does —
-    /// that string would still get hashed into a cache key as if it were
-    /// the whole, real SDK identity.
+    /// or every probe actually run was `.value`/`.notPresent` — never
+    /// `.incomplete`/`.probeFailed`. `false` the moment either the version
+    /// *or* the build-number probe comes back `.incomplete`/`.probeFailed`:
+    /// a truncated or failed build-number capture must not be allowed to
+    /// silently degrade `identity` to a coarser-but-plausible-looking
+    /// string (missing only its `(build)` suffix) the way a `.notPresent`
+    /// build probe legitimately does — that string would still get hashed
+    /// into a cache key as if it were the whole, real SDK identity.
     private static func buildSDKIdentity(
         resolvedDestination: ResolvedDestination?, workingDirectory: URL
     ) async -> (identity: String?, complete: Bool) {
@@ -195,7 +228,7 @@ enum ToolchainProbe {
         let version = await versionOutcome
         let build = await buildOutcome
 
-        if !Self.combinedCacheIdentityComplete(version, build) {
+        if !Self.combinedIdentityEvidenceComplete(version, build) {
             // Never report a value alongside this: a version-probe-incomplete
             // case already fell through `guard let version` below as `nil`
             // before this type existed, and a build-probe-incomplete case
@@ -233,12 +266,21 @@ enum ToolchainProbe {
         }
     }
 
-    private static func firstLine(
+    /// Internal, not `private`: exercised directly by
+    /// `ToolchainProbeVersionOutcomeTests` against scripted executables this
+    /// suite controls, so the `.notPresent`/`.probeFailed`/`.incomplete`
+    /// split below can be pinned against a real subprocess without waiting
+    /// on `fingerprint`'s own hardcoded `/usr/bin/...` paths to fail in the
+    /// right way.
+    static func firstLine(
         of executable: String,
         arguments: [String],
         in workingDirectory: URL
     ) async -> VersionProbeOutcome {
-        guard FileManager.default.isExecutableFile(atPath: executable) else { return .unavailable }
+        // A clean, reproducible absence: nothing was ever launched, so
+        // nothing here can time out, be signalled, or answer differently on
+        // a retry.
+        guard FileManager.default.isExecutableFile(atPath: executable) else { return .notPresent }
 
         do {
             let result = try await ProcessSupervisor.run(
@@ -252,19 +294,28 @@ enum ToolchainProbe {
             // Checked before `succeeded`: an incomplete capture proves
             // nothing one way or the other about what the process actually
             // printed, so it gets its own outcome rather than being folded
-            // into "unavailable" — see `VersionProbeOutcome.incomplete`'s own
+            // into "probeFailed" — see `VersionProbeOutcome.incomplete`'s own
             // doc comment for why the two must stay distinguishable all the
-            // way up through `cacheIdentityComplete`.
+            // way up through `identityEvidenceComplete`.
             guard result.outputComplete else { return .incomplete }
-            guard result.succeeded else { return .unavailable }
+            // Non-zero exit, a timeout, and death by signal are all folded
+            // into `succeeded == false` here — none of them is a
+            // reproducible fact about this machine the way a missing
+            // executable is: the identical probe against the identical,
+            // unchanged toolchain could easily succeed on the very next
+            // run. See `VersionProbeOutcome.probeFailed`'s own doc comment.
+            guard result.succeeded else { return .probeFailed }
             guard let value = String(decoding: result.standardOutput, as: UTF8.self)
                 .split(separator: "\n")
                 .first
                 .map({ $0.trimmingCharacters(in: .whitespaces) })
-            else { return .unavailable }
+            else { return .probeFailed }
             return .value(value)
         } catch {
-            return .unavailable
+            // The executable exists (the guard above already confirmed
+            // that) but could not actually be launched/piped — a transient,
+            // unreproducible failure, not a clean absence.
+            return .probeFailed
         }
     }
 }

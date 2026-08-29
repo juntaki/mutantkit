@@ -9,7 +9,7 @@ enum RunContextProbeError: Error, CustomStringConvertible {
     /// (`swift --version`, `xcodebuild -version`, `xcrun --show-sdk-
     /// version`/`--show-sdk-build-version`) exited successfully but its
     /// output could not be proven fully captured — see
-    /// `ToolchainProbeResult.cacheIdentityComplete`'s own doc comment.
+    /// `ToolchainProbeResult.identityEvidenceComplete`'s own doc comment.
     /// Routed through the identical fail-closed path as `gitUnavailable`,
     /// for the identical reason: a truncated toolchain probe can read as a
     /// plausible-but-wrong version string just as easily as truncated `git`
@@ -102,7 +102,7 @@ enum RunContextProbe {
         // already knows its `toolchain` was built from an incomplete probe
         // gains nothing from computing a worktree digest just to discard it.
         // See `RunContextProbeError.incompleteToolchainIdentity` and
-        // `ToolchainProbeResult.cacheIdentityComplete`'s own doc comments —
+        // `ToolchainProbeResult.identityEvidenceComplete`'s own doc comments —
         // this is the identical fail-closed treatment `worktreeContentState`
         // below already gives a `git` invocation whose own output could not
         // be confirmed complete, applied to the other half of what this
