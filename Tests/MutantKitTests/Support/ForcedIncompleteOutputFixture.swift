@@ -57,7 +57,20 @@ enum ForcedIncompleteOutputFixture {
     static func run(
         partialOutput: String = "partial-output-before-drain-timeout\n",
         timeoutSeconds: Double = 30,
-        holderSleepSeconds: Double = 7
+        // Comfortably unbounded relative to `ProcessSupervisor`'s 5-second
+        // drain grace period, not merely longer than it: an earlier version
+        // of this fixture used 7s, which is only ~2s of margin over that
+        // 5s deadline — a scheduling delay of that size in starting the
+        // post-exit drain wait (plausible under real machine load) could let
+        // the holder finish and close its fd copy before the deadline fires,
+        // making the very condition this fixture exists to force
+        // non-deterministic. 60s leaves the deadline no realistic way to be
+        // outrun by scheduling jitter, and costs nothing in wall-clock time:
+        // every caller's own assertions run once `ProcessSupervisor.run`
+        // returns (bounded by its own 5s drain wait, not by this sleep), and
+        // the `defer` below SIGKILLs the holder the moment the test is done
+        // with it rather than letting it run out its sleep.
+        holderSleepSeconds: Double = 60
     ) async throws -> ProcessResult {
         let workDirectory = FileManager.default.temporaryDirectory
         let token = UUID().uuidString
