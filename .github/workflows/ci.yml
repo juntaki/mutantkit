@@ -830,7 +830,11 @@ jobs:
   # workflow's own scope; this job only guarantees the check exists and
   # means what its name says.
   merge-gate:
-    name: Full merge gate
+    # "Merge gate", not "Full merge gate": this check is meant to be the one
+    # required status for every PR, targeted runs included -- "Full" read as
+    # if it only applied to (or only passed on) a full-matrix run, which is
+    # not the design.
+    name: Merge gate
     runs-on: ubuntu-latest
     needs:
       - lint
@@ -848,38 +852,60 @@ jobs:
     # `failure`.
     if: always()
     steps:
-      - name: Confirm every gate job succeeded or was intentionally routed around
+      # Fail-closed, not "success|skipped accepted uniformly": that older
+      # form treated an UNEXPECTED skip (e.g. `lint` or `acceptance` never
+      # running at all, from a GitHub-side scheduling problem or a future
+      # accidental `if:` on a job that must always run) exactly the same as
+      # `route`'s own deliberate, intentional skip of `unit-system`/the
+      # schemata jobs on a narrowly-targeted run -- both looked like a
+      # harmless "skipped" to this job, so both passed the gate. This step
+      # instead derives the actual expected result for every dependency from
+      # `route`'s own real output before comparing, so this gate proves the
+      # execution plan `route` declared and what actually happened are the
+      # same thing, not merely that nothing outright failed.
+      - name: Confirm every job matches route's declared execution plan
         shell: bash
         run: |
           set -euo pipefail
+          run_full="${{ needs.route.outputs.run_full }}"
+          run_schemata_targeted="${{ needs.route.outputs.run_schemata_targeted }}"
           failed="false"
-          for entry in \
-            "lint:${{ needs.lint.result }}" \
-            "route:${{ needs.route.result }}" \
-            "unit-fast:${{ needs.unit-fast.result }}" \
-            "unit-system:${{ needs.unit-system.result }}" \
-            "acceptance:${{ needs.acceptance.result }}" \
-            "ror-schemata-differential:${{ needs.ror-schemata-differential.result }}" \
-            "ios-simulator-schemata-runtime:${{ needs.ios-simulator-schemata-runtime.result }}" \
-          ; do
-            name="${entry%%:*}"
-            result="${entry#*:}"
-            echo "$name -> $result"
-            # `skipped` is the expected, intended outcome for a job gated
-            # behind `route`'s own `if:` on a narrowly-targeted run (e.g.
-            # `unit-system` when only `cli-commands` was selected) -- never
-            # treated as a failure here. Anything else other than `success`
-            # (`failure`, `cancelled`, `timed_out`) fails this gate.
-            case "$result" in
-              success|skipped) ;;
-              *)
-                echo "::error::$name reported '$result', not success or an intentional skip"
-                failed="true"
-                ;;
-            esac
-          done
+
+          check() {
+            local name="$1" actual="$2" expected="$3"
+            echo "$name -> $actual (expected: $expected)"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$name reported '$actual', expected '$expected' per route's own execution plan (run_full=$run_full, run_schemata_targeted=$run_schemata_targeted)"
+              failed="true"
+            fi
+          }
+
+          # Always required to genuinely succeed -- route never skips any of
+          # these regardless of run_full/run_schemata_targeted, so a skip
+          # here is never intentional.
+          check "lint" "${{ needs.lint.result }}" "success"
+          check "route" "${{ needs.route.result }}" "success"
+          check "unit-fast" "${{ needs.unit-fast.result }}" "success"
+          check "acceptance" "${{ needs.acceptance.result }}" "success"
+
+          # Gated behind run_full -- route's own `if:` on these jobs.
+          if [ "$run_full" = "true" ]; then
+            check "unit-system" "${{ needs.unit-system.result }}" "success"
+          else
+            check "unit-system" "${{ needs.unit-system.result }}" "skipped"
+          fi
+
+          # Gated behind run_full OR run_schemata_targeted.
+          if [ "$run_full" = "true" ] || [ "$run_schemata_targeted" = "true" ]; then
+            check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}" "success"
+            check "ios-simulator-schemata-runtime" "${{ needs.ios-simulator-schemata-runtime.result }}" "success"
+          else
+            check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}" "skipped"
+            check "ios-simulator-schemata-runtime" "${{ needs.ios-simulator-schemata-runtime.result }}" "skipped"
+          fi
+
           if [ "$failed" = "true" ]; then
-            echo "::error::merge-gate: at least one required job did not succeed"
+            echo "::error::merge-gate: at least one job's actual result did not match route's declared execution plan"
             exit 1
           fi
-          echo "merge-gate: every required job succeeded or was intentionally routed around"
+          echo "merge-gate: every job's result matches route's declared execution plan exactly"
