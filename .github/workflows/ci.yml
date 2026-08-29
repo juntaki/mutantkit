@@ -4,6 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `labeled` added (default is only opened/synchronize/reopened) so a
+    # coordinator can apply `ci:full`/`ci:merge-ready` to an already-pushed
+    # HEAD and get a fresh CI run reflecting it immediately, without needing
+    # an empty commit to re-trigger anything. See the `route` job below for
+    # what these labels actually do.
+    types: [opened, synchronize, reopened, labeled]
+  # The deliberate "run the complete merge gate right now" trigger (see the
+  # `route` job's `workflow_dispatch` handling below) -- a human/coordinator
+  # picks the branch/PR ref in the Actions UI ("Run workflow") once review
+  # has converged, rather than paying full-matrix cost on every intermediate
+  # review-round push. No inputs: dispatching this workflow at all always
+  # means "run everything."
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,6 +48,7 @@ env:
   # Tests/BenchmarkRunnerTests/ also use the trait, but those live in a
   # different job/target already and are out of scope for this split).
   UNIT_SYSTEM_SUITE_REGEX: "SchemataRuntimeProtocolV3Tests|SchemataBuiltImageInspectionTests|ProcessTreeTests|XcodeBuildAdapterUninstallFailureTests|ProcessSupervisorResidueTests|ProcessSupervisorOutputCompletenessTests|RunContextProbeOutputCompletenessTests|ProcessSupervisorStallDetectionTests|MachOReceiptExtractorTests|ProcessSupervisorFileDescriptorLeakTests"
+
 jobs:
   # Fastest feedback of all: static analysis needs no build. SwiftLint and
   # SwiftFormat run against the whole tree using the repo's own configs
@@ -68,8 +82,8 @@ jobs:
     runs-on: macos-15
     # Generous relative to observed reality (~20-25s on this exact job) —
     # bounds a hang (a stuck `brew install`/download, say) rather than
-    # tuning for the common case. See the `unit-system` job's own comment
-    # for why every job here now has an explicit ceiling.
+    # tuning for the common case. See the `unit-fast` job's own comment for
+    # why every job here now has an explicit ceiling.
     timeout-minutes: 10
     env:
       SWIFTLINT_VERSION: "0.63.2"
@@ -95,11 +109,167 @@ jobs:
       - name: SwiftFormat (check only)
         run: swiftformat --lint --config .swiftformat .
 
+  # Staged-merge-gate routing: decides, once per push/PR event, whether this
+  # run gets the full matrix or a narrower, path-targeted slice of it. Runs
+  # on a plain Linux runner (no Swift/Xcode toolchain needed -- this job
+  # only reads `git diff` output and PR label metadata) and finishes in
+  # seconds, so gating the ~20 acceptance jobs behind `needs: route` does
+  # not recreate the sequential bottleneck this restructuring exists to
+  # remove (that bottleneck was every acceptance job waiting on a full
+  # `unit` build+test run, ~15+ minutes; this is a `git diff` and some
+  # `grep`, not a rebuild of anything).
+  #
+  # Every branch below that is not a deliberate "run everything" signal
+  # (push to main, workflow_dispatch, an override label, the trust-critical
+  # path group) still ends by checking for changed paths outside every known
+  # targeted group, and fails toward `run_full=true` if it finds any --
+  # this project's own established "unknown -> run" CI-safe-skip principle
+  # (see e.g. `scripts/assert-tests-ran.sh`'s own doc comment for the same
+  # stance applied to a filter matching zero tests). A classifier's job here
+  # is never to make a false skip look like a pass.
+  route:
+    name: Route CI scope (full vs. targeted)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_full: ${{ steps.classify.outputs.run_full }}
+      run_schemata_targeted: ${{ steps.classify.outputs.run_schemata_targeted }}
+      selected_fixtures: ${{ steps.classify.outputs.selected_fixtures }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone: classification
+          # needs a real `git diff` between the PR's base and head commits,
+          # both of which must actually be present locally to diff at all.
+          fetch-depth: 0
+
+      - name: Classify changed paths -> full matrix or a targeted acceptance slice
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          run_full="false"
+          schemata_targeted="false"
+          declare -a fixtures=()
+          reason=""
+
+          case "$EVENT_NAME" in
+            push)
+              # This workflow's `push` trigger only fires for `branches:
+              # [main]` -- a direct push (or merge) to main always gets the
+              # full matrix, unconditionally. Main itself is never narrowed.
+              run_full="true"
+              reason="push to main always runs the full matrix"
+              ;;
+            workflow_dispatch)
+              run_full="true"
+              reason="manually dispatched merge-candidate full CI run"
+              ;;
+            pull_request)
+              override_label="$(printf '%s' "$LABELS_JSON" | tr -d '[]" ' | tr ',' '\n' | grep -x -e 'ci:full' -e 'ci:merge-ready' | head -1 || true)"
+              if [ -n "$override_label" ]; then
+                run_full="true"
+                reason="override label present on this PR: $override_label"
+              else
+                changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+                if [ -z "$changed" ]; then
+                  run_full="true"
+                  reason="could not determine a changed-file list from base $BASE_SHA to head $HEAD_SHA -- fail toward the full matrix, never a silent skip"
+                else
+                  echo "Changed files (base $BASE_SHA -> head $HEAD_SHA):"
+                  echo "$changed"
+
+                  # --- Targeted acceptance groups -----------------------
+                  # trust-critical: the core execution/verdict machinery.
+                  # No shortcut for this group -- any touch here runs the
+                  # full acceptance matrix, same as an unrecognized path.
+                  trust_critical='^Sources/MutationExecution/|^Sources/CLI/RunContextProbe\.swift$|^Sources/CLI/ToolchainProbe\.swift$|^Sources/MutationModel/Integrity\.swift$|^Sources/MutationModel/MutationVerdictVerifier\.swift$|^Sources/MutationModel/VerdictProof\.swift$|^Sources/MutationModel/MultiTargetVerdict\.swift$|^Sources/AppleBuildAdapters/BuildClassifier\.swift$|^Sources/SchemataEligibilityClassifier/'
+                  # schemata: anything under a Schemata-named source path ->
+                  # the ROR schemata compile fixture plus both standalone
+                  # schemata-runtime jobs (differential + iOS-Simulator).
+                  schemata='Schemata|^Sources/MutantKitSchemataRuntimeC/|^scripts/build-schemata-runtime\.sh$'
+                  # xcode-adapter: the Xcode-project/-workspace build path
+                  # (as opposed to the plain SwiftPM path below) -> every
+                  # xcode-* acceptance fixture, plus cli-commands (its own
+                  # `init`/`doctor` tests drive a real XcodeConfigDetector
+                  # call -- see that fixture's own comment in this file).
+                  xcode_adapter='^Sources/AppleBuildAdapters/XcodeBuildAdapter\.swift$|^Sources/AppleBuildAdapters/XcodeCompilationUnitImageResolver\.swift$|^Sources/AppleBuildAdapters/XcodeLinkerInjector\.swift$|^Sources/AppleBuildAdapters/XcodeTargetResolver\.swift$|^Sources/AppleBuildAdapters/XcodeConfigDetector\.swift$'
+                  # swift-package: the plain-SwiftPM build/shard path.
+                  swift_package='^Sources/AppleBuildAdapters/SwiftPackageMacOSAdapter\.swift$|^Sources/MutationPlanner/PlanSharding\.swift$|^Sources/CLI/Commands/ShardCommand\.swift$'
+                  # cli-commands: the CLI command layer itself (inspect,
+                  # reproduce, run, migrate, plan, verify, init, doctor, ...).
+                  cli_commands='^Sources/CLI/Commands/|^Sources/CLI/ConfigurationLoader\.swift$|^Sources/CLI/ConfigurationPreflight\.swift$|^Sources/CLI/GitDiff\.swift$|^Sources/CLI/HostResourcePreflight\.swift$|^Sources/CLI/MutantKit\.swift$|^Sources/CLI/PlanCompatibility\.swift$|^Sources/CLI/ResourceSnapshot\.swift$|^Sources/CLI/RunManifest\.swift$|^Sources/CLI/Version\.swift$'
+
+                  if echo "$changed" | grep -qE "$trust_critical"; then
+                    run_full="true"
+                    reason="changed path(s) matched the trust-critical group (ProcessSupervisor/MutationExecution internals, RunContextProbe, ToolchainProbe, integrity/cache/classifier/verdict code) -- runs the full matrix, no shortcut"
+                  else
+                    matched_any="false"
+
+                    if echo "$changed" | grep -qE "$schemata"; then
+                      matched_any="true"; schemata_targeted="true"
+                      fixtures+=("ror-schemata-compile")
+                    fi
+                    if echo "$changed" | grep -qE "$xcode_adapter"; then
+                      matched_any="true"
+                      fixtures+=("xcode-project" "xcode-workspace" "xcode-app-debug-dylib" "xcode-unlinked-source" "xcode-config-detector" "xcode-batch-testing" "xcode-batch-testing-ui-target" "xcode-coverage-selection" "xcode-incremental-batch-testing" "xcode-wave-early-kill" "cli-commands")
+                    fi
+                    if echo "$changed" | grep -qE "$swift_package"; then
+                      matched_any="true"
+                      fixtures+=("swift-package" "swift-package-coverage" "swift-package-ios" "shard-merge")
+                    fi
+                    if echo "$changed" | grep -qE "$cli_commands"; then
+                      matched_any="true"
+                      fixtures+=("cli-commands")
+                    fi
+
+                    # A changed path outside every known group above is
+                    # exactly the "cannot classify" case -- fail toward
+                    # the full matrix rather than silently running only
+                    # whatever the other, unrelated matched groups cover.
+                    uncovered="$(echo "$changed" | grep -vE "$trust_critical|$schemata|$xcode_adapter|$swift_package|$cli_commands" || true)"
+                    if [ -n "$uncovered" ] || [ "$matched_any" = "false" ]; then
+                      run_full="true"
+                      reason="at least one changed path did not clearly map to a known targeted group -- unknown must run, never silently skip. Uncovered: $(echo "$uncovered" | paste -sd, - )"
+                    else
+                      reason="changed paths matched only: $(printf '%s\n' "${fixtures[@]}" | sort -u | paste -sd, - )"
+                    fi
+                  fi
+                fi
+              fi
+              ;;
+            *)
+              run_full="true"
+              reason="unrecognized event '$EVENT_NAME' -- fail toward the full matrix"
+              ;;
+          esac
+
+          if [ "${#fixtures[@]}" -gt 0 ]; then
+            unique_fixtures="$(printf '%s\n' "${fixtures[@]}" | sort -u)"
+            fixtures_json="$(printf '"%s",' $unique_fixtures)"
+            fixtures_json="[${fixtures_json%,}]"
+          else
+            fixtures_json="[]"
+          fi
+
+          echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
+          echo "run_schemata_targeted=$schemata_targeted" >> "$GITHUB_OUTPUT"
+          echo "selected_fixtures=$fixtures_json" >> "$GITHUB_OUTPUT"
+          echo "::notice::CI routing decision: run_full=$run_full, run_schemata_targeted=$schemata_targeted, selected_fixtures=$fixtures_json -- $reason"
+
   # Fast feedback: everything that does not spawn a real, long-lived
   # subprocess and does not depend on real OS timing -- pure model/parser/
   # planner/classifier/CLI-decision-logic tests and deterministic fixtures.
-  # Always runs, unconditionally, on every push -- exactly like the former
-  # `unit` job did.
+  # Always runs, on every push and every PR review-round push, with no
+  # dependency on `route`'s classification: this is the "ordinary per-push"
+  # gate item D describes, deliberately unconditional so it never waits on
+  # anything slower than itself.
   #
   # Split out of the former single `unit` job specifically so this job's
   # own runtime is not held hostage by `unit-system`'s real-subprocess,
@@ -237,16 +407,19 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
-
   # The other half of the former `unit` job: real-process ProcessSupervisor
   # tests, fd-inheritance, residue/reaping, and the drain-timeout/stall-
   # detector machinery -- exactly the suites tagged `.subprocessExclusive`
   # under Tests/MutantKitTests/Unit/ (`$UNIT_SYSTEM_SUITE_REGEX`, defined at
   # the top of this file).
   #
-  # Runs on every push for now, exactly like the former `unit` job did (a
-  # later change adds path-based gating so this only runs when the full
-  # matrix is actually needed, per the staged-merge-gate design).
+  # Deliberately NOT part of the ordinary per-push gate: unlike `unit-fast`,
+  # this only runs when `route` says the full matrix is in play (push to
+  # main, a `ci:full`/`ci:merge-ready` label, workflow_dispatch, or a
+  # trust-critical/unclassified path match) -- see the `route` job above.
+  # These are exactly the tests item F's "merge-candidate full CI" is meant
+  # to still guarantee run before merge; they are not skipped, only moved
+  # off the fast per-review-round-push path.
   #
   # A real, reproducible hang (this job's own `Test` step sitting for
   # 68+ minutes with no completion, versus ~15-20s for the identical
@@ -261,6 +434,8 @@ jobs:
   unit-system:
     name: Unit tests (system / real-process)
     runs-on: macos-15
+    needs: route
+    if: success() && needs.route.outputs.run_full == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -461,12 +636,34 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
+  # The suites that build and mutate real projects. Slow, and the only thing that
+  # proves the tool works rather than merely compiles: every wiring bug this
+  # project has had — a sandbox handed the wrong excludes, xcodebuild pointed at
+  # unmutated sources, concurrent mutants fighting over one simulator — was
+  # invisible to the unit tests and produced a confident, wrong score.
+  #
+  # No `needs: unit` (there is no `unit` job anymore, and even against
+  # `unit-fast`/`unit-system` this would be a real dependency to add back):
+  # none of these fixtures consume any build artifact either former `unit`
+  # job produces -- each one runs its own independent `swift build
+  # --build-tests` from scratch (see the "Build" step below). The old
+  # `needs: unit` was pure ordering, never a real artifact dependency, for
+  # every one of these ~20 acceptance-family jobs; this file's own history
+  # (git blame on this comment) is the audit trail for that claim.
+  #
+  # Instead, `needs: route` (a few-second classification job, not a rebuild)
+  # gates which *individual* matrix entries actually execute their Build/
+  # Acceptance steps this run, via the `if:` below -- every fixture still
+  # shows up in the Actions UI on every push (as `skipped` when not
+  # selected), so what ran and what didn't stays visible, not hidden.
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
+    needs: route
+    if: success() && (needs.route.outputs.run_full == 'true' || contains(fromJSON(needs.route.outputs.selected_fixtures), matrix.fixture))
     # Generous: real xcodebuild/simulator work, legitimately slower than
-    # `unit`'s own plain unit suite — but still bounded, per the same
-    # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
+    # `unit-fast`'s own plain unit suite — but still bounded, per the same
+    # "nothing runs unbounded" reasoning as `unit-system`'s own ceiling above.
     timeout-minutes: 30
     strategy:
       # Never cancel siblings: which fixtures fail together is a diagnosis.
@@ -538,7 +735,7 @@ jobs:
           # benchmark against a real external project found broken while
           # every unit test (all fakes, no real xcodebuild invocation or
           # .xctestrun) stayed green. They are the whole reason this job
-          # exists rather than trusting `unit` alone.
+          # exists rather than trusting `unit-fast`/`unit-system` alone.
           - fixture: xcode-batch-testing
             filter: XcodeBatchTestingAcceptanceTests
             simulator: "1"
@@ -627,9 +824,17 @@ jobs:
   # (schemata, invoked directly — RelationalOperatorReplacementSchemataLowerer
   # is still not registered in SchemataLowererRegistry.builtIn) and asserts
   # zero disagreement — the real gate before that registration can happen.
+  #
+  # `needs: route` / `if:` below: same routing as the `acceptance` matrix --
+  # runs on the full matrix, or when the `schemata` targeted group matched a
+  # changed path (this job has no matrix entry of its own to key an `if:`
+  # off `matrix.fixture` the way `acceptance` does, hence the separate
+  # `run_schemata_targeted` output).
   ror-schemata-differential:
     name: ROR schemata isolated-vs-schemata differential
     runs-on: macos-15
+    needs: route
+    if: success() && (needs.route.outputs.run_full == 'true' || needs.route.outputs.run_schemata_targeted == 'true')
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
@@ -679,9 +884,14 @@ jobs:
   # them, so they would have failed closed with `missingOverride` the first time
   # anyone ran them here, silently never proving anything past a developer's own
   # laptop. This job is that wiring.
+  #
+  # `needs: route` / `if:` below: same routing as `ror-schemata-differential`
+  # above -- full matrix, or the `schemata` targeted group.
   ios-simulator-schemata-runtime:
     name: iOS-Simulator schemata runtime (build + link viability)
     runs-on: macos-15
+    needs: route
+    if: success() && (needs.route.outputs.run_full == 'true' || needs.route.outputs.run_schemata_targeted == 'true')
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
