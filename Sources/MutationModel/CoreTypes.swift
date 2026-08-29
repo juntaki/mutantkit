@@ -158,4 +158,5 @@ public enum SchemaVersion {
     public static let operatorCatalogEntry = 1
     public static let qualityGateResult = 1
     public static let buildDiagnosis = 1
+    public static let configurationValidationResult = 1
 }

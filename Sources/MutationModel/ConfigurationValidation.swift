@@ -19,6 +19,26 @@ public struct ConfigurationIssue: Codable, Sendable, Hashable, CustomStringConve
     public var description: String { "\(severity.rawValue): \(path): \(message)" }
 }
 
+/// `config`'s fully-computed verdict — every issue already collected, `valid`
+/// already decided — mirroring `QualityGateResult`/`BuildDiagnosis`'s own
+/// shape: a stored `schemaVersion` set internally, never a caller-supplied
+/// init param, and `valid` stored rather than left purely computed so
+/// `mutantkit config --json` exposes the same verdict `ConfigCommand` itself
+/// branches its exit code on (`ConfigurationIssue.severity == .error`, not
+/// merely "any issue at all" — a config with only warnings is still `valid`,
+/// exactly as the text path's exit code already treats it).
+public struct ConfigurationValidationResult: Codable, Sendable, Hashable {
+    public let schemaVersion: Int
+    public let valid: Bool
+    public let issues: [ConfigurationIssue]
+
+    public init(issues: [ConfigurationIssue]) {
+        schemaVersion = SchemaVersion.configurationValidationResult
+        self.issues = issues
+        valid = !issues.contains { $0.severity == .error }
+    }
+}
+
 public enum ConfigurationValidator {
     /// - Parameter projectRoot: the real, on-disk directory `project
     ///   .derivedDataPath` will eventually be resolved against — the same
