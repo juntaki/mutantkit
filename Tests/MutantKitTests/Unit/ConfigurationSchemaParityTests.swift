@@ -94,6 +94,30 @@ struct ConfigurationSchemaParityTests {
         #expect(try encodedKeys(mutant) == nestedSection(["timeouts", "mutant"], in: schema))
     }
 
+    /// `ConfigurationJSONSchema.document`'s `$id` claims a real,
+    /// `raw.githubusercontent.com` URL (see that type's doc comment) that
+    /// resolves to `Schema/mutantkit-v1.json` in this very repository. That
+    /// only stays true if the checked-in file and the embedded document
+    /// never drift apart — this compares them as parsed JSON (not raw text)
+    /// so formatting differences don't count as drift, only actual content
+    /// differences do.
+    @Test("The checked-in Schema/mutantkit-v1.json matches the embedded schema exactly")
+    func checkedInSchemaFileMatchesEmbeddedDocument() throws {
+        let schemaFileURL = Acceptance.packageRoot.appendingPathComponent("Schema/mutantkit-v1.json")
+        let fileData = try Data(contentsOf: schemaFileURL)
+        let embeddedData = Data(ConfigurationJSONSchema.document.utf8)
+
+        let fileObject = try JSONSerialization.jsonObject(with: fileData)
+        let embeddedObject = try JSONSerialization.jsonObject(with: embeddedData)
+
+        // Re-serialize both with sorted keys so key order (irrelevant to a
+        // JSON Schema's meaning) can't mask or manufacture a mismatch.
+        let fileCanonical = try JSONSerialization.data(withJSONObject: fileObject, options: [.sortedKeys])
+        let embeddedCanonical = try JSONSerialization.data(withJSONObject: embeddedObject, options: [.sortedKeys])
+
+        #expect(fileCanonical == embeddedCanonical)
+    }
+
     @Test("qualityGate matches QualityGateSettings")
     func qualityGateSection() throws {
         let schema = try schema

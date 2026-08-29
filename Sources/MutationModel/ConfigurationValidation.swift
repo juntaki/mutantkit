@@ -427,11 +427,31 @@ public enum ConfigurationValidator {
 /// settings struct appears here, so adding a public setting without adding it
 /// to the schema fails the build. Extend a section by adding to `properties`
 /// in both places at once.
+///
+/// `$id` below must stay byte-identical to `Schema/mutantkit-v1.json`'s own
+/// `$id` — that checked-in file is this exact document, actually hosted, and
+/// `ConfigurationSchemaParityTests`'s drift guard fails the build the moment
+/// the two disagree (on the `$id` line or anything else).
+///
+/// `$id` points at a `raw.githubusercontent.com` URL pinned to this
+/// repository's most recent release tag (see `git tag --list`) rather than
+/// `main`: `main` is served live, so a schema fetched or cached from a
+/// branch URL can change shape underneath a consumer with no warning,
+/// whereas a tag is expected to stay put once cut. That gets a stable,
+/// effectively-versioned, publicly resolvable `$id` for free — no server, no
+/// Pages deploy, no CI job; GitHub already serves the raw bytes of any
+/// tagged ref. Bump the tag component here (and in
+/// `Schema/mutantkit-v1.json`) as part of any release whose changes touch
+/// this document. Config format version 1 (`Configuration.version`) has
+/// never changed shape, so no bump has been needed yet; if an incompatible
+/// version 2 ever ships, it gets its own file (`mutantkit-v2.json`) and its
+/// own `$id` rather than mutating this one out from under existing
+/// consumers.
 public enum ConfigurationJSONSchema {
     public static let document = #"""
     {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "$id": "https://mutantkit.dev/schema/mutantkit-v1.json",
+      "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/v0.2.0/Schema/mutantkit-v1.json",
       "title": "MutantKit configuration",
       "type": "object",
       "additionalProperties": false,
