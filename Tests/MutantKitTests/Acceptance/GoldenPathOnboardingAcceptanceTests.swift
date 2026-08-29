@@ -2,7 +2,7 @@ import Foundation
 import MutationModel
 import Testing
 
-/// P9: proves the README's documented "golden path" — the exact sequence a
+/// Proves the README's documented "golden path" — the exact sequence a
 /// brand-new user or agent is told to type — actually works end to end
 /// against a real, configless project, through the real `mutantkit` binary.
 ///
@@ -20,13 +20,13 @@ import Testing
 /// exercises a genuine build+test loop without paying a simulator's cost.
 @Suite("Acceptance: clean-room golden-path onboarding", .enabled(if: Acceptance.isEnabled))
 struct GoldenPathOnboardingAcceptanceTests {
-    /// `mutantkit setup` orchestrates `init` + `doctor` (P9 phase 1) and is
+    /// `mutantkit setup` orchestrates `init` + `doctor` in one step and is
     /// the command the README's golden path now leads with. It is exercised
     /// here exactly as documented — no flags beyond what a first-time user
     /// would type — rather than falling back to `init`+`doctor` directly:
     /// `setup` is finished and this is precisely the scenario (a configless
     /// SwiftPM project with unambiguous detection) it targets.
-    @Test("setup -> config -> doctor -> plan -> run walks a fresh project to a trustworthy report")
+    @Test("setup -> dry-run -> config -> doctor -> plan -> run walks a fresh project to a trustworthy report")
     func goldenPathProducesATrustworthyReport() throws {
         let dir = try Acceptance.stageFixture("SwiftPackageMacOS")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -54,20 +54,32 @@ struct GoldenPathOnboardingAcceptanceTests {
             "setup reported success but wrote no mutantkit.yml"
         )
 
-        // 2. The config `setup` wrote is not just present, it is valid: the
+        // 2. `mutantkit dry-run`, exactly as README's golden path puts it —
+        // right after `setup`, before `plan` — builds and tests the
+        // unmutated baseline once against the config `setup` just wrote.
+        // This is the one command this suite's own stated purpose requires
+        // and used to be missing entirely: the sequence below used to skip
+        // straight to `config`/`doctor`, so a real dry-run regression could
+        // pass this suite while the README's actual documented path was
+        // broken.
+        let dryRun = try Acceptance.run(["dry-run"], in: dir)
+        #expect(dryRun.exitCode == 0, "\(dryRun.output)")
+        #expect(dryRun.output.contains("Dry run passed"), "\(dryRun.output)")
+
+        // 3. The config `setup` wrote is not just present, it is valid: the
         // same validation `mutantkit run` would refuse to proceed without.
         let config = try Acceptance.run(["config"], in: dir)
         #expect(config.exitCode == 0, "\(config.output)")
         #expect(config.output.contains("Configuration is valid."), "\(config.output)")
 
-        // 3. `doctor`, run fresh against exactly the state `setup` left
+        // 4. `doctor`, run fresh against exactly the state `setup` left
         // behind (not reusing setup's own internal readiness check),
         // confirms the environment is independently sound: real toolchain,
         // real trial build, real trial test run.
         let doctor = try Acceptance.run(["doctor"], in: dir)
         #expect(doctor.exitCode == 0, "\(doctor.output)")
 
-        // 4. `plan`, bounded via the documented `--max-mutants` override
+        // 5. `plan`, bounded via the documented `--max-mutants` override
         // (not a benchmark shortcut invented for this test — it is
         // `OverrideOptions.maxMutants`, the same flag a user reaches for to
         // keep a first run small) so this proves the golden path at product
@@ -85,7 +97,7 @@ struct GoldenPathOnboardingAcceptanceTests {
         // coincidentally matching what little there was to find.
         #expect(decodedPlan.discoveredCount > decodedPlan.mutations.count, "\(decodedPlan.discoveredCount)")
 
-        // 5. A small, bounded `run` against that plan produces a report
+        // 6. A small, bounded `run` against that plan produces a report
         // whose own integrity mechanism — not a check this test invents —
         // reconciles: every planned mutation was applied, built, classified
         // and reported, with zero violations.
