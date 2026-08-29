@@ -58,11 +58,13 @@ enum ReadinessCheck {
             DiagnosisItem(
                 name: "MutantKit",
                 status: .ok,
+                code: .mutantkitVersion,
                 detail: "\(ToolVersion.version) (plan schema \(ToolVersion.planSchemaVersion))"
             ),
             DiagnosisItem(
                 name: "Swift",
                 status: toolchain.swiftVersion == "unknown" ? .failure : .ok,
+                code: .swiftToolchain,
                 detail: toolchain.swiftVersion,
                 remedy: toolchain.swiftVersion == "unknown"
                     ? "Could not run `swift --version`. Install the Swift toolchain or Xcode command line tools."
@@ -71,6 +73,7 @@ enum ReadinessCheck {
             DiagnosisItem(
                 name: "Xcode",
                 status: toolchain.xcodeVersion == nil ? .warning : .ok,
+                code: .xcodeToolchain,
                 detail: toolchain.xcodeVersion ?? "not found",
                 remedy: toolchain.xcodeVersion == nil
                     ? "Needed for Xcode projects, workspaces and non-macOS Swift packages. Install Xcode and run `xcode-select --switch`."
@@ -83,6 +86,7 @@ enum ReadinessCheck {
             items.append(DiagnosisItem(
                 name: "Project",
                 status: .ok,
+                code: .projectDetected,
                 detail: "\(resolution.detection.kind.rawValue) — \(resolution.detection.reason)"
             ))
 
@@ -90,6 +94,7 @@ enum ReadinessCheck {
                 items.append(DiagnosisItem(
                     name: "Declared platforms",
                     status: .ok,
+                    code: .declaredPlatforms,
                     detail: resolution.detection.declaredPlatforms.joined(separator: ", ")
                 ))
             }
@@ -102,6 +107,7 @@ enum ReadinessCheck {
                 items.append(DiagnosisItem(
                     name: "Trial build",
                     status: .warning,
+                    code: .trialBuildSkipped,
                     detail: "skipped (--skip-build)",
                     remedy: "Run without --skip-build to confirm the project actually builds for testing."
                 ))
@@ -110,6 +116,7 @@ enum ReadinessCheck {
             items.append(DiagnosisItem(
                 name: "Project",
                 status: .failure,
+                code: .projectResolutionFailed,
                 detail: "\(error)",
                 remedy: await remedy(forFailedResolutionIn: root, configuration: configuration)
             ))
@@ -164,12 +171,13 @@ enum ReadinessCheck {
                 configStatus = DiagnosisItem(
                     name: "Configuration",
                     status: .failure,
+                    code: .configurationInvalid,
                     detail: error.description,
                     remedy: "Fix mutantkit.yml, or remove it to fall back to defaults."
                 )
             }
         } catch {
-            configStatus = DiagnosisItem(name: "Configuration", status: .failure, detail: "\(error)")
+            configStatus = DiagnosisItem(name: "Configuration", status: .failure, code: .configurationInvalid, detail: "\(error)")
         }
 
         return (configuration, configStatus ?? validationFailure(for: configuration, root: root))
@@ -185,6 +193,7 @@ enum ReadinessCheck {
             return DiagnosisItem(
                 name: "Configuration",
                 status: .failure,
+                code: .configurationInvalid,
                 detail: issue.description,
                 remedy: "Fix the configuration issue above."
             )
@@ -198,7 +207,7 @@ enum ReadinessCheck {
         guard let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
               let available = values.volumeAvailableCapacityForImportantUsage
         else {
-            return DiagnosisItem(name: "Disk space", status: .warning, detail: "could not be determined")
+            return DiagnosisItem(name: "Disk space", status: .warning, code: .diskSpace, detail: "could not be determined")
         }
 
         let gigabytes = Double(available) / 1_000_000_000
@@ -206,6 +215,7 @@ enum ReadinessCheck {
         return DiagnosisItem(
             name: "Disk space",
             status: lowSpace ? .warning : .ok,
+            code: .diskSpace,
             detail: String(format: "%.1f GB available", gigabytes),
             remedy: lowSpace ? "Isolated mode copies the tree per concurrent mutant. Free space or lower `execution.workers`." : nil
         )
@@ -258,6 +268,7 @@ enum ReadinessCheck {
         return [DiagnosisItem(
             name: "Production profile",
             status: .warning,
+            code: .productionProfileRecommended,
             detail: "execution.simulatorPool is not enabled",
             remedy: "A real benchmark against a large iOS app found `simulatorPool: true` with `workers: 2` "
                 + "2.17x faster than a tuned workers: 1 reference, with identical outcomes and no integrity "

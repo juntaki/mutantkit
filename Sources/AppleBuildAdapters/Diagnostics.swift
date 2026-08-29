@@ -46,6 +46,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Xcode",
                 status: .failure,
+                code: .xcodeToolchain,
                 detail: "xcodebuild -version failed.",
                 remedy: """
                 Install Xcode and select it with `sudo xcode-select -s \
@@ -56,7 +57,7 @@ enum Diagnostics {
 
         let text = String(decoding: result.standardOutput, as: UTF8.self)
             .split(separator: "\n").joined(separator: " · ")
-        return DiagnosisItem(name: "Xcode", status: .ok, detail: text)
+        return DiagnosisItem(name: "Xcode", status: .ok, code: .xcodeToolchain, detail: text)
     }
 
     static func swiftVersion(workingDirectory: URL) async -> DiagnosisItem {
@@ -69,6 +70,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Swift toolchain",
                 status: .failure,
+                code: .swiftToolchain,
                 detail: "swift --version failed.",
                 remedy: "Check `xcode-select -p` points at a valid Xcode."
             )
@@ -76,7 +78,7 @@ enum Diagnostics {
 
         let text = String(decoding: result.standardOutput, as: UTF8.self)
             .split(separator: "\n").first.map(String.init) ?? "unknown"
-        return DiagnosisItem(name: "Swift toolchain", status: .ok, detail: text)
+        return DiagnosisItem(name: "Swift toolchain", status: .ok, code: .swiftToolchain, detail: text)
     }
 
     // MARK: - Project
@@ -87,12 +89,14 @@ enum Diagnostics {
             return [DiagnosisItem(
                 name: "Project kind",
                 status: .ok,
+                code: .projectDetected,
                 detail: "\(detection.kind.rawValue) — \(detection.reason)"
             )]
         } catch {
             return [DiagnosisItem(
                 name: "Project kind",
                 status: .failure,
+                code: .projectResolutionFailed,
                 detail: "\(error)",
                 remedy: """
                 Run mutantkit from the directory holding your .xcworkspace, .xcodeproj \
@@ -110,6 +114,7 @@ enum Diagnostics {
                 return DiagnosisItem(
                     name: "Schemes",
                     status: .failure,
+                    code: .scheme,
                     detail: "mutantkit.yml asks for scheme '\(configured)', which does not exist. Available: \(schemes.joined(separator: ", ")).",
                     remedy: "Set project.scheme to one of the available schemes."
                 )
@@ -117,6 +122,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Schemes",
                 status: .ok,
+                code: .scheme,
                 detail: "Using '\(configured)' from mutantkit.yml."
             )
         }
@@ -126,6 +132,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Schemes",
                 status: .failure,
+                code: .scheme,
                 detail: "No schemes found.",
                 remedy: """
                 Mark a scheme shared in Xcode (Product > Scheme > Manage Schemes, \
@@ -133,11 +140,12 @@ enum Diagnostics {
                 """
             )
         case 1:
-            return DiagnosisItem(name: "Schemes", status: .ok, detail: "Using '\(schemes[0])'.")
+            return DiagnosisItem(name: "Schemes", status: .ok, code: .scheme, detail: "Using '\(schemes[0])'.")
         default:
             return DiagnosisItem(
                 name: "Schemes",
                 status: .warning,
+                code: .scheme,
                 detail: "\(schemes.count) schemes found: \(schemes.joined(separator: ", ")).",
                 remedy: "Set project.scheme in mutantkit.yml; mutantkit will not pick one for you."
             )
@@ -154,6 +162,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Destinations",
                 status: .warning,
+                code: .destination,
                 detail: "Not checked: no scheme is resolved yet.",
                 remedy: "Resolve the scheme problem above first."
             )
@@ -170,6 +179,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Destinations",
                 status: .warning,
+                code: .destination,
                 detail: "Could not list destinations for '\(scheme)'.",
                 remedy: "Check the scheme builds in Xcode. Requested destination: \(requested)."
             )
@@ -180,6 +190,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Destinations",
                 status: .failure,
+                code: .destination,
                 detail: "'\(scheme)' reports no available destinations.",
                 remedy: """
                 Install a simulator runtime in Xcode > Settings > Components, or point \
@@ -191,6 +202,7 @@ enum Diagnostics {
         return DiagnosisItem(
             name: "Destinations",
             status: .ok,
+            code: .destination,
             detail: "\(listed.count) available for '\(scheme)'; using \(requested). First: \(listed.prefix(3).joined(separator: " | "))."
         )
     }
@@ -246,6 +258,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "DerivedData",
                 status: .warning,
+                code: .derivedData,
                 detail: "\(standardizedPath.path) resolves outside this workspace, so every concurrent "
                     + "worker would share it and could overwrite each other's build products.",
                 remedy: "Set project.derivedDataPath to a relative path in mutantkit.yml."
@@ -254,6 +267,7 @@ enum Diagnostics {
         return DiagnosisItem(
             name: "DerivedData",
             status: .ok,
+            code: .derivedData,
             detail: "\(path.path) (per-workspace, so concurrent mutants cannot overwrite each other's products)."
         )
     }
@@ -263,6 +277,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Disk space",
                 status: .warning,
+                code: .diskSpace,
                 detail: "Could not determine free space on the volume holding \(url.path)."
             )
         }
@@ -274,6 +289,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Disk space",
                 status: .failure,
+                code: .diskSpace,
                 detail: "\(formatBytes(free)) free.",
                 remedy: """
                 Free at least 5 GB. Every worker keeps its own copy of the project and \
@@ -286,13 +302,21 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Disk space",
                 status: .warning,
+                code: .diskSpace,
                 detail: "\(formatBytes(free)) free.",
                 remedy: "Consider freeing space or lowering execution.workers."
             )
         }
-        return DiagnosisItem(name: "Disk space", status: .ok, detail: "\(formatBytes(free)) free.")
+        return DiagnosisItem(name: "Disk space", status: .ok, code: .diskSpace, detail: "\(formatBytes(free)) free.")
     }
+}
 
+/// The real build-for-testing check and everything it reads back out of the
+/// result — split into its own extension purely to keep `Diagnostics`' own
+/// body under this project's `type_body_length` limit (adding `DiagnosisItem
+/// .Code` to every check pushed the single-enum-body version over it); this
+/// is code motion only, not a behavior change.
+extension Diagnostics {
     // MARK: - The real thing
 
     /// Actually builds, then checks the handoff artifact exists.
@@ -303,6 +327,7 @@ enum Diagnostics {
             var items = [DiagnosisItem(
                 name: "build-for-testing",
                 status: .ok,
+                code: .trialBuild,
                 detail: "Succeeded in \(String(format: "%.1f", artifact.command.durationSeconds ?? 0))s."
             )]
 
@@ -310,6 +335,7 @@ enum Diagnostics {
                 items.append(DiagnosisItem(
                     name: ".xctestrun",
                     status: .ok,
+                    code: .xctestrunArtifact,
                     detail: "Found \(xctestrun.lastPathComponent) by searching Build/Products."
                 ))
                 items.append(testTargets(inXCTestRun: xctestrun))
@@ -317,6 +343,7 @@ enum Diagnostics {
                 items.append(DiagnosisItem(
                     name: ".xctestrun",
                     status: .failure,
+                    code: .xctestrunArtifact,
                     detail: "The build produced no .xctestrun.",
                     remedy: "Add a test target to the scheme's Test action."
                 ))
@@ -328,6 +355,7 @@ enum Diagnostics {
             return [DiagnosisItem(
                 name: "build-for-testing",
                 status: .failure,
+                code: .trialBuild,
                 detail: failure.diagnosis,
                 remedy: failure.kind == .compilationError
                     ? "Fix the build first: mutation testing needs a project that compiles as-is."
@@ -337,6 +365,7 @@ enum Diagnostics {
             return [DiagnosisItem(
                 name: "build-for-testing",
                 status: .failure,
+                code: .trialBuild,
                 detail: "\(error)",
                 remedy: "Run the same xcodebuild command by hand to see the full output."
             )]
@@ -352,6 +381,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Test targets",
                 status: .warning,
+                code: .testTargets,
                 detail: "Could not read \(url.lastPathComponent).",
                 remedy: "The file exists but is not a readable plist; try a clean build."
             )
@@ -373,6 +403,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Test targets",
                 status: .failure,
+                code: .testTargets,
                 detail: "\(url.lastPathComponent) lists no test targets.",
                 remedy: "Enable a test target in the scheme's Test action."
             )
@@ -381,6 +412,7 @@ enum Diagnostics {
         return DiagnosisItem(
             name: "Test targets",
             status: .ok,
+            code: .testTargets,
             detail: names.sorted().joined(separator: ", ")
         )
     }
@@ -390,6 +422,7 @@ enum Diagnostics {
             return DiagnosisItem(
                 name: "Product hash",
                 status: .warning,
+                code: .productHash,
                 detail: "No test binary was found under \(artifact.productsDirectory.path).",
                 remedy: """
                 Without this hash mutantkit cannot prove a mutant reached the binary, and \
@@ -400,6 +433,7 @@ enum Diagnostics {
         return DiagnosisItem(
             name: "Product hash",
             status: .ok,
+            code: .productHash,
             detail: "Test binaries hashed; mutant activation can be proven."
         )
     }

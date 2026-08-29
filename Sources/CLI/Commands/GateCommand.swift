@@ -55,8 +55,8 @@ struct GateCommand: ParsableCommand {
     var json = false
 
     func run() throws {
-        let runReport = try decode(reportPath: report)
-        let baselineReport = try baseline.map { try decode(reportPath: $0) }
+        let runReport = try decode(reportPath: report, role: "report")
+        let baselineReport = try baseline.map { try decode(reportPath: $0, role: "baseline report") }
 
         var thresholds = try loadConfiguredThresholds()
         if let minimumTested { thresholds.minimumTested = minimumTested / 100 }
@@ -83,10 +83,29 @@ struct GateCommand: ParsableCommand {
         }
     }
 
-    private func decode(reportPath: String) throws -> RunReport {
-        try MutantKitExit.onFailure {
+    /// Reads and decodes a report from disk, emitting a structured `--json`
+    /// error document instead of throwing prose when the file is missing or
+    /// malformed — `gate --json` must emit exactly one JSON document on
+    /// every path, including this one, which is exactly the failure an
+    /// agent driving `gate` most needs structured output on (a report path
+    /// that does not exist, or one that is not valid MutantKit JSON). The
+    /// text path is unchanged: `MutantKitExit.onFailure` still prints the
+    /// same prose to stderr and maps to `operationalError` it always has.
+    private func decode(reportPath: String, role: String) throws -> RunReport {
+        do {
             let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
             return try MutationPlan.decoder().decode(RunReport.self, from: data)
+        } catch {
+            guard json else {
+                return try MutantKitExit.onFailure { throw error }
+            }
+            let code = error is DecodingError ? "reportMalformed" : "reportUnreadable"
+            try JSONOutput.emitError(
+                code: code,
+                message: "Could not read the \(role) at \"\(reportPath)\" as a MutantKit JSON report: \(error)",
+                remedy: "Check --report/--baseline point at a real report.json written by `mutantkit run`."
+            )
+            throw ExitCode(MutantKitExit.operationalError)
         }
     }
 

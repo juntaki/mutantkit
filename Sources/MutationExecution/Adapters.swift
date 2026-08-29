@@ -41,15 +41,51 @@ public struct DiagnosisItem: Codable, Sendable {
         case failure
     }
 
+    /// A stable, documented identifier for *what was checked* — independent
+    /// of `status`/`detail`, which describe the outcome and vary run to run.
+    /// Follows `QualityGateViolation.Kind`'s own convention (a `String` enum
+    /// alongside a free-text `detail`) so `doctor --json` gives an agent the
+    /// same thing `gate --json` already does: something to `switch` on
+    /// instead of parsing prose. Two different checks that happen to render
+    /// under the same display `name` (e.g. `ReadinessCheck`'s "Project" vs.
+    /// `Diagnostics.projectKind`'s "Project kind", which `ReadinessCheck
+    /// .deduplicated` collapses to one line) intentionally share a `code`
+    /// too — the code names the fact being reported, not the source line
+    /// that reported it.
+    public enum Code: String, Codable, Sendable {
+        case configurationInvalid
+        case mutantkitVersion
+        case swiftToolchain
+        case xcodeToolchain
+        case projectDetected
+        case projectResolutionFailed
+        case declaredPlatforms
+        case productionProfileRecommended
+        case scheme
+        case destination
+        case derivedData
+        case trialBuild
+        case trialBuildSkipped
+        case xctestrunArtifact
+        case testTargets
+        case productHash
+        case diskSpace
+        case availableMemory
+        case systemLoad
+        case bootedSimulators
+    }
+
     public let name: String
     public let status: Status
+    public let code: Code
     public let detail: String
     /// What the user should do about it. Populated for anything not `ok`.
     public let remedy: String?
 
-    public init(name: String, status: Status, detail: String, remedy: String? = nil) {
+    public init(name: String, status: Status, code: Code, detail: String, remedy: String? = nil) {
         self.name = name
         self.status = status
+        self.code = code
         self.detail = detail
         self.remedy = remedy
     }

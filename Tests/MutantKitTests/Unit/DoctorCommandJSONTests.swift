@@ -42,12 +42,52 @@ struct DoctorCommandJSONTests {
         #expect(json["canProceed"] as? Bool == true)
         let items = try #require(json["items"] as? [[String: Any]])
         #expect(!items.isEmpty)
-        #expect(items.allSatisfy { $0["name"] != nil && $0["status"] != nil && $0["detail"] != nil })
+        #expect(items.allSatisfy { $0["name"] != nil && $0["status"] != nil && $0["code"] != nil && $0["detail"] != nil })
         #expect(!items.contains { $0["status"] as? String == "failure" })
 
         let decoded = try MutationPlan.decoder().decode(BuildDiagnosis.self, from: data)
         #expect(decoded.canProceed == outcome.diagnosis.canProceed)
         #expect(decoded.items.count == outcome.diagnosis.items.count)
+    }
+
+    /// The must-have half of P11's `doctor --json` fix: every `DiagnosisItem`
+    /// now carries a stable `code` an agent can `switch` on instead of
+    /// parsing `detail` prose (`DiagnosisItem.Code`, mirroring
+    /// `QualityGateViolation.Kind`'s existing convention for `gate`). This
+    /// drives a real failure — an empty directory `AppleAdapterFactory`
+    /// cannot resolve a project kind for — rather than asserting against a
+    /// hand-built `DiagnosisItem`, so the check is on what `doctor` actually
+    /// emits, not on a literal this test made up. `"Swift"`/`"Xcode"` are
+    /// deliberately not the failure exercised here even though the finding
+    /// names them as examples: this machine has both installed, so forcing
+    /// that specific failure would mean faking the toolchain rather than
+    /// testing the real one — the unresolvable-project failure below is
+    /// real, reliable regardless of what's installed, and exercises the
+    /// exact same `DiagnosisItem.code` contract.
+    @Test("--json's failure item carries a stable `code`, not just name/status/detail")
+    func notReadyDiagnosisJSONShapeHasStableCode() async throws {
+        let dir = try makeEmptyFixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let outcome = await ReadinessCheck.run(root: dir, configPath: nil, skipBuild: true)
+        #expect(!outcome.diagnosis.canProceed)
+
+        let data = try MutationPlan.encoder().encode(outcome.diagnosis)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let items = try #require(json["items"] as? [[String: Any]])
+
+        let failure = try #require(items.first { $0["status"] as? String == "failure" })
+        let code = try #require(failure["code"] as? String)
+        #expect(code == "projectResolutionFailed")
+        // `code` names *what* failed, independent of the free-text `detail`
+        // describing *how* — the failure the finding calls out (an agent
+        // having to parse `detail` prose) is exactly what a `code` equal to
+        // (or derived from) `detail` would still leave unsolved.
+        #expect(code != failure["detail"] as? String)
+
+        let decoded = try MutationPlan.decoder().decode(BuildDiagnosis.self, from: data)
+        let decodedFailure = try #require(decoded.items.first { $0.status == .failure })
+        #expect(decodedFailure.code == .projectResolutionFailed)
     }
 
     @Test("--json's JSON is schema-versioned and reports canProceed false with a failure item for an unresolvable project")
@@ -65,6 +105,7 @@ struct DoctorCommandJSONTests {
         #expect(json["schemaVersion"] as? Int == SchemaVersion.buildDiagnosis)
         #expect(json["canProceed"] as? Bool == false)
         #expect(items.contains { $0["status"] as? String == "failure" })
+        #expect(items.allSatisfy { $0["code"] != nil })
 
         let decoded = try MutationPlan.decoder().decode(BuildDiagnosis.self, from: data)
         #expect(decoded.canProceed == false)

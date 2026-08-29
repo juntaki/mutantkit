@@ -159,4 +159,10 @@ public enum SchemaVersion {
     public static let qualityGateResult = 1
     public static let buildDiagnosis = 1
     public static let configurationValidationResult = 1
+    /// Shared by every command's `--json` error path (`JSONErrorEnvelope`),
+    /// unlike every constant above, which is one per command's *success*
+    /// shape. An agent recognizes "this command failed" the same way
+    /// regardless of which command it ran, so this stays a single shared
+    /// version rather than one per command.
+    public static let commandError = 1
 }
