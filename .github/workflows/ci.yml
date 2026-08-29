@@ -660,7 +660,12 @@ jobs:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
     needs: route
-    if: success() && (needs.route.outputs.run_full == 'true' || contains(fromJSON(needs.route.outputs.selected_fixtures), matrix.fixture))
+    # No job-level `if:` here on purpose -- the `matrix` context is not
+    # available in a job-level `if:` (GitHub Actions evaluates it before
+    # the matrix is expanded), only in `steps.<step>.if:`. Per-fixture
+    # selection is therefore applied to each substantive step below
+    # instead, so every fixture still appears in the Actions UI (as
+    # `skipped` when not selected) rather than the whole job vanishing.
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit-fast`'s own plain unit suite — but still bounded, per the same
     # "nothing runs unbounded" reasoning as `unit-system`'s own ceiling above.
@@ -773,21 +778,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
+        if: needs.route.outputs.run_full == 'true' || contains(fromJSON(needs.route.outputs.selected_fixtures), matrix.fixture)
         run: swift --version && xcodebuild -version
 
       # The suites pick whichever iPhone this machine actually has rather than
       # pinning a model, so this is context for a failure, not a gate.
       - name: Available simulators
-        if: matrix.simulator == '1'
+        if: matrix.simulator == '1' && (needs.route.outputs.run_full == 'true' || contains(fromJSON(needs.route.outputs.selected_fixtures), matrix.fixture))
         run: xcrun simctl list devices available | grep -i iphone || true
 
       - name: Build
+        if: needs.route.outputs.run_full == 'true' || contains(fromJSON(needs.route.outputs.selected_fixtures), matrix.fixture)
         shell: bash
         run: |
           set -o pipefail
           swift build --build-tests 2>&1 | tee build.log
 
       - name: Acceptance
+        if: needs.route.outputs.run_full == 'true' || contains(fromJSON(needs.route.outputs.selected_fixtures), matrix.fixture)
         shell: bash
         env:
           MUTANTKIT_ACCEPTANCE: "1"
