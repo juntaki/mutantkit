@@ -142,8 +142,11 @@ struct XcodeWaveEarlyKillAcceptanceTests {
         let data = try Data(contentsOf: url)
         let snapshot = try JSONDecoder().decode(PrioritySnapshot.self, from: data)
 
-        #expect(snapshot.detections["CheckoutTests/CheckoutTests/testCouponAboveMinimum"] == 1)
-        #expect(snapshot.detections["CheckoutTests/CheckoutTests/testCouponAtMinimum"] == 1)
+        // `TestIdentifier.onlyTestingArgument` always appends `()` to the
+        // method name (`PerTestCoverageMap.swift:46`) -- the real, correct
+        // XCTest `-only-testing:` argument shape.
+        #expect(snapshot.detections["CheckoutTests/CheckoutTests/testCouponAboveMinimum()"] == 1)
+        #expect(snapshot.detections["CheckoutTests/CheckoutTests/testCouponAtMinimum()"] == 1)
         #expect(snapshot.detections.count == 2)
     }
 }

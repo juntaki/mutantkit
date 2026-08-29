@@ -391,6 +391,18 @@ jobs:
           - fixture: ror-schemata-compile
             filter: RORSchemataCompileViabilityAcceptanceTests
             simulator: "0"
+          # `Acceptance.waveEnabled`
+          # (`Tests/MutantKitTests/Acceptance/AcceptanceWaveSupport.swift`)
+          # gates `XcodeWaveEarlyKillAcceptanceTests` behind
+          # `MUTANTKIT_WAVE_ACCEPTANCE`, which no workflow ever set, so this
+          # real, differential, Xcode acceptance gate for wave-based early
+          # kill had never executed in CI. Reuses the same `XcodeProject`
+          # fixture the `xcode-project` entry above already builds — no new
+          # fixture, no new infra, just the missing opt-in.
+          - fixture: xcode-wave-early-kill
+            filter: XcodeWaveEarlyKillAcceptanceTests
+            simulator: "1"
+            wave: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -413,9 +425,16 @@ jobs:
         env:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
+          MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
         run: |
           set -o pipefail
           swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
+          test_exit=$?
+          # A filter matching zero tests must fail this job, not pass it
+          # silently -- see scripts/assert-tests-ran.sh. A real test failure
+          # above must still win even if the count check itself passes.
+          scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
+          exit $test_exit
 
       - name: Upload acceptance failure logs
         if: failure()
@@ -464,6 +483,10 @@ jobs:
         run: |
           set -o pipefail
           swift test --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 | tee acceptance.log
+          test_exit=$?
+          # See scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
+          scripts/assert-tests-ran.sh acceptance.log "RORSchemataIsolatedDifferentialAcceptanceTests" || test_exit=1
+          exit $test_exit
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -515,6 +538,10 @@ jobs:
         run: |
           set -o pipefail
           swift test --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 | tee acceptance.log
+          test_exit=$?
+          # See scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
+          scripts/assert-tests-ran.sh acceptance.log "SchemataIOSSimulatorRuntime*AcceptanceTests" || test_exit=1
+          exit $test_exit
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
