@@ -45,7 +45,7 @@ struct PlanCommand: AsyncParsableCommand {
 
         // Gathered here because the planner runs no subprocesses — keeping it
         // pure is what makes plans testable without a toolchain.
-        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root)
+        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root).fingerprint
 
         var scope: DiffScope?
         if let base = settings.execution.diffBase {

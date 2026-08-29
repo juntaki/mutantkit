@@ -28,7 +28,7 @@ struct DoctorCommand: AsyncParsableCommand {
 
         let (configuration, configStatus) = loadConfiguration(root: root)
 
-        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root)
+        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root).fingerprint
         var items: [DiagnosisItem] = []
         if let configStatus {
             items.append(configStatus)

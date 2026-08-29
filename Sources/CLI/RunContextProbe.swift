@@ -5,6 +5,17 @@ import MutationModel
 enum RunContextProbeError: Error, CustomStringConvertible {
     case gitUnavailable(String)
     case unprovableWorktreeContent(path: String, reason: String)
+    /// At least one cache-identity-relevant `ToolchainProbe` subprocess
+    /// (`swift --version`, `xcodebuild -version`, `xcrun --show-sdk-
+    /// version`/`--show-sdk-build-version`) exited successfully but its
+    /// output could not be proven fully captured — see
+    /// `ToolchainProbeResult.cacheIdentityComplete`'s own doc comment.
+    /// Routed through the identical fail-closed path as `gitUnavailable`,
+    /// for the identical reason: a truncated toolchain probe can read as a
+    /// plausible-but-wrong version string just as easily as truncated `git`
+    /// output can read as a plausible-but-wrong worktree digest, and both
+    /// are cache-identity inputs a resumed run trusts completely.
+    case incompleteToolchainIdentity
 
     var description: String {
         switch self {
@@ -14,6 +25,16 @@ enum RunContextProbeError: Error, CustomStringConvertible {
             resume needs git to prove nothing changed since a checkpoint was \
             written; without it, resuming would risk reusing a stale result, \
             so this run will not resume from any existing checkpoint.
+            """
+        case .incompleteToolchainIdentity:
+            """
+            Could not fingerprint the toolchain: at least one version probe \
+            (swift/xcodebuild/xcrun) exited successfully but its output could \
+            not be fully captured before the subprocess ended. Checkpoint \
+            resume and the cross-run caches all key on this value; trusting \
+            an unconfirmed capture here risks the identical false-cache-hit \
+            shape the worktree digest guards against, so this run will not \
+            resume from any existing checkpoint and uses no cross-run cache.
             """
         case let .unprovableWorktreeContent(path, reason):
             """
@@ -74,8 +95,21 @@ enum RunContextProbe {
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
         workUnitID: String,
+        toolchainCacheIdentityComplete: Bool = true,
         processRunner: ProcessRunner = defaultProcessRunner
     ) async throws -> RunContextFingerprint {
+        // Checked before the (possibly slow) git work below: a caller that
+        // already knows its `toolchain` was built from an incomplete probe
+        // gains nothing from computing a worktree digest just to discard it.
+        // See `RunContextProbeError.incompleteToolchainIdentity` and
+        // `ToolchainProbeResult.cacheIdentityComplete`'s own doc comments —
+        // this is the identical fail-closed treatment `worktreeContentState`
+        // below already gives a `git` invocation whose own output could not
+        // be confirmed complete, applied to the other half of what this
+        // fingerprint hashes.
+        guard toolchainCacheIdentityComplete else {
+            throw RunContextProbeError.incompleteToolchainIdentity
+        }
         let git = try await worktreeContentState(in: projectRoot, processRunner: processRunner)
 
         let components = [
@@ -136,8 +170,14 @@ enum RunContextProbe {
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
         purpose: String,
+        toolchainCacheIdentityComplete: Bool = true,
         processRunner: ProcessRunner = defaultProcessRunner
     ) async throws -> String {
+        // See `compute`'s identical guard, just above, for why this is
+        // checked before doing any git work at all.
+        guard toolchainCacheIdentityComplete else {
+            throw RunContextProbeError.incompleteToolchainIdentity
+        }
         let worktree = try await worktreeContentState(in: projectRoot, processRunner: processRunner)
 
         // `execution.workers` bounds chunk/mutant-level *parallelism* only —

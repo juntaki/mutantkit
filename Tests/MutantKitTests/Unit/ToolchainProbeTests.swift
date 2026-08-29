@@ -16,6 +16,7 @@ import Testing
 struct ToolchainProbeTests {
     private func fingerprint(for resolvedDestination: ResolvedDestination?) async -> ToolchainFingerprint {
         await ToolchainProbe.fingerprint(workingDirectory: FileManager.default.temporaryDirectory, resolvedDestination: resolvedDestination)
+            .fingerprint
     }
 
     private func simulator(udid: String, runtimeIdentifier: String = "com.apple.CoreSimulator.SimRuntime.iOS-26-5") -> SimulatorDevice {

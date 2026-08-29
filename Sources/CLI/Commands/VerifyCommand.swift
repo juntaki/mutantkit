@@ -109,7 +109,7 @@ struct VerifyCommand: AsyncParsableCommand {
     private func printCompatibility(of loadedPlan: MutationPlan, root: URL) async {
         do {
             let configuration = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
-            let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root)
+            let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root).fingerprint
             let compatibility = PlanCompatibilityValidator.check(loadedPlan, against: configuration, toolchain: toolchain)
             if compatibility.isEmpty {
                 print("✓ Compatibility plan's toolchain and configuration hash match this environment")
