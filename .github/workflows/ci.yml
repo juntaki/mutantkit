@@ -192,6 +192,93 @@ jobs:
           echo "acceptance_matrix=$acceptance_matrix" >> "$GITHUB_OUTPUT"
           echo "::notice::CI routing decision: run_full=$run_full, run_schemata_targeted=$run_schemata_targeted, selected_fixtures=$selected_fixtures -- $reason"
 
+  # Build once, shared by every job below that runs `swift test` against the
+  # same debug `--build-tests` output: unit-fast, unit-system, every
+  # acceptance matrix entry, and (for their shared debug portion only)
+  # ror-schemata-differential / ios-simulator-schemata-runtime. Before this
+  # job existed, each of those ~19-20 job/matrix-entry instances ran its own
+  # byte-identical `swift build --build-tests` from scratch in parallel --
+  # under GitHub-hosted macOS runners' real, constrained concurrency, that
+  # many redundant from-scratch builds queues in concurrency-limited waves,
+  # paying full build cost in every wave rather than once. Building it here,
+  # exactly once, and having every consumer download the result and run
+  # `swift test --skip-build` instead turns that into one build plus N cheap
+  # skip-build test runs.
+  #
+  # Validated locally before wiring this in: `swift test --skip-build`
+  # against a `.build` produced by a *different* `swift build --build-tests`
+  # invocation -- same path, a different path, and a real zip round-trip --
+  # never recompiles anything and never produces a stale or incorrect
+  # result. It does not even revalidate the build database against the
+  # extraction path; it just runs whatever binary already sits at the
+  # conventional `.build/<triple>/debug` location. The artifact packaged
+  # below carries exactly the subset that trial found load-bearing: the
+  # built products directory, the `.build/debug` symlink pointing at it, and
+  # the three small SwiftPM state files -- not `checkouts/`, `repositories/`,
+  # `artifacts/`, `plugins/`, or `prebuilts/`, which are the large majority
+  # of `.build`'s size and are regenerated for free (no network) from each
+  # consuming job's own "Cache SwiftPM dependencies" step below, which every
+  # job here already has.
+  #
+  # Runs unconditionally rather than gated on `route`'s own full-vs-targeted
+  # decision: `unit-fast` and `acceptance` both run on every single push/PR
+  # event regardless of that routing, so at least one real consumer always
+  # needs this build's output anyway. Conditionally gating this job would
+  # only reproduce `route`'s own branching a second time for no actual
+  # savings, in exchange for a strictly more complex `if:` to get right.
+  build:
+    name: Build (debug, --build-tests)
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      # Only the pieces a downstream `swift test --skip-build` actually
+      # needs in order to run without recompiling anything -- see this job's
+      # own comment above for how that subset was determined. A tar archive
+      # (not a raw upload-artifact directory upload) specifically to carry
+      # `.build/debug`'s symlink and every binary's executable bit through
+      # the upload/download round-trip intact and unambiguous.
+      - name: Package build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf build-tests.tar.gz \
+            .build/debug \
+            .build/*-apple-macosx/debug \
+            .build/build.db \
+            .build/debug.yaml \
+            .build/workspace-state.json
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tests
+          path: build-tests.tar.gz
+          retention-days: 1
+      - name: Upload build failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          if-no-files-found: ignore
+          path: build.log
+
   # Fast feedback: everything that does not spawn a real, long-lived
   # subprocess and does not depend on real OS timing -- pure model/parser/
   # planner/classifier/CLI-decision-logic tests and deterministic fixtures.
@@ -212,6 +299,7 @@ jobs:
   unit-fast:
     name: Unit tests (fast)
     runs-on: macos-15
+    needs: build
     # Generous relative to known-good local runtime, bounded so a hang
     # fails fast and visibly instead of silently burning CI minutes. See
     # `unit-system`'s own comment for the full "why every job here has an
@@ -242,11 +330,15 @@ jobs:
         run: |
           swift --version && xcodebuild -version
           echo "CPU count: $(sysctl -n hw.ncpu)"
-      - name: Build
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
       # Same stall-watchdog mechanism as `unit-system`'s own `Test` step --
       # see there for the full incident history and the reasoning behind
       # every constant below (240s stall threshold, the two-sample capture,
@@ -267,7 +359,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p samples
-          swift test --skip "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
+          swift test --skip-build --skip "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
           test_pid=$!
           echo "swift test started, pid=$test_pid"
           last_lines=0
@@ -325,7 +417,6 @@ jobs:
           name: unit-fast-failure-logs
           if-no-files-found: ignore
           path: |
-            build.log
             test.log
             samples/
       - name: Publish unit-fast failure excerpt
@@ -340,9 +431,12 @@ jobs:
               const lines = fs.readFileSync(path, 'utf8').split('\n');
               return lines.slice(-180).join('\n');
             };
-            const build = readTail('build.log');
+            // No build.log here anymore -- `swift build --build-tests` now
+            // runs once in the shared `build` job (see its own failure-log
+            // upload for that), not in this job, which only downloads the
+            // already-built output and runs `swift test --skip-build`.
             const test = readTail('test.log');
-            const excerpt = (test || build || 'No captured build/test log was available.').slice(-30000);
+            const excerpt = (test || 'No captured test log was available.').slice(-30000);
             const body = `${marker}\n### Latest unit-fast CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
@@ -381,7 +475,9 @@ jobs:
   unit-system:
     name: Unit tests (system / real-process)
     runs-on: macos-15
-    needs: route
+    needs:
+      - route
+      - build
     if: success() && needs.route.outputs.run_full == 'true'
     timeout-minutes: 15
     steps:
@@ -401,11 +497,15 @@ jobs:
         run: |
           swift --version && xcodebuild -version
           echo "CPU count: $(sysctl -n hw.ncpu)"
-      - name: Build
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
       # Diagnostic instrumentation for the same real CI hang this job's
       # own `timeout-minutes` above exists for. `swift test` runs in the
       # background, writing straight to a file (never through a pipe
@@ -496,7 +596,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p samples
-          swift test --filter "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
+          swift test --skip-build --filter "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
           test_pid=$!
           echo "swift test started, pid=$test_pid"
           last_lines=0
@@ -564,7 +664,6 @@ jobs:
           name: unit-system-failure-logs
           if-no-files-found: ignore
           path: |
-            build.log
             test.log
             samples/
       - name: Publish unit-system failure excerpt
@@ -579,9 +678,12 @@ jobs:
               const lines = fs.readFileSync(path, 'utf8').split('\n');
               return lines.slice(-180).join('\n');
             };
-            const build = readTail('build.log');
+            // No build.log here anymore -- `swift build --build-tests` now
+            // runs once in the shared `build` job (see its own failure-log
+            // upload for that), not in this job, which only downloads the
+            // already-built output and runs `swift test --skip-build`.
             const test = readTail('test.log');
-            const excerpt = (test || build || 'No captured build/test log was available.').slice(-30000);
+            const excerpt = (test || 'No captured test log was available.').slice(-30000);
             const body = `${marker}\n### Latest unit-system CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
@@ -599,14 +701,16 @@ jobs:
   # unmutated sources, concurrent mutants fighting over one simulator — was
   # invisible to the unit tests and produced a confident, wrong score.
   #
-  # No `needs: unit` (there is no `unit` job anymore, and even against
-  # `unit-fast`/`unit-system` this would be a real dependency to add back):
-  # none of these fixtures consume any build artifact either former `unit`
-  # job produces -- each one runs its own independent `swift build
-  # --build-tests` from scratch (see the "Build" step below). The old
-  # `needs: unit` was pure ordering, never a real artifact dependency, for
-  # every one of these ~20 acceptance-family jobs; this file's own history
-  # (git blame on this comment) is the audit trail for that claim.
+  # `needs: build` (in addition to `route`, for the matrix itself): every
+  # fixture in this matrix downloads and replays the one shared debug
+  # `--build-tests` output the `build` job produces instead of each running
+  # its own independent `swift build --build-tests` from scratch, which is
+  # what every fixture here used to do (see `build`'s own comment above for
+  # why, and this file's own history/git blame for the prior per-fixture
+  # from-scratch build this replaced). There is still no dependency on
+  # `unit-fast`/`unit-system`'s own results -- only on `build`'s compiled
+  # output, downloaded fresh by every matrix entry, never on those two jobs
+  # having run or passed.
   #
   # `needs: route` + `strategy.matrix: fromJSON(needs.route.outputs.acceptance_matrix)`:
   # a REAL dynamic matrix, not a step-level shortcut on a fixed list. The
@@ -672,7 +776,9 @@ jobs:
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
-    needs: route
+    needs:
+      - route
+      - build
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit-fast`'s own plain unit suite — but still bounded, per the same
     # "nothing runs unbounded" reasoning as `unit-system`'s own ceiling above.
@@ -706,11 +812,15 @@ jobs:
         if: matrix.simulator == '1'
         run: xcrun simctl list devices available | grep -i iphone || true
 
-      - name: Build
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
 
       - name: Acceptance
         shell: bash
@@ -720,7 +830,7 @@ jobs:
           MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
         run: |
           set -o pipefail
-          swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
+          swift test --skip-build --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
           test_exit=$?
           # A filter matching zero tests must fail this job, not pass it
           # silently -- see scripts/assert-tests-ran.sh. A real test failure
@@ -734,9 +844,7 @@ jobs:
         with:
           name: acceptance-${{ matrix.fixture }}-failure-logs
           if-no-files-found: ignore
-          path: |
-            build.log
-            acceptance.log
+          path: acceptance.log
 
   # Separate from the `acceptance` matrix above because this suite links and
   # runs the real schemata runtime binary (SchemataMutationRunner drives a
@@ -758,7 +866,9 @@ jobs:
   ror-schemata-differential:
     name: ROR schemata isolated-vs-schemata differential
     runs-on: macos-15
-    needs: route
+    needs:
+      - route
+      - build
     if: success() && (needs.route.outputs.run_full == 'true' || needs.route.outputs.run_schemata_targeted == 'true')
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
@@ -779,11 +889,18 @@ jobs:
         run: swift --version && xcodebuild -version
       - name: Build the schemata runtime static library
         run: swift build -c release --product MutantKitSchemataRuntime
-      - name: Build tests
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here. The
+      # release schemata-runtime build just above is genuinely separate
+      # (different config, different product) and is unaffected -- it still
+      # runs here, on this runner, every time.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
       - name: Differential acceptance
         shell: bash
         env:
@@ -791,7 +908,7 @@ jobs:
           MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
         run: |
           set -o pipefail
-          swift test --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 | tee acceptance.log
+          swift test --skip-build --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 | tee acceptance.log
           test_exit=$?
           # See scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
           scripts/assert-tests-ran.sh acceptance.log "RORSchemataIsolatedDifferentialAcceptanceTests" || test_exit=1
@@ -802,9 +919,7 @@ jobs:
         with:
           name: ror-schemata-differential-failure-logs
           if-no-files-found: ignore
-          path: |
-            build.log
-            acceptance.log
+          path: acceptance.log
 
   # Separate from both `acceptance` and `ror-schemata-differential` for the same
   # reason as the latter: it needs a real, non-default
@@ -825,7 +940,9 @@ jobs:
   ios-simulator-schemata-runtime:
     name: iOS-Simulator schemata runtime (build + link viability)
     runs-on: macos-15
-    needs: route
+    needs:
+      - route
+      - build
     if: success() && (needs.route.outputs.run_full == 'true' || needs.route.outputs.run_schemata_targeted == 'true')
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
@@ -848,11 +965,18 @@ jobs:
         run: swift build -c release --product MutantKitSchemataRuntime
       - name: Build the iOS-Simulator schemata runtime static library
         run: scripts/build-schemata-runtime.sh "$GITHUB_WORKSPACE/.build/release"
-      - name: Build tests
+      # Built once, by the `build` job above -- see its own comment for why
+      # this replaces a from-scratch `swift build --build-tests` here. The
+      # two release schemata-runtime builds just above are genuinely
+      # separate (different config, different products) and are unaffected
+      # -- they still run here, on this runner, every time.
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tests
+      - name: Extract build output
         shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+        run: tar -xzf build-tests.tar.gz
       - name: iOS-Simulator runtime acceptance
         shell: bash
         env:
@@ -860,7 +984,7 @@ jobs:
           MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
         run: |
           set -o pipefail
-          swift test --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 | tee acceptance.log
+          swift test --skip-build --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 | tee acceptance.log
           test_exit=$?
           # See scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
           scripts/assert-tests-ran.sh acceptance.log "SchemataIOSSimulatorRuntime*AcceptanceTests" || test_exit=1
@@ -871,9 +995,7 @@ jobs:
         with:
           name: ios-simulator-schemata-runtime-failure-logs
           if-no-files-found: ignore
-          path: |
-            build.log
-            acceptance.log
+          path: acceptance.log
 
   # A single, stably-named status check that a future required-status-check
   # / merge-queue setup can point at, instead of enumerating every
@@ -897,6 +1019,7 @@ jobs:
     needs:
       - lint
       - route
+      - build
       - unit-fast
       - unit-system
       - acceptance
@@ -943,6 +1066,7 @@ jobs:
           # here is never intentional.
           check "lint" "${{ needs.lint.result }}" "success"
           check "route" "${{ needs.route.result }}" "success"
+          check "build" "${{ needs.build.result }}" "success"
           check "unit-fast" "${{ needs.unit-fast.result }}" "success"
           check "acceptance" "${{ needs.acceptance.result }}" "success"
 
