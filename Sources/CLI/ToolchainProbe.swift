@@ -44,8 +44,11 @@ struct ToolchainProbeResult: Sendable {
 enum ToolchainProbe {
     /// What a single version-string subprocess probe (`swift --version`,
     /// `xcodebuild -version`, `xcrun --show-sdk-version`/`--show-sdk-build-
-    /// version`) actually found.
-    private enum VersionProbeOutcome {
+    /// version`) actually found. Internal, not `private`: `combinedCacheIdentityComplete`
+    /// below is unit-tested directly against real outcome values
+    /// (`ToolchainProbeCombinedCompletenessTests`), which needs to
+    /// construct them from another file.
+    enum VersionProbeOutcome {
         /// The subprocess ran, exited successfully, and its output was
         /// proven fully captured.
         case value(String)
@@ -74,6 +77,26 @@ enum ToolchainProbe {
             if case .incomplete = self { return true }
             return false
         }
+    }
+
+    /// Whether a set of version-probe outcomes are all safe to treat as part
+    /// of a reproducible cache identity: `true` only when *none* of them is
+    /// `.incomplete` — see `VersionProbeOutcome.incomplete`'s own doc comment
+    /// for why a single incomplete probe (even just the SDK's build-number
+    /// half, with its paired version probe fine) must veto the whole cache
+    /// identity, not just the field it belongs to. `.unavailable` never
+    /// vetoes anything here: it is a genuine, reproducible fact about the
+    /// machine, not lost evidence.
+    ///
+    /// Split out of `fingerprint`/`buildSDKIdentity`'s own inline boolean
+    /// logic purely so it can be pinned by a direct, no-subprocess unit test
+    /// (`ToolchainProbeCombinedCompletenessTests`) that calls this exact
+    /// function, rather than a test that merely hand-constructs the boolean
+    /// it should have produced — mirrors `ProcessSupervisor
+    /// .classify(readResult:errno:)`'s own reason for existing as a
+    /// standalone function.
+    static func combinedCacheIdentityComplete(_ outcomes: VersionProbeOutcome...) -> Bool {
+        !outcomes.contains { $0.isIncomplete }
     }
 
     /// `resolvedDestination`: the run's own already-resolved destination
@@ -120,7 +143,7 @@ enum ToolchainProbe {
 
         return ToolchainProbeResult(
             fingerprint: fingerprint,
-            cacheIdentityComplete: !swift.isIncomplete && !xcode.isIncomplete && sdkResult.complete
+            cacheIdentityComplete: Self.combinedCacheIdentityComplete(swift, xcode) && sdkResult.complete
         )
     }
 
@@ -172,7 +195,7 @@ enum ToolchainProbe {
         let version = await versionOutcome
         let build = await buildOutcome
 
-        if version.isIncomplete || build.isIncomplete {
+        if !Self.combinedCacheIdentityComplete(version, build) {
             // Never report a value alongside this: a version-probe-incomplete
             // case already fell through `guard let version` below as `nil`
             // before this type existed, and a build-probe-incomplete case

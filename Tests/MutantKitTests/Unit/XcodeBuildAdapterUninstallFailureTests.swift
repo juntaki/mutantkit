@@ -147,6 +147,48 @@ struct XcodeBuildAdapterUninstallFailureTests {
         #expect(message.contains("subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"))
     }
 
+    /// The differential-pair counterpart to
+    /// `incompleteOutputProducesTheExactDiagnosis` above: forces
+    /// `ProcessResult.outputComplete == true` with real, specific
+    /// `combinedOutput` content through the identical injected
+    /// `processRunner` seam, and pins that the diagnosis reports *that*
+    /// content — never the incomplete-output message. Without this,
+    /// `incompleteOutputProducesTheExactDiagnosis` alone could not
+    /// distinguish the real fix from a hypothetical implementation that
+    /// always reports the incomplete-output message regardless of
+    /// `outputComplete`; only having both prove the `true`/`false` branches
+    /// are genuinely distinguished.
+    @Test("A complete-but-failed simctl result is reported with the real captured detail, never the incomplete-output diagnosis")
+    func completeOutputProducesTheRealDetail() async throws {
+        let xctestrun = try makeXCTestRun()
+        defer { try? FileManager.default.removeItem(at: xctestrun) }
+
+        var reported: [String] = []
+        await adapter().uninstallStaleApp(
+            artifact: artifact(xctestrunPath: xctestrun),
+            from: lease(udid: Self.bogusUDID),
+            report: { reported.append($0) },
+            processRunner: { _, _, _, _ in
+                ProcessResult(
+                    exitCode: 148,
+                    standardOutput: Data(),
+                    standardError: Data("Invalid device: \(Self.bogusUDID)".utf8),
+                    durationSeconds: 1,
+                    timedOut: false,
+                    terminatingSignal: nil,
+                    outputComplete: true
+                )
+            }
+        )
+
+        let message = try #require(reported.first)
+        #expect(reported.count == 1)
+        #expect(message.contains(Self.bundleID))
+        #expect(message.contains(Self.bogusUDID))
+        #expect(message.contains("Invalid device: \(Self.bogusUDID)"))
+        #expect(!message.contains("subprocess output incomplete"))
+    }
+
     @Test("A build with no .xctestrun reports nothing and returns immediately")
     func noXCTestRunReportsNothing() async {
         var reported: [String] = []
