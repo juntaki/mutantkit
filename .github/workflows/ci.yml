@@ -312,6 +312,13 @@ jobs:
           - fixture: shard-merge
             filter: ShardMergeAcceptanceTests
             simulator: "0"
+          # P9: proves the README's documented golden path (`setup` ->
+          # `config` -> `doctor` -> `plan` -> `run`) end to end against a
+          # configless project, through the real binary — not just that each
+          # command works in isolation. SwiftPM-only, no simulator needed.
+          - fixture: golden-path-onboarding
+            filter: GoldenPathOnboardingAcceptanceTests
+            simulator: "0"
           - fixture: swift-package-ios
             filter: SwiftPackageIOSAcceptanceTests
             simulator: "1"
