@@ -14,90 +14,98 @@ import Testing
 /// changed-file lists and PR-label sets — no new YAML/bash parsing, and no
 /// re-implementation of the classification logic to compare against; this
 /// exercises the exact artifact CI actually runs.
+struct CIRouteResult: Decodable, Equatable {
+    let runFull: Bool
+    let runSchemataTargeted: Bool
+    let selectedFixtures: [String]
+    let acceptanceMatrix: CIRouteAcceptanceMatrix
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case runFull = "run_full"
+        case runSchemataTargeted = "run_schemata_targeted"
+        case selectedFixtures = "selected_fixtures"
+        case acceptanceMatrix = "acceptance_matrix"
+        case reason
+    }
+}
+
+/// Mirrors the `{"include": [...]}` shape GitHub Actions' `fromJSON(...)`
+/// expects for `strategy.matrix` — see `Scripts/ci-route.sh`'s own header
+/// comment and `.github/workflows/ci.yml`'s `acceptance` job.
+struct CIRouteAcceptanceMatrix: Decodable, Equatable {
+    struct Entry: Decodable, Equatable {
+        let fixture: String
+        let filter: String
+        let simulator: String?
+        let wave: String?
+    }
+
+    let include: [Entry]
+}
+
+/// Shells out to the real `Scripts/ci-route.sh` — the same mechanism
+/// `SchemataIOSSimulatorRuntimeArtifactAcceptanceTests` and friends already
+/// use to invoke `Scripts/build-schemata-runtime.sh` and the `mutantkit`
+/// binary itself (see `Acceptance.binary()`), applied here to a routing
+/// script instead of the product under test. Shared by both halves of this
+/// suite (split across two `@Suite` structs purely to stay under
+/// SwiftLint's `type_body_length`, not because the two halves test
+/// different things) so there is exactly one way to invoke the script.
+func ciRoute(
+    event: String,
+    labels: [String] = [],
+    changedFiles: [String] = []
+) throws -> CIRouteResult {
+    let scriptURL = Acceptance.packageRoot.appendingPathComponent("Scripts/ci-route.sh")
+    try #require(
+        FileManager.default.isExecutableFile(atPath: scriptURL.path),
+        "Scripts/ci-route.sh is missing or not executable at \(scriptURL.path)"
+    )
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/bash")
+    let labelsData = try JSONEncoder().encode(labels)
+    let labelsJSON = String(decoding: labelsData, as: UTF8.self)
+    process.arguments = [scriptURL.path, event, labelsJSON]
+
+    let stdin = Pipe()
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    try process.run()
+
+    let inputData = Data(changedFiles.joined(separator: "\n").utf8)
+    stdin.fileHandleForWriting.write(inputData)
+    try stdin.fileHandleForWriting.close()
+
+    process.waitUntilExit()
+
+    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+
+    try #require(
+        process.terminationStatus == 0,
+        """
+        Scripts/ci-route.sh exited \(process.terminationStatus) for event='\(event)' \
+        labels=\(labels) changedFiles=\(changedFiles): \(String(decoding: errData, as: UTF8.self))
+        """
+    )
+
+    return try JSONDecoder().decode(CIRouteResult.self, from: outData)
+}
+
 @Suite("CI route classification (Scripts/ci-route.sh)")
 struct CIRouteClassificationTests {
-    struct RouteResult: Decodable, Equatable {
-        let runFull: Bool
-        let runSchemataTargeted: Bool
-        let selectedFixtures: [String]
-        let acceptanceMatrix: AcceptanceMatrix
-        let reason: String
-
-        enum CodingKeys: String, CodingKey {
-            case runFull = "run_full"
-            case runSchemataTargeted = "run_schemata_targeted"
-            case selectedFixtures = "selected_fixtures"
-            case acceptanceMatrix = "acceptance_matrix"
-            case reason
-        }
-    }
-
-    /// Mirrors the `{"include": [...]}` shape GitHub Actions'
-    /// `fromJSON(...)` expects for `strategy.matrix` — see this script's own
-    /// header comment and `.github/workflows/ci.yml`'s `acceptance` job.
-    struct AcceptanceMatrix: Decodable, Equatable {
-        struct Entry: Decodable, Equatable {
-            let fixture: String
-            let filter: String
-            let simulator: String?
-            let wave: String?
-        }
-
-        let include: [Entry]
-    }
-
-    private static var scriptURL: URL {
-        Acceptance.packageRoot.appendingPathComponent("Scripts/ci-route.sh")
-    }
-
-    /// Shells out to the real script — the same mechanism
-    /// `SchemataIOSSimulatorRuntimeArtifactAcceptanceTests` and friends
-    /// already use to invoke `Scripts/build-schemata-runtime.sh` and the
-    /// `mutantkit` binary itself (see `Acceptance.binary()`), applied here
-    /// to a routing script instead of the product under test.
     private func route(
         event: String,
         labels: [String] = [],
         changedFiles: [String] = []
-    ) throws -> RouteResult {
-        try #require(
-            FileManager.default.isExecutableFile(atPath: Self.scriptURL.path),
-            "Scripts/ci-route.sh is missing or not executable at \(Self.scriptURL.path)"
-        )
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        let labelsData = try JSONEncoder().encode(labels)
-        let labelsJSON = String(decoding: labelsData, as: UTF8.self)
-        process.arguments = [Self.scriptURL.path, event, labelsJSON]
-
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        try process.run()
-
-        let inputData = Data(changedFiles.joined(separator: "\n").utf8)
-        stdin.fileHandleForWriting.write(inputData)
-        try stdin.fileHandleForWriting.close()
-
-        process.waitUntilExit()
-
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-
-        try #require(
-            process.terminationStatus == 0,
-            """
-            Scripts/ci-route.sh exited \(process.terminationStatus) for event='\(event)' \
-            labels=\(labels) changedFiles=\(changedFiles): \(String(decoding: errData, as: UTF8.self))
-            """
-        )
-
-        return try JSONDecoder().decode(RouteResult.self, from: outData)
+    ) throws -> CIRouteResult {
+        try ciRoute(event: event, labels: labels, changedFiles: changedFiles)
     }
 
     // MARK: - Event / label / dispatch signals -> always full, regardless of paths
@@ -157,6 +165,22 @@ struct CIRouteClassificationTests {
     @Test("GateCommand.swift is trust-critical and runs the full matrix")
     func gateCommandIsTrustCritical() throws {
         let result = try route(event: "pull_request", changedFiles: ["Sources/CLI/Commands/GateCommand.swift"])
+        #expect(result.runFull)
+    }
+
+    // C0 landed real defects in exactly these two files (PlanCommand writing
+    // a plan from an unproven toolchain identity; VerifyCommand reporting a
+    // false "match" from incomplete evidence) -- a future regression in
+    // either must reach the full matrix, not the coarse cli-commands slice.
+    @Test("PlanCommand.swift is trust-critical and runs the full matrix")
+    func planCommandIsTrustCritical() throws {
+        let result = try route(event: "pull_request", changedFiles: ["Sources/CLI/Commands/PlanCommand.swift"])
+        #expect(result.runFull)
+    }
+
+    @Test("VerifyCommand.swift is trust-critical and runs the full matrix")
+    func verifyCommandIsTrustCritical() throws {
+        let result = try route(event: "pull_request", changedFiles: ["Sources/CLI/Commands/VerifyCommand.swift"])
         #expect(result.runFull)
     }
 
@@ -246,6 +270,21 @@ struct CIRouteClassificationTests {
         #expect(!result.runFull)
         #expect(Set(result.selectedFixtures) == ["swift-package", "swift-package-coverage", "swift-package-ios", "shard-merge"])
     }
+}
+
+/// The `acceptance_matrix` field, unknown-path fail-open behavior, and the
+/// fixture-existence cross-check -- split into its own `@Suite` purely to
+/// stay under SwiftLint's `type_body_length` (see `ciRoute(...)`'s own doc
+/// comment); conceptually still one suite for `Scripts/ci-route.sh`.
+@Suite("CI route classification: acceptance_matrix and fixture existence")
+struct CIRouteAcceptanceMatrixTests {
+    private func route(
+        event: String,
+        labels: [String] = [],
+        changedFiles: [String] = []
+    ) throws -> CIRouteResult {
+        try ciRoute(event: event, labels: labels, changedFiles: changedFiles)
+    }
 
     // MARK: - acceptance_matrix
 
@@ -263,7 +302,7 @@ struct CIRouteClassificationTests {
         )
         #expect(!result.runFull)
         #expect(result.acceptanceMatrix.include == [
-            AcceptanceMatrix.Entry(fixture: "cli-commands", filter: "CLICommandsAcceptanceTests", simulator: "1", wave: nil)
+            CIRouteAcceptanceMatrix.Entry(fixture: "cli-commands", filter: "CLICommandsAcceptanceTests", simulator: "1", wave: nil)
         ])
     }
 

@@ -75,15 +75,21 @@ reason=""
 # --- Targeted acceptance groups -------------------------------------------
 #
 # trust-critical: the core execution/verdict/toolchain-probe machinery, plus
-# the two CLI commands (`run`, `gate`) that are the connection point into it
-# -- cache, checkpoint, execution-orchestration, verdict, and integrity all
-# meet here. No shortcut for this group: any touch runs the full acceptance
-# matrix, same as an unrecognized path. RunCommand.swift/GateCommand.swift
-# are listed explicitly rather than relying on the (deliberately broader,
-# and therefore too coarse for *this* purpose) cli-commands prefix below --
-# see cli_commands's own comment for why that prefix cannot be trusted to
-# route these two files correctly on its own.
-trust_critical='^Sources/MutationExecution/|^Sources/CLI/RunContextProbe\.swift$|^Sources/CLI/ToolchainProbe\.swift$|^Sources/CLI/Commands/RunCommand\.swift$|^Sources/CLI/Commands/GateCommand\.swift$|^Sources/MutationModel/Integrity\.swift$|^Sources/MutationModel/MutationVerdictVerifier\.swift$|^Sources/MutationModel/VerdictProof\.swift$|^Sources/MutationModel/MultiTargetVerdict\.swift$|^Sources/AppleBuildAdapters/BuildClassifier\.swift$|^Sources/SchemataEligibilityClassifier/'
+# the four CLI commands (`run`, `gate`, `plan`, `verify`) that are the
+# connection point into it -- cache, checkpoint, execution-orchestration,
+# verdict, and integrity all meet here. No shortcut for this group: any touch
+# runs the full acceptance matrix, same as an unrecognized path.
+# RunCommand.swift/GateCommand.swift/PlanCommand.swift/VerifyCommand.swift are
+# listed explicitly rather than relying on the (deliberately broader, and
+# therefore too coarse for *this* purpose) cli-commands prefix below -- see
+# cli_commands's own comment for why that prefix cannot be trusted to route
+# these files correctly on its own. PlanCommand/VerifyCommand specifically:
+# the C0 correctness fix landed real defects in exactly these two files
+# (PlanCommand writing a plan from an unproven toolchain identity;
+# VerifyCommand reporting a false "match" from incomplete evidence) --
+# a future regression in either belongs behind the full matrix, not a
+# same-file-prefix-only acceptance slice.
+trust_critical='^Sources/MutationExecution/|^Sources/CLI/RunContextProbe\.swift$|^Sources/CLI/ToolchainProbe\.swift$|^Sources/CLI/Commands/RunCommand\.swift$|^Sources/CLI/Commands/GateCommand\.swift$|^Sources/CLI/Commands/PlanCommand\.swift$|^Sources/CLI/Commands/VerifyCommand\.swift$|^Sources/MutationModel/Integrity\.swift$|^Sources/MutationModel/MutationVerdictVerifier\.swift$|^Sources/MutationModel/VerdictProof\.swift$|^Sources/MutationModel/MultiTargetVerdict\.swift$|^Sources/AppleBuildAdapters/BuildClassifier\.swift$|^Sources/SchemataEligibilityClassifier/'
 # schemata: anything under a Schemata-named source path -> the ROR schemata
 # compile fixture plus both standalone schemata-runtime jobs (differential +
 # iOS-Simulator). Path is `Scripts/`, not `scripts/` -- this repo's actual
@@ -154,7 +160,7 @@ case "$event_name" in
 
       if echo "$changed_files" | grep -qE "$trust_critical"; then
         run_full="true"
-        reason="changed path(s) matched the trust-critical group (ProcessSupervisor/MutationExecution internals, RunContextProbe, ToolchainProbe, run/gate commands, integrity/cache/classifier/verdict code) -- runs the full matrix, no shortcut"
+        reason="changed path(s) matched the trust-critical group (ProcessSupervisor/MutationExecution internals, RunContextProbe, ToolchainProbe, run/gate/plan/verify commands, integrity/cache/classifier/verdict code) -- runs the full matrix, no shortcut"
       else
         if echo "$changed_files" | grep -qE "$schemata"; then
           matched_any="true"; schemata_targeted="true"
