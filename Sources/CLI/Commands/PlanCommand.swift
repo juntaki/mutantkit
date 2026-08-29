@@ -43,7 +43,7 @@ struct PlanCommand: AsyncParsableCommand {
 
         // Gathered here because the planner runs no subprocesses — keeping it
         // pure is what makes plans testable without a toolchain.
-        let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root)
+        let toolchain = try await resolvedToolchain(root: root)
 
         var scope: DiffScope?
         if let base = settings.execution.diffBase {
@@ -143,5 +143,39 @@ struct PlanCommand: AsyncParsableCommand {
             print("Pass either --diff-base or --since, not two different refs.")
             throw ExitCode(MutantKitExit.operationalError)
         }
+    }
+
+    // A plan is the single source of truth everything downstream reads —
+    // writing one now would bake an under-evidenced toolchain identity into
+    // it permanently, with no way for `verify`/`run` to later tell
+    // "provably unknown" apart from "the probe just happened to fail."
+    // Failing here instead means every plan.json that does get written
+    // always has a trustworthy toolchain identity.
+    private func resolvedToolchain(root: URL) async throws -> ToolchainFingerprint {
+        let toolchainProbe = await ToolchainProbe.fingerprint(workingDirectory: root)
+        guard let toolchain = Self.toolchainForPlanning(from: toolchainProbe) else {
+            print("""
+            Could not establish this machine's toolchain identity: a probe \
+            (swift/xcodebuild/xcrun) failed, timed out, or produced no \
+            parseable output. Writing a plan now would record an \
+            under-evidenced toolchain identity in plan.json. Re-run \
+            `mutantkit plan` once the toolchain can be probed cleanly.
+            """)
+            throw ExitCode(MutantKitExit.operationalError)
+        }
+        return toolchain
+    }
+}
+
+extension PlanCommand {
+    /// The fingerprint to plan with, or `nil` when `probe`'s own toolchain
+    /// identity was under-evidenced. Split out from `run()` purely so this
+    /// decision can be pinned by a direct, no-subprocess unit test
+    /// (`PlanCommandToolchainEvidenceTests`) that hand-constructs
+    /// `ToolchainProbeResult` values, mirroring `ToolchainProbe
+    /// .combinedIdentityEvidenceComplete`'s own reason for existing as a
+    /// standalone function.
+    static func toolchainForPlanning(from probe: ToolchainProbeResult) -> ToolchainFingerprint? {
+        probe.identityEvidenceComplete ? probe.fingerprint : nil
     }
 }

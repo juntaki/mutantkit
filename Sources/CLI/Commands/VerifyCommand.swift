@@ -111,13 +111,23 @@ struct VerifyCommand: AsyncParsableCommand {
     private func printCompatibility(of loadedPlan: MutationPlan, root: URL) async {
         do {
             let configuration = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
-            let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root)
-            let compatibility = PlanCompatibilityValidator.check(loadedPlan, against: configuration, toolchain: toolchain)
-            if compatibility.isEmpty {
+            let toolchainProbe = await ToolchainProbe.fingerprint(workingDirectory: root)
+            switch Self.compatibilityOutcome(plan: loadedPlan, configuration: configuration, toolchainProbe: toolchainProbe) {
+            case .match:
                 print("✓ Compatibility plan's toolchain and configuration hash match this environment")
-            } else {
-                print("! Compatibility \(compatibility.count) difference(s) from this environment")
-                for issue in compatibility { print("  └─ \(issue.message)") }
+            case let .differences(issues):
+                print("! Compatibility \(issues.count) difference(s) from this environment")
+                for issue in issues { print("  └─ \(issue.message)") }
+            case .unproven:
+                // Never a "✓ ... match": either side's evidence being
+                // unproven could just as easily hide a real difference as
+                // paper over one — printing a match here would be a
+                // compatibility verdict built on evidence that was never
+                // actually gathered, against this project's own "unknown
+                // evidence never becomes a verdict" principle.
+                print("! Compatibility could not be proven this run")
+                print("  └─ this run's toolchain probe was incomplete (a subprocess failed, timed out, "
+                    + "or produced no parseable output) — re-run `mutantkit verify` to get a trustworthy comparison")
             }
         } catch let error as ConfigurationError {
             if case .notFound = error {
@@ -129,5 +139,31 @@ struct VerifyCommand: AsyncParsableCommand {
             print("! Compatibility could not be checked: \(error)")
         }
         print("")
+    }
+}
+
+extension VerifyCommand {
+    /// Whether `loadedPlan`'s recorded toolchain/configuration identity
+    /// matches this run's — `.unproven`, never `.match`, when
+    /// `toolchainProbe`'s own evidence was incomplete: two independently
+    /// incomplete probes can both collapse to the same "unknown" toolchain
+    /// field, which would otherwise read as a match built on nothing. Split
+    /// out from `printCompatibility` purely so this decision can be pinned
+    /// by a direct, no-filesystem unit test (`VerifyCommandCompatibilityTests`)
+    /// that hand-constructs `ToolchainProbeResult` values, mirroring
+    /// `ToolchainProbe.combinedIdentityEvidenceComplete`'s own reason for
+    /// existing as a standalone function.
+    enum PlanCompatibilityOutcome: Equatable {
+        case match
+        case differences([ConfigurationIssue])
+        case unproven
+    }
+
+    static func compatibilityOutcome(
+        plan: MutationPlan, configuration: Configuration, toolchainProbe: ToolchainProbeResult
+    ) -> PlanCompatibilityOutcome {
+        guard toolchainProbe.identityEvidenceComplete else { return .unproven }
+        let issues = PlanCompatibilityValidator.check(plan, against: configuration, toolchain: toolchainProbe.fingerprint)
+        return issues.isEmpty ? .match : .differences(issues)
     }
 }

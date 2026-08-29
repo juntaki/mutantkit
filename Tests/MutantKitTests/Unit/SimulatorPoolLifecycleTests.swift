@@ -33,14 +33,14 @@ struct SimulatorPoolLifecycleTests {
     private static func success(_ stdout: String = "") -> ProcessResult {
         ProcessResult(
             exitCode: 0, standardOutput: Data(stdout.utf8), standardError: Data(),
-            durationSeconds: 0.01, timedOut: false, terminatingSignal: nil
+            durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true
         )
     }
 
     private static func failure(exitCode: Int32 = 1, _ stderr: String = "") -> ProcessResult {
         ProcessResult(
             exitCode: exitCode, standardOutput: Data(), standardError: Data(stderr.utf8),
-            durationSeconds: 0.01, timedOut: false, terminatingSignal: nil
+            durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true
         )
     }
 
@@ -59,7 +59,8 @@ struct SimulatorPoolLifecycleTests {
                     standardError: Data(),
                     durationSeconds: 0.01,
                     timedOut: false,
-                    terminatingSignal: nil
+                    terminatingSignal: nil,
+                    outputComplete: true
                 )
             }
             return try await scripted(executable, arguments)
@@ -163,7 +164,7 @@ struct SimulatorPoolLifecycleTests {
                 if arguments.contains("bootstatus") {
                     return ProcessResult(
                         exitCode: 0, standardOutput: Data(), standardError: Data(),
-                        durationSeconds: 90, timedOut: true, terminatingSignal: nil
+                        durationSeconds: 90, timedOut: true, terminatingSignal: nil, outputComplete: true
                     )
                 }
                 return Self.success()
