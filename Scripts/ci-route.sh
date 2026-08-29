@@ -24,21 +24,44 @@
 #     "run_full": true|false,
 #     "run_schemata_targeted": true|false,
 #     "selected_fixtures": ["fixture-a", "fixture-b", ...],
-#     "acceptance_matrix": {"include": [{"fixture": ..., "filter": ..., "simulator": ..., ["wave": ...]}, ...]},
+#     "acceptance_matrix": {"include": [
+#       {
+#         "shard": "A" | "<fixture-name>",
+#         "simulator": "0"|"1",
+#         "fixtures": [{"fixture": ..., "filter": ..., "simulator": ..., ["wave": ...]}, ...]
+#       },
+#       ...
+#     ]},
 #     "reason": "human-readable explanation"
 #   }
 #
 # `acceptance_matrix` is a real, already-filtered GitHub Actions matrix
-# object -- `run_full=true` means it contains every fixture from
+# object -- one `include` entry per `acceptance` job the run needs, each
+# carrying one *or more* fixtures to run in sequence inside that one job
+# (see the `acceptance` job's own comment/steps in ci.yml for why: 18
+# individual acceptance jobs on a 5-concurrent-macOS-runner account each
+# separately re-pay SwiftPM-cache-restore + build-artifact-download/extract
+# + simulator-boot overhead, so a full run instead groups fixtures into the
+# 4 shards declared by each fixture's own `shard` field in
+# Scripts/ci-fixtures.json -- see that field's own `_shard_readme` for how
+# the 4 groups were sized). `run_full=true` means every fixture from
 # Scripts/ci-fixtures.json (the single source of truth for the full fixture
-# list, read by this script both for that full case and to look up the
-# filter/simulator/wave fields of a targeted selection); otherwise it
-# contains only the entries whose `fixture` name appears in
-# `selected_fixtures`. The `route` job's workflow step feeds this straight
-# into the `acceptance` job's `strategy.matrix: ${{ fromJSON(...) }}` -- see
-# ci.yml's own comment there -- so an unselected fixture never creates a
-# runner job at all, rather than creating one whose steps are merely
-# skipped.
+# list, and for the filter/simulator/wave fields of a targeted selection) is
+# present, grouped by its `shard` field into (today) 4 `include` entries.
+# Otherwise -- a targeted, path-routed run -- each selected fixture gets its
+# *own* single-fixture `include` entry (`shard` set to that fixture's own
+# name), which reproduces exactly today's per-fixture job parallelism: a
+# targeted run already selects only a handful of fixtures, so the
+# many-jobs-on-few-runners problem the full-matrix grouping solves does not
+# apply, and grouping there would only add latency for no benefit. Each
+# `include` entry's own `simulator` field is the OR of every member
+# fixture's `simulator` (so `matrix.simulator == '1'` gates the shared
+# "Available simulators" preflight step in ci.yml exactly once per job,
+# needed if *any* fixture inside it needs a simulator). The `route` job's
+# workflow step feeds this straight into the `acceptance` job's
+# `strategy.matrix: ${{ fromJSON(...) }}` -- see ci.yml's own comment there
+# -- so an unselected fixture never creates a runner job at all, rather than
+# creating one whose steps are merely skipped.
 #
 # Every branch that is not a deliberate "run everything" signal (push to
 # main, workflow_dispatch, an override label, the trust-critical path group)
@@ -59,6 +82,20 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fixtures_file="$script_dir/ci-fixtures.json"
 if [ ! -f "$fixtures_file" ]; then
   echo "::error::ci-route.sh requires $fixtures_file (the fixture source of truth), which was not found" >&2
+  exit 1
+fi
+
+# Fail-closed config-integrity check, run unconditionally (not only on a
+# full-matrix run): every fixture in Scripts/ci-fixtures.json must declare a
+# `shard` -- see that file's own `_shard_readme` -- because a fixture
+# missing one would still get silently included in the full-matrix grouping
+# below (as a `shard: null` group), which is exactly the kind of "cannot
+# classify, so assume it's fine" outcome this project's own CI-safe-skip
+# principle rejects. Catching it here, at classification time, is cheaper
+# and clearer than debugging an oddly-shaped `acceptance_matrix` later.
+missing_shard="$(jq -r '[.fixtures[] | select((.shard // "") == "") | .fixture] | join(", ")' "$fixtures_file")"
+if [ -n "$missing_shard" ]; then
+  echo "::error::ci-route.sh: fixture(s) missing a 'shard' field in $fixtures_file: $missing_shard -- every fixture must belong to exactly one full-matrix shard (see that file's _shard_readme)" >&2
   exit 1
 fi
 
@@ -207,17 +244,52 @@ else
 fi
 
 # `acceptance_matrix`: the real, already-filtered GitHub Actions matrix
-# object -- see this script's own header comment. Built from
-# Scripts/ci-fixtures.json (the one source of truth for fixture
-# definitions) in both branches, so the full-matrix case and the targeted
-# case can never drift into two independently-maintained fixture lists.
+# object -- see this script's own header comment for the shard-grouped
+# shape. Built from Scripts/ci-fixtures.json (the one source of truth for
+# fixture definitions) in both branches, so the full-matrix case and the
+# targeted case can never drift into two independently-maintained fixture
+# lists.
+#
+# Full run: group every fixture by its own `shard` field (Scripts/ci-fixtures.json's
+# `_shard_readme` explains how the groups were sized) into one `include`
+# entry per shard. `group_by` sorts by the grouping key, so shards come out
+# in a stable A/B/C/D order run to run -- not load-bearing, just tidier logs.
+#
+# Targeted run: unchanged selection logic (still exactly which fixtures
+# matched a group above), but each selected fixture is wrapped as its own
+# single-fixture "shard" (named after the fixture itself) instead of being
+# grouped -- see this script's own header comment for why targeted runs
+# keep today's one-job-per-fixture parallelism rather than adopting the
+# full-matrix grouping.
 if [ "$run_full" = "true" ]; then
-  acceptance_matrix="$(jq -c '{include: .fixtures}' "$fixtures_file")"
+  acceptance_matrix="$(
+    jq -c '
+      { include: (
+          .fixtures
+          | group_by(.shard)
+          | map({
+              shard: .[0].shard,
+              simulator: (if any(.[]; .simulator == "1") then "1" else "0" end),
+              fixtures: map({fixture, filter, simulator, wave})
+            })
+        )
+      }
+    ' "$fixtures_file"
+  )"
 else
   acceptance_matrix="$(
-    jq -c --argjson names "$fixtures_json" \
-      '{include: [.fixtures[] | select(.fixture as $f | ($names | index($f)) != null)]}' \
-      "$fixtures_file"
+    jq -c --argjson names "$fixtures_json" '
+      { include: [
+          .fixtures[]
+          | select(.fixture as $f | ($names | index($f)) != null)
+          | {
+              shard: .fixture,
+              simulator: .simulator,
+              fixtures: [ {fixture, filter, simulator, wave} ]
+            }
+        ]
+      }
+    ' "$fixtures_file"
   )"
 fi
 

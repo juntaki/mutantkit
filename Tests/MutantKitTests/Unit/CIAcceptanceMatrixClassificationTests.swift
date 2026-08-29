@@ -22,6 +22,7 @@ struct CIAcceptanceMatrixClassificationTests {
         let filter: String
         let simulator: String?
         let wave: String?
+        let shard: String?
     }
 
     private struct FixturesFile: Decodable {
@@ -181,6 +182,27 @@ struct CIAcceptanceMatrixClassificationTests {
             #expect(
                 entry.simulator == "0" || entry.simulator == "1",
                 "fixture '\(entry.fixture)' has simulator: \(declared), not an explicit \"0\" or \"1\""
+            )
+        }
+    }
+
+    /// `shard` drives Scripts/ci-route.sh's full-matrix grouping (see that
+    /// file's own header comment and Scripts/ci-fixtures.json's
+    /// `_shard_readme`) -- a fixture missing one, or carrying a stray value
+    /// outside the four declared groups, would either crash that grouping or
+    /// silently create a fifth, undocumented shard. `ci-route.sh` itself
+    /// already fails closed on a missing `shard` at classification time; this
+    /// test pins the same guarantee one layer up, directly against the
+    /// checked-in fixture file, independent of the script's own behavior.
+    @Test("Every matrix entry declares a shard from the four documented groups")
+    func everyEntryDeclaresAKnownShard() throws {
+        let matrix = try loadMatrix()
+        let knownShards: Set = ["A", "B", "C", "D"]
+        for entry in matrix {
+            let declared = entry.shard.map { "\"\($0)\"" } ?? "<missing>"
+            #expect(
+                entry.shard.map(knownShards.contains) == true,
+                "fixture '\(entry.fixture)' has shard: \(declared), not one of \(knownShards.sorted())"
             )
         }
     }

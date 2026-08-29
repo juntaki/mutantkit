@@ -773,23 +773,60 @@ jobs:
   #     for wave-based early kill had never executed in CI. Reuses the same
   #     `XcodeProject` fixture the `xcode-project` entry already builds --
   #     no new fixture, no new infra, just the missing opt-in.
+  #
+  # Sharding (full-matrix runs only): each `acceptance_matrix` entry is now
+  # `{shard, simulator, fixtures: [...]}` rather than one fixture per entry
+  # -- see Scripts/ci-route.sh's own header comment and
+  # Scripts/ci-fixtures.json's `_shard_readme`. On a full run (push to main,
+  # `ci:full`/`ci:merge-ready`, workflow_dispatch, or an unclassified/
+  # trust-critical path) this collapses today's 18 individual fixture jobs
+  # into 4 weighted shard jobs, each running its own fixtures one at a time
+  # in the loop below -- because GitHub Pro's hosted runners cap concurrent
+  # macOS jobs at 5, 18 individual jobs queue in waves and each separately
+  # re-pays SwiftPM-cache-restore + build-artifact-download/extract +
+  # simulator-boot overhead; a shard now pays that once for several
+  # fixtures instead of once per fixture. On a targeted (path-routed) run,
+  # `route` instead puts each selected fixture in its own single-fixture
+  # shard (named after the fixture) -- see ci-route.sh's own comment for why
+  # targeted runs keep today's one-job-per-fixture parallelism rather than
+  # adopting the full-matrix grouping.
+  #
+  # Every fixture inside a shard still runs as its own independent
+  # `swift test --skip-build --filter <filter>` invocation, with its own log
+  # file and its own `scripts/assert-tests-ran.sh` check -- this is
+  # deliberately NOT "concatenate every fixture's filter into one `swift
+  # test` call": that would collapse per-fixture diagnosis (which fixture
+  # failed, whether it ran at all) into a single pass/fail for the whole
+  # shard, exactly the fixture-level fail-closed guarantee this matrix
+  # exists to keep. A failing fixture does not stop the loop -- the
+  # remaining fixtures in the same shard still run (mirroring `fail-fast:
+  # false` at the fixture level, not just the shard level), and the job as a
+  # whole fails if any of them did.
   acceptance:
-    name: Acceptance (${{ matrix.fixture }})
+    name: Acceptance (${{ matrix.shard }})
     runs-on: macos-15
     needs:
       - route
       - build
     # Generous: real xcodebuild/simulator work, legitimately slower than
-    # `unit-fast`'s own plain unit suite — but still bounded, per the same
-    # "nothing runs unbounded" reasoning as `unit-system`'s own ceiling above.
-    timeout-minutes: 30
+    # `unit-fast`'s own plain unit suite, and now several fixtures run in
+    # sequence inside one shard (see this job's own comment above) rather
+    # than one fixture per job -- a full shard is expected to take on the
+    # order of 26-27 minutes based on the wall-clock timings
+    # Scripts/ci-fixtures.json's `_shard_readme` sized the shards from.
+    # Still bounded, per the same "nothing runs unbounded" reasoning as
+    # `unit-system`'s own ceiling above, just with headroom sized for a
+    # shard rather than a single fixture.
+    timeout-minutes: 40
     strategy:
-      # Never cancel siblings: which fixtures fail together is a diagnosis.
+      # Never cancel siblings: which shards (and, within a shard, which
+      # fixtures) fail together is a diagnosis.
       fail-fast: false
       # See this job's own comment above -- `route` already filtered this
-      # down to exactly the fixtures this run needs (or every fixture, on a
-      # full run), reading Scripts/ci-fixtures.json as its one source of
-      # truth. No static `include:` list here anymore.
+      # down to exactly the fixtures this run needs, grouped into shards (or
+      # every fixture, one shard per fixture, on a targeted run), reading
+      # Scripts/ci-fixtures.json as its one source of truth. No static
+      # `include:` list here anymore.
       matrix: ${{ fromJSON(needs.route.outputs.acceptance_matrix) }}
     steps:
       - uses: actions/checkout@v4
@@ -806,8 +843,11 @@ jobs:
       - name: Toolchain
         run: swift --version && xcodebuild -version
 
-      # The suites pick whichever iPhone this machine actually has rather than
-      # pinning a model, so this is context for a failure, not a gate.
+      # `matrix.simulator` is the OR of every fixture's own `simulator` value
+      # inside this shard (computed by Scripts/ci-route.sh) -- run this once
+      # per shard if *any* member fixture needs it, not once per fixture.
+      # The suites pick whichever iPhone this machine actually has rather
+      # than pinning a model, so this is context for a failure, not a gate.
       - name: Available simulators
         if: matrix.simulator == '1'
         run: xcrun simctl list devices available | grep -i iphone || true
@@ -822,29 +862,60 @@ jobs:
         shell: bash
         run: tar -xzf build-tests.tar.gz
 
+      # Runs every fixture assigned to this shard in sequence -- each its
+      # own `swift test --skip-build --filter`, own log file, own
+      # `scripts/assert-tests-ran.sh` check, own exit code (see this job's
+      # own comment above for why this is not one combined `swift test`
+      # call). `set -o pipefail` alone (no `set -e`): a failing fixture must
+      # not abort the loop, only mark `overall_exit` and let the remaining
+      # fixtures in this shard still run.
       - name: Acceptance
         shell: bash
         env:
           MUTANTKIT_ACCEPTANCE: "1"
-          MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
-          MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
+          FIXTURES_JSON: ${{ toJSON(matrix.fixtures) }}
         run: |
           set -o pipefail
-          swift test --skip-build --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
-          test_exit=$?
-          # A filter matching zero tests must fail this job, not pass it
-          # silently -- see scripts/assert-tests-ran.sh. A real test failure
-          # above must still win even if the count check itself passes.
-          scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
-          exit $test_exit
+          mkdir -p acceptance-logs
+          overall_exit=0
+          failed_fixtures=()
+
+          while IFS= read -r fixture_json; do
+            fixture="$(jq -r '.fixture' <<<"$fixture_json")"
+            filter="$(jq -r '.filter' <<<"$fixture_json")"
+            simulator="$(jq -r '.simulator' <<<"$fixture_json")"
+            wave="$(jq -r '.wave // "0"' <<<"$fixture_json")"
+            log_file="acceptance-logs/${fixture}.log"
+
+            echo "::group::Acceptance: $fixture (filter: $filter)"
+            fixture_exit=0
+            MUTANTKIT_ACCEPTANCE_SIMULATOR="$simulator" \
+              MUTANTKIT_WAVE_ACCEPTANCE="$wave" \
+              swift test --skip-build --filter "$filter" 2>&1 | tee "$log_file" || fixture_exit=$?
+            # A filter matching zero tests must fail this fixture, not pass
+            # it silently -- see scripts/assert-tests-ran.sh. A real test
+            # failure above must still win even if the count check passes.
+            scripts/assert-tests-ran.sh "$log_file" "fixture $fixture (filter $filter)" || fixture_exit=1
+            if [ "$fixture_exit" -ne 0 ]; then
+              echo "::error::fixture $fixture (shard ${{ matrix.shard }}) failed with exit $fixture_exit -- see $log_file"
+              failed_fixtures+=("$fixture")
+              overall_exit=1
+            fi
+            echo "::endgroup::"
+          done < <(jq -c '.[]' <<<"$FIXTURES_JSON")
+
+          if [ "$overall_exit" -ne 0 ]; then
+            echo "::error::shard ${{ matrix.shard }}: failing fixture(s): ${failed_fixtures[*]}"
+          fi
+          exit $overall_exit
 
       - name: Upload acceptance failure logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: acceptance-${{ matrix.fixture }}-failure-logs
+          name: acceptance-${{ matrix.shard }}-failure-logs
           if-no-files-found: ignore
-          path: acceptance.log
+          path: acceptance-logs/
 
   # Separate from the `acceptance` matrix above because this suite links and
   # runs the real schemata runtime binary (SchemataMutationRunner drives a

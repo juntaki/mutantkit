@@ -32,13 +32,24 @@ struct CIRouteResult: Decodable, Equatable {
 
 /// Mirrors the `{"include": [...]}` shape GitHub Actions' `fromJSON(...)`
 /// expects for `strategy.matrix` — see `Scripts/ci-route.sh`'s own header
-/// comment and `.github/workflows/ci.yml`'s `acceptance` job.
+/// comment and `.github/workflows/ci.yml`'s `acceptance` job. Each `include`
+/// entry is a *shard* (one `acceptance` job) carrying one or more fixtures
+/// to run in sequence — on a full-matrix run, fixtures grouped by
+/// `Scripts/ci-fixtures.json`'s own `shard` field; on a targeted run, one
+/// single-fixture shard per selected fixture (see `ci-route.sh`'s header
+/// comment for why).
 struct CIRouteAcceptanceMatrix: Decodable, Equatable {
-    struct Entry: Decodable, Equatable {
+    struct Fixture: Decodable, Equatable {
         let fixture: String
         let filter: String
         let simulator: String?
         let wave: String?
+    }
+
+    struct Entry: Decodable, Equatable {
+        let shard: String
+        let simulator: String?
+        let fixtures: [Fixture]
     }
 
     let include: [Entry]
@@ -294,7 +305,7 @@ struct CIRouteAcceptanceMatrixTests {
     // field directly via `strategy.matrix: fromJSON(...)` instead of a
     // static `include:` list.
 
-    @Test("a targeted run's acceptance_matrix contains only the selected fixtures' full entries")
+    @Test("a targeted run's acceptance_matrix contains only the selected fixtures, one single-fixture shard each")
     func targetedAcceptanceMatrixContainsOnlySelectedFixtures() throws {
         let result = try route(
             event: "pull_request",
@@ -302,8 +313,40 @@ struct CIRouteAcceptanceMatrixTests {
         )
         #expect(!result.runFull)
         #expect(result.acceptanceMatrix.include == [
-            CIRouteAcceptanceMatrix.Entry(fixture: "cli-commands", filter: "CLICommandsAcceptanceTests", simulator: "1", wave: nil)
+            CIRouteAcceptanceMatrix.Entry(
+                shard: "cli-commands",
+                simulator: "1",
+                fixtures: [
+                    CIRouteAcceptanceMatrix.Fixture(
+                        fixture: "cli-commands",
+                        filter: "CLICommandsAcceptanceTests",
+                        simulator: "1",
+                        wave: nil
+                    )
+                ]
+            )
         ])
+    }
+
+    @Test("a targeted run keeps each selected fixture in its own independent shard (today's parallelism, unchanged)")
+    func targetedRunKeepsOneShardPerFixture() throws {
+        let result = try route(
+            event: "pull_request",
+            changedFiles: ["Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"]
+        )
+        #expect(!result.runFull)
+        // Sharding (grouping several fixtures into one job) is a full-matrix-only
+        // optimization -- see Scripts/ci-route.sh's own header comment. A
+        // targeted run must still create one independent `include` entry per
+        // selected fixture, exactly as before this change, so its own
+        // parallelism/job count is never reduced.
+        #expect(result.acceptanceMatrix.include.count == result.selectedFixtures.count)
+        for entry in result.acceptanceMatrix.include {
+            #expect(entry.fixtures.count == 1)
+            #expect(entry.shard == entry.fixtures[0].fixture)
+        }
+        let shardNames = Set(result.acceptanceMatrix.include.map(\.shard))
+        #expect(shardNames == Set(result.selectedFixtures))
     }
 
     @Test("a targeted run's acceptance_matrix includes golden-path-onboarding now that it's real")
@@ -317,7 +360,7 @@ struct CIRouteAcceptanceMatrixTests {
         // (the golden-path onboarding feature merged) -- it must appear in the
         // real, ready-to-use matrix object, not just the informational
         // `selectedFixtures` list.
-        let matrixFixtures = Set(result.acceptanceMatrix.include.map(\.fixture))
+        let matrixFixtures = Set(result.acceptanceMatrix.include.flatMap(\.fixtures).map(\.fixture))
         #expect(matrixFixtures == ["cli-commands", "xcode-config-detector", "golden-path-onboarding"])
     }
 
@@ -327,16 +370,65 @@ struct CIRouteAcceptanceMatrixTests {
             event: "pull_request",
             changedFiles: ["Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"]
         )
-        let entry = try #require(result.acceptanceMatrix.include.first { $0.fixture == "xcode-wave-early-kill" })
-        #expect(entry.wave == "1")
+        let fixture = try #require(
+            result.acceptanceMatrix.include.flatMap(\.fixtures).first { $0.fixture == "xcode-wave-early-kill" }
+        )
+        #expect(fixture.wave == "1")
     }
 
     @Test("push's acceptance_matrix contains every real fixture, not a second hardcoded copy")
     func fullRunAcceptanceMatrixContainsEveryRealFixture() throws {
         let result = try route(event: "push")
         #expect(result.runFull)
-        let matrixFixtures = Set(result.acceptanceMatrix.include.map(\.fixture))
+        let matrixFixtures = Set(result.acceptanceMatrix.include.flatMap(\.fixtures).map(\.fixture))
         #expect(matrixFixtures == (try realMatrixFixtureNames()))
+    }
+
+    // MARK: - Full-matrix sharding (Phase 1 acceptance-matrix reshaping)
+
+    //
+    // A full run groups the 18 fixtures into a handful of weighted shard
+    // jobs instead of one job per fixture -- see Scripts/ci-route.sh's own
+    // header comment and Scripts/ci-fixtures.json's `_shard_readme` for why.
+    // These tests pin the three guarantees that matter for correctness
+    // (never fixture count/scheduling speed): every fixture lands in
+    // exactly one shard, no shard is empty, and each shard's own
+    // `simulator` flag is the true OR of its member fixtures.
+
+    @Test("a full run's shards partition every real fixture exactly once -- none missing, none duplicated")
+    func fullRunShardsPartitionEveryFixtureExactlyOnce() throws {
+        let result = try route(event: "push")
+        #expect(result.runFull)
+
+        let allFixturesAcrossShards = result.acceptanceMatrix.include.flatMap(\.fixtures).map(\.fixture)
+        // Exactly-once membership: the flattened list's count matches its
+        // own de-duplicated set's count, and that set matches the real
+        // fixture list -- a fixture appearing in two shards, or in none,
+        // would fail one of these two checks.
+        #expect(allFixturesAcrossShards.count == Set(allFixturesAcrossShards).count)
+        #expect(Set(allFixturesAcrossShards) == (try realMatrixFixtureNames()))
+
+        for entry in result.acceptanceMatrix.include {
+            #expect(!entry.fixtures.isEmpty, "shard '\(entry.shard)' has zero fixtures")
+        }
+    }
+
+    @Test("a full run's shard-level simulator flag is the true OR of its member fixtures")
+    func fullRunShardSimulatorFlagIsOrOfMembers() throws {
+        let result = try route(event: "push")
+        #expect(result.runFull)
+
+        for entry in result.acceptanceMatrix.include {
+            let anyMemberNeedsSimulator = entry.fixtures.contains { $0.simulator == "1" }
+            let expectedSimulator = anyMemberNeedsSimulator ? "1" : "0"
+            #expect(
+                entry.simulator == expectedSimulator,
+                """
+                shard '\(entry.shard)' declares simulator: \(entry.simulator ?? "<missing>"), \
+                but its own members' OR is \(expectedSimulator)
+                """
+            )
+        }
     }
 
     // MARK: - Unknown paths -> fail toward the full matrix
