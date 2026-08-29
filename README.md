@@ -588,6 +588,34 @@ tight", because the result cannot tell you which.
 
 Precedence: CLI > project config > environment > defaults.
 
+### Configuration versioning
+
+`version` (top of the file) identifies the shape of `mutantkit.yml` itself,
+separately from the tool's own release version. It defaults to `1` when
+omitted, so every config written before this field existed is still valid.
+
+**A version mismatch fails closed.** If a config ever declares a `version`
+this build does not recognize, loading it is refused with an error naming
+the file, the version found, and the version expected — the run does not
+proceed with a guess at what the file meant.
+
+**There is currently no automatic migration between config versions**,
+because there has only ever been one: version 1 has not changed shape since
+it was introduced, so there is nothing to migrate *to* yet. This is a
+deliberate decision, not an oversight — building a migrator ahead of an
+actual format change would mean writing conversion logic against a target
+that does not exist and cannot be tested against a real old file. If an
+incompatible version 2 ever ships, a real migrator (and a documented
+upgrade path) will be built at that point, against the actual difference
+between the two versions.
+
+`mutantkit migrate --from-muter` (see [Coming from Muter](#coming-from-muter)
+below) is unrelated to this: it imports a *Muter* config, which has no
+version concept of its own, into a fresh MutantKit config. The file it
+writes is stamped with `version: 1` explicitly, and its report says so —
+distinguishing a tool-authored file with a known, deliberate version from a
+hand-written one that reaches the same default implicitly.
+
 ### Recommended production profile
 
 For an Xcode project/workspace or an Apple-platform SwiftPM package — anything

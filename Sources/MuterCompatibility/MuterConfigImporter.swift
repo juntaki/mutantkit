@@ -78,12 +78,21 @@ public struct MuterConfigImporter: Sendable {
         let operators = translateOperators(muter, into: &entries)
         recordUnmappable(muter, into: &entries)
 
+        // Muter's config format carries no version at all, so there is nothing
+        // to translate here — but stamping ours explicitly (rather than
+        // leaning on `Configuration.init`'s implicit default) is worth
+        // recording anyway: it marks this file as tool-authored against a
+        // known configuration schema version, unlike a hand-written
+        // mutantkit.yml, which reaches the same value only implicitly by
+        // omitting the field.
         let configuration = Configuration(
+            version: 1,
             project: project,
             sources: sources,
             operators: operators,
             timeouts: timeouts
         )
+        recordVersionStamp(configuration.version, into: &entries)
 
         return MuterImport(
             configuration: configuration,
@@ -368,6 +377,26 @@ public struct MuterConfigImporter: Sendable {
         return OperatorSettings(
             sideEffectCallRemoval: SideEffectCallRemovalSettings(excludeCalls: muter.excludeCalls)
         )
+    }
+
+    // MARK: - Version
+
+    /// Records that the output's `version` field was set on purpose, not left
+    /// to default silently. Muter has no equivalent concept to translate from
+    /// — this entry exists purely so the report is explicit about it.
+    private func recordVersionStamp(_ version: Int, into entries: inout [ImportReport.Entry]) {
+        entries.append(ImportReport.Entry(
+            field: "version",
+            disposition: .translated,
+            muterValue: "(no equivalent — Muter's config format is not versioned)",
+            mutantkitValue: "version: \(version)",
+            detail: """
+            Stamped explicitly on the imported file rather than left to default. This marks \
+            it as tool-authored against a known configuration schema version, as opposed to a \
+            hand-written mutantkit.yml, which reaches the same value only implicitly by \
+            omitting the field.
+            """
+        ))
     }
 
     // MARK: - What we cannot carry
