@@ -26,8 +26,14 @@ public struct ProcessResult: Sendable {
     /// `false` whenever the bounded post-exit drain wait (see `runBlocking`'s
     /// own `drainGroup.wait(timeout:)` call) did not confirm that *both*
     /// stdout and stderr had been fully read to EOF before this result was
-    /// built — `true` otherwise. This is a fact about *evidence*, orthogonal
-    /// to `exitCode`/`timedOut`/`terminatingSignal`: a process can exit
+    /// built — `true` otherwise. Genuine EOF (`read()` returning `0`) is
+    /// tracked separately, per stream, from the drain loop merely exiting:
+    /// a real `read()` error (`errno != EINTR`) breaks the same loop the
+    /// same way EOF does, but proves nothing about whether the writer was
+    /// actually done, so it must not be reported as `outputComplete == true`
+    /// either — see `drain`'s own `DataBox.reachedEOF`. This is a fact
+    /// about *evidence*, orthogonal to `exitCode`/`timedOut`/
+    /// `terminatingSignal`: a process can exit
     /// cleanly (even successfully) while something other than the process
     /// itself — a descendant that escaped reaping, a slow/contended drain
     /// thread — still holds a pipe open, in which case `standardOutput`/
@@ -354,6 +360,15 @@ public enum ProcessSupervisor {
         // EOF when this deadline passed, so whatever bytes were captured so far
         // must be treated as possibly truncated, not as the complete record.
         let drainOutcome = drainGroup.wait(timeout: .now() + drainGracePeriodSeconds)
+        // `drainOutcome == .success` only proves the drain loops *exited* —
+        // both a real EOF (`read()` returning `0`) and a genuine `read()`
+        // error (`errno != EINTR`, rare on a real pipe, but real) break the
+        // identical loop the identical way and signal this group the
+        // identical way. Only the former is actual proof every byte the
+        // writer produced was seen; the latter is a read failure that says
+        // nothing about whether the writer was done. `reachedEOF` is set
+        // only on the `count == 0` branch (see `drain` below), so both must
+        // be true, independently, for either stream to count as evidence.
 
         let exitCode: Int32
         var terminatingSignal: Int32?
@@ -373,7 +388,7 @@ public enum ProcessSupervisor {
             timedOut: timedOut,
             terminatingSignal: terminatingSignal,
             stalled: stalled,
-            outputComplete: drainOutcome == .success
+            outputComplete: drainOutcome == .success && outBox.reachedEOF && errBox.reachedEOF
         )
     }
 
@@ -552,15 +567,58 @@ public enum ProcessSupervisor {
         return (status, true, stalledCause)
     }
 
+    /// The three ways a single `read()` call on a drained pipe fd can end
+    /// this stream's drain loop, classified from just the syscall's own
+    /// return value and errno — split out from `drain`'s loop below purely
+    /// so the exact EOF-vs-error distinction `ProcessResult.outputComplete`
+    /// depends on can be pinned by a direct, timing-free, no-real-fd unit
+    /// test (`ProcessSupervisorDrainClassificationTests`), rather than only
+    /// inferred from `ForcedIncompleteOutputFixture`'s real-fd, real-timing
+    /// integration test, which cannot force a genuine `read()` error at all
+    /// (only a real EOF, which is the one outcome that was never in
+    /// question).
+    enum DrainReadOutcome: Equatable {
+        /// More bytes arrived; the loop keeps reading.
+        case data(Int)
+        /// `read()` returned `0`: real EOF, every writer of this fd has
+        /// closed it. The only outcome that proves the bytes read so far
+        /// are the whole story.
+        case eof
+        /// `read()` was interrupted by a signal — retried, never treated as
+        /// any kind of completion.
+        case retry
+        /// A genuine read error (`errno != EINTR`, rare on a real pipe, but
+        /// real). The loop must stop, but this proves nothing about whether
+        /// the writer was actually done — must never be reported the same
+        /// way `.eof` is.
+        case error
+    }
+
+    static func classify(readResult count: Int, errno currentErrno: Int32) -> DrainReadOutcome {
+        if count > 0 { return .data(count) }
+        if count == 0 { return .eof }
+        return currentErrno == EINTR ? .retry : .error
+    }
+
     private static func drain(_ fd: Int32, into box: DataBox, group: DispatchGroup) {
         DispatchQueue.global(qos: .userInitiated).async(group: group) {
             var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-            while true {
+            readLoop: while true {
                 let count = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
-                if count > 0 {
+                switch classify(readResult: count, errno: errno) {
+                case .data:
                     box.append(Data(buffer[0 ..< count]))
-                } else if count == 0 || errno != EINTR {
-                    break
+                case .eof:
+                    // See `DrainReadOutcome.eof`'s own doc comment: the only
+                    // branch that proves the bytes above are the whole story.
+                    box.markEOF()
+                    break readLoop
+                case .retry:
+                    continue readLoop
+                case .error:
+                    // Not EOF — `reachedEOF` stays false and `outputComplete`
+                    // must reflect that.
+                    break readLoop
                 }
             }
             close(fd)
@@ -573,6 +631,11 @@ public enum ProcessSupervisor {
 /// Accumulates pipe output from a drain thread.
 private final class DataBox: @unchecked Sendable {
     private var storage = Data()
+    /// Set only when this stream's drain loop observed real EOF
+    /// (`read() == 0`) — never on a `read()` error. See `drain`'s own
+    /// comments and `ProcessResult.outputComplete`'s doc comment for why
+    /// the two must stay distinguishable.
+    private var eofReached = false
     private let lock = NSLock()
 
     func append(_ data: Data) {
@@ -581,10 +644,22 @@ private final class DataBox: @unchecked Sendable {
         lock.unlock()
     }
 
+    func markEOF() {
+        lock.lock()
+        eofReached = true
+        lock.unlock()
+    }
+
     var value: Data {
         lock.lock()
         defer { lock.unlock() }
         return storage
+    }
+
+    var reachedEOF: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return eofReached
     }
 }
 
