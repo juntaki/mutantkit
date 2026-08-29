@@ -149,13 +149,15 @@ mutantkit run --plan plan.json --fail-on-survivors
 ```
 
 Start with `setup`. It detects what kind of project you have, which scheme and
-test targets it found, writes a starting `mutantkit.yml`, and then runs the
-same readiness diagnostics `doctor` does — whether `build-for-testing` actually
-succeeds, whether the `.xctestrun` really exists — against the config it just
-wrote, before you spend an hour finding out otherwise. If it reports an
-ambiguous scheme or an empty test-target list, resolve that in
-`mutantkit.yml` by hand; `setup` deliberately never guesses on your behalf,
-and says so rather than writing a config it isn't sure is right.
+test targets it found, writes a best-effort starting `mutantkit.yml` filling
+in everything it could detect, and then runs the same readiness diagnostics
+`doctor` does — whether `build-for-testing` actually succeeds, whether the
+`.xctestrun` really exists — against the config it just wrote, before you
+spend an hour finding out otherwise. If it reports an ambiguous scheme or an
+empty test-target list, resolve that in `mutantkit.yml` by hand; `setup`
+deliberately never guesses at an ambiguous choice on your behalf — it writes
+the rest of the config anyway (same as `mutantkit init`) and clearly reports
+what's still unresolved, rather than silently picking one for you.
 
 Prefer one step at a time, or scripting around the individual steps?
 `mutantkit doctor` checks the environment alone (worth re-running any time,
