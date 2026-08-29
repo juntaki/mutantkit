@@ -74,20 +74,41 @@ enum ConfigurationLoader {
             throw ConfigurationError.unreadable(path: url.path, underlying: error.localizedDescription)
         }
 
-        var configuration: Configuration
+        var configuration = try decode(data, sourceDescription: url.path)
+        applyEnvironment(environment, to: &configuration)
+        return configuration
+    }
+
+    /// Decodes a `mutantkit.yml`-shaped YAML string directly, without
+    /// reading it from a file — the exact text `mutantkit setup`/`setup
+    /// --dry-run` already built as the config it is (or would be) about to
+    /// write. Shares every rule `load` enforces (schema-version check,
+    /// environment overrides) so an in-memory preview is diagnosed
+    /// identically to the file it would produce, instead of needing its own,
+    /// separately-maintained rules.
+    static func parse(
+        _ text: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> Configuration {
+        var configuration = try decode(Data(text.utf8), sourceDescription: "<generated mutantkit.yml preview>")
+        applyEnvironment(environment, to: &configuration)
+        return configuration
+    }
+
+    private static func decode(_ data: Data, sourceDescription: String) throws -> Configuration {
+        let configuration: Configuration
         do {
             configuration = try YAMLDecoder().decode(Configuration.self, from: data)
         } catch {
-            throw ConfigurationError.malformed(path: url.path, underlying: "\(error)")
+            throw ConfigurationError.malformed(path: sourceDescription, underlying: "\(error)")
         }
 
         guard configuration.version == 1 else {
             throw ConfigurationError.unsupportedVersion(
-                path: url.path, found: configuration.version, expected: 1
+                path: sourceDescription, found: configuration.version, expected: 1
             )
         }
 
-        applyEnvironment(environment, to: &configuration)
         return configuration
     }
 

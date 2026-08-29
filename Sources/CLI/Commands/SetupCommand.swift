@@ -30,7 +30,10 @@ struct SetupCommand: AsyncParsableCommand {
         reports those and stops short of a verdict — and never starts a mutation run itself.
 
         Pass --dry-run to preview exactly what would be detected and written, without writing \
-        anything. Safe to run repeatedly, including from an agent deciding whether to proceed.
+        anything — and to run readiness against that exact preview, so a failure means the \
+        previewed config would not be ready, not that something already on disk isn't. Exits \
+        non-zero in that case. Safe to run repeatedly, including from an agent deciding whether \
+        to proceed.
         """
     )
 
@@ -47,7 +50,13 @@ struct SetupCommand: AsyncParsableCommand {
 
     func run() async throws {
         let root = common.resolvedProjectRoot
-        let destination = root.appendingPathComponent(ConfigurationLoader.fileName)
+        // Wherever `--config` names is where `setup` writes, same as every
+        // other command that accepts it treats it as "the config this
+        // invocation is about" — not just where readiness happens to read
+        // from while a hardcoded `<root>/mutantkit.yml` gets written
+        // instead.
+        let destination = common.configPath.map { URL(fileURLWithPath: $0) }
+            ?? root.appendingPathComponent(ConfigurationLoader.fileName)
         let alreadyExists = FileManager.default.fileExists(atPath: destination.path)
 
         if alreadyExists, !force, !dryRun {
@@ -66,13 +75,19 @@ struct SetupCommand: AsyncParsableCommand {
             print("\nWrote \(destination.path)")
         }
 
-        // Same checks `doctor` runs, against the config `setup` just wrote (or,
-        // in --dry-run, whatever is already on disk — the preview above already
-        // covers what would change). This is what actually proves the golden
-        // path end to end: a freshly-detected config that also passes the real
+        // Same checks `doctor` runs, against the *exact* `Configuration` this
+        // run just wrote, or — in --dry-run — the exact one it would write:
+        // parsed from `plan.template` directly, never re-read from
+        // `destination` on disk. Re-reading the path would answer "is
+        // whatever's already there ready", which in --dry-run is a
+        // completely different question from "would writing this preview
+        // leave the project ready" — the one thing a preview exists to
+        // answer. This is what actually proves the golden path end to end: a
+        // freshly-detected config that also passes the real
         // toolchain/build/host checks, not just one that looks plausible.
         print("\nChecking readiness…\n")
-        let readiness = await ReadinessCheck.run(root: root, configPath: common.configPath, skipBuild: skipBuild)
+        let configuration = try ConfigurationLoader.parse(plan.template)
+        let readiness = await ReadinessCheck.run(root: root, configuration: configuration, skipBuild: skipBuild)
         print(ReadinessCheck.render(readiness.diagnosis))
 
         let step = Self.nextStep(
@@ -83,8 +98,11 @@ struct SetupCommand: AsyncParsableCommand {
         )
         print("\n\(Self.message(for: step, configPath: destination.path))")
 
-        if case .environmentNotReady = step {
+        switch step {
+        case .environmentNotReady, .previewNotReady:
             throw ExitCode(MutantKitExit.operationalError)
+        case .previewOnly, .needsManualCompletion, .ready:
+            break
         }
     }
 
@@ -93,9 +111,15 @@ struct SetupCommand: AsyncParsableCommand {
     /// tested directly, without running real detection, `xcodebuild`, or a
     /// trial build.
     enum NextStep: Equatable {
-        /// `--dry-run` was passed: nothing was written, regardless of
-        /// anything else this run found.
+        /// `--dry-run` was passed and the previewed config — the exact one
+        /// that would be written — already passes readiness.
         case previewOnly
+        /// `--dry-run` was passed, nothing was written, and the previewed
+        /// config would *not* pass readiness. Distinct from `.previewOnly`:
+        /// an agent deciding whether to run `setup` for real needs to see a
+        /// genuine would-fail diagnosis here, not a blanket "preview done"
+        /// that reads the same whether the previewed config works or not.
+        case previewNotReady
         /// A human still has to resolve an ambiguous scheme or fill in a
         /// test target by hand. Matches `init`'s own existing behavior for
         /// the identical scenario — it still writes the file and still
@@ -110,7 +134,13 @@ struct SetupCommand: AsyncParsableCommand {
     }
 
     static func nextStep(dryRun: Bool, hasTestTargets: Bool, schemeAmbiguous: Bool, environmentReady: Bool) -> NextStep {
-        if dryRun { return .previewOnly }
+        // Preview mode's only question is "would the previewed config pass
+        // readiness" — an ambiguous scheme or empty test-target list already
+        // shows up as part of that same diagnosis (an adapter cannot resolve
+        // without a scheme, and `doctor`'s own checks warn on an empty
+        // `tests.targets`), so it does not need a second, separately-gated
+        // bucket the way the non-dry-run path below does.
+        if dryRun { return environmentReady ? .previewOnly : .previewNotReady }
 
         var unresolved: [String] = []
         if schemeAmbiguous { unresolved.append("the ambiguous Xcode scheme") }
@@ -124,6 +154,9 @@ struct SetupCommand: AsyncParsableCommand {
         switch step {
         case .previewOnly:
             "This was a preview — nothing was written. Re-run without --dry-run to write \(configPath)."
+        case .previewNotReady:
+            "This was a preview — nothing was written, and the previewed \(configPath) would not be ready. "
+                + "Fix the failures above, then re-run --dry-run to confirm before writing for real."
         case let .needsManualCompletion(details):
             "Resolve \(details.joined(separator: " and ")) in \(configPath), then run `mutantkit doctor` to confirm."
         case .environmentNotReady:

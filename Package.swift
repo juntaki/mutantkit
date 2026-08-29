@@ -196,6 +196,7 @@ let package = Package(
                 "ApplePlatformOperators", "MutationPlanner", "MutationExecution",
                 "AppleBuildAdapters", "Reporting", "MuterCompatibility",
                 "CLI", "SchemataEligibilityClassifier",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 // Not imported by any test file — a target dependency here
                 // exists only so `swift build --build-tests` (already run
                 // before every test invocation) also produces

@@ -22,7 +22,33 @@ enum ReadinessCheck {
 
     static func run(root: URL, configPath: String?, skipBuild: Bool) async -> Outcome {
         let (configuration, configStatus) = loadConfiguration(configPath: configPath, root: root)
+        return await diagnose(configuration: configuration, configStatus: configStatus, root: root, skipBuild: skipBuild)
+    }
 
+    /// Diagnoses an already-resolved `Configuration` directly, instead of
+    /// loading one from a path on disk.
+    ///
+    /// `mutantkit setup`/`setup --dry-run` build the exact `Configuration`
+    /// they are about to write (or would write) before this ever runs —
+    /// this lets both diagnose that same object, rather than independently
+    /// re-reading whatever already happens to exist at `--config`'s path.
+    /// The two can disagree: a stale config already on disk, or one at a
+    /// different path than `--config` names, would otherwise get diagnosed
+    /// instead of the config `setup` actually cares about — silently
+    /// answering "is what's already here ready" instead of "would writing
+    /// this leave the project ready", which is the only question a preview
+    /// exists to answer.
+    static func run(root: URL, configuration: Configuration, skipBuild: Bool) async -> Outcome {
+        let configStatus = validationFailure(for: configuration, root: root)
+        return await diagnose(configuration: configuration, configStatus: configStatus, root: root, skipBuild: skipBuild)
+    }
+
+    private static func diagnose(
+        configuration: Configuration,
+        configStatus: DiagnosisItem?,
+        root: URL,
+        skipBuild: Bool
+    ) async -> Outcome {
         let toolchain = await ToolchainProbe.fingerprint(workingDirectory: root).fingerprint
         var items: [DiagnosisItem] = []
         if let configStatus {
@@ -146,15 +172,24 @@ enum ReadinessCheck {
             configStatus = DiagnosisItem(name: "Configuration", status: .failure, detail: "\(error)")
         }
 
+        return (configuration, configStatus ?? validationFailure(for: configuration, root: root))
+    }
+
+    /// The first configuration-validation error, rendered as the same
+    /// `DiagnosisItem` shape a load failure would produce — shared by both
+    /// the disk-loading and in-memory diagnosis entry points so a validation
+    /// error reads identically regardless of where the `Configuration` came
+    /// from.
+    private static func validationFailure(for configuration: Configuration, root: URL) -> DiagnosisItem? {
         for issue in ConfigurationValidator.validate(configuration, projectRoot: root) where issue.severity == .error {
-            configStatus = configStatus ?? DiagnosisItem(
+            return DiagnosisItem(
                 name: "Configuration",
                 status: .failure,
                 detail: issue.description,
                 remedy: "Fix the configuration issue above."
             )
         }
-        return (configuration, configStatus)
+        return nil
     }
 
     /// Isolated mode makes a full source copy per concurrent mutant, so running

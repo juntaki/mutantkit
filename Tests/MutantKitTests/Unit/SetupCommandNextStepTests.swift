@@ -2,17 +2,28 @@
 import Testing
 
 /// `mutantkit setup`'s "what do I tell the user next" decision, pinned
-/// directly: `--dry-run` always wins (nothing was written, so nothing else
-/// matters), an unresolved scheme/test target must not be silently guessed
-/// away, and only a genuine `doctor`-style readiness failure should make
-/// `setup` itself report "not ready" or exit non-zero — the same contract
-/// `init` and `doctor` already have individually.
+/// directly: `--dry-run` never writes anything, but its outcome still turns
+/// on whether the *previewed* config actually passes readiness — a real
+/// diagnosed failure of that preview must read differently from one that
+/// passes, not collapse into the same "preview done" bucket regardless. An
+/// unresolved scheme/test target must not be silently guessed away, and only
+/// a genuine `doctor`-style readiness failure should make `setup` itself
+/// report "not ready" or exit non-zero — the same contract `init` and
+/// `doctor` already have individually.
 @Suite("SetupCommand.nextStep")
 struct SetupCommandNextStepTests {
-    @Test("--dry-run always reports previewOnly, even when everything else looks unresolved or unready")
-    func dryRunAlwaysWins() {
+    @Test("--dry-run with a ready preview reports previewOnly, regardless of scheme/test-target ambiguity")
+    func dryRunReadyReportsPreviewOnly() {
         #expect(SetupCommand.nextStep(dryRun: true, hasTestTargets: true, schemeAmbiguous: false, environmentReady: true) == .previewOnly)
-        #expect(SetupCommand.nextStep(dryRun: true, hasTestTargets: false, schemeAmbiguous: true, environmentReady: false) == .previewOnly)
+        #expect(SetupCommand.nextStep(dryRun: true, hasTestTargets: false, schemeAmbiguous: true, environmentReady: true) == .previewOnly)
+    }
+
+    @Test("--dry-run with a genuinely failing preview reports previewNotReady, not a silent previewOnly")
+    func dryRunNotReadyReportsPreviewNotReady() {
+        let resolved = SetupCommand.nextStep(dryRun: true, hasTestTargets: true, schemeAmbiguous: false, environmentReady: false)
+        #expect(resolved == .previewNotReady)
+        let unresolved = SetupCommand.nextStep(dryRun: true, hasTestTargets: false, schemeAmbiguous: true, environmentReady: false)
+        #expect(unresolved == .previewNotReady)
     }
 
     @Test("An ambiguous scheme is reported, not silently resolved, even when the environment is otherwise ready")
@@ -72,6 +83,7 @@ struct SetupCommandNextStepTests {
         let path = "/tmp/project/mutantkit.yml"
         let unresolved = SetupCommand.NextStep.needsManualCompletion(details: ["the ambiguous Xcode scheme"])
         #expect(SetupCommand.message(for: .previewOnly, configPath: path).contains(path))
+        #expect(SetupCommand.message(for: .previewNotReady, configPath: path).contains(path))
         #expect(SetupCommand.message(for: unresolved, configPath: path).contains(path))
         #expect(SetupCommand.message(for: unresolved, configPath: path).contains("the ambiguous Xcode scheme"))
 
