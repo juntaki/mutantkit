@@ -3,30 +3,59 @@ name: Action smoke test
 # Exercises the repo-root `action.yml` composite action the same way an
 # external consumer would (`uses: juntaki/mutantkit@<ref>`), except pointed
 # at this checkout (`uses: ./`) so a change to action.yml is validated
-# before it ever reaches a tag. Manual/scheduled rather than on every push:
-# unlike `ci.yml` (which builds from source) this depends on a real
-# published GitHub Release existing to download, so it is not a source-of-
-# truth gate for a PR — `release.yml`'s own `clean-machine-e2e` job already
-# proves the underlying tarball/SHA256SUMS/PATH recipe works at release
-# time; this job's only job is to prove action.yml wraps that recipe
-# correctly.
+# before it ever reaches a tag.
+#
+# Two genuinely different things are being proven here, and they are kept
+# in separate jobs on purpose (P13 review, item 3):
+#
+#   - "install mode against a real release" (the `install-mode-*` jobs) —
+#     depends on a real, already-published GitHub Release existing to
+#     download. `release.yml`'s own `clean-machine-e2e` job already proves
+#     the underlying tarball/SHA256SUMS/PATH recipe at release time; these
+#     jobs prove action.yml wraps that recipe correctly, including
+#     attestation verification and version-pin resolution.
+#
+#   - "CI-mode orchestration" (every other job) — this cannot be proven
+#     against a published release: the CLI surface `mode: ci` depends on
+#     (`gate --json`, `run --also-report`) postdates the latest release at
+#     the time this test suite was written (v0.2.0 has neither — see
+#     `Scripts/action/preflight-capabilities.sh`'s own doc comment). Every
+#     `ci-mode-*`/`build-from-source` job below instead builds `mutantkit`
+#     straight from this exact PR HEAD and feeds it to action.yml via
+#     `internal-test-binary-dir` (install.sh's own test-only seam — never a
+#     documented, supported input), so what is actually exercised is this
+#     PR's real orchestration script against this PR's real CLI, not a
+#     stand-in for either.
+#
+# `pull_request` (path-filtered to this Action's own surface) is what makes
+# this required evidence for a P13 PR rather than decoration: a broken
+# action.yml/orchestration script on a PR that touches exactly these files
+# must not be able to hide behind a green `ci.yml` that never invokes either
+# one.
 on:
   workflow_dispatch:
   schedule:
     # Weekly, so a change on the GitHub Actions platform side (runner image,
-    # curl/shasum/tar behavior) that silently breaks the action is caught
-    # without anyone having to remember to run it by hand.
+    # curl/shasum/tar/gh-cli behavior) that silently breaks the action is
+    # caught without anyone having to remember to run it by hand.
     - cron: "0 6 * * 1"
+  pull_request:
+    paths:
+      - "action.yml"
+      - "Scripts/action/**"
+      - ".github/workflows/action-smoke-test.yml"
 
 jobs:
-  smoke-test:
-    name: Install via action.yml (${{ matrix.version }})
+  # ---------------------------------------------------------------------
+  # mode: install, against a real published release.
+  # ---------------------------------------------------------------------
+
+  install-mode:
+    name: "mode: install (${{ matrix.version }})"
     runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
-        # Both the floating default and an explicit pin — the two paths
-        # action.yml's `inputs.version` branches on.
         version: ["latest"]
     steps:
       - uses: actions/checkout@v4
@@ -37,22 +66,681 @@ jobs:
         with:
           version: ${{ matrix.version }}
 
-      - name: Confirm mutantkit is on PATH and reports a version
+      - name: outputs.version is a single non-empty line matching a fresh `mutantkit --version`
         shell: bash
         run: |
           set -euo pipefail
           command -v mutantkit
-          reported="$(mutantkit --version)"
-          echo "mutantkit --version: $reported"
-          if [ -z "$reported" ]; then
-            echo "::error::mutantkit --version produced no output"
+
+          output_version="${{ steps.mutantkit.outputs.version }}"
+          if [ -z "$output_version" ]; then
+            echo "::error::outputs.version was empty" >&2
             exit 1
           fi
-          if [ "$reported" != "${{ steps.mutantkit.outputs.version }}" ]; then
-            echo "::error::action output version ('${{ steps.mutantkit.outputs.version }}') does not match a fresh 'mutantkit --version' ('$reported')"
+          non_empty_line_count="$(printf '%s\n' "$output_version" | grep -c .)"
+          if [ "$non_empty_line_count" != "1" ]; then
+            echo "::error::outputs.version must be exactly one non-empty line, got: $output_version" >&2
             exit 1
           fi
 
-      - name: mutantkit doctor (no project — must report that honestly, not crash)
+          fresh="$(mutantkit --version | head -n1)"
+          if [ "$fresh" != "$output_version" ]; then
+            echo "::error::outputs.version ('$output_version') does not match a fresh 'mutantkit --version' first line ('$fresh')" >&2
+            exit 1
+          fi
+
+      - name: "mode: install never starts a mutation campaign (no project present)"
         shell: bash
-        run: mutantkit doctor || true
+        run: |
+          set -euo pipefail
+          # `doctor` on an empty directory must fail *honestly* — a specific,
+          # actionable diagnostic and MutantKitExit.operationalError — never
+          # crash, and (this is the point of this job) never get invoked by
+          # `mode: install` at all in the first place. `|| true` on `doctor`
+          # was an earlier version of this test's own mistake: it proved
+          # nothing beyond "the process exited," which a crash also does.
+          set +e
+          doctor_json="$(mutantkit doctor --json 2>/tmp/doctor.stderr)"
+          doctor_exit=$?
+          set -e
+          echo "$doctor_json"
+          if [ "$doctor_exit" != "1" ]; then
+            echo "::error::expected mutantkit doctor --json to exit 1 (MutantKitExit.operationalError) on an empty directory, got $doctor_exit" >&2
+            exit 1
+          fi
+          echo "$doctor_json" | jq -e '.canProceed == false' >/dev/null \
+            || { echo "::error::expected canProceed == false"; exit 1; }
+          echo "$doctor_json" | jq -e '[.items[].code] | contains(["projectResolutionFailed"])' >/dev/null \
+            || { echo "::error::expected a projectResolutionFailed diagnosis item"; exit 1; }
+
+          # The actual proof this job exists for: mode: install must never
+          # itself have run doctor/plan/run — no artifact of a campaign
+          # should exist in this empty workspace.
+          for f in plan.json report.json gate-result.json .mutantkit; do
+            if [ -e "$f" ]; then
+              echo "::error::mode: install left behind '$f' — it must never run doctor/plan/run/gate itself" >&2
+              exit 1
+            fi
+          done
+
+  mode-validation:
+    name: "Unknown mode fails closed, before any download"
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: "mode: not-a-real-mode"
+        id: bogus-mode
+        continue-on-error: true
+        uses: ./
+        with:
+          mode: not-a-real-mode
+      - name: Assert the step actually failed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.bogus-mode.outcome }}" != "failure" ]; then
+            echo "::error::expected mode: not-a-real-mode to fail closed, got outcome '${{ steps.bogus-mode.outcome }}'" >&2
+            exit 1
+          fi
+
+  incompatible-cli-fails-closed:
+    name: "mode: ci against a pre-P13 release fails at preflight, not mid-campaign"
+    runs-on: macos-15
+    steps:
+      - name: Checkout mutantkit (action.yml)
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+
+      - name: Stage a real Swift package as the project under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R mutantkit-src/Fixtures/SwiftPackageMacOS/. .
+          cat > mutantkit.yml <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [console, json]
+          YAML
+
+      # v0.2.0 is real: the latest published release at the time P13 was
+      # written, and confirmed (Scripts/action/preflight-capabilities.sh's
+      # own doc comment) to have neither `gate --json` nor `run
+      # --also-report`. `mode: ci` against it must refuse to even start
+      # doctor, not fail confusingly deep into a real mutation campaign.
+      - name: "mode: ci, version: v0.2.0"
+        id: old-cli
+        continue-on-error: true
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          version: v0.2.0
+
+      - name: Assert it failed before doctor/plan ever ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.old-cli.outcome }}" != "failure" ]; then
+            echo "::error::expected mode: ci with an incompatible CLI version to fail, got outcome '${{ steps.old-cli.outcome }}'" >&2
+            exit 1
+          fi
+          for f in plan.json report.json gate-result.json; do
+            if [ -e "$f" ]; then
+              echo "::error::'$f' exists — the incompatible-CLI preflight should have failed before plan/run ever produced output" >&2
+              exit 1
+            fi
+          done
+
+  # ---------------------------------------------------------------------
+  # mode: ci, against mutantkit built from this exact PR HEAD.
+  # ---------------------------------------------------------------------
+
+  build-from-source:
+    name: Build mutantkit from PR HEAD (shared by every mode:ci job below)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build -c release --product mutantkit
+      - name: Stage the built binary for other jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-bin
+          cp .build/release/mutantkit dist-bin/mutantkit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutantkit-from-source
+          path: dist-bin/mutantkit
+          retention-days: 1
+
+  ci-mode-happy-path:
+    name: "mode: ci happy path — doctor/plan/run/gate/summary/artifacts, reporter preservation"
+    needs: build-from-source
+    runs-on: macos-15
+    steps:
+      - name: Checkout mutantkit (action.yml)
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-from-source
+          path: test-binary
+      - run: chmod +x test-binary/mutantkit
+        shell: bash
+
+      # `Fixtures/SwiftPackageMacOS`'s mutants are pinned by this repo's own
+      # `SwiftPackageMacOSAcceptanceTests`: 3 killed, 4 survived, zero
+      # integrity violations under `execution.strategy: isolated` — not a
+      # full kill. No `qualityGate:` is configured below, so `gate`'s
+      # `passed: true` here asserts "integrity held and a real score was
+      # computed" (see `QualityGate.evaluate`'s own fail-closed
+      # `scoreUnavailable` path for what a broken pipeline would show
+      # instead), not "every mutant died" — the deterministic
+      # threshold-failure path is `ci-mode-quality-gate-failure` below.
+      # `reports: [sonar]` is deliberately a kind this action never itself
+      # requests (P13 review, item 4/reporter preservation): its survival
+      # alongside the four CI-required kinds is what proves `--also-report`
+      # added to the config's own reports instead of replacing them.
+      - name: Stage the fixture project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R mutantkit-src/Fixtures/SwiftPackageMacOS/. .
+          cat > mutantkit.yml <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [sonar]
+          YAML
+
+      - name: "Run mutantkit via action.yml (mode: ci)"
+        id: mutantkit
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          artifact-name: mutantkit-report-happy-path
+
+      - name: Assert the run actually produced real, trustworthy output
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "::group::report.json"
+          test -s report.json || { echo "::error::report.json is missing or empty"; exit 1; }
+          jq -e '.score.killed != null and .score.survived != null' report.json >/dev/null \
+            || { echo "::error::report.json has no mutation score"; cat report.json; exit 1; }
+          jq -e '.integrity.violations | length == 0' report.json >/dev/null \
+            || { echo "::error::report.json recorded an integrity violation"; jq '.integrity' report.json; exit 1; }
+          jq '{score, integrityViolations: .integrity.violations}' report.json
+          echo "::endgroup::"
+
+          echo "::group::gate-result.json"
+          test -s gate-result.json || { echo "::error::gate-result.json is missing or empty"; exit 1; }
+          jq -e 'has("passed") and has("violations")' gate-result.json >/dev/null \
+            || { echo "::error::gate-result.json is not a QualityGateResult"; cat gate-result.json; exit 1; }
+          cat gate-result.json
+          [ "$(jq -r '.passed' gate-result.json)" = "true" ] \
+            || { echo "::error::expected gate to pass against this fixture's known-good baseline"; exit 1; }
+          echo "::endgroup::"
+
+          echo "::group::\$GITHUB_STEP_SUMMARY"
+          test -s "$GITHUB_STEP_SUMMARY" || { echo "::error::no job summary was written"; exit 1; }
+          cat "$GITHUB_STEP_SUMMARY"
+          grep -q ':white_check_mark: Mutation quality gate passed' "$GITHUB_STEP_SUMMARY" \
+            || { echo "::error::job summary is missing the expected pass banner"; exit 1; }
+          grep -qi 'mutation' "$GITHUB_STEP_SUMMARY" \
+            || { echo "::error::job summary is missing CISummaryReporter's own section (summary.md was not folded in)"; exit 1; }
+          echo "::endgroup::"
+
+          echo "::group::reporter preservation (--also-report is additive)"
+          test -s .mutantkit/report.html || { echo "::error::.mutantkit/report.html (--also-report) was not generated"; exit 1; }
+          test -s .mutantkit/summary.md || { echo "::error::.mutantkit/summary.md (--also-report) was not generated"; exit 1; }
+          test -s .mutantkit/sonar-issues.json \
+            || { echo "::error::.mutantkit/sonar-issues.json (the project's OWN configured report) is missing — --also-report appears to have replaced reports: [sonar] instead of adding to it"; exit 1; }
+          echo "::endgroup::"
+
+      - name: Download the artifact action.yml uploaded, under its custom name
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-report-happy-path
+          path: downloaded-artifact
+
+      - name: Assert the downloaded artifact has real, non-hidden content
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in report.json gate-result.json report.html summary.md; do
+            path="downloaded-artifact/$f"
+            test -s "$path" || { echo "::error::uploaded artifact is missing or empty: $f"; exit 1; }
+          done
+          echo "mutantkit-report-happy-path artifact verified: $(find downloaded-artifact -type f | sort | tr '\n' ' ')"
+
+  ci-mode-quality-gate-failure:
+    name: "mode: ci — an unmeetable threshold fails the job, artifacts still upload"
+    needs: build-from-source
+    runs-on: macos-15
+    steps:
+      - name: Checkout mutantkit (action.yml)
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-from-source
+          path: test-binary
+      - run: chmod +x test-binary/mutantkit
+        shell: bash
+
+      # `effectiveScore.minimum: 101` cannot be met by any report (a
+      # percentage cannot exceed 100) — deterministic, without needing an
+      # actually-uncovered mutant.
+      - name: Stage the fixture project with an unmeetable quality gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R mutantkit-src/Fixtures/SwiftPackageMacOS/. .
+          cat > mutantkit.yml <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [console]
+          qualityGate:
+            effectiveScore:
+              minimum: 101
+          YAML
+
+      - name: "Run mutantkit via action.yml (mode: ci) — expected to fail"
+        id: mutantkit
+        continue-on-error: true
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          artifact-name: mutantkit-report-gate-failure
+
+      - name: Assert the job is red for the right reason
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.mutantkit.outcome }}" != "failure" ]; then
+            echo "::error::expected the unmeetable quality gate to fail this step, got outcome '${{ steps.mutantkit.outcome }}'" >&2
+            exit 1
+          fi
+          test -s gate-result.json || { echo "::error::gate-result.json is missing"; exit 1; }
+          [ "$(jq -r '.passed' gate-result.json)" = "false" ] \
+            || { echo "::error::expected gate-result.json .passed == false"; cat gate-result.json; exit 1; }
+          jq -e '.violations | length > 0' gate-result.json >/dev/null \
+            || { echo "::error::expected at least one violation"; exit 1; }
+
+          test -s "$GITHUB_STEP_SUMMARY"
+          grep -q ':x: Mutation quality gate failed' "$GITHUB_STEP_SUMMARY" \
+            || { echo "::error::job summary is missing the expected failure banner"; cat "$GITHUB_STEP_SUMMARY"; exit 1; }
+          grep -q 'effectiveScore' "$GITHUB_STEP_SUMMARY" \
+            || { echo "::error::job summary did not list the effectiveScore violation"; exit 1; }
+
+      - name: Artifacts must still be uploaded on a failing gate
+        uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-report-gate-failure
+          path: downloaded-artifact
+      - shell: bash
+        run: |
+          set -euo pipefail
+          test -s downloaded-artifact/gate-result.json \
+            || { echo "::error::gate-result.json missing from the artifact on a failing gate"; exit 1; }
+
+  ci-mode-gate-operational-failure:
+    name: "gate operational failure (missing/malformed report) never reads as a pass"
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Drives Scripts/action/summarize-gate.sh directly, against
+      # hand-crafted gate-result.json fixtures — the operational-failure and
+      # malformed-JSON shapes below are *not* reachable by running a real
+      # mutation campaign (see the script's own doc comment: they mean
+      # `mutantkit gate` itself never reached a verdict), so this is the
+      # actual failure mode the summarizer's own shape-classification exists
+      # to handle. `--json`'s two real shapes (QualityGateResult /
+      # JSONErrorEnvelope) are quoted directly from Sources/CLI/JSONOutput.swift
+      # and Sources/MutationModel/QualityGate.swift.
+      - name: Operational failure (JSONErrorEnvelope) is never read as a pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '{"schemaVersion":1,"ok":false,"error":{"code":"reportUnreadable","message":"could not read report.json","remedy":"check --report points at a real report"}}' > gate-result.json
+          export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/summary-error.md"
+          : > "$GITHUB_STEP_SUMMARY"
+          Scripts/action/summarize-gate.sh gate-result.json
+          cat "$GITHUB_STEP_SUMMARY"
+          grep -q 'operational failure' "$GITHUB_STEP_SUMMARY"
+          grep -q 'reportUnreadable' "$GITHUB_STEP_SUMMARY"
+          # `!` on its own line is exempt from `errexit` — a bare `! grep ...`
+          # matching would silently NOT fail this script under `set -e`. An
+          # explicit `if` avoids that trap.
+          if grep -qi 'quality gate passed' "$GITHUB_STEP_SUMMARY"; then
+            echo "::error::an operational failure must never render as a quality-gate pass" >&2
+            exit 1
+          fi
+          if grep -qi 'quality gate failed' "$GITHUB_STEP_SUMMARY"; then
+            echo "::error::an operational failure must never render as a quality-gate failure (it never reached a verdict)" >&2
+            exit 1
+          fi
+
+      - name: A genuine failing verdict still reads as a failure, not an operational error
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '{"schemaVersion":1,"passed":false,"violations":[{"kind":"effectiveScore","detail":"62%% < 70%% minimum"}]}' > gate-result.json
+          export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/summary-fail.md"
+          : > "$GITHUB_STEP_SUMMARY"
+          Scripts/action/summarize-gate.sh gate-result.json
+          cat "$GITHUB_STEP_SUMMARY"
+          grep -q ':x: Mutation quality gate failed' "$GITHUB_STEP_SUMMARY"
+          grep -q 'effectiveScore' "$GITHUB_STEP_SUMMARY"
+
+      - name: A genuine passing verdict reads as a pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '{"schemaVersion":1,"passed":true,"violations":[]}' > gate-result.json
+          export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/summary-pass.md"
+          : > "$GITHUB_STEP_SUMMARY"
+          Scripts/action/summarize-gate.sh gate-result.json
+          grep -q ':white_check_mark: Mutation quality gate passed' "$GITHUB_STEP_SUMMARY"
+
+      - name: A missing gate-result.json is reported honestly, not silently
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f gate-result.json
+          export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/summary-missing.md"
+          : > "$GITHUB_STEP_SUMMARY"
+          Scripts/action/summarize-gate.sh gate-result.json
+          grep -q 'did not produce a result' "$GITHUB_STEP_SUMMARY"
+
+      - name: preflight-capabilities.sh fails closed against a mutantkit build with no gate --json
+        shell: bash
+        run: |
+          set -euo pipefail
+          fake_bin="$RUNNER_TEMP/fake-mutantkit-bin"
+          mkdir -p "$fake_bin"
+          cat > "$fake_bin/mutantkit" <<'SCRIPT'
+          #!/usr/bin/env bash
+          if [ "$1" = "--version" ]; then
+            echo "mutantkit 0.2.0"
+            exit 0
+          fi
+          case "$1 $2" in
+            "gate --help") echo "OPTIONS: --report <report> --baseline <baseline>" ;;
+            "run --help") echo "OPTIONS: --report <report>" ;;
+            *) exit 0 ;;
+          esac
+          SCRIPT
+          chmod +x "$fake_bin/mutantkit"
+          set +e
+          PATH="$fake_bin:$PATH" Scripts/action/preflight-capabilities.sh
+          preflight_exit=$?
+          set -e
+          if [ "$preflight_exit" = "0" ]; then
+            echo "::error::preflight-capabilities.sh should have failed against a binary with no gate --json / run --also-report" >&2
+            exit 1
+          fi
+
+  ci-mode-diff:
+    name: "diff: missing ref fails closed; a fetched ref succeeds"
+    needs: build-from-source
+    runs-on: macos-15
+    steps:
+      # Shallow (default fetch-depth: 1): `origin/main` is not fetched, so
+      # it must not resolve.
+      - name: "Checkout (shallow — origin/main is NOT fetched)"
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-from-source
+          path: test-binary
+      - run: chmod +x test-binary/mutantkit
+        shell: bash
+
+      # Staged as a SUBDIRECTORY of the mutantkit-src checkout, not at the
+      # workspace root: `git -C <project-root> rev-parse --verify <ref>`
+      # (orchestrate-ci.sh's own diff-ref preflight) discovers the nearest
+      # enclosing `.git` by walking upward from `project-root` — a bare
+      # workspace-root copy of just the fixture's files has no `.git` at
+      # all, which would fail this whole job's own point ("unfetched ref"
+      # vs. "not a git repository" are two different failures) for the
+      # wrong reason. A subdirectory of the real `mutantkit-src` checkout
+      # sees that checkout's own real fetch state while never overwriting
+      # mutantkit-src's own Package.swift/Sources/Tests.
+      - name: Stage the fixture project (inside the mutantkit-src checkout, so its git history applies)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mutantkit-src/smoke-fixture
+          cp -R mutantkit-src/Fixtures/SwiftPackageMacOS/. mutantkit-src/smoke-fixture/
+          cat > mutantkit-src/smoke-fixture/mutantkit.yml <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [console]
+          YAML
+
+      - name: "diff: origin/main, unfetched — expected to fail closed, cheaply"
+        id: missing-diff
+        continue-on-error: true
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          project-root: mutantkit-src/smoke-fixture
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          diff: origin/main
+
+      - name: Assert it failed closed before plan ever ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.missing-diff.outcome }}" != "failure" ]; then
+            echo "::error::expected an unfetched diff base to fail closed, got outcome '${{ steps.missing-diff.outcome }}'" >&2
+            exit 1
+          fi
+          if [ -e mutantkit-src/smoke-fixture/plan.json ]; then
+            echo "::error::plan.json exists — the diff-ref preflight should have failed before mutantkit plan ever ran" >&2
+            exit 1
+          fi
+
+      # A second, independent checkout in the same job, this time with the
+      # full history the first step's own error message points at —
+      # `origin/main` now resolves and planning succeeds. Re-stages the
+      # fixture too: a fresh `actions/checkout` with the same `path:`
+      # replaces mutantkit-src wholesale, taking smoke-fixture with it.
+      - name: "Checkout (fetch-depth: 0 — origin/main now resolves)"
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+          fetch-depth: 0
+
+      - name: Re-stage the fixture project after the deeper checkout
+        # `actions/checkout` resets/cleans an already-present `path:`
+        # directory, taking the untracked `smoke-fixture/` subdirectory
+        # staged above with it — recreated here identically.
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mutantkit-src/smoke-fixture
+          cp -R mutantkit-src/Fixtures/SwiftPackageMacOS/. mutantkit-src/smoke-fixture/
+          cat > mutantkit-src/smoke-fixture/mutantkit.yml <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [console]
+          YAML
+
+      - name: "diff: origin/main, fetched — expected to plan successfully"
+        id: fetched-diff
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          project-root: mutantkit-src/smoke-fixture
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          diff: origin/main
+
+      - name: Assert planning succeeded with a real diff scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s mutantkit-src/smoke-fixture/plan.json || { echo "::error::plan.json was not produced against a fetched diff base"; exit 1; }
+
+  ci-mode-baseline:
+    name: "baseline cache: fresh miss, same-SHA rerun has no save collision, scopes stay isolated"
+    needs: build-from-source
+    runs-on: macos-15
+    # action.yml's own baseline-save steps require `github.event_name !=
+    # 'pull_request'` on purpose (a PR run must never write the target
+    # branch's baseline before it has merged — see action.yml's own
+    # comment on "Save mutation baseline"). This job's whole point is
+    # proving a save happened and a same-SHA rerun then hit it, which is
+    # structurally impossible to observe on a `pull_request` event without
+    # weakening that real safety rail just to make a test pass — so this
+    # job is skipped there and instead runs on `workflow_dispatch` and the
+    # weekly `schedule`, both real non-PR events.
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout mutantkit (action.yml)
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-from-source
+          path: test-binary
+      - run: chmod +x test-binary/mutantkit
+        shell: bash
+
+      - name: Stage the fixture project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R mutantkit-src/Fixtures/SwiftPackageMacOS/. .
+          cat > mutantkit.yml <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [console]
+          YAML
+
+      # `baseline-scope` below is unique to this workflow run (`github.run_id`)
+      # so this job never collides with a baseline any other run/job saved —
+      # both invocations below start from a guaranteed-fresh key.
+
+      - name: "Invocation 1 (scope A) — expect a cache miss, then a save"
+        id: scope-a-first
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          baseline-scope: smoke-${{ github.run_id }}-A
+          artifact-name: mutantkit-baseline-a1
+
+      - name: Assert invocation 1 was a cache miss
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.scope-a-first.outputs.baseline-cache-hit }}" = "true" ]; then
+            echo "::error::expected a fresh scope's first run to be a cache miss" >&2
+            exit 1
+          fi
+
+      # Same scope, same SHA (same workflow run) — the shape of a workflow
+      # rerun. The point of this step: it must succeed at all. A broken
+      # `steps.restore-baseline.outputs.cache-hit != 'true'` guard on the
+      # save step would make `actions/cache/save` fail outright on this
+      # exact-key collision (P13 review, item 11) — this step failing at all
+      # is the regression signal, not any particular assertion below it.
+      - name: "Invocation 2 (scope A again, same SHA) — same-SHA rerun must not collide on save"
+        id: scope-a-second
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          baseline-scope: smoke-${{ github.run_id }}-A
+          artifact-name: mutantkit-baseline-a2
+
+      - name: Assert invocation 2 saw invocation 1's baseline (exact-key hit)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.scope-a-second.outputs.baseline-cache-hit }}" != "true" ]; then
+            echo "::error::expected the second same-scope/same-SHA invocation to be an exact cache hit" >&2
+            exit 1
+          fi
+
+      - name: "Invocation 3 (scope B) — a different scope must not see scope A's baseline"
+        id: scope-b
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          baseline-scope: smoke-${{ github.run_id }}-B
+          artifact-name: mutantkit-baseline-b
+
+      - name: Assert scope B did not inherit scope A's baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.scope-b.outputs.baseline-cache-hit }}" = "true" ]; then
+            echo "::error::scope B reported a cache hit on its very first run — baseline-scope is not isolating the two scopes" >&2
+            exit 1
+          fi
