@@ -108,8 +108,18 @@ jobs:
           # ArgumentParser's own "unknown option," not this tool's
           # `operationalError`). The text path's exit code and prose have
           # been stable since this tool's first commit.
+          #
+          # `--project-root` points at a fresh, genuinely-empty temp
+          # directory, not CWD: this job's own workspace is the checked-out
+          # mutantkit repo itself (needed for `uses: ./`), which has a very
+          # real `Package.swift` at its root — running `doctor` against CWD
+          # would detect *that* project and, having a real project, could
+          # legitimately report ready, proving nothing about a "no project"
+          # environment.
+          empty_dir="$RUNNER_TEMP/no-project-here"
+          mkdir -p "$empty_dir"
           set +e
-          doctor_output="$(mutantkit doctor 2>&1)"
+          doctor_output="$(mutantkit doctor --project-root "$empty_dir" 2>&1)"
           doctor_exit=$?
           set -e
           echo "$doctor_output"
