@@ -148,4 +148,21 @@ public enum SchemaVersion {
     /// `executionContext` check refuses a `schemaVersion` mismatch rather
     /// than guess at how to reinterpret an incompatible shape).
     public static let schemataPlan = 2
+    /// One constant per agent-facing `--json` output type, not one shared
+    /// constant across them: each type's shape can change independently
+    /// (as `plan`/`result`/`schemataPlan` already do above), so a reader
+    /// that only understands `AgentEvidenceReport` v1 must not be misled by
+    /// a version bump that actually belongs to `RunHistoryRecord`.
+    public static let agentEvidenceReport = 1
+    public static let runHistoryRecord = 1
+    public static let operatorCatalogEntry = 1
+    public static let qualityGateResult = 1
+    public static let buildDiagnosis = 1
+    public static let configurationValidationResult = 1
+    /// Shared by every command's `--json` error path (`JSONErrorEnvelope`),
+    /// unlike every constant above, which is one per command's *success*
+    /// shape. An agent recognizes "this command failed" the same way
+    /// regardless of which command it ran, so this stays a single shared
+    /// version rather than one per command.
+    public static let commandError = 1
 }

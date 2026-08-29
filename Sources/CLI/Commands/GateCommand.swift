@@ -42,9 +42,21 @@ struct GateCommand: ParsableCommand {
     @Option(name: .long, help: "Fail if more than this many mutants survive now but not in --baseline.")
     var newSurvivorsMaximum: Int?
 
+    /// `QualityGateResult` is already exactly the shape a CI script wants —
+    /// `passed` plus a `kind`-tagged `violations` list, fully computed
+    /// before either output path renders it — so this serializes it
+    /// directly (with `schemaVersion` added, see `QualityGateResult`'s own
+    /// doc comment) rather than mapping it into a separate envelope type.
+    /// Exit codes stay identical to the text path: `--json` still throws
+    /// `MutantKitExit.qualityGateFailure` on a failing gate, after emitting
+    /// the JSON document, so a CI script can rely on the exit code alone
+    /// without parsing output, or parse `--json` and get the same verdict.
+    @Flag(name: .long, help: "Emit the quality-gate result as JSON instead of the text summary below.")
+    var json = false
+
     func run() throws {
-        let runReport = try decode(reportPath: report)
-        let baselineReport = try baseline.map { try decode(reportPath: $0) }
+        let runReport = try decode(reportPath: report, role: "report")
+        let baselineReport = try baseline.map { try decode(reportPath: $0, role: "baseline report") }
 
         var thresholds = try loadConfiguredThresholds()
         if let minimumTested { thresholds.minimumTested = minimumTested / 100 }
@@ -55,21 +67,46 @@ struct GateCommand: ParsableCommand {
 
         let result = QualityGate.evaluate(report: runReport, thresholds: thresholds, baseline: baselineReport)
 
-        if result.passed {
+        if json {
+            try JSONOutput.emit(result)
+        } else if result.passed {
             print("Mutation quality gate passed.")
-            return
+        } else {
+            print("Mutation quality gate failed:")
+            for violation in result.violations {
+                print("  - \(violation.detail)")
+            }
         }
 
-        print("Mutation quality gate failed:")
-        for violation in result.violations {
-            print("  - \(violation.detail)")
+        if !result.passed {
+            throw ExitCode(MutantKitExit.qualityGateFailure)
         }
-        throw ExitCode(MutantKitExit.qualityGateFailure)
     }
 
-    private func decode(reportPath: String) throws -> RunReport {
-        let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
-        return try MutationPlan.decoder().decode(RunReport.self, from: data)
+    /// Reads and decodes a report from disk, emitting a structured `--json`
+    /// error document instead of throwing prose when the file is missing or
+    /// malformed — `gate --json` must emit exactly one JSON document on
+    /// every path, including this one, which is exactly the failure an
+    /// agent driving `gate` most needs structured output on (a report path
+    /// that does not exist, or one that is not valid MutantKit JSON). The
+    /// text path is unchanged: `MutantKitExit.onFailure` still prints the
+    /// same prose to stderr and maps to `operationalError` it always has.
+    private func decode(reportPath: String, role: String) throws -> RunReport {
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
+            return try MutationPlan.decoder().decode(RunReport.self, from: data)
+        } catch {
+            guard json else {
+                return try MutantKitExit.onFailure { throw error }
+            }
+            let code = error is DecodingError ? "reportMalformed" : "reportUnreadable"
+            try JSONOutput.emitError(
+                code: code,
+                message: "Could not read the \(role) at \"\(reportPath)\" as a MutantKit JSON report: \(error)",
+                remedy: "Check --report/--baseline point at a real report.json written by `mutantkit run`."
+            )
+            throw ExitCode(MutantKitExit.operationalError)
+        }
     }
 
     /// `gate` tolerates having no `mutantkit.yml` at all (CLI flags alone are

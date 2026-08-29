@@ -60,10 +60,20 @@ public struct QualityGateViolation: Codable, Sendable, Hashable, CustomStringCon
 }
 
 public struct QualityGateResult: Codable, Sendable, Hashable {
+    /// Set internally to `SchemaVersion.qualityGateResult`, never a caller-
+    /// supplied parameter — the same discipline `MutationPlan`/`RunReport`/
+    /// `AgentEvidenceReport` already follow for their own `schemaVersion`,
+    /// so nothing that builds a result can accidentally stamp it with the
+    /// wrong version. This type is never decoded from disk today (`gate`
+    /// only ever constructs it fresh from `evaluate`), but stamping it now
+    /// means `mutantkit gate --json` carries the same versioning contract
+    /// every other agent-facing `--json` output already does.
+    public let schemaVersion: Int
     public let passed: Bool
     public let violations: [QualityGateViolation]
 
     public init(passed: Bool, violations: [QualityGateViolation]) {
+        schemaVersion = SchemaVersion.qualityGateResult
         self.passed = passed
         self.violations = violations
     }

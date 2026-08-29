@@ -36,9 +36,7 @@ struct PlanCommand: AsyncParsableCommand {
 
         try ConfigurationPreflight.run(settings)
 
-        if diffBase != nil, since != nil, diffBase != since {
-            throw ValidationError("Pass either --diff-base or --since, not two different refs.")
-        }
+        try Self.validateDiffBaseAndSince(diffBase: diffBase, since: since)
         if let base = diffBase ?? since {
             settings.execution.diffBase = base
         }
@@ -129,6 +127,21 @@ struct PlanCommand: AsyncParsableCommand {
                 print("  \(entry.operatorID): eligible \(entry.eligible), selected \(entry.selected), " +
                     "budgetDropped \(entry.budgetDropped)")
             }
+        }
+    }
+
+    /// Pulled out of `run()` so this bad-input check is directly testable —
+    /// mirroring how `RunCommand` pulls out its own validation/history
+    /// helpers for the same reason. Bad input, not a usage-syntax error:
+    /// every other bad-input case in this command already throws
+    /// `MutantKitExit.operationalError` explicitly rather than
+    /// `ArgumentParser`'s own `ValidationError` (exit 64), and this one
+    /// should be no different (see `MutantKitExit`'s own exit-code
+    /// contract).
+    static func validateDiffBaseAndSince(diffBase: String?, since: String?) throws {
+        if diffBase != nil, since != nil, diffBase != since {
+            print("Pass either --diff-base or --since, not two different refs.")
+            throw ExitCode(MutantKitExit.operationalError)
         }
     }
 

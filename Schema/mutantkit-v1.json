@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/main/Schema/mutantkit-v1.json",
+  "title": "MutantKit configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["auto", "swiftPackageMacOS", "swiftPackageApple", "xcodeProject", "xcodeWorkspace"] },
+        "path": { "type": ["string", "null"] },
+        "scheme": { "type": ["string", "null"] },
+        "destination": { "type": ["string", "null"] },
+        "derivedDataPath": { "type": ["string", "null"] }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targets": { "type": "array", "items": { "type": "string" } },
+        "extraArguments": { "type": "array", "items": { "type": "string" } },
+        "parallel": { "type": "boolean" }
+      }
+    },
+    "operators": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": { "enum": ["conservative", "default", "experimental"] },
+        "disable": { "type": "array", "items": { "type": "string" } },
+        "enable": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": { "enum": ["isolated", "schemata"] },
+        "workers": { "type": ["integer", "null"], "minimum": 1 },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxMutants": { "type": ["integer", "null"], "minimum": 1 },
+            "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+            "seed": { "type": ["integer", "null"] },
+            "stratifyBy": { "enum": ["subtype", "operatorSubtype", null] },
+            "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 },
+            "selection": { "enum": ["v1", "v2", null] },
+            "minimumPerStratum": { "type": ["integer", "null"], "minimum": 1 },
+            "weight": {
+              "type": ["object", "null"],
+              "additionalProperties": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+            }
+          }
+        },
+        "diffBase": { "type": ["string", "null"] },
+        "measureCoverage": { "type": "boolean" },
+        "selectCoveringTests": { "type": "boolean" },
+        "incrementalBuild": { "type": "boolean" },
+        "retestKilledMutants": { "type": "boolean" },
+        "confirmCrashKills": { "type": "boolean" },
+        "confirmTimedOutMutants": { "type": "boolean" },
+        "earlyAbortSelectedTests": { "type": "boolean" },
+        "testBatchSize": { "type": ["integer", "null"], "minimum": 1 },
+        "noOpCanarySampleRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "simulatorPool": { "type": "boolean" }
+      }
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseline": { "type": ["number", "string"] },
+        "mutant": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": { "enum": ["fixed", "adaptive"] },
+            "multiplier": { "type": "number" },
+            "minimum": { "type": ["number", "string"] },
+            "maximum": { "type": ["number", "string"] },
+            "overheadAllowance": { "type": ["number", "string"] }
+          }
+        },
+        "terminationGracePeriod": { "type": ["number", "string"] }
+      }
+    },
+    "reports": {
+      "type": "array",
+      "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary", "sonar", "github-actions"] },
+      "uniqueItems": true
+    },
+    "qualityGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "testedScore": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "minimum": { "type": ["number", "null"] } }
+        },
+        "effectiveScore": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "minimum": { "type": ["number", "null"] } }
+        },
+        "regression": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "maximumDrop": { "type": ["number", "null"] } }
+        },
+        "survived": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "newMaximum": { "type": ["integer", "null"] } }
+        },
+        "integrityViolations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "maximum": { "type": ["integer", "null"] } }
+        }
+      }
+    }
+  }
+}

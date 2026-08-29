@@ -306,21 +306,19 @@ struct CIRouteAcceptanceMatrixTests {
         ])
     }
 
-    @Test("a targeted run's acceptance_matrix never includes a fixture pending on another branch")
-    func targetedAcceptanceMatrixExcludesPendingFixture() throws {
+    @Test("a targeted run's acceptance_matrix includes golden-path-onboarding now that it's real")
+    func targetedAcceptanceMatrixIncludesOnboardingFixture() throws {
         let result = try route(
             event: "pull_request",
             changedFiles: ["Sources/CLI/Commands/SetupCommand.swift"]
         )
         #expect(!result.runFull)
-        // `golden-path-onboarding` is in `selectedFixtures` (see
-        // `setupCommandSelectsOnboardingSet` above) but does not exist in
-        // Scripts/ci-fixtures.json yet -- it must never appear in the real,
-        // ready-to-use matrix object, only in the informational
+        // `golden-path-onboarding` now exists for real in Scripts/ci-fixtures.json
+        // (the golden-path onboarding feature merged) -- it must appear in the
+        // real, ready-to-use matrix object, not just the informational
         // `selectedFixtures` list.
         let matrixFixtures = Set(result.acceptanceMatrix.include.map(\.fixture))
-        #expect(matrixFixtures == ["cli-commands", "xcode-config-detector"])
-        #expect(!matrixFixtures.contains("golden-path-onboarding"))
+        #expect(matrixFixtures == ["cli-commands", "xcode-config-detector", "golden-path-onboarding"])
     }
 
     @Test("an xcode-adapter path's acceptance_matrix carries wave: \"1\" on xcode-wave-early-kill")
@@ -366,18 +364,14 @@ struct CIRouteAcceptanceMatrixTests {
 
     // MARK: - Every fixture the router can emit must be real
 
-    /// The one, narrowly-scoped exception to "every fixture the router can
-    /// emit must exist in the real matrix": `golden-path-onboarding` is the
-    /// fixture the still-separate golden-path-onboarding feature branch
-    /// will add (see `GoldenPathOnboardingAcceptanceTests` there). The
-    /// router is deliberately taught this name now, keyed to what it will
-    /// be, so routing is already correct the instant that branch merges —
-    /// see `Scripts/ci-route.sh`'s own `onboarding` group comment. Nothing
-    /// else may rely on this exception: any other name the router can emit
-    /// that is missing from the real matrix is exactly the drift this test
-    /// exists to catch (a renamed/removed fixture silently breaking the
-    /// router's output).
-    private static let fixturesAllowedToBePending: Set<String> = ["golden-path-onboarding"]
+    /// `golden-path-onboarding` used to be the one narrowly-scoped, documented
+    /// exception here (taught to the router ahead of the feature branch that
+    /// would add it) -- now that the golden-path onboarding work has merged
+    /// and `Scripts/ci-fixtures.json` carries a real entry for it, there is no
+    /// exception left. Any name the router can emit that is missing from the
+    /// real matrix is exactly the drift this test exists to catch (a
+    /// renamed/removed fixture silently breaking the router's output).
+    private static let fixturesAllowedToBePending: Set<String> = []
 
     /// Every distinct changed-path shape that exercises one non-full,
     /// non-trust-critical targeted group in `Scripts/ci-route.sh` — the

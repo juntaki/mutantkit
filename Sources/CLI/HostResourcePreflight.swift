@@ -84,6 +84,7 @@ enum HostResourcePreflight {
             items.append(DiagnosisItem(
                 name: "Available memory",
                 status: low ? .warning : .ok,
+                code: .availableMemory,
                 detail: String(format: "%.1f GB available", gigabytes),
                 remedy: low ? lowMemoryRemedy : nil
             ))
@@ -91,6 +92,7 @@ enum HostResourcePreflight {
             items.append(DiagnosisItem(
                 name: "Available memory",
                 status: .warning,
+                code: .availableMemory,
                 detail: "could not be determined",
                 remedy: "host_statistics64 failed to report memory usage; proceeding without this signal."
             ))
@@ -101,6 +103,7 @@ enum HostResourcePreflight {
         items.append(DiagnosisItem(
             name: "System load",
             status: highLoad ? .warning : .ok,
+            code: .systemLoad,
             detail: String(
                 format: "%.2f, %.2f, %.2f (1m, 5m, 15m) on %d cores",
                 snapshot.loadAverage1Minute, snapshot.loadAverage5Minute, snapshot.loadAverage15Minute,
@@ -123,11 +126,15 @@ enum HostResourcePreflight {
     static func diagnoseSimulators(bootedSimulatorCount: Int?, simulatorApplicable: Bool) -> [DiagnosisItem] {
         switch bootedSimulatorCount {
         case _ where !simulatorApplicable:
-            return [DiagnosisItem(name: "Booted simulators", status: .ok, detail: "not applicable (non-simulator destination)")]
+            return [DiagnosisItem(
+                name: "Booted simulators", status: .ok, code: .bootedSimulators,
+                detail: "not applicable (non-simulator destination)"
+            )]
         case nil:
             return [DiagnosisItem(
                 name: "Booted simulators",
                 status: .warning,
+                code: .bootedSimulators,
                 detail: "could not be determined",
                 remedy: "`xcrun simctl list devices booted` failed; proceeding without this signal."
             )]
@@ -137,11 +144,12 @@ enum HostResourcePreflight {
             return [DiagnosisItem(
                 name: "Booted simulators",
                 status: .warning,
+                code: .bootedSimulators,
                 detail: "\(count) booted",
                 remedy: contentionRemedy
             )]
         case let .some(count):
-            return [DiagnosisItem(name: "Booted simulators", status: .ok, detail: "\(count) booted")]
+            return [DiagnosisItem(name: "Booted simulators", status: .ok, code: .bootedSimulators, detail: "\(count) booted")]
         }
     }
 

@@ -157,7 +157,7 @@ struct XcodeBuildAdapterDerivedDataPathTests {
 }
 
 /// `mutantkit doctor` diagnoses the environment even when configuration
-/// validation already flagged an error (see `DoctorCommand.loadConfiguration`),
+/// validation already flagged an error (see `ReadinessCheck.loadConfiguration`),
 /// so `Diagnostics.derivedData` can still be asked to report on an absolute,
 /// out-of-sandbox path despite `ConfigurationValidator` rejecting one for a
 /// real run. It must not claim the per-workspace isolation guarantee in that
@@ -229,7 +229,7 @@ struct DiagnosticsDerivedDataTests {
     /// resolves outside the workspace must be caught here too, as a
     /// defense-in-depth backstop alongside `ConfigurationValidator`'s own
     /// symlink check: `doctor` runs even when configuration validation
-    /// already failed (see `DoctorCommand.loadConfiguration`), so this is
+    /// already failed (see `ReadinessCheck.loadConfiguration`), so this is
     /// often the only check that actually ran against this exact workspace.
     @Test("A relative path that resolves outside the workspace through a symlink is reported as unsafe")
     func symlinkEscapingPathIsWarned() throws {

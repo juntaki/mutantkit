@@ -19,6 +19,26 @@ public struct ConfigurationIssue: Codable, Sendable, Hashable, CustomStringConve
     public var description: String { "\(severity.rawValue): \(path): \(message)" }
 }
 
+/// `config`'s fully-computed verdict — every issue already collected, `valid`
+/// already decided — mirroring `QualityGateResult`/`BuildDiagnosis`'s own
+/// shape: a stored `schemaVersion` set internally, never a caller-supplied
+/// init param, and `valid` stored rather than left purely computed so
+/// `mutantkit config --json` exposes the same verdict `ConfigCommand` itself
+/// branches its exit code on (`ConfigurationIssue.severity == .error`, not
+/// merely "any issue at all" — a config with only warnings is still `valid`,
+/// exactly as the text path's exit code already treats it).
+public struct ConfigurationValidationResult: Codable, Sendable, Hashable {
+    public let schemaVersion: Int
+    public let valid: Bool
+    public let issues: [ConfigurationIssue]
+
+    public init(issues: [ConfigurationIssue]) {
+        schemaVersion = SchemaVersion.configurationValidationResult
+        self.issues = issues
+        valid = !issues.contains { $0.severity == .error }
+    }
+}
+
 public enum ConfigurationValidator {
     /// - Parameter projectRoot: the real, on-disk directory `project
     ///   .derivedDataPath` will eventually be resolved against — the same
@@ -407,11 +427,34 @@ public enum ConfigurationValidator {
 /// settings struct appears here, so adding a public setting without adding it
 /// to the schema fails the build. Extend a section by adding to `properties`
 /// in both places at once.
+///
+/// `$id` below must stay byte-identical to `Schema/mutantkit-v1.json`'s own
+/// `$id` — that checked-in file is this exact document, actually hosted, and
+/// `ConfigurationSchemaParityTests`'s drift guard fails the build the moment
+/// the two disagree (on the `$id` line or anything else).
+///
+/// `$id` points at a `raw.githubusercontent.com` URL pinned to `main`, not to
+/// a release tag. This file (`Schema/mutantkit-v1.json`) is new in this same
+/// body of work and does not exist on the last cut tag (`v0.2.0`, predating
+/// it) — a tag-pinned `$id` would 404 for every consumer from the moment
+/// this merges, defeating the point of hosting an editor-facing schema at
+/// all. Pinning to `main` instead resolves immediately on merge, since
+/// `main` is served live: a branch URL's content can in principle drift out
+/// from under a consumer with no version bump to warn them, but that risk is
+/// accepted here because config format version 1 (`Configuration.version`)
+/// has never changed shape and drift would require an actual shape change to
+/// this document, not just any commit to `main`. Re-pin `$id` to the next
+/// real release tag once one ships that includes this file (bump both here
+/// and in `Schema/mutantkit-v1.json`, and in `ConfigurationLoader.schemaURL`)
+/// to regain the stronger, tag-pinned guarantee described above. If an
+/// incompatible version 2 ever ships, it gets its own file
+/// (`mutantkit-v2.json`) and its own `$id` rather than mutating this one out
+/// from under existing consumers.
 public enum ConfigurationJSONSchema {
     public static let document = #"""
     {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "$id": "https://mutantkit.dev/schema/mutantkit-v1.json",
+      "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/main/Schema/mutantkit-v1.json",
       "title": "MutantKit configuration",
       "type": "object",
       "additionalProperties": false,
@@ -419,6 +462,7 @@ public enum ConfigurationJSONSchema {
         "version": { "type": "integer", "const": 1 },
         "project": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": { "enum": ["auto", "swiftPackageMacOS", "swiftPackageApple", "xcodeProject", "xcodeWorkspace"] },
             "path": { "type": ["string", "null"] },
@@ -429,6 +473,7 @@ public enum ConfigurationJSONSchema {
         },
         "sources": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "include": { "type": "array", "items": { "type": "string" } },
             "exclude": { "type": "array", "items": { "type": "string" } }
@@ -436,6 +481,7 @@ public enum ConfigurationJSONSchema {
         },
         "tests": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "targets": { "type": "array", "items": { "type": "string" } },
             "extraArguments": { "type": "array", "items": { "type": "string" } },
@@ -444,6 +490,7 @@ public enum ConfigurationJSONSchema {
         },
         "operators": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "profile": { "enum": ["conservative", "default", "experimental"] },
             "disable": { "type": "array", "items": { "type": "string" } },
@@ -452,11 +499,13 @@ public enum ConfigurationJSONSchema {
         },
         "execution": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "strategy": { "enum": ["isolated", "schemata"] },
             "workers": { "type": ["integer", "null"], "minimum": 1 },
             "budget": {
               "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "maxMutants": { "type": ["integer", "null"], "minimum": 1 },
                 "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
@@ -486,10 +535,12 @@ public enum ConfigurationJSONSchema {
         },
         "timeouts": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "baseline": { "type": ["number", "string"] },
             "mutant": {
               "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "strategy": { "enum": ["fixed", "adaptive"] },
                 "multiplier": { "type": "number" },
@@ -508,25 +559,31 @@ public enum ConfigurationJSONSchema {
         },
         "qualityGate": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "testedScore": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "minimum": { "type": ["number", "null"] } }
             },
             "effectiveScore": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "minimum": { "type": ["number", "null"] } }
             },
             "regression": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "maximumDrop": { "type": ["number", "null"] } }
             },
             "survived": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "newMaximum": { "type": ["integer", "null"] } }
             },
             "integrityViolations": {
               "type": "object",
+              "additionalProperties": false,
               "properties": { "maximum": { "type": ["integer", "null"] } }
             }
           }

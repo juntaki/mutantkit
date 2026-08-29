@@ -5,10 +5,10 @@ Trustworthy mutation testing for Swift and Apple platforms.
 ```bash
 brew install juntaki/mutantkit/mutantkit
 
-mutantkit doctor
-mutantkit init
+mutantkit setup
+mutantkit dry-run
 mutantkit plan --output plan.json
-mutantkit run --plan plan.json
+mutantkit run --plan plan.json --fail-on-survivors
 ```
 
 > **MutantKit never scores a mutant unless it can prove the mutation was
@@ -19,9 +19,10 @@ MutantKit introduces small faults into your code and checks whether your tests
 notice. Tests that pass against broken code are not testing anything, and
 coverage cannot tell you which ones those are.
 
-> **Status: v0.1, in development.** Isolated execution, with incremental builds,
-> batched testing, coverage-based test selection, and cross-run caching to keep
-> it fast at real-project scale. Twelve core operators (three experimental-only
+> **Status: v0.2.0 (latest release), in active development.** Isolated
+> execution, with incremental builds, batched testing, coverage-based test
+> selection, and cross-run caching to keep it fast at real-project scale.
+> Twelve core operators (three experimental-only
 > on compile-safety grounds — arithmetic and assignment, both with
 > fixture-confirmed compile risk, plus arithmetic's own 2 confirmed
 > reproducible runtime hangs found in corpus validation; nil-coalescing
@@ -34,56 +35,6 @@ coverage cannot tell you which ones those are.
 > Remove Side Effects, generalized) — are new and not yet corpus-measured
 > on any project — see [Operators](#operators)).
 > See [Roadmap](#roadmap) for what is and is not implemented.
-
-## What makes this one different
-
-Not the operator count. The claim is narrower and, unusually for this category,
-falsifiable:
-
-> **Every mutant MutantKit reports can be proven to have been applied to your
-> source and executed. If it cannot be proven, MutantKit reports no score.**
-
-That is a strange thing to have to promise. It exists because the failure mode it
-rules out is real and it is silent: a mutation testing tool can complete
-successfully, print a confident score, and have applied no mutations at all. The
-number looks fine. It is measuring nothing.
-
-So MutantKit fails closed. A run that cannot reconcile its own invariants produces
-integrity violations and **no score** — not a zero, not a partial number, no
-score. A mutant with no source diff behind it is a phantom, and a phantom fails
-the whole run rather than quietly joining the denominator.
-
-Concretely:
-
-- **Activation is measured, not assumed.** A mutant's compiled code is compared
-  against the baseline's, so a mutation that reached the source but not the
-  binary is caught rather than scored. This is why every sandbox path is the same
-  length: the build path leaks into codegen, and unequal paths would make every
-  mutant look activated for reasons having nothing to do with the mutation.
-- **A mutation is a value, not a syntax node.** The Mutation Plan is plain JSON
-  and is the only source of truth. Mutations are anchored to UTF-8 byte ranges
-  and content hashes, never to SwiftSyntax node identity — so re-parsing is
-  harmless, discovery can drop every AST it reads, and plans survive sharding,
-  resuming and reproduction. ([ADR-0002](ADR/0002-the-mutation-plan-is-the-source-of-truth.md))
-- **A stale anchor is a diagnosis, not a corruption.** If the file changed,
-  you get `notApplied` with a precise reason. MutantKit never relocates an edit to
-  a nearby offset by guesswork, and never lets an unknown become `survived`.
-- **Test results come from structured output, not from regexes over stdout.**
-  For Xcode, verdict evidence comes from `.xcresult`. For SwiftPM/macOS,
-  MutantKit uses `swift test`'s exit status as the contract for the verdict,
-  plus `--xunit-output`'s structured xUnit report for counts and failing-test
-  names. Either way, it does not infer verdicts by regex-matching console
-  output, which lies whenever a test framework's own console formatting
-  changes.
-- **MutantKit owns the timeout, and reclaims what it starts.** A mutant that deletes
-  a `continuation.resume()` hangs forever. MutantKit kills the process group *and*
-  every descendant it can find by PID — because killing the group is not enough
-  on its own: SwiftPM's test helper moves itself into a new group, and the one
-  process that escapes is the one running your tests. It survives, spins, and
-  holds the output pipe open. This is covered by a fixture that hangs on purpose.
-- **Two scores, never one.** `Tested` and `Effective` answer different
-  questions, and quietly reporting only the flattering one is how a suite with
-  poor coverage comes to look excellent.
 
 ## Install
 
@@ -130,7 +81,7 @@ job that verifies a clean-machine install (`release.yml`) does exactly this:
 ```
 
 Pin to a specific release instead of `latest` (e.g.
-`.../releases/download/v0.1.0/...`) for a CI job that shouldn't change
+`.../releases/download/v0.2.0/...`) for a CI job that shouldn't change
 behavior mid-week on its own.
 
 ### Upgrading / uninstalling
@@ -150,16 +101,44 @@ accumulated — nothing is written outside the project directory.
 
 MutantKit ships a ready-to-use skill file at
 [`skills/mutantkit/SKILL.md`](skills/mutantkit/SKILL.md) — practical
-operating knowledge for an agent driving the CLI: doctor-first discipline,
+operating knowledge for an agent driving the CLI: setup-first discipline,
 how to read `integrity` before trusting a score, how to tell a real
 survivor from an unkillable OS/hardware boundary, the suppression and
 CI-gate patterns, and what not to do (report a score without checking
-integrity, run unbudgeted before `doctor`, hand-edit `plan.json`). Point an
+integrity, run unbudgeted before `setup`, hand-edit `plan.json`). Point an
 agent at it instead of re-deriving MutantKit's CLI surface from `--help`
 output every session.
 
-**Claude Code**: skills are auto-discovered from `.claude/skills/<name>/SKILL.md`
-— personal (all projects) or project-scoped (this repo only):
+**Claude Code — install as a plugin (recommended)**: this repo is itself a
+self-hosted plugin marketplace
+([`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)) for a
+single plugin ([`.claude-plugin/plugin.json`](.claude-plugin/plugin.json))
+that wraps the same `skills/mutantkit/SKILL.md` — no separate copy of the
+skill is maintained. Add the marketplace once, then install:
+
+```bash
+claude plugin marketplace add juntaki/mutantkit
+claude plugin install mutantkit@mutantkit
+```
+
+or, from inside an interactive session:
+
+```
+/plugin marketplace add juntaki/mutantkit
+/plugin install mutantkit@mutantkit
+```
+
+This gets you the skill plus automatic updates (`claude plugin marketplace
+update mutantkit` / `claude plugin update mutantkit`) through Claude Code's
+normal plugin lifecycle, without hand-copying a file. (This is unrelated to
+`claude plugin init`, which scaffolds a brand-new personal plugin under
+`~/.claude/skills/` — that command is for authoring a plugin from scratch,
+not for installing this one.)
+
+**Claude Code — manual fallback**: skills are also auto-discovered from
+`.claude/skills/<name>/SKILL.md` directly, with no plugin involved. Use this
+if you'd rather not add a marketplace — e.g. a one-off personal copy, or a
+locally-edited variant:
 
 ```bash
 # personal — available in every project
@@ -171,9 +150,32 @@ mkdir -p .claude/skills/mutantkit
 cp skills/mutantkit/SKILL.md .claude/skills/mutantkit/SKILL.md
 ```
 
-**Codex CLI**: Codex reads `AGENTS.md` automatically from the project root
-(and parent directories). Fold the skill's contents in directly, or keep it
-as a separate file and reference it:
+**Codex — plugin (recommended)**: this repo is also a self-hosted Codex
+plugin marketplace
+([`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json)) for
+a single plugin ([`.codex-plugin/plugin.json`](.codex-plugin/plugin.json))
+whose `skills` field points at the same `./skills/` directory used above, so
+there is still only one copy of `SKILL.md`. Add the marketplace once, then
+install:
+
+```bash
+codex plugin marketplace add juntaki/mutantkit
+codex plugin add mutantkit@mutantkit
+```
+
+`codex plugin marketplace add` accepts the `owner/repo` GitHub shorthand
+shown above (also a git URL or a local path); `codex plugin add
+<plugin>@<marketplace>` is the CLI verb that installs and enables a plugin
+from an already-added marketplace — both are real CLI commands, not a
+desktop-app-only action. (`codex plugin marketplace list` / `upgrade` /
+`remove` manage sources the same way `claude plugin marketplace` does, and
+`codex plugin list` / `remove` mirror `codex plugin add` for the plugin
+itself.)
+
+**Codex CLI — manual fallback (`AGENTS.md`)**: Codex also reads `AGENTS.md`
+automatically from the project root (and parent directories), independent of
+the plugin system above. Fold the skill's contents in directly, or keep it as
+a separate file and reference it:
 
 ```bash
 mkdir -p .codex   # if you keep project-local Codex config here
@@ -188,19 +190,40 @@ body is plain instructions any agent can follow, so copying it into
 whichever context file your tool of choice loads (`AGENTS.md`, a custom
 system prompt, an MCP resource) works the same way.
 
-## Use
+## First local run
 
 ```bash
-mutantkit doctor    # check the environment BEFORE writing any config
-mutantkit init      # generate mutantkit.yml
+mutantkit setup      # detect the project, check the environment, write mutantkit.yml
+mutantkit dry-run    # build + test the unmutated baseline once, prove the harness works
 mutantkit plan --output plan.json
-mutantkit run --plan plan.json
+mutantkit run --plan plan.json --fail-on-survivors
 ```
 
-Start with `doctor`. It tells you what kind of project you have, which schemes
-and test targets it found, whether `build-for-testing` actually succeeds, and
-whether the `.xctestrun` really exists — before you spend an hour finding out
-otherwise.
+Start with `setup`. It detects what kind of project you have, which scheme and
+test targets it found, writes a best-effort starting `mutantkit.yml` filling
+in everything it could detect, and then runs the same readiness diagnostics
+`doctor` does — whether `build-for-testing` actually succeeds, whether the
+`.xctestrun` really exists — against the config it just wrote, before you
+spend an hour finding out otherwise. If it reports an ambiguous scheme or an
+empty test-target list, resolve that in `mutantkit.yml` by hand; `setup`
+deliberately never guesses at an ambiguous choice on your behalf — it writes
+the rest of the config anyway (same as `mutantkit init`) and clearly reports
+what's still unresolved, rather than silently picking one for you.
+
+Prefer one step at a time, or scripting around the individual steps?
+`mutantkit doctor` checks the environment alone (worth re-running any time,
+e.g. after an Xcode upgrade) and `mutantkit init` writes the config alone —
+`setup` is a thin composition of exactly those two, not a separate code path.
+
+Before spending minutes planning and running the full mutant pool,
+`mutantkit dry-run` builds and tests the unmutated baseline once, through the
+same adapters and destination resolution a mutation run itself will use — the
+cheapest way to confirm the harness actually works before any mutant is
+involved.
+
+`mutantkit run` does not fail the build just because a mutant survived — see
+[What a surviving mutant means](#what-a-surviving-mutant-means). Pass
+`--fail-on-survivors`, as above, to make a run mean something to CI.
 
 ### Shell completion
 
@@ -234,7 +257,7 @@ reproduce it on its own:
 mutantkit reproduce mut_a1b2c3d4e5f6a7b8
 ```
 
-### CI
+## CI
 
 ```bash
 mutantkit plan --output plan.json
@@ -373,6 +396,110 @@ rule that matched, so `discovered == planned + skipped` always holds and
 `mutantkit plan`'s own output reports how many were suppressed and why —
 never a mutation that just quietly stopped appearing.
 
+## What a surviving mutant means
+
+A mutant is one small, deliberate change to your source — a `<` flipped to
+`<=`, a `&&` flipped to `||`, a return value replaced with a value the syntax
+alone proves is safe. MutantKit builds and tests a copy of your project with
+that one change applied, and classifies what happened:
+
+- **`survived`** — the tests ran, covered the mutated line, and all passed
+  anyway. This is the real finding: some test that exercises this code path
+  never actually asserted on the behavior the mutation changed. Line coverage
+  cannot show this — a line can run inside a test with nothing checking what
+  it produced.
+- **`noCoverage`** — the tests passed, but nothing ran the mutated line at
+  all. A coverage gap, not a suite-quality gap, and scored separately (below)
+  rather than folded into `survived`.
+- **`notApplied` / `baselineMismatch` / `infrastructureFailure`** — the run
+  itself has a problem (a stale source anchor, an unmutated baseline that did
+  not behave as recorded, a toolchain or simulator failure), not a statement
+  about the test suite. The first two are integrity violations: they fail the
+  whole run and withhold the score rather than being counted toward one — see
+  [What makes this one different](#what-makes-this-one-different).
+
+Two scores are reported, deliberately, because reporting only one is how a
+suite with poor coverage comes to look excellent: **Tested**
+(`killed / (killed + survived)`) answers "of the code my tests actually run,
+how much do they check?"; **Effective**
+(`killed / (killed + survived + noCoverage)`) answers "of the code I asked to
+be mutated, how much is checked?"
+
+Not every survivor means "write a test." A unit suite frequently cannot kill
+a mutant at a thin OS/hardware boundary — CoreAudio/HAL wrappers,
+`SMAppService`, other hardware or OS service adapters, network integration
+shims, UI glue — even when the code is correct, because the behavior it
+changes only manifests through the real OS/hardware. Read a survivor there as
+an integration-boundary finding, not a missing test — see
+[What to point MutantKit at](#what-to-point-mutantkit-at) — and either
+exclude the file with `sources.exclude`, or suppress the one mutant if it's
+already a known, accepted gap — see
+[Suppressing one mutation](#suppressing-one-mutation).
+
+For any specific survivor, a score is not actionable but a diff is:
+
+```bash
+mutantkit inspect mut_a1b2c3d4e5f6a7b8   # original/mutated source, the tests that ran, why it survived
+mutantkit reproduce mut_a1b2c3d4e5f6a7b8 # rerun just this one mutant, in isolation
+```
+
+By default, a survivor does not fail the build — a surviving mutant is a
+finding, not a tool failure, and a suite is not broken for having one. Pass
+`--fail-on-survivors` to `mutantkit run` to change that for a single report,
+or use `mutantkit gate` to turn a report into an actual merge decision —
+new survivors versus a baseline, a regression budget, a minimum score — see
+[Quality gate](#quality-gate-turning-a-score-into-a-merge-decision).
+
+## What makes this one different
+
+Not the operator count. The claim is narrower and, unusually for this category,
+falsifiable:
+
+> **Every mutant MutantKit reports can be proven to have been applied to your
+> source and executed. If it cannot be proven, MutantKit reports no score.**
+
+That is a strange thing to have to promise. It exists because the failure mode it
+rules out is real and it is silent: a mutation testing tool can complete
+successfully, print a confident score, and have applied no mutations at all. The
+number looks fine. It is measuring nothing.
+
+So MutantKit fails closed. A run that cannot reconcile its own invariants produces
+integrity violations and **no score** — not a zero, not a partial number, no
+score. A mutant with no source diff behind it is a phantom, and a phantom fails
+the whole run rather than quietly joining the denominator.
+
+Concretely:
+
+- **Activation is measured, not assumed.** A mutant's compiled code is compared
+  against the baseline's, so a mutation that reached the source but not the
+  binary is caught rather than scored. This is why every sandbox path is the same
+  length: the build path leaks into codegen, and unequal paths would make every
+  mutant look activated for reasons having nothing to do with the mutation.
+- **A mutation is a value, not a syntax node.** The Mutation Plan is plain JSON
+  and is the only source of truth. Mutations are anchored to UTF-8 byte ranges
+  and content hashes, never to SwiftSyntax node identity — so re-parsing is
+  harmless, discovery can drop every AST it reads, and plans survive sharding,
+  resuming and reproduction. ([ADR-0002](ADR/0002-the-mutation-plan-is-the-source-of-truth.md))
+- **A stale anchor is a diagnosis, not a corruption.** If the file changed,
+  you get `notApplied` with a precise reason. MutantKit never relocates an edit to
+  a nearby offset by guesswork, and never lets an unknown become `survived`.
+- **Test results come from structured output, not from regexes over stdout.**
+  For Xcode, verdict evidence comes from `.xcresult`. For SwiftPM/macOS,
+  MutantKit uses `swift test`'s exit status as the contract for the verdict,
+  plus `--xunit-output`'s structured xUnit report for counts and failing-test
+  names. Either way, it does not infer verdicts by regex-matching console
+  output, which lies whenever a test framework's own console formatting
+  changes.
+- **MutantKit owns the timeout, and reclaims what it starts.** A mutant that deletes
+  a `continuation.resume()` hangs forever. MutantKit kills the process group *and*
+  every descendant it can find by PID — because killing the group is not enough
+  on its own: SwiftPM's test helper moves itself into a new group, and the one
+  process that escapes is the one running your tests. It survives, spins, and
+  holds the output pipe open. This is covered by a fixture that hangs on purpose.
+- **Two scores, never one.** `Tested` and `Effective` answer different
+  questions, and quietly reporting only the flattering one is how a suite with
+  poor coverage comes to look excellent.
+
 ## Configuration
 
 ```yaml
@@ -466,6 +593,34 @@ tight", because the result cannot tell you which.
 
 Precedence: CLI > project config > environment > defaults.
 
+### Configuration versioning
+
+`version` (top of the file) identifies the shape of `mutantkit.yml` itself,
+separately from the tool's own release version. It defaults to `1` when
+omitted, so every config written before this field existed is still valid.
+
+**A version mismatch fails closed.** If a config ever declares a `version`
+this build does not recognize, loading it is refused with an error naming
+the file, the version found, and the version expected — the run does not
+proceed with a guess at what the file meant.
+
+**There is currently no automatic migration between config versions**,
+because there has only ever been one: version 1 has not changed shape since
+it was introduced, so there is nothing to migrate *to* yet. This is a
+deliberate decision, not an oversight — building a migrator ahead of an
+actual format change would mean writing conversion logic against a target
+that does not exist and cannot be tested against a real old file. If an
+incompatible version 2 ever ships, a real migrator (and a documented
+upgrade path) will be built at that point, against the actual difference
+between the two versions.
+
+`mutantkit migrate --from-muter` (see [Coming from Muter](#coming-from-muter)
+below) is unrelated to this: it imports a *Muter* config, which has no
+version concept of its own, into a fresh MutantKit config. The file it
+writes is stamped with `version: 1` explicitly, and its report says so —
+distinguishing a tool-authored file with a known, deliberate version from a
+hand-written one that reaches the same default implicitly.
+
 ### Recommended production profile
 
 For an Xcode project/workspace or an Apple-platform SwiftPM package — anything
@@ -555,14 +710,20 @@ to fix, not what already passed.
 
 ```
 CLI
-Core          MutationModel · MutationPlanner · Integrity · Configuration
-SwiftFrontend Discovery · Application · SourceAnchorVerifier   (SwiftSyntax)
-Execution     Workspace · ProcessSupervisor · Timeout · Checkpoint · Classifier ·
-              CoverageProfileCache · MutationResultCache
-AppleAdapters SwiftPM · xcodebuild · XCResult · SimulatorPool
-Operators     SwiftCoreOperators · ApplePlatformOperators
-Reporting     Console · Xcode · JSON · Stryker · HTML · Sonar · GitHub Actions
+Core               MutationModel · MutationPlanner · Integrity · Configuration
+SwiftFrontend      Discovery · Application · SourceAnchorVerifier   (SwiftSyntax)
+Execution          Workspace · ProcessSupervisor · Timeout · Checkpoint · Classifier ·
+                   CoverageProfileCache · MutationResultCache
+AppleBuildAdapters SwiftPM · xcodebuild · XCResult · SimulatorPool
+Operators          SwiftCoreOperators · ApplePlatformOperators
+Reporting          Console · Xcode · JSON · Stryker · HTML · Sonar · GitHub Actions
 ```
+
+A simplified sketch, grouped by responsibility rather than a literal listing
+of `Sources/` directories — it omits internal tooling that supports
+development but sits outside the pipeline a mutation run itself executes
+(the benchmark harness, the Muter-config importer, standalone measurement
+probes).
 
 Modules talk through protocols and immutable value types. There is no shared
 mutable state. Operators are pure functions from syntax to candidates — they
@@ -585,10 +746,11 @@ method MDroid+ used for Android — not from plausible-sounding guesses. Until t
 study exists, `ApplePlatformOperators` contains one operator,
 `LifecycleSuperCallRemovalOperator`, purely as a demonstration of the
 extension point — it is not registered, has no RED tests, and is not
-reachable from the CLI by any profile or `operators.enable` entry. See
-`Research/fault-taxonomy/` and the operator's own doc comment.
+reachable from the CLI by any profile or `operators.enable` entry. See the
+operator's own doc comment; the fault taxonomy this phase is waiting on lives
+at `Research/fault-taxonomy/` (internal, not part of this public repo).
 
-### Not in v0.1
+### Not yet implemented
 
 UI tests · on-device runs · external binary plugins · LLVM IR mutation · LLM
 generated mutations · automatic equivalent mutant detection · exhaustive Swift
@@ -659,7 +821,8 @@ An operator earns `defaultEnabled` by evidence, not by being interesting:
 "**provisional**" above means: corpus-measured against real projects, but not
 yet against the additional project shapes this catalog's own
 default-promotion bar calls for (see `Research/operator-catalog/README.md`
-§ "Quality gate for every operator"). Ternary-branch-swap, unary-not-removal
+§ "Quality gate for every operator" — internal, not part of this public
+repo). Ternary-branch-swap, unary-not-removal
 and return-value-replacement have now each been corpus-measured on **two**
 real projects — a second project's run reproduced the first project's
 overall pattern for all three, and ternary-branch-swap's low kill rate in
@@ -674,10 +837,11 @@ not yet been corpus-measured on any project. Full methodology and results
 Arithmetic, assignment, else-clause-deletion, range-boundary-replacement
 and side-effect-call-removal are reachable via the `experimental` profile
 or an explicit `operators.enable` entry, not by default — see
-`Research/operator-catalog/README.md` for the measured compile-viability
-evidence and what promoting them to default would require. Nil-coalescing
-fallback is reachable the same way, for a different reason: see
-`Research/operator-catalog/README.md` for the corpus signal-density
+`Research/operator-catalog/README.md` (internal, not part of this public
+repo) for the measured compile-viability evidence and what promoting them to
+default would require. Nil-coalescing fallback is reachable the same way,
+for a different reason: see `Research/operator-catalog/README.md` (internal,
+not part of this public repo) for the corpus signal-density
 evidence — a second real project's measurement did not reproduce the first
 project's low kill rate, an unresolved discrepancy, not a reversal of the
 demotion — and what re-promoting it would require.

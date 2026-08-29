@@ -34,35 +34,80 @@ public struct BuildArtifact: Sendable {
 }
 
 /// One `doctor` check.
-public struct DiagnosisItem: Sendable {
-    public enum Status: String, Sendable {
+public struct DiagnosisItem: Codable, Sendable {
+    public enum Status: String, Codable, Sendable {
         case ok
         case warning
         case failure
     }
 
+    /// A stable, documented identifier for *what was checked* — independent
+    /// of `status`/`detail`, which describe the outcome and vary run to run.
+    /// Follows `QualityGateViolation.Kind`'s own convention (a `String` enum
+    /// alongside a free-text `detail`) so `doctor --json` gives an agent the
+    /// same thing `gate --json` already does: something to `switch` on
+    /// instead of parsing prose. Two different checks that happen to render
+    /// under the same display `name` (e.g. `ReadinessCheck`'s "Project" vs.
+    /// `Diagnostics.projectKind`'s "Project kind", which `ReadinessCheck
+    /// .deduplicated` collapses to one line) intentionally share a `code`
+    /// too — the code names the fact being reported, not the source line
+    /// that reported it.
+    public enum Code: String, Codable, Sendable {
+        case configurationInvalid
+        case mutantkitVersion
+        case swiftToolchain
+        case xcodeToolchain
+        case projectDetected
+        case projectResolutionFailed
+        case declaredPlatforms
+        case productionProfileRecommended
+        case scheme
+        case destination
+        case derivedData
+        case trialBuild
+        case trialBuildSkipped
+        case xctestrunArtifact
+        case testTargets
+        case productHash
+        case diskSpace
+        case availableMemory
+        case systemLoad
+        case bootedSimulators
+    }
+
     public let name: String
     public let status: Status
+    public let code: Code
     public let detail: String
     /// What the user should do about it. Populated for anything not `ok`.
     public let remedy: String?
 
-    public init(name: String, status: Status, detail: String, remedy: String? = nil) {
+    public init(name: String, status: Status, code: Code, detail: String, remedy: String? = nil) {
         self.name = name
         self.status = status
+        self.code = code
         self.detail = detail
         self.remedy = remedy
     }
 }
 
-public struct BuildDiagnosis: Sendable {
+/// `doctor`'s fully-computed verdict — every check already run, `canProceed`
+/// already decided — mirroring `QualityGateResult`'s own shape (`gate`'s
+/// analogous decision-before-render result): a stored `schemaVersion` set
+/// internally, never a caller-supplied init param, and `canProceed` stored
+/// rather than left purely computed so `mutantkit doctor --json` exposes the
+/// same verdict `DoctorCommand` itself branches its exit code on, the same
+/// way `QualityGateResult.passed` does for `gate --json`.
+public struct BuildDiagnosis: Codable, Sendable {
+    public let schemaVersion: Int
     public let items: [DiagnosisItem]
+    public let canProceed: Bool
 
     public init(items: [DiagnosisItem]) {
+        schemaVersion = SchemaVersion.buildDiagnosis
         self.items = items
+        canProceed = !items.contains { $0.status == .failure }
     }
-
-    public var canProceed: Bool { !items.contains { $0.status == .failure } }
 }
 
 /// Builds baselines and mutants.

@@ -117,15 +117,8 @@ sharding='^Sources/CLI/Commands/ShardCommand\.swift$|^Sources/CLI/Commands/Merge
 # onboarding: the golden-path setup/init/doctor sequence
 # (`mutantkit setup` -> `dry-run` -> `doctor` -> ...) and the detection/
 # readiness logic it shares with `init`/`doctor` directly. This group's own
-# fixture, `golden-path-onboarding` (GoldenPathOnboardingAcceptanceTests),
-# lands with the still-separate golden-path-onboarding feature branch and
-# may not exist in this branch's own acceptance matrix yet -- see
-# Tests/MutantKitTests/Unit/CIRouteClassificationTests.swift's
-# `fixtureAllowlistedAsPending` for the one, narrowly-scoped exception this
-# makes to "every fixture the router can emit must exist in the real
-# matrix." The rule is added now, keyed to the name it will have, so
-# routing is correct the instant that other work merges -- not skipped just
-# because the fixture is temporarily absent.
+# fixture, `golden-path-onboarding` (GoldenPathOnboardingAcceptanceTests), is
+# a real entry in Scripts/ci-fixtures.json.
 onboarding='^Sources/CLI/Commands/SetupCommand\.swift$|^Sources/CLI/Commands/InitCommand\.swift$|^Sources/CLI/Commands/DoctorCommand\.swift$|^Sources/CLI/ReadinessCheck\.swift$|^Sources/CLI/ProjectDetectionPlan\.swift$|^Sources/CLI/ConfigurationLoader\.swift$'
 # cli-commands: the CLI command layer itself (inspect, reproduce, migrate,
 # plan, verify, ...) and the handful of CLI-layer support files that don't

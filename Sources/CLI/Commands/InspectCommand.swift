@@ -49,7 +49,7 @@ struct InspectCommand: AsyncParsableCommand {
         let (loadedRun, result) = loadResult(for: id, root: root)
 
         if json {
-            try printJSON(Self.agentEvidenceReport(
+            try JSONOutput.emit(Self.agentEvidenceReport(
                 point: point, descriptor: descriptor, result: result, toolchain: loadedRun?.toolchain, projectRoot: root
             ))
             return
@@ -237,7 +237,9 @@ extension InspectCommand {
     func reportMissingMutation(id: MutationID, loadedPlan: MutationPlan) throws {
         if let skip = loadedPlan.skipped.first(where: { $0.id == id }) {
             if json {
-                try printJSON(SkippedMutationJSON(mutantId: id.rawValue, skipped: true, reason: skip.reason.rawValue, detail: skip.detail))
+                try JSONOutput.emit(
+                    SkippedMutationJSON(mutantId: id.rawValue, skipped: true, reason: skip.reason.rawValue, detail: skip.detail)
+                )
                 return
             }
             print("\(id) was skipped at planning time.")
@@ -246,7 +248,7 @@ extension InspectCommand {
             return
         }
         if json {
-            try printJSON(ErrorJSON(error: "No mutation \(id) in \(plan)."))
+            try JSONOutput.emit(ErrorJSON(error: "No mutation \(id) in \(plan)."))
         } else {
             print("No mutation \(id) in \(plan).")
         }
@@ -263,15 +265,6 @@ extension InspectCommand {
         let loadedRun: RunReport? = (try? Data(contentsOf: reportURL))
             .flatMap { try? MutationPlan.decoder().decode(RunReport.self, from: $0) }
         return (loadedRun, loadedRun?.results.first { $0.id == id })
-    }
-
-    /// Canonical JSON, matching `JSONReporter`'s own convention (one
-    /// spelling of "canonical JSON" for every artifact this tool writes),
-    /// followed by a trailing newline so `--json` output composes cleanly
-    /// with ordinary shell tooling (`| jq`, redirected to a file, etc.).
-    func printJSON(_ value: some Encodable) throws {
-        let data = try MutationPlan.encoder().encode(value)
-        print(String(decoding: data, as: UTF8.self))
     }
 
     /// Builds the full `AgentEvidenceReport` for a mutation that exists in

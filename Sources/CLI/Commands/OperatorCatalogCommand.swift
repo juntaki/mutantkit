@@ -146,7 +146,7 @@ struct OperatorCatalogCommand: ParsableCommand {
     }
 
     static func jsonString(_ value: some Encodable) throws -> String {
-        String(decoding: try MutationPlan.encoder().encode(value), as: UTF8.self)
+        try JSONOutput.string(for: value)
     }
 
     private static func profileLabel(_ profile: OperatorProfile?) -> String {
@@ -161,6 +161,11 @@ struct OperatorCatalogCommand: ParsableCommand {
 /// on — rather than a second, hand-maintained notion of "which profile is
 /// this operator in".
 struct OperatorCatalogEntry: Codable, Equatable {
+    /// Set internally to `SchemaVersion.operatorCatalogEntry`, never a
+    /// caller-supplied parameter — matching `AgentEvidenceReport` and
+    /// `RunHistoryRecord`, this tool's two other agent-facing `--json`
+    /// output types.
+    let schemaVersion: Int
     let id: String
     let category: String
     let version: Int
@@ -187,6 +192,7 @@ struct OperatorCatalogEntry: Codable, Equatable {
     private static let profileOrder: [OperatorProfile] = [.conservative, .default, .experimental]
 
     init(descriptor: OperatorDescriptor) {
+        schemaVersion = SchemaVersion.operatorCatalogEntry
         id = descriptor.id
         category = descriptor.category
         version = descriptor.version

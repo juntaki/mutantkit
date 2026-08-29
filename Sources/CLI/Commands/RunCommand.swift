@@ -50,14 +50,7 @@ struct RunCommand: AsyncParsableCommand {
         try ConfigurationPreflight.run(settings)
 
         if !report.isEmpty {
-            settings.reports = try report.map { raw in
-                guard let kind = ReportKind(rawValue: raw) else {
-                    throw ValidationError(
-                        "Unknown report '\(raw)'. Expected one of: \(ReportKind.allCases.map(\.rawValue).joined(separator: ", "))."
-                    )
-                }
-                return kind
-            }
+            settings.reports = try Self.resolvedReports(from: report)
         }
 
         let planURL = URL(fileURLWithPath: plan)
@@ -471,6 +464,24 @@ struct RunCommand: AsyncParsableCommand {
     /// Returns the diagnosis written on failure, `nil` on success — mostly
     /// useful to a caller (a test) that wants to assert a failure was
     /// actually surfaced rather than just that some output happened.
+    /// Pulled out of `run()` so this bad-input check is directly testable —
+    /// the same reason `recordHistory`/`resolveTestAdapter`/`lockIdentity`
+    /// below are their own functions rather than inlined. Bad input, not a
+    /// usage-syntax error: every other bad-input case in this command
+    /// already throws `MutantKitExit.operationalError` explicitly rather
+    /// than `ArgumentParser`'s own `ValidationError` (exit 64), and this one
+    /// should be no different (see `MutantKitExit`'s own exit-code
+    /// contract).
+    static func resolvedReports(from raw: [String]) throws -> [ReportKind] {
+        try raw.map { value in
+            guard let kind = ReportKind(rawValue: value) else {
+                print("Unknown report '\(value)'. Expected one of: \(ReportKind.allCases.map(\.rawValue).joined(separator: ", ")).")
+                throw ExitCode(MutantKitExit.operationalError)
+            }
+            return kind
+        }
+    }
+
     @discardableResult
     static func recordHistory(
         _ report: RunReport,

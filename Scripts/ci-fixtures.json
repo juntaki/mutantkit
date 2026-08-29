@@ -4,6 +4,7 @@
     { "fixture": "swift-package", "filter": "SwiftPackageMacOSAcceptanceTests", "simulator": "0" },
     { "fixture": "swift-package-coverage", "filter": "SwiftPackageMacOSCoverageAcceptanceTests", "simulator": "0" },
     { "fixture": "shard-merge", "filter": "ShardMergeAcceptanceTests", "simulator": "0" },
+    { "fixture": "golden-path-onboarding", "filter": "GoldenPathOnboardingAcceptanceTests", "simulator": "0" },
     { "fixture": "swift-package-ios", "filter": "SwiftPackageIOSAcceptanceTests", "simulator": "1" },
     { "fixture": "xcode-project", "filter": "XcodeProjectAcceptanceTests", "simulator": "1" },
     { "fixture": "xcode-workspace", "filter": "XcodeWorkspaceAcceptanceTests", "simulator": "1" },

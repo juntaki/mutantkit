@@ -22,11 +22,15 @@ struct MergeCommand: AsyncParsableCommand {
     var output = "report.json"
 
     func run() async throws {
-        let loadedPlan = try MutationPlan.decode(from: Data(contentsOf: URL(fileURLWithPath: plan)))
+        let loadedPlan = try MutantKitExit.onFailure {
+            try MutationPlan.decode(from: Data(contentsOf: URL(fileURLWithPath: plan)))
+        }
         let decoder = MutationPlan.decoder()
 
-        let loaded = try reports.map { path in
-            try decoder.decode(RunReport.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let loaded = try MutantKitExit.onFailure {
+            try reports.map { path in
+                try decoder.decode(RunReport.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+            }
         }
 
         // Merging re-runs the integrity check against the *whole* plan, which is

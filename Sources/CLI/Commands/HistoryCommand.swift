@@ -24,8 +24,7 @@ struct HistoryCommand: ParsableCommand {
         let records = store.records(limit: max(0, limit))
 
         if json {
-            let data = try MutationPlan.encoder().encode(records)
-            print(String(decoding: data, as: UTF8.self))
+            try JSONOutput.emit(records)
             return
         }
 

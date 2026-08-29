@@ -14,6 +14,18 @@ struct ConfigCommand: ParsableCommand {
     @Flag(name: .long, help: "Print the JSON Schema instead of validating the resolved configuration.")
     var schema = false
 
+    /// The validation *result*, not the config file format's JSON Schema
+    /// dumped by `--schema` above — a different thing entirely, left
+    /// untouched. `ConfigurationIssue` is already `Codable`/`Sendable` with
+    /// a structured `severity`/`path`/`message`, so `--json` needed no new
+    /// ad hoc issue type, only `ConfigurationValidationResult` to add the
+    /// `schemaVersion` + top-level `valid` verdict, mirroring `gate --json`
+    /// and `doctor --json`. Exit codes are untouched: this still throws
+    /// `MutantKitExit.operationalError` whenever an `.error`-severity issue
+    /// is present, regardless of `--json`.
+    @Flag(name: .long, help: "Emit the validation result as JSON instead of printing prose diagnostics.")
+    var json = false
+
     func run() throws {
         if schema {
             print(ConfigurationJSONSchema.document)
@@ -26,17 +38,19 @@ struct ConfigCommand: ParsableCommand {
             projectRoot: root
         )
         let issues = ConfigurationValidator.validate(configuration, projectRoot: root)
+        let result = ConfigurationValidationResult(issues: issues)
 
-        if issues.isEmpty {
+        if json {
+            try JSONOutput.emit(result)
+        } else if issues.isEmpty {
             print("Configuration is valid.")
-            return
+        } else {
+            for issue in issues {
+                print(issue.description)
+            }
         }
 
-        for issue in issues {
-            print(issue.description)
-        }
-
-        if issues.contains(where: { $0.severity == .error }) {
+        if !result.valid {
             throw ExitCode(MutantKitExit.operationalError)
         }
     }
