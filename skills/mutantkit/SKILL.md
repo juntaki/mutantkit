@@ -18,10 +18,11 @@ were real. Trust this tool's numbers accordingly, and be equally suspicious
 of any other mutation-testing tool's output that does not make the same
 claim.
 
-> _Skill last verified against commit `76cf3dd` of this repo (the golden
-> path this file describes: `setup` → `dry-run` → `plan` → `run
-> --fail-on-survivors`). If the installed CLI's `--help` output disagrees
-> with anything below, trust `--help` and treat this file as stale._
+> _Skill last verified against MutantKit's plan/report schema version 1 (the
+> golden path this file describes: `setup` → `dry-run` → `plan` → `run
+> --fail-on-survivors`). Check `mutantkit --version` (which prints both
+> schema versions) and `mutantkit --help`; if either disagrees with anything
+> below, trust the CLI's own output and treat this file as stale._
 
 ## Before doing anything else: `mutantkit setup`
 
@@ -173,8 +174,9 @@ instead of restarting from zero.
 `project.kind`/`scheme`/`destination` (Xcode projects only),
 `sources.include`/`exclude`, `tests.targets`, `operators.profile`
 (`conservative`/`default`/`experimental`), `execution.budget.maxMutants`,
-`execution.strategy` (`isolated` default; `schemata` is faster where the
-operator supports it and falls back automatically otherwise). CLI flags
+`execution.strategy` (`isolated` default; `schemata` is faster but is
+fail-closed, not a silent fallback — it errors clearly if the resolved
+project adapter doesn't support it, currently SwiftPM only). CLI flags
 override the config file, which overrides environment, which overrides
 defaults.
 

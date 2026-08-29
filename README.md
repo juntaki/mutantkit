@@ -150,24 +150,27 @@ mkdir -p .claude/skills/mutantkit
 cp skills/mutantkit/SKILL.md .claude/skills/mutantkit/SKILL.md
 ```
 
-**Codex — plugin (recommended)**: this repo also carries a
-[`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) manifest — the
-distribution format ChatGPT and Codex share — whose `skills` field points at
-the same `./skills/` directory used above, so there is still only one copy of
-`SKILL.md`. Add this repo as a marketplace source from the Codex CLI:
+**Codex — plugin (recommended)**: this repo is also a self-hosted Codex
+plugin marketplace
+([`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json)) for
+a single plugin ([`.codex-plugin/plugin.json`](.codex-plugin/plugin.json))
+whose `skills` field points at the same `./skills/` directory used above, so
+there is still only one copy of `SKILL.md`. Add the marketplace once, then
+install:
 
 ```bash
 codex plugin marketplace add juntaki/mutantkit
+codex plugin add mutantkit@mutantkit
 ```
 
-(`codex plugin marketplace list` / `upgrade` / `remove` manage sources the
-same way `claude plugin marketplace` does.) **Unconfirmed**: as of this
-writing, `codex plugin marketplace add` only registers the source — the
-Codex/ChatGPT docs describe *installing and enabling* a plugin as a ChatGPT
-desktop app action (Settings → Plugins Directory → pick the marketplace →
-install), not a CLI verb. If a `codex plugin install` (or equivalent) lands
-later, prefer it; until then, adding the marketplace from the CLI and
-finishing the install in the desktop app is the documented path.
+`codex plugin marketplace add` accepts the `owner/repo` GitHub shorthand
+shown above (also a git URL or a local path); `codex plugin add
+<plugin>@<marketplace>` is the CLI verb that installs and enables a plugin
+from an already-added marketplace — both are real CLI commands, not a
+desktop-app-only action. (`codex plugin marketplace list` / `upgrade` /
+`remove` manage sources the same way `claude plugin marketplace` does, and
+`codex plugin list` / `remove` mirror `codex plugin add` for the plugin
+itself.)
 
 **Codex CLI — manual fallback (`AGENTS.md`)**: Codex also reads `AGENTS.md`
 automatically from the project root (and parent directories), independent of

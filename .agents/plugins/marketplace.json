@@ -1,0 +1,20 @@
+{
+  "name": "mutantkit",
+  "interface": {
+    "displayName": "MutantKit"
+  },
+  "plugins": [
+    {
+      "name": "mutantkit",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Testing"
+    }
+  ]
+}
