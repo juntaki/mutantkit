@@ -18,35 +18,63 @@ were real. Trust this tool's numbers accordingly, and be equally suspicious
 of any other mutation-testing tool's output that does not make the same
 claim.
 
-## Before doing anything else: `mutantkit doctor`
+> _Skill last verified against commit `76cf3dd` of this repo (the golden
+> path this file describes: `setup` → `dry-run` → `plan` → `run
+> --fail-on-survivors`). If the installed CLI's `--help` output disagrees
+> with anything below, trust `--help` and treat this file as stale._
 
-Always run this first in a project that has never been planned before. It
-detects project kind (SwiftPM vs Xcode), schemes, test targets, whether
-`build-for-testing` actually succeeds, and whether the resulting
-`.xctestrun` really exists — cheap to run, and it turns "the run failed
-after twenty minutes" into an immediate, actionable diagnosis instead.
+## Before doing anything else: `mutantkit setup`
+
+Always run this first in a project MutantKit hasn't touched yet. `setup`
+composes what `init` and `doctor` each do into one step: it detects project
+kind (SwiftPM vs Xcode), schemes, and test targets; writes `mutantkit.yml`
+(never overwriting an existing one unless you pass `--force`); then runs the
+same readiness checks `doctor` performs, against the config it just wrote —
+whether `build-for-testing` actually succeeds, whether the resulting
+`.xctestrun` really exists — and tells you the exact next command to run.
 
 ```bash
-mutantkit doctor
+mutantkit setup
 ```
 
-If it reports a problem, fix that before touching `plan`/`run` — a
+Pass `--dry-run` to preview exactly what `setup` would detect and write,
+without writing anything — safe to run repeatedly, including from an agent
+still deciding whether to proceed. (This is a flag on `setup` itself, not
+the separate `mutantkit dry-run` command in the workflow below — the two
+are unrelated commands that happen to share a name; don't conflate them.)
+
+If `setup` reports a problem, fix that before touching `plan`/`run` — a
 misconfigured scheme or destination does not produce a wrong score, it
 produces no usable run at all.
+
+`mutantkit doctor` (readiness checks alone, writes nothing) and `mutantkit
+init` (writes `mutantkit.yml` alone, checks nothing) still exist and work
+standalone — reach for `doctor` on its own for a CI diagnostics step or a
+project that already has a config and just needs re-checking. For a
+brand-new project, `setup` is the one entry point to use.
 
 ## Core workflow
 
 ```bash
-mutantkit init                          # writes mutantkit.yml (only if one doesn't exist)
-mutantkit plan --output plan.json       # discovers mutants, no source ever touched
-mutantkit run --plan plan.json --output report.json
+mutantkit setup                                              # detect project, check readiness, write mutantkit.yml
+mutantkit dry-run                                             # build + test the baseline once, no mutants yet
+mutantkit plan --output plan.json                             # discovers mutants, no source ever touched
+mutantkit run --plan plan.json --output report.json --fail-on-survivors
 ```
+
+`dry-run` builds and tests the unmutated project exactly once, using the
+same adapters, destination resolution, and timeouts a real mutation run
+will use. Run it before a first real `plan`/`run` on a project — it turns a
+broken baseline into one clear failure instead of into every one of
+hundreds of mutants failing for the same underlying reason.
 
 `plan` never mutates a file — it is pure discovery, safe to run repeatedly
 and safe to run unbudgeted (no `execution.budget.maxMutants`) to see the
 full candidate pool before deciding a budget. `run` is the step that
 actually builds and tests mutated copies, in an isolated sandbox — never the
-user's working tree.
+user's working tree. `--fail-on-survivors` makes `run` itself exit non-zero
+on any surviving mutant — for the more nuanced "did this change make things
+worse against a baseline" question, see `mutantkit gate` below instead.
 
 For a first run on an unfamiliar project, set a small budget
 (`execution.budget.maxMutants: 20-50`) before running the full pool — a
@@ -153,8 +181,9 @@ defaults.
 ## What NOT to do
 
 - Don't report a `score` without checking `integrity.violations` first.
-- Don't run `mutantkit run` unbudgeted on a project you haven't `doctor`ed
-  yet — diagnose config problems on a small budget first.
+- Don't run `mutantkit run` unbudgeted on a project you haven't run
+  `mutantkit setup` (or at least `doctor` + `dry-run`) against yet —
+  diagnose config and baseline problems on a small budget first.
 - Don't treat every survivor as a missing test — see "Distinguishing a real
   gap from noise" above.
 - Don't hand-edit `plan.json` — it's the single source of truth and is
