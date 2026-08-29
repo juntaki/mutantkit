@@ -14,6 +14,27 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The exact suites tagged `.subprocessExclusive` under
+  # Tests/MutantKitTests/Unit/ -- see Tests/MutantKitTests/Support/
+  # SubprocessTestGate.swift's own doc comment. Every one of them spawns a
+  # real OS subprocess, and several exercise genuinely timing-sensitive
+  # machinery (the stall watchdog, real descendant reaping, fd-inheritance
+  # races) that no fake clock or fake process can stand in for -- exactly
+  # the `unit-system` bucket below. This project already curated and
+  # maintains this exact list for its own subprocess-contention-avoidance
+  # reasons; reusing it as the unit-fast/unit-system boundary means there is
+  # one place that decides "this is a real-process/timing test," not two
+  # independently-maintained lists that can silently drift apart.
+  #
+  # `swift test` only supports regex `--filter`/`--skip` (no CLI tag-based
+  # selection -- confirmed against this toolchain's own `swift test --help`),
+  # so this is a maintained, explicit suite-name list, not a generated one.
+  # Update it if a suite gains or loses `.subprocessExclusive` under
+  # Tests/MutantKitTests/Unit/ (Tests/MutantKitTests/Acceptance/ and
+  # Tests/BenchmarkRunnerTests/ also use the trait, but those live in a
+  # different job/target already and are out of scope for this split).
+  UNIT_SYSTEM_SUITE_REGEX: "SchemataRuntimeProtocolV3Tests|SchemataBuiltImageInspectionTests|ProcessTreeTests|XcodeBuildAdapterUninstallFailureTests|ProcessSupervisorResidueTests|ProcessSupervisorOutputCompletenessTests|RunContextProbeOutputCompletenessTests|ProcessSupervisorStallDetectionTests|MachOReceiptExtractorTests|ProcessSupervisorFileDescriptorLeakTests"
 jobs:
   # Fastest feedback of all: static analysis needs no build. SwiftLint and
   # SwiftFormat run against the whole tree using the repo's own configs
@@ -47,8 +68,8 @@ jobs:
     runs-on: macos-15
     # Generous relative to observed reality (~20-25s on this exact job) —
     # bounds a hang (a stuck `brew install`/download, say) rather than
-    # tuning for the common case. See the `unit` job's own comment for
-    # why every job here now has an explicit ceiling.
+    # tuning for the common case. See the `unit-system` job's own comment
+    # for why every job here now has an explicit ceiling.
     timeout-minutes: 10
     env:
       SWIFTLINT_VERSION: "0.63.2"
@@ -74,20 +95,172 @@ jobs:
       - name: SwiftFormat (check only)
         run: swiftformat --lint --config .swiftformat .
 
-  # Fast feedback: everything that does not build another project.
-  unit:
-    name: Unit tests
+  # Fast feedback: everything that does not spawn a real, long-lived
+  # subprocess and does not depend on real OS timing -- pure model/parser/
+  # planner/classifier/CLI-decision-logic tests and deterministic fixtures.
+  # Always runs, unconditionally, on every push -- exactly like the former
+  # `unit` job did.
+  #
+  # Split out of the former single `unit` job specifically so this job's
+  # own runtime is not held hostage by `unit-system`'s real-subprocess,
+  # real-timing suites (see that job's own comment for the incident history
+  # that makes those suites slow and occasionally flaky under contention).
+  # This job keeps the exact same build+test+stall-watchdog shape the
+  # former `unit` job had -- defensively, not because the originating hang
+  # incident lived here (it did not; see `unit-system`) but because a
+  # regression of the same *class* is not provably impossible here either,
+  # and the watchdog is cheap insurance either way.
+  unit-fast:
+    name: Unit tests (fast)
     runs-on: macos-15
-    # A real, reproducible hang (this job's own `Test` step sitting for
-    # 68+ minutes with no completion, versus ~15-20s for the identical
-    # `swift test` locally) burned real Actions minutes on this account
-    # before three compounding process-handling bugs were found and
-    # fixed (Sources/BenchmarkRunner/ToolRunner.swift). This ceiling is
-    # this project's own "nothing runs unbounded" principle applied to
-    # its own CI: generous relative to known-good local runtime (cold
-    # build + full unit suite) so it never fires on a real, if slow, run,
-    # but bounded so a recurrence (this exact class of bug, or a new one)
-    # fails fast and visibly instead of silently burning an hour+ again.
+    # Generous relative to known-good local runtime, bounded so a hang
+    # fails fast and visibly instead of silently burning CI minutes. See
+    # `unit-system`'s own comment for the full "why every job here has an
+    # explicit ceiling" history.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        shell: bash
+        run: |
+          swift --version && xcodebuild -version
+          echo "CPU count: $(sysctl -n hw.ncpu)"
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      # Same stall-watchdog mechanism as `unit-system`'s own `Test` step --
+      # see there for the full incident history and the reasoning behind
+      # every constant below (240s stall threshold, the two-sample capture,
+      # exiting 124 instead of relying on `timeout-minutes`, etc). Kept
+      # identical here rather than factored into a composite action because
+      # this repo has no existing composite-action-reuse precedent for its
+      # own CI steps (each acceptance-family job below already duplicates
+      # its own Toolchain/Build/Upload steps the same way).
+      #
+      # The one real difference: `--skip "$UNIT_SYSTEM_SUITE_REGEX"` (defined
+      # at workflow level, top of this file) excludes exactly the suites
+      # `unit-system` runs instead, so no test runs in both jobs and none
+      # falls through the gap between them.
+      - name: Test
+        shell: bash
+        env:
+          SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH: "2"
+        run: |
+          set -o pipefail
+          mkdir -p samples
+          swift test --skip "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
+          test_pid=$!
+          echo "swift test started, pid=$test_pid"
+          last_lines=0
+          stall_seconds=0
+          while kill -0 "$test_pid" 2>/dev/null; do
+            sleep 15
+            lines=$(wc -l < test.log | tr -d ' ')
+            if [ "$lines" -eq "$last_lines" ]; then
+              stall_seconds=$((stall_seconds + 15))
+            else
+              stall_seconds=0
+            fi
+            last_lines=$lines
+            echo "--- heartbeat $(date -u +%H:%M:%S) --- test.log lines: $lines (no growth for ${stall_seconds}s) ---"
+            ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE "swift|xctest" | grep -v grep || true
+            tail -n 5 test.log
+
+            if [ "$stall_seconds" -ge 240 ]; then
+              echo ">>> STALL DETECTED (test.log has not grown in ${stall_seconds}s) — capturing diagnostics <<<"
+              ps -ef > samples/ps-tree.txt
+
+              parent_pid=$(pgrep -f "swift-test" | head -1)
+              if [ -n "$parent_pid" ]; then
+                echo "sampling parent swift-test pid=$parent_pid (for completeness — the real work is in the helper below)"
+                sample "$parent_pid" 5 -file "samples/sample-parent-${parent_pid}.txt" 2>&1 | tail -n 3 || true
+              fi
+
+              for helper_pid in $(pgrep -f "swiftpm-testing-helper"); do
+                echo "sampling swiftpm-testing-helper pid=$helper_pid — the actual test-worker process"
+                sample "$helper_pid" 5 -file "samples/sample-helper-${helper_pid}.txt" 2>&1 | tail -n 3 || true
+                lsof -p "$helper_pid" > "samples/lsof-helper-${helper_pid}.txt" 2>&1 || true
+              done
+
+              echo ">>> killing the stuck process tree and failing this step (exit 124) so the job registers as an ordinary failure, not a GitHub-initiated cancellation <<<"
+              kill -9 "$test_pid" 2>/dev/null
+              pkill -9 -f swiftpm-testing-helper 2>/dev/null
+              pkill -9 -f "swift-test" 2>/dev/null
+              cat test.log
+              exit 124
+            fi
+          done
+          wait "$test_pid"
+          exit_code=$?
+          echo "=== swift test exited with code $exit_code ==="
+          # A filter/skip matching zero tests must fail this job, not pass
+          # it silently -- see scripts/assert-tests-ran.sh. A real test
+          # failure above must still win even if the count check passes.
+          scripts/assert-tests-ran.sh test.log "unit-fast (all suites except: \$UNIT_SYSTEM_SUITE_REGEX)" || exit_code=1
+          cat test.log
+          exit $exit_code
+      - name: Upload unit-fast failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-fast-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            test.log
+            samples/
+      - name: Publish unit-fast failure excerpt
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- mutantkit-ci-unit-fast-failure -->';
+            const readTail = (path) => {
+              if (!fs.existsSync(path)) return '';
+              const lines = fs.readFileSync(path, 'utf8').split('\n');
+              return lines.slice(-180).join('\n');
+            };
+            const build = readTail('build.log');
+            const test = readTail('test.log');
+            const excerpt = (test || build || 'No captured build/test log was available.').slice(-30000);
+            const body = `${marker}\n### Latest unit-fast CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+
+  # The other half of the former `unit` job: real-process ProcessSupervisor
+  # tests, fd-inheritance, residue/reaping, and the drain-timeout/stall-
+  # detector machinery -- exactly the suites tagged `.subprocessExclusive`
+  # under Tests/MutantKitTests/Unit/ (`$UNIT_SYSTEM_SUITE_REGEX`, defined at
+  # the top of this file).
+  #
+  # Runs on every push for now, exactly like the former `unit` job did (a
+  # later change adds path-based gating so this only runs when the full
+  # matrix is actually needed, per the staged-merge-gate design).
+  #
+  # A real, reproducible hang (this job's own `Test` step sitting for
+  # 68+ minutes with no completion, versus ~15-20s for the identical
+  # `swift test` locally) burned real Actions minutes on this account
+  # before three compounding process-handling bugs were found and
+  # fixed (Sources/BenchmarkRunner/ToolRunner.swift). This ceiling is
+  # this project's own "nothing runs unbounded" principle applied to
+  # its own CI: generous relative to known-good local runtime (cold
+  # build + full unit suite) so it never fires on a real, if slow, run,
+  # but bounded so a recurrence (this exact class of bug, or a new one)
+  # fails fast and visibly instead of silently burning an hour+ again.
+  unit-system:
+    name: Unit tests (system / real-process)
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -154,12 +327,11 @@ jobs:
       # (the conventional "timed out" exit code) — deliberately *not*
       # left to this job's own `timeout-minutes`, which marks a job
       # `cancelled`, not `failed`; `if: failure()` (the existing
-      # "Upload unit failure logs" step's own condition before this
-      # comment was written) does not run on a `cancelled` job, so a
-      # GitHub-initiated timeout would silently discard every sample
-      # this step just captured. Exiting 124 from inside the step itself
-      # makes this an ordinary step failure, which does trigger the
-      # upload.
+      # "Upload unit-system failure logs" step's own condition) does not
+      # run on a `cancelled` job, so a GitHub-initiated timeout would
+      # silently discard every sample this step just captured. Exiting
+      # 124 from inside the step itself makes this an ordinary step
+      # failure, which does trigger the upload.
       #
       # SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH: CI-only (never set
       # for local development), added after a real, repeated CI failure
@@ -192,7 +364,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p samples
-          swift test > test.log 2>&1 &
+          swift test --filter "$UNIT_SYSTEM_SUITE_REGEX" > test.log 2>&1 &
           test_pid=$!
           echo "swift test started, pid=$test_pid"
           last_lines=0
@@ -241,6 +413,10 @@ jobs:
           wait "$test_pid"
           exit_code=$?
           echo "=== swift test exited with code $exit_code ==="
+          # A filter matching zero tests must fail this job, not pass it
+          # silently -- see scripts/assert-tests-ran.sh (same policy the
+          # acceptance jobs below already apply to their own --filter).
+          scripts/assert-tests-ran.sh test.log "unit-system (\$UNIT_SYSTEM_SUITE_REGEX)" || exit_code=1
           cat test.log
           exit $exit_code
       # `always()`, not `failure()`: a job that hits its own
@@ -249,23 +425,23 @@ jobs:
       # exact scenario this whole diagnostic exists to capture evidence
       # from. Uploading unconditionally is the only way the stack
       # samples and logs from a timeout are ever actually retained.
-      - name: Upload unit failure logs
+      - name: Upload unit-system failure logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-failure-logs
+          name: unit-system-failure-logs
           if-no-files-found: ignore
           path: |
             build.log
             test.log
             samples/
-      - name: Publish unit failure excerpt
+      - name: Publish unit-system failure excerpt
         if: failure() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const marker = '<!-- mutantkit-ci-unit-failure -->';
+            const marker = '<!-- mutantkit-ci-unit-system-failure -->';
             const readTail = (path) => {
               if (!fs.existsSync(path)) return '';
               const lines = fs.readFileSync(path, 'utf8').split('\n');
@@ -274,7 +450,7 @@ jobs:
             const build = readTail('build.log');
             const test = readTail('test.log');
             const excerpt = (test || build || 'No captured build/test log was available.').slice(-30000);
-            const body = `${marker}\n### Latest unit CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
+            const body = `${marker}\n### Latest unit-system CI failure\n\n\`\`\`text\n${excerpt}\n\`\`\``;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
@@ -285,20 +461,6 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
-  # The suites that build and mutate real projects. Slow, and the only thing that
-  # proves the tool works rather than merely compiles: every wiring bug this
-  # project has had — a sandbox handed the wrong excludes, xcodebuild pointed at
-  # unmutated sources, concurrent mutants fighting over one simulator — was
-  # invisible to the unit tests and produced a confident, wrong score.
-  #
-  # No `needs: unit`: every one of these ~20 acceptance-family fixtures
-  # builds its own test target independently (see each job's own "Build"
-  # step) and consumes no artifact the `unit` job produces -- the previous
-  # `needs: unit` was pure ordering, not a real dependency, and serialized
-  # every push through a full unit run before any acceptance job could even
-  # start. Removing it lets `unit` and every acceptance fixture run in
-  # parallel; nothing here changes what eventually gets verified before
-  # merge, only when each check starts.
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
