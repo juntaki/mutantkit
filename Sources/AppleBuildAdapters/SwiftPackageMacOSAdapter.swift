@@ -583,12 +583,38 @@ private extension TestIdentifier {
     /// test: an anchored regex over the same `<target>.<Class>/<method>`
     /// shape `swift test list` itself emits (see
     /// `SwiftPackageMacOSAdapter.parseTestIdentifiers`). `--filter` matches
-    /// as a substring regex search, not an exact-match lookup, so this is
-    /// anchored with `^…$` and the literal `.` is escaped — otherwise a test
-    /// name that is a prefix of another's, or the wildcard `.` between
-    /// target and class, could pull in a second, unintended test.
+    /// as a substring regex search, not an exact-match lookup, so both
+    /// `target` and `qualifiedName` are escaped as regex *literals* — not
+    /// just the `.` between them — and the whole thing is anchored with
+    /// `^…`.
+    ///
+    /// `qualifiedName` is not just letters and slashes: a Swift Testing
+    /// `@Test` function's own identifier includes its call parentheses
+    /// (`seniorRateBoundary()`), which are regex metacharacters. Left
+    /// unescaped, `()` at the end of a pattern is an empty capture group,
+    /// not a literal match for the two characters `(` `)` — direct
+    /// reproduction against a real Swift Testing target confirmed this
+    /// alone is enough to make the previous, dot-only-escaped filter match
+    /// **zero** tests, silently, exit code 0 included (P12-B Finding A/B).
+    ///
+    /// Swift Testing also filters at *runtime*, not in SwiftPM itself the
+    /// way XCTest is, against `Test.ID.description` — which appends
+    /// `/<file>:<line>:<column>` after the exact identifier `swift test
+    /// list` reports, confirmed by direct reproduction against a throwaway
+    /// probe package (`idprobeTests.idprobeTests/printsID()/…swift:6:6`).
+    /// `list` itself never includes that suffix, so a bare `…$` anchor —
+    /// correct for XCTest, which SwiftPM filters before that suffix ever
+    /// enters the picture — cannot match a Swift Testing identifier's real
+    /// runtime ID at all. `(?:/.*)?$` accepts that optional suffix without
+    /// widening the match: `qualifiedName`'s own trailing `()` (or
+    /// `(label:)` for a parameterised test) already means no *other*
+    /// discovered identifier can share this literal prefix immediately
+    /// followed by `/` or the end of the string, so this cannot pull in a
+    /// second test the way a bare, unanchored prefix would.
     var swiftTestFilterArgument: String {
-        "^\(target)\\.\(qualifiedName)$"
+        let escapedTarget = NSRegularExpression.escapedPattern(for: target)
+        let escapedQualifiedName = NSRegularExpression.escapedPattern(for: qualifiedName)
+        return "^\(escapedTarget)\\.\(escapedQualifiedName)(?:/.*)?$"
     }
 }
 
