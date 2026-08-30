@@ -298,14 +298,15 @@ struct SourceCoverageReaderTests {
     }
 
     /// The exact gap an independent (codex) review caught: a genuinely
-    /// malformed file must not discard the whole directory's coverage, but
-    /// neither may a *validly-parsed, legitimately-empty* one -- a real
-    /// export for an untested module has nothing to say, which is not the
-    /// same fact as "this file could not be trusted." An earlier version of
-    /// this fix conflated the two through `parse`'s own public
-    /// nil-means-either contract, so a package where even one coverage file
-    /// happened to cover nothing would silently lose every other file's real
-    /// coverage too.
+    /// malformed sibling file must still discard the whole directory's
+    /// coverage (fail-closed), but a *validly-parsed, legitimately-empty*
+    /// one must not be treated the same way -- a real export for an
+    /// untested module has nothing to say, which is not the same fact as
+    /// "this file could not be trusted." An earlier version of this fix
+    /// conflated the two through `parse`'s own public nil-means-either
+    /// contract, so a package where even one coverage file happened to
+    /// cover nothing would silently lose every other file's real coverage
+    /// too -- this test pins that only the malformed case may do that.
     @Test("read still returns the real coverage when one codecov file legitimately covers nothing")
     func readSurvivesALegitimatelyEmptyFile() throws {
         let dir = makeTemporaryDirectory()
