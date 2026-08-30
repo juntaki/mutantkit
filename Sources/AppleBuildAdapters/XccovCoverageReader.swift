@@ -23,14 +23,19 @@ public enum XccovCoverageReader {
     /// - Returns: `nil` when the bundle does not exist, `xccov` fails, or the
     ///   output does not parse — all treated as "no coverage information",
     ///   never as "the project has zero coverage".
+    public static func read(archive xcresult: URL, projectRoot: URL) async -> CoverageMap? {
+        await read(archive: xcresult, projectRoot: projectRoot, processRunner: defaultProcessRunner)
+    }
+
     /// - Parameter processRunner: `AdapterSupport.swift`'s `ProcessRunner`
     ///   seam, letting a test force `outputComplete == false` deterministically
     ///   (mirrors `XcodeBuildAdapter.uninstallStaleApp`'s identical use of it).
     ///   `internal`, not `public` (like `ProcessRunner`/`defaultProcessRunner`
-    ///   themselves) — every real caller is inside this module; only `parse`,
-    ///   the pure half, is meant to be called from outside it.
+    ///   themselves) — every real caller outside this module goes through
+    ///   the public overload above; no default value here, so the two
+    ///   overloads never read as ambiguous at a call site.
     static func read(
-        archive xcresult: URL, projectRoot: URL, processRunner: ProcessRunner = defaultProcessRunner
+        archive xcresult: URL, projectRoot: URL, processRunner: ProcessRunner
     ) async -> CoverageMap? {
         guard FileManager.default.fileExists(atPath: xcresult.path) else { return nil }
 
