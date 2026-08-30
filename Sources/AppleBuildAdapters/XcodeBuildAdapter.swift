@@ -1240,10 +1240,15 @@ extension XcodeBuildAdapter: TestSelecting {
     /// if another test also covers the same line, that line stays
     /// non-empty and never falls back to the full suite, so a mutant only
     /// the unprovable test would have killed can be scored against the
-    /// wrong, narrower selection and turn into a false survivor. A test
-    /// that legitimately covers nothing (a genuine, successfully-read empty
-    /// coverage export) is not this case — that test's own turn simply
-    /// contributes no lines, same as before, and the loop continues.
+    /// wrong, narrower selection and turn into a false survivor. A test that
+    /// legitimately covers nothing is not this failure class, but is not
+    /// distinguished from it today either: `XccovCoverageReader.read` itself
+    /// conservatively folds a validly-parsed, genuinely-empty export into
+    /// the same `nil` a malformed one produces (see its own doc comment),
+    /// so this loop's `guard ... let map = ... else { return nil }` below
+    /// invalidates the whole map for that test too — safe (a fallback to
+    /// the full suite is never wrong, only slower), just not the narrowest
+    /// correct behavior; sharpening it is a performance question for later.
     /// - Parameter artifact: `runBaseline`'s own, uninstrumented artifact —
     ///   kept only to enumerate test identifiers from its already-produced
     ///   bundle; never built or tested against directly. Per-test coverage
