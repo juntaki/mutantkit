@@ -325,4 +325,3 @@ struct SwiftPackageMacOSShortfallClassificationTests {
         #expect(result.status == .passed)
     }
 }
-

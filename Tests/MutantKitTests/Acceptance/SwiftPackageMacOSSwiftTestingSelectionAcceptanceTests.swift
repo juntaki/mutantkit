@@ -199,6 +199,20 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
     @Test("measurePerTestCoverage does not leave per-test xunit reports behind in the workspace")
     func perTestCoverageDoesNotAccumulateXUnitReports() async throws {
         let workspace = try Acceptance.stageFixture("SwiftPackageMacOS")
+        // `stageFixture` copies `Fixtures/SwiftPackageMacOS/` verbatim, which
+        // includes its own untracked `mutantkit-xunit-swift-testing.xml`
+        // (a leftover from an earlier phase's live reproduction, never
+        // touched or deleted -- see this fixture's own history) — present
+        // before `measurePerTestCoverage` ever runs, and not itself evidence
+        // of anything this test checks. Snapshotting the pre-existing
+        // filenames here, rather than filtering by prefix alone, is what
+        // keeps this test about *new* leftovers only.
+        let preExisting = Set(
+            try FileManager.default
+                .contentsOfDirectory(at: workspace, includingPropertiesForKeys: nil)
+                .map(\.lastPathComponent)
+        )
+
         let adapter = SwiftPackageMacOSAdapter(configuration: Configuration())
         let artifact = try await adapter.buildBaseline(in: workspace)
         let perTestCoverage = await adapter.measurePerTestCoverage(
@@ -206,12 +220,12 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
         )
         _ = try #require(perTestCoverage, "measurePerTestCoverage produced no attribution at all")
 
-        let leftoverReports = try FileManager.default
+        let newXUnitReports = try FileManager.default
             .contentsOfDirectory(at: workspace, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("mutantkit-xunit") }
+            .filter { $0.lastPathComponent.hasPrefix("mutantkit-xunit") && !preExisting.contains($0.lastPathComponent) }
         #expect(
-            leftoverReports.isEmpty,
-            "measurePerTestCoverage left \(leftoverReports.count) xunit report(s) behind: \(leftoverReports.map(\.lastPathComponent))"
+            newXUnitReports.isEmpty,
+            "measurePerTestCoverage left \(newXUnitReports.count) new xunit report(s) behind: \(newXUnitReports.map(\.lastPathComponent))"
         )
     }
 
