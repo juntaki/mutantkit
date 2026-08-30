@@ -212,6 +212,15 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         // being left behind in the user's tree.
         let xunitOutput = workspace.appendingPathComponent("mutantkit-xunit.xml")
 
+        // `measurePerTestCoverage`'s loop calls this method many times against
+        // the same `workspace`, so `xunitOutput` is the same path on every
+        // call. Clear any report already there before invoking the toolchain —
+        // `classify`'s shortfall check must never read a previous iteration's
+        // stale report as if it were this run's own (P12-B Finding C's
+        // fail-closed contract; nothing guarantees SwiftPM overwrites on every
+        // single invocation).
+        Self.clearStaleXUnitReports(at: xunitOutput)
+
         // `--skip-build` because the build already happened and was already
         // classified. Letting the test step build would turn a compilation error
         // into a test failure, scoring an unviable mutant as killed.
@@ -290,6 +299,18 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
             result: result, command: command, xunitOutput: xunitOutput,
             reliableExpectedTestCount: reliableExpectedTestCount
         )
+    }
+
+    /// Removes any report already sitting at `requested` and its Swift
+    /// Testing sibling (`XUnitParser.candidatePaths`), so a run that reuses
+    /// this path can never have its verdict read from a previous
+    /// invocation's leftovers. Best-effort: a missing file is not an error,
+    /// and a failed removal is left for the run's own classification to
+    /// treat as "no fresh report" rather than surfaced here.
+    static func clearStaleXUnitReports(at requested: URL, fileManager: FileManager = .default) {
+        for candidate in XUnitParser.candidatePaths(for: requested) {
+            try? fileManager.removeItem(at: candidate)
+        }
     }
 
     /// Classifies a `swift test` run from its exit status and its xunit report.

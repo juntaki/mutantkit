@@ -298,3 +298,57 @@ struct SwiftPackageMacOSShortfallClassificationTests {
         #expect(result.status == .passed)
     }
 }
+
+/// `runTests`'s xunit report path is reused across every per-test iteration
+/// in `measurePerTestCoverage`'s loop -- the same `mutantkit-xunit.xml` /
+/// `mutantkit-xunit-swift-testing.xml` pair, one workspace, many `swift test`
+/// invocations. `classify`'s shortfall check (above) trusts whatever report
+/// sits at that path; nothing guarantees SwiftPM writes a fresh one on every
+/// single invocation. Before running the toolchain, `runTests` clears any
+/// report already at that path, so a run that -- for any reason -- does not
+/// produce a fresh one is read as "no report" (correctly failing closed) and
+/// never as a previous iteration's stale, possibly misleadingly nonzero, one.
+@Suite("SwiftPM stale xunit report clearing")
+struct SwiftPackageMacOSStaleXUnitReportTests {
+    private func stage(_ contents: [String: String]) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stale-xunit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, xml) in contents {
+            try Data(xml.utf8).write(to: directory.appendingPathComponent(name))
+        }
+        return directory.appendingPathComponent("mutantkit-xunit.xml")
+    }
+
+    @Test("Both the requested report and its Swift Testing sibling are removed")
+    func removesBothCandidates() throws {
+        let requested = try stage([
+            "mutantkit-xunit.xml": "<testsuites />",
+            "mutantkit-xunit-swift-testing.xml": "<testsuites />"
+        ])
+
+        SwiftPackageMacOSAdapter.clearStaleXUnitReports(at: requested)
+
+        for candidate in XUnitParser.candidatePaths(for: requested) {
+            #expect(!FileManager.default.fileExists(atPath: candidate.path))
+        }
+    }
+
+    @Test("A missing report is a no-op, not a crash")
+    func missingReportIsANoOp() {
+        let requested = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stale-xunit-\(UUID().uuidString)")
+            .appendingPathComponent("mutantkit-xunit.xml")
+
+        SwiftPackageMacOSAdapter.clearStaleXUnitReports(at: requested)
+    }
+
+    @Test("Only the requested report exists -- it alone is removed cleanly")
+    func onlyRequestedReportExists() throws {
+        let requested = try stage(["mutantkit-xunit.xml": "<testsuites />"])
+
+        SwiftPackageMacOSAdapter.clearStaleXUnitReports(at: requested)
+
+        #expect(!FileManager.default.fileExists(atPath: requested.path))
+    }
+}
