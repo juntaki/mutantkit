@@ -384,7 +384,6 @@ struct SourceCoverageReaderTests {
         #expect(SourceCoverageReader.parse(json, projectRoot: projectRoot) == nil)
     }
 
-
     // MARK: - Helpers
 
     private func makeTemporaryDirectory() -> URL {
