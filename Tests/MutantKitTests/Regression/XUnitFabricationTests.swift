@@ -190,3 +190,90 @@ struct XUnitRawExecutedCountTests {
         #expect(XUnitParser.rawExecutedCount(forRequestedOutput: requested) == 0)
     }
 }
+
+/// `swiftTestingExecutedCount` is the evidence a narrowed, all-Swift-Testing
+/// selection's own shortfall check needs -- proof the *Swift Testing*
+/// report specifically recorded an execution, never a substitute drawn from
+/// the unrelated XCTest report at the requested path.
+@Suite("Regression: Swift Testing executed count never borrows from XCTest's report")
+struct XUnitSwiftTestingExecutedCountTests {
+    private func write(_ contents: [String: String]) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xunit-swift-testing-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, xml) in contents {
+            try Data(xml.utf8).write(to: directory.appendingPathComponent(name))
+        }
+        return directory.appendingPathComponent("report.xml")
+    }
+
+    /// The exact scenario a mixed-framework merge would get wrong: the
+    /// requested (XCTest) path claims a real execution, but the Swift
+    /// Testing sibling -- the only report a Swift-Testing-shaped
+    /// selection's own claim is actually about -- says zero.
+    @Test("An XCTest report's nonzero count is never substituted for the Swift Testing sibling's own")
+    func xctestCountIsNeverBorrowed() throws {
+        let requested = try write([
+            "report.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="LibTests" tests="1" failures="0" skipped="0" time="0.03" />
+            </testsuites>
+            """,
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="0" failures="0" skipped="0" time="0.0001" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.swiftTestingExecutedCount(forRequestedOutput: requested) == 0)
+        // rawExecutedCount, by contrast, legitimately sums both -- this
+        // pins the two functions' different contracts against each other,
+        // not just against a fixture.
+        #expect(XUnitParser.rawExecutedCount(forRequestedOutput: requested) == 1)
+    }
+
+    @Test("A genuine Swift Testing execution is read from its own report")
+    func genuineSwiftTestingExecutionIsCounted() throws {
+        let requested = try write([
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="1" failures="0" skipped="0" time="0.001" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.swiftTestingExecutedCount(forRequestedOutput: requested) == 1)
+    }
+
+    @Test("A skipped Swift Testing test does not count as executed")
+    func skippedSwiftTestingTestDoesNotCount() throws {
+        let requested = try write([
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="1" failures="0" skipped="1" time="0.001" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.swiftTestingExecutedCount(forRequestedOutput: requested) == 0)
+    }
+
+    @Test("A missing Swift Testing sibling stays unknown, even if the requested path has a report")
+    func missingSwiftTestingSiblingStaysUnknown() throws {
+        let requested = try write([
+            "report.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="LibTests" tests="1" failures="0" skipped="0" time="0.03" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.swiftTestingExecutedCount(forRequestedOutput: requested) == nil)
+    }
+}

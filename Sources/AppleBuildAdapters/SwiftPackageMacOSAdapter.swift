@@ -210,16 +210,19 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         // Written inside the sandbox, so concurrent mutants cannot overwrite one
         // another's report — and so it disappears with the sandbox rather than
         // being left behind in the user's tree.
-        let xunitOutput = workspace.appendingPathComponent("mutantkit-xunit.xml")
-
-        // `measurePerTestCoverage`'s loop calls this method many times against
-        // the same `workspace`, so `xunitOutput` is the same path on every
-        // call. Clear any report already there before invoking the toolchain —
-        // `classify`'s shortfall check must never read a previous iteration's
-        // stale report as if it were this run's own (P12-B Finding C's
-        // fail-closed contract; nothing guarantees SwiftPM overwrites on every
-        // single invocation).
-        Self.clearStaleXUnitReports(at: xunitOutput)
+        //
+        // Unique per invocation, not a fixed name: `measurePerTestCoverage`'s
+        // loop calls this method many times against the *same* workspace, so
+        // a fixed path would be the same file on every call. An earlier
+        // version of this cleared that fixed path with a `try?`-guarded
+        // delete before each run — but a failed removal (permissions, a
+        // locked file, anything) would silently leave the previous
+        // iteration's report in place, and `classify`'s shortfall check
+        // would read it as this run's own (P12-B Finding C's fail-closed
+        // contract broken by exactly the failure mode meant to protect it).
+        // A UUID in the filename makes that collision structurally
+        // impossible instead of merely attempted — no cleanup to fail.
+        let xunitOutput = workspace.appendingPathComponent("mutantkit-xunit-\(UUID().uuidString).xml")
 
         // `--skip-build` because the build already happened and was already
         // classified. Letting the test step build would turn a compilation error
@@ -301,18 +304,6 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         )
     }
 
-    /// Removes any report already sitting at `requested` and its Swift
-    /// Testing sibling (`XUnitParser.candidatePaths`), so a run that reuses
-    /// this path can never have its verdict read from a previous
-    /// invocation's leftovers. Best-effort: a missing file is not an error,
-    /// and a failed removal is left for the run's own classification to
-    /// treat as "no fresh report" rather than surfaced here.
-    static func clearStaleXUnitReports(at requested: URL, fileManager: FileManager = .default) {
-        for candidate in XUnitParser.candidatePaths(for: requested) {
-            try? fileManager.removeItem(at: candidate)
-        }
-    }
-
     /// Classifies a `swift test` run from its exit status and its xunit report.
     ///
     /// `swift test` writes no `.xcresult`, but `--xunit-output` gives it a
@@ -376,7 +367,7 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
                 // B3): for a narrowed selection, no evidence that anything ran
                 // is exactly as unsafe to call a pass as evidence that zero
                 // things ran.
-                let executedCount = xunitOutput.flatMap { XUnitParser.rawExecutedCount(forRequestedOutput: $0) }
+                let executedCount = xunitOutput.flatMap { XUnitParser.swiftTestingExecutedCount(forRequestedOutput: $0) }
                 if (executedCount ?? 0) < reliableExpectedTestCount {
                     return TestRunResult(
                         status: .infrastructureFailure,
