@@ -88,10 +88,20 @@ public enum SourceCoverageReader {
             let count = segment[safe: 2] as? Int ?? 0
             let isRegionEntry = segment[safe: 4] as? Bool ?? false
 
-            // Close the currently-open region at this segment's line.
+            // Close the currently-open region at this segment's line. The
+            // region's own opening line always counts, even when the
+            // closing segment sits on that identical line (a single-line
+            // region — an early return or a one-statement branch body is
+            // exactly this shape): the closing segment marks a later
+            // *column* on the same line, which this line-granular reader
+            // does not track, so `start.line ..< line` alone would collapse
+            // to an empty range and silently drop the region's only line.
+            // `max(line, start.line + 1)` guarantees at least `start.line`
+            // itself is included, and is a no-op for the ordinary
+            // multi-line case where `line` is already past `start.line`.
             if let start = open {
                 if start.count > 0 {
-                    for l in start.line ..< line { lines.insert(l) }
+                    for l in start.line ..< max(line, start.line + 1) { lines.insert(l) }
                 }
                 open = nil
             }
