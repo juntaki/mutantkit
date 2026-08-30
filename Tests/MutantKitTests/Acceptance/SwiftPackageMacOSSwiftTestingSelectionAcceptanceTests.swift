@@ -177,4 +177,47 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
         #expect(bulkDiscountLine?.contains(seniorRateBoundary) != true)
     }
 
+    // MARK: B5 — the schemata selected-test path shares the same fix
+
+    /// `SchemataTestable.runSchemataToken(selectedTests:)` is the third
+    /// shared user of `swiftTestFilterArgument`/`reliableExpectedCount`
+    /// (alongside `measurePerTestCoverage` above and
+    /// `TestSelecting.runMutant` in `impossibleSelectionIsNotAuthoritativePass`).
+    /// It is exercised here against a plain (non-schemata-linked) build: the
+    /// schemata runtime library's linkage only affects which mutation a
+    /// token activates, never how `--filter` is built or how a zero-executed
+    /// run is classified, so this proves the filter/shortfall fix reaches
+    /// this call site too without needing `buildSchemataChunk` or
+    /// `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE`.
+    @Test("The schemata token path selects exactly the requested Swift Testing test")
+    func schemataTokenPathRoundTrips() async throws {
+        let staged = try await self.staged()
+        let seniorRateBoundary = try identifier(suffix: "seniorRateBoundary()", in: staged.discovered)
+
+        let result = try await staged.adapter.runSchemataToken(
+            staged.artifact, in: staged.workspace, timeoutSeconds: 30,
+            environment: [:], selectedTests: [seniorRateBoundary]
+        )
+
+        #expect(result.status == .passed, "\(result.diagnosis)")
+    }
+
+    /// The same impossible-selection contract as
+    /// `impossibleSelectionIsNotAuthoritativePass`, through the schemata
+    /// token call site instead of `runMutant`.
+    @Test("The schemata token path also refuses to call an impossible selection a pass")
+    func schemataTokenPathRejectsImpossibleSelection() async throws {
+        let staged = try await self.staged()
+        let impossible = TestIdentifier(target: "PricingTests", qualifiedName: "PricingTests/thisTestDoesNotExist()")
+
+        let result = try await staged.adapter.runSchemataToken(
+            staged.artifact, in: staged.workspace, timeoutSeconds: 30,
+            environment: [:], selectedTests: [impossible]
+        )
+
+        #expect(
+            result.status != .passed,
+            "an unsatisfiable selection was reported as passed via the schemata token path: \(result.diagnosis)"
+        )
+    }
 }
