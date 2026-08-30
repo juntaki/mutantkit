@@ -520,10 +520,19 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
     /// dominates every mutant's wall clock regardless of how few tests
     /// actually exercise the mutated line.
     ///
-    /// A test that does not pass in isolation (order-dependent, needs a
-    /// sibling's side effect) contributes no attribution and is silently
-    /// skipped — the mutant it would have covered simply falls back to the
-    /// full configured test list, which is always correct, just slower.
+    /// All-or-nothing (P12-B Finding D): a test whose isolated run cannot be
+    /// proven — order-dependent and failing alone, crashed, timed out, or a
+    /// selection SwiftPM silently ran zero of (Finding A/B/C, before this
+    /// adapter's own filter and `classify` fixes) — invalidates the whole
+    /// map, not just that one test's own entry. A previous version of this
+    /// method `continue`d past such a test, returning whatever the
+    /// *successful* tests alone had built; confirmed live (P12-B B1) that
+    /// this produces a map that still looks complete and usable while
+    /// silently missing the unprovable test's real coverage, which can turn
+    /// a mutant that test alone would have killed into a false survivor. A
+    /// test that legitimately covers nothing (a genuine, successfully-read
+    /// empty `CoverageMap`) is not this case — that test's own turn simply
+    /// contributes no lines, same as before, and the loop continues.
     /// - Parameter artifact: `runBaseline`'s own, uninstrumented artifact —
     ///   unused here beyond satisfying the protocol; test identifiers come
     ///   from `swift test list`, not from the artifact, and per-test
@@ -550,9 +559,9 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
                 enableCoverage: true,
                 testFilters: [test.swiftTestFilterArgument],
                 reliableExpectedTestCount: test.isSwiftTestingShaped ? 1 : nil
-            ), run.status == .passed else { continue }
+            ), run.status == .passed else { return nil }
 
-            guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { continue }
+            guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { return nil }
             Self.invert(map, coveredBy: test, into: &coveringTests)
         }
 
