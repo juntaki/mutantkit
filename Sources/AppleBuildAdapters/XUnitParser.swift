@@ -14,14 +14,16 @@ import MutationModel
 enum XUnitParser {
     /// The paths SwiftPM may write, given the `--xunit-output` value it was passed.
     static func candidatePaths(for requested: URL) -> [URL] {
+        [requested, swiftTestingSiblingPath(for: requested)]
+    }
+
+    /// The Swift Testing sibling SwiftPM derives from `--xunit-output`'s own
+    /// requested path — `<stem>-swift-testing.<ext>` alongside it.
+    static func swiftTestingSiblingPath(for requested: URL) -> URL {
         let directory = requested.deletingLastPathComponent()
         let stem = requested.deletingPathExtension().lastPathComponent
         let ext = requested.pathExtension.isEmpty ? "xml" : requested.pathExtension
-
-        return [
-            requested,
-            directory.appendingPathComponent("\(stem)-swift-testing").appendingPathExtension(ext)
-        ]
+        return directory.appendingPathComponent("\(stem)-swift-testing").appendingPathExtension(ext)
     }
 
     /// Merges every report SwiftPM actually wrote.
@@ -59,6 +61,44 @@ enum XUnitParser {
             failingTests: merged.failingTests.sorted(),
             durationSeconds: merged.duration
         )
+    }
+
+    /// The merged *executed* count — `total` minus `skipped` — without
+    /// `summary`'s "an all-zero merge means no measurement" collapse: the
+    /// opposite fact a selected-test shortfall check needs, proof that a
+    /// real zero was recorded rather than proof that a nonzero one was.
+    /// `nil` only when *neither* candidate path parsed at all (no report of
+    /// any kind was written), which stays genuinely unknown; a parsed report
+    /// claiming zero is a real, structured zero.
+    ///
+    /// `total` alone is not enough (codex review, P12-B Phase B3): a
+    /// disabled or conditionally-skipped Swift Testing test still reports
+    /// `tests="1" skipped="1"`, so counting it as executed would let a
+    /// selected test that never actually ran satisfy the shortfall check —
+    /// exactly the false pass this check exists to prevent.
+    static func rawExecutedCount(forRequestedOutput requested: URL) -> Int? {
+        let suites = candidatePaths(for: requested).compactMap { parse(contentsOf: $0) }
+        guard !suites.isEmpty else { return nil }
+        return suites.reduce(0) { $0 + $1.total - $1.skipped }
+    }
+
+    /// The Swift Testing report's own executed count — `total` minus
+    /// `skipped` — reading *only* the `-swift-testing` sibling, never the
+    /// requested (XCTest) path `rawExecutedCount` also merges in.
+    ///
+    /// A claim that a narrowed, all-Swift-Testing selection really executed
+    /// is a claim about the Swift Testing report specifically: summing in
+    /// the XCTest report (as `rawExecutedCount` does, correctly, for its own
+    /// "did anything run at all" purpose) would let an unrelated XCTest
+    /// count satisfy a check that is supposed to be evidence the requested
+    /// Swift Testing test(s) themselves ran — the exact substitution a
+    /// selected-test shortfall check exists to rule out. `nil` when the
+    /// Swift Testing sibling itself was not written or did not parse, the
+    /// same "genuinely unknown" contract `rawExecutedCount` uses, scoped to
+    /// the one report this claim is actually about.
+    static func swiftTestingExecutedCount(forRequestedOutput requested: URL) -> Int? {
+        guard let report = parse(contentsOf: swiftTestingSiblingPath(for: requested)) else { return nil }
+        return report.total - report.skipped
     }
 
     struct Report {
