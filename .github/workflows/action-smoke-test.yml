@@ -907,6 +907,7 @@ jobs:
       # source again, the touch really runs and the marker file appears.
       - name: "Run mutantkit via action.yml with a spaced project-root and an adversarial baseline-scope"
         id: mutantkit
+        continue-on-error: true
         uses: ./mutantkit-src
         with:
           mode: ci
@@ -915,12 +916,27 @@ jobs:
           baseline-scope: "$(touch ${{ runner.temp }}/mutantkit-injection-marker)"
           artifact-name: mutantkit-report-input-hardening
 
-      - name: Assert no injected command ran, and the spaced project-root was still used as real data
+      # The security property this job exists to prove — checked
+      # unconditionally, regardless of whether the run above succeeded, so
+      # an unrelated failure downstream (a toolchain limitation, a flaky
+      # runner) can never silently skip the one assertion that actually
+      # matters here.
+      - name: Assert no injected command ran (checked regardless of the run's own outcome)
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
           if [ -f "$RUNNER_TEMP/mutantkit-injection-marker" ]; then
             echo "::error::an input value was evaluated as shell source instead of treated as literal data" >&2
+            exit 1
+          fi
+
+      - name: Assert the run actually succeeded against the spaced project-root as real data
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.mutantkit.outcome }}" != "success" ]; then
+            echo "::error::expected the run against a spaced project-root to succeed, got outcome '${{ steps.mutantkit.outcome }}'" >&2
             exit 1
           fi
           project_root='adversarial project root with spaces'
