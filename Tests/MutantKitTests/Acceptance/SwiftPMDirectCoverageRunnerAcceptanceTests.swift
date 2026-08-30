@@ -3,7 +3,7 @@ import Foundation
 import MutationExecution
 import Testing
 
-/// Real-toolchain proof that the F1-C1 fast-profiler building blocks
+/// Real-toolchain proof that the fast-profiler substrate
 /// (`SwiftPMTestProductResolver`, `SwiftPMDirectCoverageRunner`,
 /// `SwiftPMCoverageExporter`) actually work together end to end against a
 /// real `swiftpm-testing-helper` invocation and real LLVM coverage tooling —
@@ -12,18 +12,21 @@ import Testing
 /// not yet wired into `measurePerTestCoverage`'s public surface (that is a
 /// later integration step), so this suite drives them directly.
 ///
-/// Covers the same acceptance shape as the SwiftPM (F1-P0-era) fail-closed
-/// suites and the earlier F1-A1 spike criteria: a valid test, an impossible
-/// filter, a failing test, a disabled/skipped test, and two sequential
-/// single-test runs with no cross-contamination.
+/// Four widgets, one behavior each, matching the earlier F1-A1 spike
+/// criteria: `widgetAPasses`/`widgetBPasses` (valid, disjoint coverage —
+/// used to prove no cross-contamination between isolated runs, not merely
+/// "each run got its own file path"), `widgetCAlwaysFails` (the serial
+/// oracle's own all-or-nothing contract), `widgetDSkipped` (`.disabled`).
 ///
 /// Off by default like every other acceptance suite: `MUTANTKIT_ACCEPTANCE=1 swift test`.
-@Suite("Acceptance: SwiftPM direct coverage runner (F1-C1 substrate)", .enabled(if: Acceptance.isEnabled))
+@Suite("Acceptance: SwiftPM direct coverage runner", .enabled(if: Acceptance.isEnabled))
 struct SwiftPMDirectCoverageRunnerAcceptanceTests {
     private static let librarySource = """
     public enum Widgets {
         public static func widgetA() -> Int { 1 }
         public static func widgetB() -> Int { 2 }
+        public static func widgetC() -> Int { 3 }
+        public static func widgetD() -> Int { 4 }
     }
 
     """
@@ -34,19 +37,24 @@ struct SwiftPMDirectCoverageRunnerAcceptanceTests {
 
     @Suite("Widgets")
     struct WidgetsTests {
-        @Test("widget A")
-        func widgetANeverFails() {
+        @Test("widget A passes")
+        func widgetAPasses() {
             #expect(Widgets.widgetA() == 1)
         }
 
-        @Test("widget B, always fails")
-        func widgetBAlwaysFails() {
-            _ = Widgets.widgetB()
+        @Test("widget B passes")
+        func widgetBPasses() {
+            #expect(Widgets.widgetB() == 2)
+        }
+
+        @Test("widget C always fails")
+        func widgetCAlwaysFails() {
+            _ = Widgets.widgetC()
             #expect(Bool(false), "deliberately unconditional failure")
         }
 
-        @Test("widget C, always skipped", .disabled("never runs"))
-        func widgetCNeverRuns() {
+        @Test("widget D always skipped", .disabled("never runs"))
+        func widgetDSkipped() {
             #expect(Bool(false), "must never execute")
         }
     }
@@ -99,12 +107,16 @@ struct SwiftPMDirectCoverageRunnerAcceptanceTests {
         return (workspace, binary)
     }
 
+    private func lineNumber(containing needle: String) throws -> Int {
+        try #require(Self.librarySource.components(separatedBy: "\n").firstIndex { $0.contains(needle) }) + 1
+    }
+
     @Test("A valid test's own coverage attributes exactly the line it covers")
     func validTestAttributesItsOwnLine() async throws {
         let (workspace, binary) = try await buildAndResolve()
         defer { try? FileManager.default.removeItem(at: workspace) }
 
-        let test = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetANeverFails()")
+        let test = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetAPasses()")
         let scratch = workspace.appendingPathComponent(".mutantkit-scratch", isDirectory: true)
 
         guard case .succeeded(let outcome) = await SwiftPMDirectCoverageRunner.run(
@@ -122,42 +134,57 @@ struct SwiftPMDirectCoverageRunnerAcceptanceTests {
         }
 
         let executed = try #require(SourceCoverageReader.parse(json, projectRoot: workspace))
-        let widgetALine = try #require(
-            Self.librarySource.components(separatedBy: "\n").firstIndex { $0.contains("widgetA()") }
-        ) + 1
-        let widgetBLine = try #require(
-            Self.librarySource.components(separatedBy: "\n").firstIndex { $0.contains("widgetB()") }
-        ) + 1
+        let widgetALine = try lineNumber(containing: "widgetA()")
+        let widgetBLine = try lineNumber(containing: "widgetB()")
 
         let widgetsFile = "Sources/Widgets/Widgets.swift"
         #expect(executed[widgetsFile]?.contains(widgetALine) == true)
         #expect(executed[widgetsFile]?.contains(widgetBLine) != true)
     }
 
-    @Test("Two sequential single-test runs do not contaminate each other's coverage")
-    func sequentialRunsDoNotContaminate() async throws {
+    @Test("Two sequential isolated runs of disjoint tests produce disjoint coverage -- no contamination")
+    func sequentialRunsProduceDisjointCoverage() async throws {
         let (workspace, binary) = try await buildAndResolve()
         defer { try? FileManager.default.removeItem(at: workspace) }
 
         let scratch = workspace.appendingPathComponent(".mutantkit-scratch", isDirectory: true)
-        let testA = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetANeverFails()")
+        let testA = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetAPasses()")
+        let testB = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetBPasses()")
 
-        // Run A, then immediately run A again -- if profiles or event
-        // streams leaked state between runs (a shared path, a stale
-        // environment variable), the second run's own evidence would be
-        // the tell.
-        guard case .succeeded(let first) = await SwiftPMDirectCoverageRunner.run(
+        guard case .succeeded(let outcomeA) = await SwiftPMDirectCoverageRunner.run(
             testBundleBinary: binary, test: testA, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
-        ), case .succeeded(let second) = await SwiftPMDirectCoverageRunner.run(
-            testBundleBinary: binary, test: testA, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
+        ), case .succeeded(let outcomeB) = await SwiftPMDirectCoverageRunner.run(
+            testBundleBinary: binary, test: testB, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
         ) else {
             Issue.record("expected both isolated runs to succeed")
             return
         }
 
-        #expect(first.profileURL != second.profileURL, "each run must get its own unique profile path")
-        #expect(FileManager.default.fileExists(atPath: first.profileURL.path))
-        #expect(FileManager.default.fileExists(atPath: second.profileURL.path))
+        guard case .exported(let jsonA) = await SwiftPMCoverageExporter.export(
+            profileURL: outcomeA.profileURL, testBundleBinary: binary, scratchDirectory: scratch
+        ), case .exported(let jsonB) = await SwiftPMCoverageExporter.export(
+            profileURL: outcomeB.profileURL, testBundleBinary: binary, scratchDirectory: scratch
+        ) else {
+            Issue.record("expected both coverage exports to succeed")
+            return
+        }
+
+        let executedA = try #require(SourceCoverageReader.parse(jsonA, projectRoot: workspace))
+        let executedB = try #require(SourceCoverageReader.parse(jsonB, projectRoot: workspace))
+        let widgetALine = try lineNumber(containing: "widgetA()")
+        let widgetBLine = try lineNumber(containing: "widgetB()")
+        let widgetsFile = "Sources/Widgets/Widgets.swift"
+
+        // The actual proof: A's own export covers A's line and not B's;
+        // B's own export covers B's line and not A's. Distinct profile
+        // paths (already implied by each run succeeding independently)
+        // prove nothing about coverage *content* on their own -- this is
+        // the check that would catch a shared, leaking, or default-named
+        // profile.
+        #expect(executedA[widgetsFile]?.contains(widgetALine) == true)
+        #expect(executedA[widgetsFile]?.contains(widgetBLine) != true)
+        #expect(executedB[widgetsFile]?.contains(widgetBLine) == true)
+        #expect(executedB[widgetsFile]?.contains(widgetALine) != true)
     }
 
     @Test("An impossible filter (a test that does not exist) is unavailable, not a false empty success")
@@ -183,10 +210,10 @@ struct SwiftPMDirectCoverageRunnerAcceptanceTests {
         defer { try? FileManager.default.removeItem(at: workspace) }
 
         let scratch = workspace.appendingPathComponent(".mutantkit-scratch", isDirectory: true)
-        let testB = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetBAlwaysFails()")
+        let testC = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetCAlwaysFails()")
 
         let result = await SwiftPMDirectCoverageRunner.run(
-            testBundleBinary: binary, test: testB, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
+            testBundleBinary: binary, test: testC, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
         )
         guard case .unavailable = result else {
             Issue.record("expected .unavailable for a test that fails in isolation, got \(result)")
@@ -194,16 +221,16 @@ struct SwiftPMDirectCoverageRunnerAcceptanceTests {
         }
     }
 
-    @Test("A disabled test is unavailable -- it never starts, so it can never satisfy an executed count")
+    @Test("A disabled test is unavailable -- it emits testSkipped, never testStarted/testEnded")
     func disabledTestIsUnavailable() async throws {
         let (workspace, binary) = try await buildAndResolve()
         defer { try? FileManager.default.removeItem(at: workspace) }
 
         let scratch = workspace.appendingPathComponent(".mutantkit-scratch", isDirectory: true)
-        let testC = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetCNeverRuns()")
+        let testD = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetDSkipped()")
 
         let result = await SwiftPMDirectCoverageRunner.run(
-            testBundleBinary: binary, test: testC, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
+            testBundleBinary: binary, test: testD, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
         )
         guard case .unavailable = result else {
             Issue.record("expected .unavailable for a disabled test, got \(result)")

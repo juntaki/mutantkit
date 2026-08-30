@@ -3,49 +3,84 @@ import Foundation
 import MutationExecution
 import Testing
 
-/// Fixtures below are hand-built to the exact shape confirmed live against
-/// the real toolchain (`swiftpm-testing-helper --event-stream-version 0`,
-/// see `SwiftTestingEventStreamParser`'s own doc comment) — not a
-/// reconstruction from documentation alone.
+/// Fixtures below are lines taken verbatim (or trivially trimmed of
+/// irrelevant fields) from real `swiftpm-testing-helper
+/// --event-stream-version 0` captures against a real built `.xctest`
+/// bundle — a plain passing test, a failing test, a 3-case
+/// `@Test(arguments:)` parameterized test, and a `.disabled` test. Not
+/// reconstructed from documentation or invented shapes.
 @Suite("Swift Testing event stream parser")
 struct SwiftTestingEventStreamParserTests {
-    private static func line(_ json: String) -> String { json }
-
-    private static let suiteDeclaration = line("""
-    {"kind":"test","payload":{"id":"PricingTests.PricingTests","kind":"suite","name":"PricingTests"},"version":0}
-    """)
-
-    private static func functionDeclaration(id: String, name: String = "bulkDiscountRoughly()") -> String {
-        line("""
-        {"kind":"test","payload":{"id":"\(id)","kind":"function","isParameterized":false,"name":"\(name)"},"version":0}
-        """)
+    private static let runStarted = """
+    {"kind":"event","payload":{"kind":"runStarted","messages":[{"symbol":"default","text":"Test run started."}]},"version":0}
+    """
+    private static let runEndedPass = """
+    {"kind":"event","payload":{"kind":"runEnded","messages":[{"symbol":"pass","text":"Test run passed."}]},"version":0}
+    """
+    private static let suiteDeclaration = """
+    {"kind":"test","payload":{"id":"WidgetsTests.WidgetsTests","kind":"suite","name":"WidgetsTests"},"version":0}
+    """
+    private static func suiteStarted(id: String = "WidgetsTests.WidgetsTests") -> String {
+        """
+        {"kind":"event","payload":{"kind":"testStarted","testID":"\(id)","messages":[{"symbol":"default","text":"Suite started."}]},"version":0}
+        """
+    }
+    private static func suiteEnded(id: String = "WidgetsTests.WidgetsTests") -> String {
+        """
+        {"kind":"event","payload":{"kind":"testEnded","testID":"\(id)","messages":[{"symbol":"pass","text":"Suite passed."}]},"version":0}
+        """
     }
 
-    private static func event(kind: String, testID: String? = nil, symbol: String? = nil) -> String {
-        let messages = symbol.map { ",\"messages\":[{\"symbol\":\"\($0)\",\"text\":\"...\"}]" } ?? ""
-        if let testID {
-            return line("""
-            {"kind":"event","payload":{"kind":"\(kind)","testID":"\(testID)"\(messages)},"version":0}
-            """)
-        }
-        return line("""
-        {"kind":"event","payload":{"kind":"\(kind)"\(messages)},"version":0}
-        """)
+    private static func functionDeclaration(id: String, name: String, isParameterized: Bool = false) -> String {
+        """
+        {"kind":"test","payload":{"id":"\(id)","kind":"function","isParameterized":\(isParameterized),"name":"\(name)"},"version":0}
+        """
+    }
+
+    private static func testStarted(id: String) -> String {
+        """
+        {"kind":"event","payload":{"kind":"testStarted","testID":"\(id)","messages":[{"symbol":"default","text":"Test started."}]},"version":0}
+        """
+    }
+
+    private static func testEnded(id: String, symbol: String = "pass") -> String {
+        """
+        {"kind":"event","payload":{"kind":"testEnded","testID":"\(id)","messages":[{"symbol":"\(symbol)","text":"Test ended."}]},"version":0}
+        """
+    }
+
+    private static func testCaseStarted(id: String) -> String {
+        """
+        {"kind":"event","payload":{"kind":"testCaseStarted","testID":"\(id)","_testCase":{"displayName":"1"},"messages":[{"symbol":"default","text":"Test case started."}]},"version":0}
+        """
+    }
+
+    private static func testCaseEnded(id: String) -> String {
+        // Confirmed live: testCaseEnded's own messages array is present but empty.
+        """
+        {"kind":"event","payload":{"kind":"testCaseEnded","testID":"\(id)","_testCase":{"displayName":"1"},"messages":[]},"version":0}
+        """
+    }
+
+    private static func testSkipped(id: String) -> String {
+        """
+        {"kind":"event","payload":{"kind":"testSkipped","testID":"\(id)","messages":[{"symbol":"skip","text":"Test skipped."}]},"version":0}
+        """
     }
 
     @Test("A clean single-test run parses to exactly the expected TestIdentifier, started and ended")
     func cleanSingleTestRunParses() throws {
-        let functionID = "PricingTests.PricingTests/bulkDiscountRoughly()"
-        let eventID = "\(functionID)/PricingTests.swift:22:6"
+        let functionID = "WidgetsTests.WidgetsTests/widgetA()"
+        let eventID = "\(functionID)/WidgetsTests.swift:6:6"
         let stream = [
             Self.suiteDeclaration,
-            Self.functionDeclaration(id: functionID),
-            Self.event(kind: "runStarted"),
-            Self.event(kind: "testStarted", testID: "PricingTests.PricingTests"),
-            Self.event(kind: "testStarted", testID: eventID),
-            Self.event(kind: "testEnded", testID: eventID),
-            Self.event(kind: "testEnded", testID: "PricingTests.PricingTests"),
-            Self.event(kind: "runEnded")
+            Self.functionDeclaration(id: functionID, name: "widgetA()"),
+            Self.runStarted,
+            Self.suiteStarted(),
+            Self.testStarted(id: eventID),
+            Self.testEnded(id: eventID),
+            Self.suiteEnded(),
+            Self.runEndedPass
         ].joined(separator: "\n")
 
         guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
@@ -53,7 +88,7 @@ struct SwiftTestingEventStreamParserTests {
             return
         }
 
-        let expected = TestIdentifier(target: "PricingTests", qualifiedName: "PricingTests/bulkDiscountRoughly()")
+        let expected = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetA()")
         #expect(evidence.runStarted)
         #expect(evidence.runEnded)
         #expect(evidence.declaredTests == [expected])
@@ -64,22 +99,14 @@ struct SwiftTestingEventStreamParserTests {
 
     @Test("A testEnded event with a fail symbol marks the test failed, even though it still ended cleanly")
     func failSymbolMarksTestFailed() throws {
-        // Suite-scoped, matching the real fixture shape used elsewhere in
-        // this file -- a global (non-suite) Swift Testing function's own id
-        // has no "/" at all (confirmed live: `swift test list` reports it
-        // as "<Target>.<method>()"), which even the existing serial oracle's
-        // own TestIdentifier parsing already excludes (`SwiftPackageMacOSAdapter
-        // .parseTestIdentifiers`'s `qualifiedName.contains("/")` guard) --
-        // a pre-existing, codebase-wide limitation this fast path
-        // intentionally matches rather than fixes.
         let functionID = "WidgetTests.WidgetTests/alwaysFails()"
         let eventID = "\(functionID)/WidgetTests.swift:4:2"
         let stream = [
             Self.functionDeclaration(id: functionID, name: "alwaysFails()"),
-            Self.event(kind: "runStarted"),
-            Self.event(kind: "testStarted", testID: eventID),
-            Self.event(kind: "testEnded", testID: eventID, symbol: "fail"),
-            Self.event(kind: "runEnded", symbol: "fail")
+            Self.runStarted,
+            Self.testStarted(id: eventID),
+            Self.testEnded(id: eventID, symbol: "fail"),
+            Self.runEndedPass
         ].joined(separator: "\n")
 
         guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
@@ -94,22 +121,17 @@ struct SwiftTestingEventStreamParserTests {
 
     @Test("A suite's own container testStarted/testEnded are not mistaken for malformed leaf-test evidence")
     func suiteContainerEventsAreNotMalformed() {
-        // Same as the clean run above, but this is the exact regression
-        // case: without declaredSuiteIDs tracking, the suite's own
-        // "PricingTests.PricingTests" testID (no "/") fails
-        // testIdentifier(fromEventStreamID:) and must not be treated as
-        // corrupted evidence.
-        let functionID = "PricingTests.PricingTests/bulkDiscountRoughly()"
-        let eventID = "\(functionID)/PricingTests.swift:22:6"
+        let functionID = "WidgetsTests.WidgetsTests/widgetA()"
+        let eventID = "\(functionID)/WidgetsTests.swift:6:6"
         let stream = [
             Self.suiteDeclaration,
-            Self.functionDeclaration(id: functionID),
-            Self.event(kind: "runStarted"),
-            Self.event(kind: "testStarted", testID: "PricingTests.PricingTests"),
-            Self.event(kind: "testStarted", testID: eventID),
-            Self.event(kind: "testEnded", testID: eventID),
-            Self.event(kind: "testEnded", testID: "PricingTests.PricingTests"),
-            Self.event(kind: "runEnded")
+            Self.functionDeclaration(id: functionID, name: "widgetA()"),
+            Self.runStarted,
+            Self.suiteStarted(),
+            Self.testStarted(id: eventID),
+            Self.testEnded(id: eventID),
+            Self.suiteEnded(),
+            Self.runEndedPass
         ].joined(separator: "\n")
 
         guard case .parsed = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
@@ -118,60 +140,90 @@ struct SwiftTestingEventStreamParserTests {
         }
     }
 
-    @Test("A parameterized test's multiple cases all fold into one TestIdentifier, and all must end")
-    func parameterizedCasesFoldIntoOneIdentifier() throws {
-        let functionID = "PricingTests.PricingTests/parameterized(value:)"
-        let case1 = "\(functionID)/PricingTests.swift:30:6"
-        let case2 = "\(functionID)/PricingTests.swift:31:6"
+    @Test("A parameterized test's single function-level start/end pair is its evidence -- case events don't multiply it")
+    func parameterizedFunctionUsesOneStartEndPairRegardlessOfCaseCount() throws {
+        // Real shape: ONE "test"/"function" declaration (isParameterized:
+        // true, no per-case declarations), ONE testStarted/testEnded pair
+        // at the function's own testID, with testCaseStarted/testCaseEnded
+        // (same testID) interleaved for each of the 3 cases -- confirmed
+        // live against a real @Test(arguments: [1, 2, 3]) function.
+        let functionID = "WidgetsTests.WidgetsTests/parameterized(_:)"
+        let eventID = "\(functionID)/WidgetsTests.swift:6:6"
         let stream = [
-            Self.functionDeclaration(id: functionID, name: "parameterized(value:)"),
-            Self.functionDeclaration(id: functionID, name: "parameterized(value:)"), // one declaration per case
-            Self.event(kind: "runStarted"),
-            Self.event(kind: "testStarted", testID: case1),
-            Self.event(kind: "testEnded", testID: case1),
-            Self.event(kind: "testStarted", testID: case2),
-            Self.event(kind: "testEnded", testID: case2),
-            Self.event(kind: "runEnded")
+            Self.functionDeclaration(id: functionID, name: "parameterized(_:)", isParameterized: true),
+            Self.runStarted,
+            Self.testStarted(id: eventID),
+            Self.testCaseStarted(id: eventID),
+            Self.testCaseStarted(id: eventID),
+            Self.testCaseStarted(id: eventID),
+            Self.testCaseEnded(id: eventID),
+            Self.testCaseEnded(id: eventID),
+            Self.testCaseEnded(id: eventID),
+            Self.testEnded(id: eventID),
+            Self.runEndedPass
         ].joined(separator: "\n")
 
         guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
-        let expected = TestIdentifier(target: "PricingTests", qualifiedName: "PricingTests/parameterized(value:)")
+        let expected = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/parameterized(_:)")
         #expect(evidence.declaredTests == [expected])
+        #expect(evidence.startedTests == [expected])
         #expect(evidence.endedTests == [expected])
+        #expect(evidence.failedTests.isEmpty)
     }
 
-    @Test("A parameterized test missing one case's testEnded is not marked ended")
-    func parameterizedTestMissingOneCaseEndIsNotEnded() {
-        let functionID = "PricingTests.PricingTests/parameterized(value:)"
-        let case1 = "\(functionID)/PricingTests.swift:30:6"
-        let case2 = "\(functionID)/PricingTests.swift:31:6"
+    @Test("testCaseStarted/testCaseEnded with a malformed messages field fails the whole stream closed")
+    func malformedCaseEventFailsClosed() {
+        let functionID = "WidgetsTests.WidgetsTests/parameterized(_:)"
+        let eventID = "\(functionID)/WidgetsTests.swift:6:6"
+        let malformedCaseEvent = """
+        {"kind":"event","payload":{"kind":"testCaseStarted","testID":"\(eventID)"},"version":0}
+        """
         let stream = [
-            Self.functionDeclaration(id: functionID, name: "parameterized(value:)"),
-            Self.functionDeclaration(id: functionID, name: "parameterized(value:)"),
-            Self.event(kind: "runStarted"),
-            Self.event(kind: "testStarted", testID: case1),
-            Self.event(kind: "testEnded", testID: case1),
-            Self.event(kind: "testStarted", testID: case2),
-            // case2 never ends -- a crash mid-case, for instance.
-            Self.event(kind: "runEnded")
+            Self.functionDeclaration(id: functionID, name: "parameterized(_:)", isParameterized: true),
+            Self.runStarted,
+            Self.testStarted(id: eventID),
+            malformedCaseEvent
+        ].joined(separator: "\n")
+
+        guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected unsupported: testCaseStarted is a known event kind, its messages field is required")
+            return
+        }
+    }
+
+    @Test("A disabled test emits testSkipped, never testStarted/testEnded, and is tracked separately")
+    func disabledTestEmitsTestSkipped() throws {
+        // Real shape, confirmed live: a .disabled test gets its own "test"/
+        // "function" declaration but never testStarted/testEnded at all --
+        // only a single testSkipped event.
+        let functionID = "WidgetsTests.WidgetsTests/skippedTest()"
+        let eventID = "\(functionID)/WidgetsTests.swift:11:6"
+        let stream = [
+            Self.functionDeclaration(id: functionID, name: "skippedTest()"),
+            Self.runStarted,
+            Self.testSkipped(id: eventID),
+            Self.runEndedPass
         ].joined(separator: "\n")
 
         guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
-        let expected = TestIdentifier(target: "PricingTests", qualifiedName: "PricingTests/parameterized(value:)")
-        #expect(!evidence.endedTests.contains(expected))
+        let expected = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/skippedTest()")
+        #expect(evidence.declaredTests == [expected])
+        #expect(evidence.startedTests.isEmpty)
+        #expect(evidence.endedTests.isEmpty)
+        #expect(evidence.skippedTests == [expected])
     }
 
     @Test("An unsupported record version fails closed")
     func unsupportedVersionFailsClosed() {
-        let stream = Self.line("""
-        {"kind":"event","payload":{"kind":"runStarted"},"version":7}
-        """)
+        let stream = """
+        {"kind":"event","payload":{"kind":"runStarted","messages":[]},"version":7}
+        """
         guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected unsupported")
             return
@@ -189,13 +241,58 @@ struct SwiftTestingEventStreamParserTests {
 
     @Test("A test declaration missing its own id fails closed")
     func declarationMissingIDFailsClosed() {
-        let stream = Self.line("""
+        let stream = """
         {"kind":"test","payload":{"kind":"function"},"version":0}
-        """)
+        """
         guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected unsupported")
             return
         }
+    }
+
+    @Test("A testStarted event missing its own messages field fails closed, not treated as no-failure")
+    func testStartedMissingMessagesFailsClosed() {
+        let functionID = "WidgetsTests.WidgetsTests/widgetA()"
+        let eventID = "\(functionID)/WidgetsTests.swift:6:6"
+        let malformedEvent = """
+        {"kind":"event","payload":{"kind":"testStarted","testID":"\(eventID)"},"version":0}
+        """
+        let stream = [
+            Self.functionDeclaration(id: functionID, name: "widgetA()"),
+            Self.runStarted,
+            malformedEvent
+        ].joined(separator: "\n")
+
+        guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected unsupported")
+            return
+        }
+    }
+
+    @Test("A known event kind with a missing payload fails the whole stream closed")
+    func knownEventWithMissingPayloadFailsClosed() {
+        let stream = """
+        {"kind":"event","version":0}
+        """
+        guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected unsupported")
+            return
+        }
+    }
+
+    @Test("An unrecognized event kind is safely ignored, not a failure")
+    func unrecognizedEventKindIsIgnored() throws {
+        let unknownEvent = """
+        {"kind":"event","payload":{"kind":"someFutureEventKind"},"version":0}
+        """
+        let stream = [Self.runStarted, unknownEvent, Self.runEndedPass].joined(separator: "\n")
+
+        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected a parsed result -- an unrecognized event kind must not fail the stream")
+            return
+        }
+        #expect(evidence.runStarted)
+        #expect(evidence.runEnded)
     }
 
     @Test("testIdentifier(fromEventStreamID:) strips the source-location suffix and matches swift test list's own shape")

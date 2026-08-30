@@ -126,6 +126,15 @@ enum SwiftPMDirectCoverageRunner {
             return .unavailable(reason: "could not launch swiftpm-testing-helper: \(error)")
         }
 
+        // Exit status is authority on its own, independent of what the event
+        // stream claims: a crash or an infrastructure-level failure could in
+        // principle still leave a stream that reads as clean (a signal
+        // arriving after the last event was flushed, for instance), and
+        // trusting the stream alone there would be exactly the kind of gap
+        // structured evidence exists to close, not reopen.
+        guard result.succeeded else {
+            return .unavailable(reason: "swiftpm-testing-helper did not exit successfully (exit \(result.exitCode))")
+        }
         guard result.outputComplete else {
             return .unavailable(reason: "swiftpm-testing-helper's own output could not be fully captured")
         }
@@ -134,29 +143,49 @@ enum SwiftPMDirectCoverageRunner {
         case .unsupported(let reason):
             return .unavailable(reason: "event stream: \(reason)")
         case .parsed(let evidence):
-            guard evidence.runStarted, evidence.runEnded else {
-                return .unavailable(reason: "the event stream never reported both runStarted and runEnded")
-            }
-            guard evidence.declaredTests.contains(test) else {
-                return .unavailable(reason: "\(test) was never declared in its own isolated run's event stream")
-            }
-            guard evidence.endedTests.contains(test) else {
-                return .unavailable(reason: "\(test) started but never reported ending (crash, hang, or a filter that matched more than intended)")
-            }
-            // Parity with the serial oracle's own contract
-            // (`SwiftPackageMacOSAdapter.measurePerTestCoverage`: `guard
-            // run.status == .passed else { return nil }`) -- a test that
-            // fails in isolation is an unprovable run, not evidence to
-            // trust, even though it did complete and produced a real
-            // profile.
-            guard !evidence.failedTests.contains(test) else {
-                return .unavailable(reason: "\(test) failed in isolation, so its coverage cannot be trusted (parity with the serial oracle)")
+            if let reason = Self.disqualifyingReason(for: test, evidence: evidence) {
+                return .unavailable(reason: reason)
             }
             guard FileManager.default.fileExists(atPath: profileURL.path) else {
                 return .unavailable(reason: "no coverage profile was written to \(profileURL.path)")
             }
             return .succeeded(Outcome(evidence: evidence, profileURL: profileURL))
         }
+    }
+
+    /// `nil` when `evidence` proves exactly `test`, and only `test`, ran to
+    /// a trustworthy completion; otherwise the specific reason it does not.
+    private static func disqualifyingReason(for test: TestIdentifier, evidence: SwiftTestingEventStreamParser.RunEvidence) -> String? {
+        guard evidence.runStarted, evidence.runEnded else {
+            return "the event stream never reported both runStarted and runEnded"
+        }
+        guard evidence.declaredTests.contains(test) else {
+            return "\(test) was never declared in its own isolated run's event stream"
+        }
+        // Exactness, not mere containment: an anchored filter regex is
+        // still only a request, never proof on its own that the helper
+        // actually honored it -- exactly the class of gap #26/P12-B
+        // Finding A/B closed for the existing xcodebuild/xctest paths,
+        // reopened here through a different mechanism if only "contains"
+        // were checked. `startedTests`/`endedTests` are the structured
+        // evidence this backend exists to provide instead of trusting the
+        // filter string; both must equal exactly `{test}`, or this
+        // isolated run did not isolate what it claimed to.
+        guard evidence.startedTests == [test] else {
+            return "the isolated filter executed unexpected tests: started \(evidence.startedTests)"
+        }
+        guard evidence.endedTests == [test] else {
+            return "the isolated run did not end exactly the requested test: ended \(evidence.endedTests)"
+        }
+        // Parity with the serial oracle's own contract
+        // (`SwiftPackageMacOSAdapter.measurePerTestCoverage`: `guard
+        // run.status == .passed else { return nil }`) -- a test that fails
+        // in isolation is an unprovable run, not evidence to trust, even
+        // though it did complete and produced a real profile.
+        guard evidence.failedTests.isEmpty else {
+            return "the isolated test run reported a failure (parity with the serial oracle)"
+        }
+        return nil
     }
 
     /// Same anchored-regex construction as `TestIdentifier.swiftTestFilterArgument`
