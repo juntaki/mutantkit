@@ -25,19 +25,33 @@ import MutationExecution
 /// they don't parse as one.
 ///
 /// An `"event"` record's `payload.kind` is one of: `runStarted`/`runEnded`
-/// (no `testID`); `testStarted`/`testEnded`/`testSkipped` (function-level,
-/// `testID` == the function's own declared id, exactly one `testStarted`/
-/// `testEnded` pair even for a parameterized function — its own `testEnded`
-/// message already aggregates every case, e.g. `"Test parameterized(_:)
-/// with 3 test cases passed"`); `testCaseStarted`/`testCaseEnded`
-/// (case-level, same function `testID`, a `_testCase` payload this parser
-/// does not need — case-level selection is out of scope, see the plan);
-/// `issueRecorded` (failure detail this parser does not otherwise need,
-/// `testID` present when tied to a specific test). Every event kind this
-/// parser recognizes carries a `messages` array — confirmed present even
-/// when empty (`testCaseEnded`'s own `messages` is `[]`) — a well-typed,
-/// required field, not an optional one this parser can treat as "no
-/// failure" when it is missing or malformed.
+/// (no `testID`); `testStarted`/`testEnded`/`testSkipped`/`testCancelled`
+/// (function-level, `testID` == the function's own declared id, exactly one
+/// `testStarted`/`testEnded` pair even for a parameterized function — its
+/// own `testEnded` message already aggregates every case, e.g. `"Test
+/// parameterized(_:) with 3 test cases passed"`); `testCaseStarted`/
+/// `testCaseEnded`/`testCaseCancelled` (case-level, same function `testID`,
+/// a `_testCase` payload this parser does not need — case-level selection
+/// is out of scope, see the plan; `testCaseCancelled` is the one case-level
+/// signal this parser still surfaces, folded into its parent function's
+/// `cancelledTests`); `issueRecorded` (failure detail this parser does not
+/// otherwise need, `testID` present when tied to a specific test).
+///
+/// Every event kind this parser recognizes carries a `messages` array —
+/// confirmed present even when empty (`testCaseEnded`'s own `messages` is
+/// `[]`) — a well-typed, required field, not an optional one this parser
+/// can treat as "no failure" when it is missing or malformed; each
+/// message's own `symbol`/`text` are required `String`s too. A leaf test's
+/// `testID` on any function- or case-scoped event must resolve to a test
+/// this stream actually declared — an event about an undeclared test is
+/// unaccountable evidence, not evidence about a real test, and fails the
+/// whole stream closed rather than silently going uncounted.
+///
+/// `testEnded`'s own pass/fail authority comes from its `messages[].symbol`
+/// set: exactly one of a recognized fail symbol (`"fail"`) or a recognized
+/// pass symbol (`"pass"`, `"passWithKnownIssue"`) must be present — neither
+/// (only informational messages) or both (contradictory) is unsupported
+/// evidence, never a presumed pass or fail.
 ///
 /// The per-record `"version"` field was observed to read `0` regardless of
 /// the `--event-stream-version` CLI flag passed to the helper (tried 0, 2, 3,
@@ -73,25 +87,39 @@ enum SwiftTestingEventStreamParser {
         /// Every function-level test this stream declared (`payload.kind ==
         /// "function"`), regardless of whether it ever started or ended —
         /// the set a caller checks "was every discovered test accounted
-        /// for" against.
+        /// for" against, and the set every other test-scoped event's own
+        /// `testID` is required to resolve into: an event about a test this
+        /// stream never declared is unaccountable evidence, not evidence
+        /// about a real test.
         var declaredTests: Set<TestIdentifier> = []
         var startedTests: Set<TestIdentifier> = []
         var endedTests: Set<TestIdentifier> = []
-        /// A `testEnded` whose own `messages[].symbol` included `"fail"` —
+        /// A `testEnded` whose own `messages` carried a `"pass"` or
+        /// `"passWithKnownIssue"` symbol and no `"fail"` symbol —
+        /// positive evidence, not merely "no fail symbol seen". A
+        /// `testEnded` with neither a recognized pass symbol nor `"fail"`
+        /// (only informational messages, say) is unsupported evidence, not
+        /// a presumed pass — "unknown evidence is not a verdict" applies to
+        /// success exactly as much as to failure. A parameterized
+        /// function's single `testEnded` already aggregates every case's
+        /// own outcome, confirmed live.
+        var passedTests: Set<TestIdentifier> = []
+        /// A `testEnded` whose own `messages` carried a `"fail"` symbol.
         /// Swift Testing's own ABI reports pass/fail this way (a structured
-        /// field on a well-typed record, not console-text scraping), and a
-        /// parameterized function's single `testEnded` already aggregates
-        /// every case's own outcome, confirmed live.
+        /// field on a well-typed record, not console-text scraping).
         var failedTests: Set<TestIdentifier> = []
         /// A `testSkipped` event for this test — it never gets `testStarted`/
         /// `testEnded` at all (confirmed live for a `.disabled` test), so
         /// `startedTests`/`endedTests` already exclude it; tracked
-        /// separately only so a caller can report *why* clearly.
+        /// separately so a caller can both report *why* clearly and require
+        /// this set be empty as part of its own trust check.
         var skippedTests: Set<TestIdentifier> = []
-        /// A `testCancelled` event for this test. Not empirically captured
-        /// (no reliable way to trigger one in a short-lived probe process),
-        /// modeled by structural analogy to every other function-scoped
-        /// event this parser has directly observed (`testID` + required
+        /// A `testCancelled` (function-scoped) or `testCaseCancelled`
+        /// (case-scoped, folded to its parent function's identifier) event
+        /// for this test. Not empirically captured (no reliable way to
+        /// trigger one in a short-lived probe process), modeled by
+        /// structural analogy to every other scoped event this parser has
+        /// directly observed (`testID` + required, strictly-typed
         /// `messages`) rather than guessed at from nothing.
         var cancelledTests: Set<TestIdentifier> = []
     }
@@ -218,19 +246,13 @@ enum SwiftTestingEventStreamParser {
                 if eventKind == "runStarted" { evidence.runStarted = true } else { evidence.runEnded = true }
 
             case _ where functionScopedEventKinds.contains(eventKind):
-                try recordFunctionScopedEvent(kind: eventKind, payload: payload, declaredSuiteIDs: declaredSuiteIDs, evidence: &evidence)
+                try recordFunctionScopedEvent(
+                    kind: eventKind, payload: payload, declaredSuiteIDs: declaredSuiteIDs,
+                    declaredTests: declaredTests, evidence: &evidence
+                )
 
             case _ where caseScopedEventKinds.contains(eventKind):
-                // Case-level lifecycle, same function testID as its parent
-                // -- validated for shape (a malformed one still fails the
-                // whole stream closed) but not folded into any evidence:
-                // the function-level testStarted/testEnded pair already
-                // covers this test's own start/end/pass-fail, and this
-                // parser does not do case-level selection.
-                _ = try requiredMessages(in: payload, eventKind: eventKind)
-                guard payload["testID"] is String else {
-                    throw UnsupportedEvidence(reason: "a \(eventKind) event was missing its own testID")
-                }
+                try recordCaseScopedEvent(kind: eventKind, payload: payload, declaredTests: declaredTests, evidence: &evidence)
 
             case "issueRecorded":
                 // Failure detail this parser does not otherwise need (the
@@ -252,10 +274,20 @@ enum SwiftTestingEventStreamParser {
         return evidence
     }
 
+    /// `runStarted`/`runEnded`/`testSkipped`/`testCancelled` (and the suite
+    /// container's own `testStarted`/`testEnded`) — a leaf test's `testID`
+    /// must resolve to a test this stream actually declared, or the event
+    /// is unaccountable evidence, not evidence about a real test: without
+    /// this check, an event naming an *undeclared* test would still parse
+    /// (its `testID` syntactically resolves to a `TestIdentifier`) and
+    /// silently vanish from every evidence set, exactly the same "count
+    /// only what confirms, ignore what doesn't" gap this parser exists to
+    /// close.
     private static func recordFunctionScopedEvent(
         kind: String,
         payload: [String: Any],
         declaredSuiteIDs: Set<String>,
+        declaredTests: Set<TestIdentifier>,
         evidence: inout RunEvidence
     ) throws {
         let messages = try requiredMessages(in: payload, eventKind: kind)
@@ -270,15 +302,16 @@ enum SwiftTestingEventStreamParser {
         guard let identifier = testIdentifier(fromEventStreamID: rawID) else {
             throw UnsupportedEvidence(reason: "a \(kind) event's testID \(rawID) did not resolve to a declared or suite id")
         }
+        guard declaredTests.contains(identifier) else {
+            throw UnsupportedEvidence(reason: "a \(kind) event named \(identifier), which this stream never declared")
+        }
 
         switch kind {
         case "testStarted":
             evidence.startedTests.insert(identifier)
         case "testEnded":
             evidence.endedTests.insert(identifier)
-            if messages.contains(where: { ($0["symbol"] as? String) == "fail" }) {
-                evidence.failedTests.insert(identifier)
-            }
+            try recordTerminalOutcome(for: identifier, messages: messages, evidence: &evidence)
         case "testSkipped":
             evidence.skippedTests.insert(identifier)
         case "testCancelled":
@@ -288,10 +321,77 @@ enum SwiftTestingEventStreamParser {
         }
     }
 
+    /// `testCaseStarted`/`testCaseEnded`/`testCaseCancelled` — case-level
+    /// lifecycle, same function `testID` as its parent. `testCaseStarted`/
+    /// `testCaseEnded` are validated for shape (a malformed one still fails
+    /// the whole stream closed) and otherwise ignored: the function-level
+    /// `testStarted`/`testEnded` pair already covers this test's own
+    /// start/end/pass-fail, and this parser does not do case-level
+    /// selection. `testCaseCancelled` is different: a single cancelled
+    /// case inside an otherwise-clean-looking parameterized run must still
+    /// disqualify the whole function, so it is folded into
+    /// `cancelledTests` under its parent's identifier, not discarded.
+    private static func recordCaseScopedEvent(
+        kind: String,
+        payload: [String: Any],
+        declaredTests: Set<TestIdentifier>,
+        evidence: inout RunEvidence
+    ) throws {
+        _ = try requiredMessages(in: payload, eventKind: kind)
+        guard let rawID = payload["testID"] as? String else {
+            throw UnsupportedEvidence(reason: "a \(kind) event was missing its own testID")
+        }
+        guard let identifier = testIdentifier(fromEventStreamID: rawID) else {
+            throw UnsupportedEvidence(reason: "a \(kind) event's testID \(rawID) did not resolve to a declared test")
+        }
+        guard declaredTests.contains(identifier) else {
+            throw UnsupportedEvidence(reason: "a \(kind) event named \(identifier), which this stream never declared")
+        }
+        if kind == "testCaseCancelled" {
+            evidence.cancelledTests.insert(identifier)
+        }
+    }
+
+    /// A `testEnded` message symbol carrying a recognized pass variant.
+    /// `"passWithKnownIssue"` is per Swift Testing's own documented symbol
+    /// enumeration (not independently captured live — no reliable way to
+    /// force a known-issue pass in a short probe — but named explicitly in
+    /// the schema this parser otherwise verified live).
+    private static let passSymbols: Set<String> = ["pass", "passWithKnownIssue"]
+
+    /// Determines `testEnded`'s own pass/fail authority from its
+    /// `messages[].symbol` set. Exactly one of "a recognized fail symbol"
+    /// or "a recognized pass symbol" must be present — neither (only
+    /// informational messages, say) or both (contradictory) is unsupported
+    /// evidence, never guessed at as a default verdict. "Unknown evidence
+    /// is not a verdict" applies to a presumed pass exactly as much as to a
+    /// presumed fail.
+    private static func recordTerminalOutcome(
+        for identifier: TestIdentifier, messages: [[String: Any]], evidence: inout RunEvidence
+    ) throws {
+        // compactMap, not a force-cast: requiredMessages already validated
+        // every message's own "symbol" is a String before this is ever
+        // called, so nothing here is actually expected to drop.
+        let symbols = Set(messages.compactMap { $0["symbol"] as? String })
+        let hasFail = symbols.contains("fail")
+        let hasPass = !symbols.isDisjoint(with: passSymbols)
+        switch (hasFail, hasPass) {
+        case (true, false):
+            evidence.failedTests.insert(identifier)
+        case (false, true):
+            evidence.passedTests.insert(identifier)
+        default:
+            throw UnsupportedEvidence(
+                reason: "\(identifier)'s testEnded reported no single recognized terminal outcome (symbols: \(symbols))"
+            )
+        }
+    }
+
     /// `payload["messages"]` as `[[String: Any]]` (an array of `{"symbol":
     /// String, "text": String}` objects) — confirmed present, though
     /// sometimes empty (`testCaseEnded`'s own `messages` is `[]`), on every
-    /// event kind this parser recognizes. Missing or wrong-typed is
+    /// event kind this parser recognizes. Missing or wrong-typed — the
+    /// array itself, or any individual message's `symbol`/`text` — is
     /// malformed evidence for a known event kind, never silently "no
     /// failure reported": this field is exactly what `testEnded`'s own
     /// pass/fail signal comes from, so trusting its *absence* the same way
@@ -301,6 +401,11 @@ enum SwiftTestingEventStreamParser {
     private static func requiredMessages(in payload: [String: Any], eventKind: String) throws -> [[String: Any]] {
         guard let messages = payload["messages"] as? [[String: Any]] else {
             throw UnsupportedEvidence(reason: "a \(eventKind) event was missing its own messages array")
+        }
+        for message in messages {
+            guard message["symbol"] is String, message["text"] is String else {
+                throw UnsupportedEvidence(reason: "a \(eventKind) event had a message with a missing/wrong-typed symbol or text")
+            }
         }
         return messages
     }

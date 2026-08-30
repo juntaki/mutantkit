@@ -177,11 +177,26 @@ enum SwiftPMDirectCoverageRunner {
         guard evidence.endedTests == [test] else {
             return "the isolated run did not end exactly the requested test: ended \(evidence.endedTests)"
         }
-        // Parity with the serial oracle's own contract
-        // (`SwiftPackageMacOSAdapter.measurePerTestCoverage`: `guard
-        // run.status == .passed else { return nil }`) -- a test that fails
-        // in isolation is an unprovable run, not evidence to trust, even
-        // though it did complete and produced a real profile.
+        guard evidence.skippedTests.isEmpty else {
+            return "the isolated run reported a skipped test: \(evidence.skippedTests)"
+        }
+        guard evidence.cancelledTests.isEmpty else {
+            return "the isolated run reported a cancelled test or test case: \(evidence.cancelledTests)"
+        }
+        // Positive pass evidence, not merely "no fail symbol seen" --
+        // `passedTests`/`failedTests` are mutually exclusive by
+        // construction (`SwiftTestingEventStreamParser
+        // .recordTerminalOutcome` fails the whole stream closed on
+        // anything else), so this pair of checks is equivalent to "exactly
+        // one recognized terminal outcome, and it was pass." Parity with
+        // the serial oracle's own contract (`SwiftPackageMacOSAdapter
+        // .measurePerTestCoverage`: `guard run.status == .passed else {
+        // return nil }`) -- a test that fails in isolation is an
+        // unprovable run, not evidence to trust, even though it did
+        // complete and produced a real profile.
+        guard evidence.passedTests == [test] else {
+            return "the isolated test run did not report the requested test as passed: passed \(evidence.passedTests)"
+        }
         guard evidence.failedTests.isEmpty else {
             return "the isolated test run reported a failure (parity with the serial oracle)"
         }
