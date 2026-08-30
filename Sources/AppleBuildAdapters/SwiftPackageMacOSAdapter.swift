@@ -348,21 +348,28 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         }
 
         if result.exitCode == 0 {
-            if let reliableExpectedTestCount,
-               let xunitOutput,
-               let executedCount = XUnitParser.rawExecutedCount(forRequestedOutput: xunitOutput),
-               executedCount < reliableExpectedTestCount {
-                return TestRunResult(
-                    status: .infrastructureFailure,
-                    summary: summary,
-                    command: command,
-                    resultArtifactPath: xunitOutput,
-                    diagnosis: """
-                    This run was narrowed to \(reliableExpectedTestCount) Swift Testing test(s), but the xunit \
-                    report records only \(executedCount) executed. Something in the selection did not run and \
-                    left no failure record explaining why, so the shortfall is not scored as a pass.
-                    """
-                )
+            if let reliableExpectedTestCount {
+                // `nil` (no xunit report parsed at all -- missing, unreadable,
+                // or `xunitOutput` itself absent) is treated as zero executed,
+                // not as "unknown, so don't check" (codex review, P12-B Phase
+                // B3): for a narrowed selection, no evidence that anything ran
+                // is exactly as unsafe to call a pass as evidence that zero
+                // things ran.
+                let executedCount = xunitOutput.flatMap { XUnitParser.rawExecutedCount(forRequestedOutput: $0) }
+                if (executedCount ?? 0) < reliableExpectedTestCount {
+                    return TestRunResult(
+                        status: .infrastructureFailure,
+                        summary: summary,
+                        command: command,
+                        resultArtifactPath: xunitOutput,
+                        diagnosis: """
+                        This run was narrowed to \(reliableExpectedTestCount) Swift Testing test(s), but the \
+                        xunit report records only \(executedCount.map(String.init) ?? "no") executed. Something \
+                        in the selection did not run and left no failure record explaining why, so the \
+                        shortfall is not scored as a pass.
+                        """
+                    )
+                }
             }
             return TestRunResult(
                 status: .passed,

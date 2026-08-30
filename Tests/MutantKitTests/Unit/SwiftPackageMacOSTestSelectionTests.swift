@@ -1,6 +1,7 @@
 @testable import AppleBuildAdapters
 import Foundation
 import MutationExecution
+import MutationModel
 import Testing
 
 /// Pins `SwiftPackageMacOSAdapter.parseTestIdentifiers` against a real
@@ -195,5 +196,105 @@ struct SwiftPackageMacOSPerTestCoverageInversionTests {
         let perTest = PerTestCoverageMap(coveringTests: coveringTests, source: "swiftpm-codecov-per-test")
 
         #expect(perTest.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest])
+    }
+}
+
+/// `SwiftPackageMacOSAdapter.classify`'s narrowed-selection shortfall check
+/// (P12-B Phase B3), pinned at the unit level with hand-built `ProcessResult`s
+/// so it does not need a real `swift test` invocation. Two gaps a codex
+/// review caught in the first version of this check:
+///
+/// - A disabled/conditionally-skipped test reports `tests="1" skipped="1"`,
+///   which must not count as "executed" (see
+///   `XUnitRawExecutedCountTests.skippedTestsDoNotCountAsExecuted` for the
+///   parser-level half of this).
+/// - No xunit report at all (a missing or unreadable file) must fail closed,
+///   not fall through to `.passed` for lack of contrary evidence.
+@Suite("SwiftPM narrowed-selection shortfall classification")
+struct SwiftPackageMacOSShortfallClassificationTests {
+    private func exitZero() -> ProcessResult {
+        ProcessResult(
+            exitCode: 0, standardOutput: Data(), standardError: Data(),
+            durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true
+        )
+    }
+
+    private func command() -> CommandRecord {
+        CommandRecording.record(
+            executable: "/usr/bin/xcrun", arguments: ["swift", "test"],
+            workingDirectory: URL(fileURLWithPath: "/tmp"), result: nil
+        )
+    }
+
+    private func writeReport(_ contents: [String: String]) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("classify-shortfall-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, xml) in contents {
+            try Data(xml.utf8).write(to: directory.appendingPathComponent(name))
+        }
+        return directory.appendingPathComponent("mutantkit-xunit.xml")
+    }
+
+    @Test("A narrowed selection with no xunit report at all fails closed, not passed")
+    func missingReportFailsClosed() {
+        let result = SwiftPackageMacOSAdapter.classify(
+            result: exitZero(), command: command(),
+            xunitOutput: URL(fileURLWithPath: "/tmp/nonexistent-\(UUID().uuidString)/mutantkit-xunit.xml"),
+            reliableExpectedTestCount: 1
+        )
+        #expect(result.status == .infrastructureFailure)
+    }
+
+    @Test("A narrowed selection with no xunitOutput path at all fails closed")
+    func nilXunitOutputFailsClosed() {
+        let result = SwiftPackageMacOSAdapter.classify(
+            result: exitZero(), command: command(), xunitOutput: nil, reliableExpectedTestCount: 1
+        )
+        #expect(result.status == .infrastructureFailure)
+    }
+
+    @Test("A skipped test does not count as executed against the narrowed count")
+    func skippedTestDoesNotCountAsExecuted() throws {
+        let xunitOutput = try writeReport([
+            "mutantkit-xunit-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="1" failures="0" skipped="1" time="0.001" />
+            </testsuites>
+            """
+        ])
+
+        let result = SwiftPackageMacOSAdapter.classify(
+            result: exitZero(), command: command(), xunitOutput: xunitOutput, reliableExpectedTestCount: 1
+        )
+        #expect(result.status == .infrastructureFailure)
+    }
+
+    @Test("A genuinely-executed narrowed selection is still reported as passed")
+    func genuineExecutionIsStillPassed() throws {
+        let xunitOutput = try writeReport([
+            "mutantkit-xunit-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="1" failures="0" skipped="0" time="0.001" />
+            </testsuites>
+            """
+        ])
+
+        let result = SwiftPackageMacOSAdapter.classify(
+            result: exitZero(), command: command(), xunitOutput: xunitOutput, reliableExpectedTestCount: 1
+        )
+        #expect(result.status == .passed)
+    }
+
+    @Test("An unnarrowed run with no xunit report is unaffected -- still passed")
+    func unnarrowedRunWithNoReportIsUnaffected() {
+        let result = SwiftPackageMacOSAdapter.classify(
+            result: exitZero(), command: command(),
+            xunitOutput: URL(fileURLWithPath: "/tmp/nonexistent-\(UUID().uuidString)/mutantkit-xunit.xml"),
+            reliableExpectedTestCount: nil
+        )
+        #expect(result.status == .passed)
     }
 }

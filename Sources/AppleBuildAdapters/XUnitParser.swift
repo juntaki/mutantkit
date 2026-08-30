@@ -61,17 +61,23 @@ enum XUnitParser {
         )
     }
 
-    /// The merged executed-test count, without `summary`'s "an all-zero
-    /// merge means no measurement" collapse — the opposite fact a
-    /// selected-test shortfall check needs: proof that a real zero was
-    /// recorded, not proof that a nonzero one was. `nil` only when *neither*
-    /// candidate path parsed at all (no report of any kind was written),
-    /// which stays genuinely unknown; a parsed report claiming zero is a
-    /// real, structured zero.
+    /// The merged *executed* count — `total` minus `skipped` — without
+    /// `summary`'s "an all-zero merge means no measurement" collapse: the
+    /// opposite fact a selected-test shortfall check needs, proof that a
+    /// real zero was recorded rather than proof that a nonzero one was.
+    /// `nil` only when *neither* candidate path parsed at all (no report of
+    /// any kind was written), which stays genuinely unknown; a parsed report
+    /// claiming zero is a real, structured zero.
+    ///
+    /// `total` alone is not enough (codex review, P12-B Phase B3): a
+    /// disabled or conditionally-skipped Swift Testing test still reports
+    /// `tests="1" skipped="1"`, so counting it as executed would let a
+    /// selected test that never actually ran satisfy the shortfall check —
+    /// exactly the false pass this check exists to prevent.
     static func rawExecutedCount(forRequestedOutput requested: URL) -> Int? {
         let suites = candidatePaths(for: requested).compactMap { parse(contentsOf: $0) }
         guard !suites.isEmpty else { return nil }
-        return suites.reduce(0) { $0 + $1.total }
+        return suites.reduce(0) { $0 + $1.total - $1.skipped }
     }
 
     struct Report {

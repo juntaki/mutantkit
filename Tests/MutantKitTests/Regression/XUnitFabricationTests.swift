@@ -171,4 +171,22 @@ struct XUnitRawExecutedCountTests {
 
         #expect(XUnitParser.rawExecutedCount(forRequestedOutput: requested) == 3)
     }
+
+    /// A disabled/conditionally-skipped test still reports `tests="1"
+    /// skipped="1"` -- codex review, P12-B Phase B3: counting it as executed
+    /// would let a selected test that never actually ran satisfy a
+    /// selected-test shortfall check.
+    @Test("Skipped tests do not count as executed")
+    func skippedTestsDoNotCountAsExecuted() throws {
+        let requested = try write([
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="1" failures="0" skipped="1" time="0.001" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.rawExecutedCount(forRequestedOutput: requested) == 0)
+    }
 }
