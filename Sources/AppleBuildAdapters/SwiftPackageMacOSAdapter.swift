@@ -552,6 +552,35 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         return selectedTests.count
     }
 
+    public func measurePerTestCoverage(
+        artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async -> PerTestCoverageMap? {
+        switch await measurePerTestCoverageFast(
+            artifact: artifact,
+            in: workspace,
+            timeoutSeconds: timeoutSeconds
+        ) {
+        case .complete(let map):
+            return map
+        case .unavailable:
+            return await measurePerTestCoverageSerial(
+                artifact: artifact,
+                in: workspace,
+                timeoutSeconds: timeoutSeconds
+            )
+        }
+    }
+
+    private func measurePerTestCoverageFast(
+        artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async -> PerTestCoverageProfileAttempt {
+        .unavailable(reason: "no fast per-test coverage backend is implemented yet")
+    }
+
     /// Runs every test `swift test list` reports, one at a time, with
     /// coverage enabled, against the artifact already built for the
     /// baseline — no separate coverage build step: `swift test
@@ -592,7 +621,7 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
     ///   from `swift test list`, not from the artifact, and per-test
     ///   coverage needs its own coverage-instrumented run regardless of what
     ///   `artifact` was built with.
-    public func measurePerTestCoverage(
+    private func measurePerTestCoverageSerial(
         artifact: BuildArtifact,
         in workspace: URL,
         timeoutSeconds: Double

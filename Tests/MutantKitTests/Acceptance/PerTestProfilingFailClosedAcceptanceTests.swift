@@ -21,6 +21,23 @@ import Testing
     .enabled(if: Acceptance.isEnabled)
 )
 struct PerTestProfilingFailClosedAcceptanceTests {
+    @Test("The unavailable fast profiler falls back to the serial reference profiler")
+    func unavailableFastProfilerFallsBackToSerialReferenceProfiler() async throws {
+        let workspace = try Acceptance.stageFixture("SwiftPackageMacOS")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let adapter = SwiftPackageMacOSAdapter(configuration: Configuration())
+        let artifact = try await adapter.buildBaseline(in: workspace)
+
+        let map = await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: 60)
+
+        let profile = try #require(map, "the serial reference profiler produced no attribution")
+        #expect(
+            profile.source == "swiftpm-codecov-per-test",
+            "the public profiler did not return the serial reference profiler's result"
+        )
+    }
+
     @Test("An unmeasurable test invalidates the whole per-test coverage map, not just its own entry")
     func unmeasurableTestProducesNoUsableMap() async throws {
         let workspace = try Acceptance.stageFixture("PerTestProfilingPartialFailure")

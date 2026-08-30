@@ -25,6 +25,35 @@ import Testing
     .enabled(if: Acceptance.simulatorEnabled)
 )
 struct XcodePerTestProfilingFailClosedAcceptanceTests {
+    @Test("The unavailable fast profiler falls back to the serial reference profiler")
+    func unavailableFastProfilerFallsBackToSerialReferenceProfiler() async throws {
+        let workspace = try Acceptance.stageFixture("XcodeProject")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let destination = try Acceptance.iPhoneDestination()
+        let configuration = Configuration(
+            project: ProjectSettings(kind: .xcodeProject, scheme: "Checkout", destination: destination)
+        )
+        let adapter = XcodeBuildAdapter(
+            configuration: configuration,
+            kind: .xcodeProject,
+            projectFile: nil,
+            projectRoot: workspace
+        )
+
+        let artifact = try await adapter.buildBaseline(in: workspace)
+        let baseline = try await adapter.runBaseline(artifact, in: workspace, timeoutSeconds: 120)
+        #expect(baseline.status == .passed, "the Checkout baseline must produce the serial profiler's test bundle")
+        let profile = try #require(
+            await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: 120),
+            "the serial reference profiler produced no attribution"
+        )
+        #expect(
+            profile.source == "xcodebuild-xccov-per-test",
+            "the public profiler did not return the serial reference profiler's result"
+        )
+    }
+
     @Test("An unmeasurable test invalidates the whole per-test coverage map, not just its own entry")
     func unmeasurableTestProducesNoUsableMap() async throws {
         let workspace = try Acceptance.stageFixture("XcodeProject")
