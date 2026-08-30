@@ -22,6 +22,14 @@ report_json="${2:?usage: stage-artifacts.sh <project-root> <report.json> <gate-r
 gate_result="${3:?usage: stage-artifacts.sh <project-root> <report.json> <gate-result.json> <staging-dir>}"
 staging="${4:?usage: stage-artifacts.sh <project-root> <report.json> <gate-result.json> <staging-dir>}"
 
+# This directory is a fixed path under `runner.temp`, reused by every
+# invocation of the action in the same job — `mkdir -p` alone leaves an
+# earlier invocation's own staged files sitting here. Left uncleared, a
+# later invocation that legitimately has fewer of the four files this run
+# (e.g. it failed before producing report.json) would silently upload the
+# earlier invocation's stale copy instead of correctly having none (P13
+# review: multi-invocation artifact contamination).
+rm -rf "$staging"
 mkdir -p "$staging"
 
 copy_if_present() {

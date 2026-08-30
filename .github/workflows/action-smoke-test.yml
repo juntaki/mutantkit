@@ -679,6 +679,124 @@ jobs:
           set -euo pipefail
           test -s mutantkit-src/smoke-fixture/plan.json || { echo "::error::plan.json was not produced against a fetched diff base"; exit 1; }
 
+  ci-mode-report-isolation:
+    name: "multi-invocation isolation: a failed invocation never inherits or leaks a prior invocation's stale report/summary/artifact"
+    needs: build-from-source
+    runs-on: macos-15
+    steps:
+      # Shallow (default fetch-depth: 1): `origin/main` is not fetched, so
+      # invocation B below (diff: origin/main) is guaranteed to fail at the
+      # diff-ref preflight — the same deterministic failure `ci-mode-diff`
+      # above already proves — before doctor/plan/run ever run. That is the
+      # scenario this job needs: an invocation that fails before writing
+      # anything, against a project-root a *previous*, successful invocation
+      # already wrote real report.json/gate-result.json/.mutantkit/* into.
+      - name: "Checkout (shallow — origin/main is NOT fetched)"
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-from-source
+          path: test-binary
+      - run: chmod +x test-binary/mutantkit
+        shell: bash
+
+      - name: Stage the fixture project (inside the mutantkit-src checkout, so its git history applies)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mutantkit-src/smoke-fixture-isolation
+          cp -R mutantkit-src/Fixtures/SwiftPackageMacOS/. mutantkit-src/smoke-fixture-isolation/
+          cat > mutantkit-src/smoke-fixture-isolation/mutantkit.yml <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [console]
+          YAML
+
+      - name: "Invocation A — a normal, successful run leaves real report/summary files behind"
+        id: invocation-a
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          project-root: mutantkit-src/smoke-fixture-isolation
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          artifact-name: mutantkit-report-isolation-a
+
+      - name: Assert invocation A really did produce all four report files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in report.json gate-result.json .mutantkit/report.html .mutantkit/summary.md; do
+            test -s "mutantkit-src/smoke-fixture-isolation/$f" \
+              || { echo "::error::invocation A did not produce $f — this scenario needs it present first, to prove invocation B does not inherit it"; exit 1; }
+          done
+
+      - name: "Invocation B — same project-root, an unfetched diff ref fails before doctor/plan/run ever run"
+        id: invocation-b
+        continue-on-error: true
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          project-root: mutantkit-src/smoke-fixture-isolation
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          diff: origin/main
+          artifact-name: mutantkit-report-isolation-b
+
+      - name: Assert invocation B really did fail (the scenario this job needs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.invocation-b.outcome }}" != "failure" ]; then
+            echo "::error::expected invocation B (unfetched diff ref) to fail closed, got outcome '${{ steps.invocation-b.outcome }}'" >&2
+            exit 1
+          fi
+
+      - name: Assert invocation B's project-root no longer carries invocation A's stale report files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in report.json gate-result.json .mutantkit/report.html .mutantkit/summary.md; do
+            path="mutantkit-src/smoke-fixture-isolation/$f"
+            if [ -e "$path" ]; then
+              echo "::error::$path still exists after invocation B failed before producing one of its own — this is invocation A's stale file leaking across invocations in the same job" >&2
+              exit 1
+            fi
+          done
+
+      # Checked directly on the runner's own disk, not via
+      # upload-artifact/download-artifact: `stage-artifacts.sh` staged
+      # nothing this invocation (its four sources are all correctly absent,
+      # per the assertion above), so `actions/upload-artifact@v4` may not
+      # even create an artifact for a genuinely-empty directory — a
+      # round trip through download-artifact would be testing upload-
+      # artifact's own empty-artifact behavior, not this fix. The staging
+      # directory itself is a fixed path under `runner.temp`, shared by
+      # every invocation in this job, and is exactly what `stage-
+      # artifacts.sh`'s own `rm -rf` fix (P13 review) protects.
+      - name: Assert the shared artifact-staging directory carries none of invocation A's stale files
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="$RUNNER_TEMP/mutantkit-artifact-staging"
+          if [ -d "$staging" ]; then
+            leftover="$(find "$staging" -type f)"
+            if [ -n "$leftover" ]; then
+              echo "::error::the shared artifact-staging directory still contains files after invocation B failed before staging any of its own — invocation A's stale files leaked through:" >&2
+              echo "$leftover" >&2
+              exit 1
+            fi
+          fi
+
   ci-mode-baseline:
     name: "baseline cache: fresh miss, same-SHA rerun has no save collision, scopes stay isolated"
     needs: build-from-source
@@ -785,5 +903,21 @@ jobs:
           set -euo pipefail
           if [ "${{ steps.scope-b.outputs.baseline-cache-hit }}" = "true" ]; then
             echo "::error::scope B reported a cache hit on its very first run — baseline-scope is not isolating the two scopes" >&2
+            exit 1
+          fi
+
+      # `baseline-cache-hit` above only proves the cache action's own KEY
+      # missed — it says nothing about whether `gate` was actually handed a
+      # stale on-disk file left over from scope A's own invocation earlier
+      # in this same job (the on-disk restore/save path used to be fixed
+      # regardless of scope; see action.yml's own comment on `baseline-dir`
+      # and `baseline-applied`). This checks the fact that actually matters:
+      # what `gate --baseline` was really given.
+      - name: Assert scope B's gate step did not apply a baseline it never restored
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.scope-b.outputs.baseline-applied }}" = "true" ]; then
+            echo "::error::scope B's gate step applied a baseline it never restored — the on-disk baseline path is leaking across differently-scoped invocations in the same job" >&2
             exit 1
           fi

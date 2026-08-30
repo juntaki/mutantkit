@@ -172,6 +172,18 @@ outputs:
       action-smoke-test.yml to prove the same-SHA-rerun and distinct-scope
       cache behaviors without needing a real workflow rerun.
     value: ${{ steps.restore-baseline.outputs.cache-hit }}
+  baseline-applied:
+    description: >-
+      "true" only when `mutantkit gate` actually ran with `--baseline`
+      pointed at a real, on-disk report this invocation restored (mode: ci,
+      no `diff:`) — "false" otherwise, including a diff-scoped run (which
+      never applies one) and a cache miss. Distinct from
+      `baseline-cache-hit`, which reflects only the cache action's own key
+      match: this instead reflects the physical file `gate` was actually
+      handed, so action-smoke-test.yml can prove a differently-scoped
+      invocation's gate step never applies another scope's baseline, not
+      merely that its cache key missed.
+    value: ${{ steps.run-mutantkit.outputs.baseline-applied }}
 
 runs:
   using: "composite"
@@ -238,6 +250,22 @@ runs:
           echo "config-path=" >> "$GITHUB_OUTPUT"
         fi
 
+        # `actions/cache/restore@v4`'s cache KEY is already scoped by
+        # baseline-scope + project-root (below), but its on-disk `path:` was
+        # a single fixed location shared by every invocation in the job
+        # (P13 review: multi-invocation baseline contamination). A
+        # differently-scoped invocation's cache miss does not clear that
+        # path — `actions/cache/restore` never removes anything on a miss —
+        # so a still-present file from an earlier, differently-scoped
+        # invocation in the same job could be read as this invocation's own
+        # baseline. Hashing the same scope string the cache key already uses
+        # into the on-disk directory name gives every scope its own
+        # location by construction, not by remembering to clean up after
+        # each invocation.
+        scope_key="${{ inputs.baseline-scope }}::$project_root"
+        scope_hash="$(printf '%s' "$scope_key" | shasum -a 256 | cut -c1-16)"
+        echo "baseline-dir=${{ runner.temp }}/mutantkit-baseline-$scope_hash" >> "$GITHUB_OUTPUT"
+
     # Cache miss (first run ever for this scope, or nothing saved yet) is
     # not an error: `restore-keys`' prefix match resolves to the newest
     # baseline for this scope if one exists, and the restored path simply
@@ -257,7 +285,7 @@ runs:
       if: inputs.mode == 'ci' && inputs.diff == ''
       uses: actions/cache/restore@v4
       with:
-        path: ${{ runner.temp }}/mutantkit-baseline/report.json
+        path: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
         key: mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::${{ github.sha }}
         restore-keys: |
           mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::
@@ -270,6 +298,7 @@ runs:
     # is this job's authoritative pass/fail signal: nothing after this step
     # recomputes or overrides it.
     - name: Run mutantkit (doctor, plan, run, gate)
+      id: run-mutantkit
       if: inputs.mode == 'ci'
       shell: bash
       env:
@@ -279,7 +308,7 @@ runs:
         PLAN_PATH: ${{ steps.resolve-paths.outputs.project-root }}/plan.json
         REPORT_JSON_PATH: ${{ steps.resolve-paths.outputs.project-root }}/report.json
         GATE_RESULT_PATH: ${{ steps.resolve-paths.outputs.project-root }}/gate-result.json
-        BASELINE_REPORT_PATH: ${{ runner.temp }}/mutantkit-baseline/report.json
+        BASELINE_REPORT_PATH: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
       run: ${{ github.action_path }}/Scripts/action/orchestrate-ci.sh
 
     # `always()`: a job that never got past doctor/plan/run should still end
@@ -309,8 +338,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mkdir -p "$(dirname "${{ runner.temp }}/mutantkit-baseline/report.json")"
-        cp "${{ steps.resolve-paths.outputs.project-root }}/report.json" "${{ runner.temp }}/mutantkit-baseline/report.json"
+        mkdir -p "${{ steps.resolve-paths.outputs.baseline-dir }}"
+        cp "${{ steps.resolve-paths.outputs.project-root }}/report.json" "${{ steps.resolve-paths.outputs.baseline-dir }}/report.json"
 
     # `cache-hit` (from the restore step) is only `true` on an *exact* key
     # match — i.e. this exact commit's baseline was already saved by an
@@ -323,7 +352,7 @@ runs:
       if: inputs.mode == 'ci' && inputs.diff == '' && success() && github.event_name != 'pull_request' && steps.restore-baseline.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
-        path: ${{ runner.temp }}/mutantkit-baseline/report.json
+        path: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
         key: mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::${{ github.sha }}
 
     # Copies only the four known report files into a flat, non-hidden
