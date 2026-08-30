@@ -2,7 +2,7 @@ import XCTest
 
 @testable import PerTestWidgets
 
-/// F1-P0: Xcode-side mirror of `Fixtures/PerTestProfilingPartialFailure`
+/// Xcode-side mirror of `Fixtures/PerTestProfilingPartialFailure`
 /// (SwiftPM). `widgetANeverFails` covers `widgetA()` and always passes, in
 /// isolation or otherwise. `widgetBNeverProfiles` covers `widgetB()` but
 /// fails unconditionally, every time. Pins that

@@ -20,7 +20,7 @@ import MutationExecution
 /// - Unlike `xcodebuild -enableCodeCoverage YES` (confirmed, separately, to
 ///   silently ignore a caller-supplied `LLVM_PROFILE_FILE` and merge every
 ///   configuration in a batch into one inseparable `Coverage.profdata` — see
-///   the F1-A2 spike notes), a **direct** invocation of an LLVM-instrumented
+///   `SwiftPMFastProfilingCapability`'s own doc comment), a **direct** invocation of an LLVM-instrumented
 ///   binary honors `LLVM_PROFILE_FILE` exactly the way any other
 ///   instrumented binary does: a literal path, no `%p` needed, one process,
 ///   one profile.

@@ -446,7 +446,7 @@ enum SwiftTestingEventStreamParser {
     /// (`"PricingTests.PricingTests/bulkDiscountRoughly()"` either way).
     /// Reusing that shape, rather than inventing a parallel one, is what
     /// lets this fast path's evidence compare directly against the serial
-    /// oracle's own `TestIdentifier` values in F1-D.
+    /// oracle's own `TestIdentifier` values in the parity gate.
     ///
     /// A suite id (`"PricingTests.PricingTests"`, no `/`) is not a leaf
     /// test and correctly fails this — callers check `declaredSuiteIDs`

@@ -4,7 +4,7 @@ import MutationExecution
 import MutationModel
 import Testing
 
-/// F1-P0: parity with `PerTestProfilingFailClosedAcceptanceTests` (the
+/// Parity with `PerTestProfilingFailClosedAcceptanceTests` (the
 /// SwiftPM/P12-B Finding D fix) for `XcodeBuildAdapter`.
 /// `measurePerTestCoverage`'s per-test loop must never let one test's
 /// unprovable isolated run quietly become "this test covers nothing"

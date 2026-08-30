@@ -12,8 +12,8 @@ import Testing
 /// not yet wired into `measurePerTestCoverage`'s public surface (that is a
 /// later integration step), so this suite drives them directly.
 ///
-/// Four widgets, one behavior each, matching the earlier F1-A1 spike
-/// criteria: `widgetAPasses`/`widgetBPasses` (valid, disjoint coverage —
+/// Four widgets, one behavior each, matching the earlier direct-invocation
+/// feasibility spike's own criteria: `widgetAPasses`/`widgetBPasses` (valid, disjoint coverage —
 /// used to prove no cross-contamination between isolated runs, not merely
 /// "each run got its own file path"), `widgetCAlwaysFails` (the serial
 /// oracle's own all-or-nothing contract), `widgetDSkipped` (`.disabled`).

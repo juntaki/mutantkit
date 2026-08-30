@@ -573,12 +573,94 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         }
     }
 
-    private func measurePerTestCoverageFast(
+    /// The fast per-test coverage path: one coverage-instrumented `swift
+    /// build`, then one direct `swiftpm-testing-helper` invocation per test
+    /// — see `SwiftPMDirectCoverageRunner` — instead of one full `swift
+    /// test --filter <id> --enable-code-coverage` process per test. Never
+    /// invokes the `swift test` frontend itself; `xcrun swift test list`
+    /// (already paid once by `enumerateTestIdentifiers`, same as the serial
+    /// path) is the only SwiftPM CLI surface this path touches at all.
+    ///
+    /// `SwiftPMFastProfilingCapability.check` gates entry: Swift Testing
+    /// only, exactly one resolvable `.xctest` product. A package with even
+    /// one XCTest-shaped discovered test is `.unavailable` in full — see
+    /// that type's own doc comment for why a mixed package never gets a
+    /// partial speedup.
+    ///
+    /// Same all-or-nothing discipline as the serial reference: any single
+    /// test this pass cannot positively profile makes the whole attempt
+    /// `.unavailable`, never a map missing just that one test's entry.
+    ///
+    /// - Parameter processRunner: `AdapterSupport.swift`'s `ProcessRunner`
+    ///   seam, threaded through to `SwiftPMDirectCoverageRunner`/
+    ///   `SwiftPMCoverageExporter` — `internal`, not `private`, so a test in
+    ///   another file can inject a spy and prove structurally that this
+    ///   path never shells out to `swift test` per test (see
+    ///   `SwiftPMFastProfilingStructuralAcceptanceTests`).
+    func measurePerTestCoverageFast(
         artifact: BuildArtifact,
         in workspace: URL,
-        timeoutSeconds: Double
+        timeoutSeconds: Double,
+        processRunner: ProcessRunner = defaultProcessRunner
     ) async -> PerTestCoverageProfileAttempt {
-        .unavailable(reason: "no fast per-test coverage backend is implemented yet")
+        let enumerated = await Self.enumerateTestIdentifiers(
+            in: workspace,
+            timeoutSeconds: timeoutSeconds,
+            terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
+        )
+        let tests = Self.scope(enumerated, toConfiguredTargets: configuration.tests.targets)
+
+        let capability = SwiftPMFastProfilingCapability.check(tests: tests, productsDirectory: productsDirectory(in: workspace))
+        guard case .supported = capability else {
+            guard case .unsupported(let reason) = capability else { return .unavailable(reason: "unreachable") }
+            return .unavailable(reason: reason)
+        }
+
+        // The capability check above resolved a product from the artifact
+        // already on disk -- but that artifact is `runBaseline`'s own
+        // *uninstrumented* one (see this method's own parameter doc on the
+        // protocol). A coverage-instrumented rebuild is still required
+        // before any test can be measured; re-resolve afterward, since the
+        // rebuild can in principle change which product exists (a clean
+        // rebuild racing a concurrent process, for instance) -- trusting
+        // the pre-build resolution here would be exactly the kind of stale
+        // assumption this fast path's own capability gate exists to avoid.
+        guard let coverageArtifact = try? await build(in: workspace, extraArguments: ["--enable-code-coverage"]) else {
+            return .unavailable(reason: "the coverage-instrumented build failed")
+        }
+        guard case .supported(let testBundleBinary) = SwiftPMFastProfilingCapability.check(
+            tests: tests, productsDirectory: productsDirectory(in: workspace)
+        ) else {
+            return .unavailable(reason: "could not resolve the coverage-instrumented build's own .xctest product")
+        }
+
+        let scratchDirectory = workspace.appendingPathComponent(".mutantkit/FastProfiler", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratchDirectory) }
+
+        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
+        for test in tests {
+            guard case .succeeded(let outcome) = await SwiftPMDirectCoverageRunner.run(
+                testBundleBinary: testBundleBinary, test: test, workingDirectory: workspace,
+                scratchDirectory: scratchDirectory, timeoutSeconds: timeoutSeconds, processRunner: processRunner
+            ) else {
+                return .unavailable(reason: "\(test) could not be profiled via the fast path")
+            }
+
+            guard case .exported(let json) = await SwiftPMCoverageExporter.export(
+                profileURL: outcome.profileURL, testBundleBinary: testBundleBinary,
+                scratchDirectory: scratchDirectory, processRunner: processRunner
+            ) else {
+                return .unavailable(reason: "\(test)'s coverage export failed")
+            }
+
+            guard let executed = SourceCoverageReader.parse(json, projectRoot: workspace) else {
+                return .unavailable(reason: "\(test)'s coverage export could not be parsed")
+            }
+            Self.invert(CoverageMap(executedLines: executed, source: "swiftpm-direct-per-test"), coveredBy: test, into: &coveringTests)
+        }
+
+        guard !coveringTests.isEmpty else { return .unavailable(reason: "no coverage was attributed") }
+        return .complete(PerTestCoverageMap(coveringTests: coveringTests, source: "swiftpm-direct-per-test"))
     }
 
     /// Runs every test `swift test list` reports, one at a time, with
@@ -796,17 +878,25 @@ private extension TestIdentifier {
         let escapedQualifiedName = NSRegularExpression.escapedPattern(for: qualifiedName)
         return "^\(escapedTarget)\\.\(escapedQualifiedName)(?:/.*)?$"
     }
+}
 
-    /// Whether `swift test list` shaped this identifier the way it shapes
-    /// every Swift Testing test: `qualifiedName` ending in the test
-    /// function's own call parentheses (`Suite/method()`, or
-    /// `Suite/method(label:)` for a parameterised one) — confirmed live in
-    /// B0 reproduction against this package's own fixtures. An XCTest
-    /// identifier's `qualifiedName` never does (`Class/method`, no trailing
-    /// `()`). See `SwiftPackageMacOSAdapter.reliableExpectedCount(for:)` for
-    /// why this specific, real distinction — not a guess — is what this
-    /// adapter trusts before treating a narrowed selection's executed count
-    /// as reliable evidence.
+/// Split from the `private extension` above: `SwiftPMFastProfilingCapability`
+/// (a different file) also needs `isSwiftTestingShaped` to decide whether a
+/// discovered test set is fast-path-eligible at all -- `internal`, not
+/// `private`, for exactly that cross-file reason. `swiftTestFilterArgument`
+/// stays `private` above; `SwiftPMDirectCoverageRunner` deliberately
+/// duplicates that one instead of sharing it (see its own doc comment).
+///
+/// Whether `swift test list` shaped this identifier the way it shapes every
+/// Swift Testing test: `qualifiedName` ending in the test function's own
+/// call parentheses (`Suite/method()`, or `Suite/method(label:)` for a
+/// parameterised one) — confirmed live in B0 reproduction against this
+/// package's own fixtures. An XCTest identifier's `qualifiedName` never
+/// does (`Class/method`, no trailing `()`). See `SwiftPackageMacOSAdapter
+/// .reliableExpectedCount(for:)` for why this specific, real distinction —
+/// not a guess — is what this adapter trusts before treating a narrowed
+/// selection's executed count as reliable evidence.
+extension TestIdentifier {
     var isSwiftTestingShaped: Bool { qualifiedName.hasSuffix(")") }
 }
 

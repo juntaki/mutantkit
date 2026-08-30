@@ -1216,35 +1216,19 @@ extension XcodeBuildAdapter: TestSelecting {
         )
     }
 
-    public func measurePerTestCoverage(
-        artifact: BuildArtifact,
-        in workspace: URL,
-        timeoutSeconds: Double
-    ) async -> PerTestCoverageMap? {
-        switch await measurePerTestCoverageFast(
-            artifact: artifact,
-            in: workspace,
-            timeoutSeconds: timeoutSeconds
-        ) {
-        case .complete(let map):
-            return map
-        case .unavailable:
-            return await measurePerTestCoverageSerial(
-                artifact: artifact,
-                in: workspace,
-                timeoutSeconds: timeoutSeconds
-            )
-        }
-    }
-
-    private func measurePerTestCoverageFast(
-        artifact: BuildArtifact,
-        in workspace: URL,
-        timeoutSeconds: Double
-    ) async -> PerTestCoverageProfileAttempt {
-        .unavailable(reason: "no fast per-test coverage backend is implemented yet")
-    }
-
+    /// Xcode/XCTest has no fast per-test coverage path — empirical testing
+    /// found `xcodebuild -enableCodeCoverage YES` manages its own coverage-
+    /// profile paths internally, silently ignoring a caller-supplied
+    /// `LLVM_PROFILE_FILE`, and merges every configuration sharing one
+    /// `.xcresult` into a single inseparable `Coverage.profdata` — there is
+    /// no batch-coverage-isolation mechanism for Xcode-managed builds to
+    /// build a fast path on. This always runs the serial implementation
+    /// below; unlike `SwiftPackageMacOSAdapter` (which has a real fast
+    /// path for Swift Testing), there is deliberately no
+    /// `PerTestCoverageProfileAttempt`/fast-vs-serial split here to keep —
+    /// a stub that always returns `.unavailable` would just be dead
+    /// indirection dressed up as pending future work.
+    ///
     /// Runs every test the baseline bundle reports, one at a time, against
     /// the artifact already built for the baseline — no rebuild — with
     /// coverage enabled and its own scratch result bundle, and merges what
@@ -1286,7 +1270,7 @@ extension XcodeBuildAdapter: TestSelecting {
     ///   every individual test run, exactly the same "instrumented copy is
     ///   never what activation evidence is measured against" split
     ///   `readCoverage` makes.
-    private func measurePerTestCoverageSerial(
+    public func measurePerTestCoverage(
         artifact: BuildArtifact,
         in workspace: URL,
         timeoutSeconds: Double

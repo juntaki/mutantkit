@@ -175,18 +175,6 @@ let package = Package(
             ]
         ),
 
-        // TEMP diagnostic tool for the "direct test-binary invocation"
-        // prototype (does bypassing `xcrun swift test`'s own CLI layer and
-        // invoking an already-built .xctest bundle straight through `xcrun
-        // xctest -XCTest <Class>/<method> <bundle>` save wall time for a
-        // single-test SwiftPM/macOS run?). Standalone — no dependency on
-        // any MutantKit module; it measures a mechanism against an
-        // arbitrary already-built SwiftPM package, not MutantKit's own
-        // runner. Not part of any frozen protocol; not intended to be a
-        // long-lived target, and NOT wired into AppleBuildAdapters or
-        // MutationRunner — that integration is a later step.
-        .executableTarget(name: "DirectXCTestInvokeProbe"),
-
         // MARK: Tests
 
         .testTarget(
