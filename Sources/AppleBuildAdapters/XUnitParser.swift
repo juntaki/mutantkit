@@ -61,6 +61,19 @@ enum XUnitParser {
         )
     }
 
+    /// The merged executed-test count, without `summary`'s "an all-zero
+    /// merge means no measurement" collapse — the opposite fact a
+    /// selected-test shortfall check needs: proof that a real zero was
+    /// recorded, not proof that a nonzero one was. `nil` only when *neither*
+    /// candidate path parsed at all (no report of any kind was written),
+    /// which stays genuinely unknown; a parsed report claiming zero is a
+    /// real, structured zero.
+    static func rawExecutedCount(forRequestedOutput requested: URL) -> Int? {
+        let suites = candidatePaths(for: requested).compactMap { parse(contentsOf: $0) }
+        guard !suites.isEmpty else { return nil }
+        return suites.reduce(0) { $0 + $1.total }
+    }
+
     struct Report {
         var total = 0
         var failed = 0

@@ -204,7 +204,8 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         timeoutSeconds: Double,
         enableCoverage: Bool = false,
         extraEnvironment: [String: String] = [:],
-        testFilters: [String]? = nil
+        testFilters: [String]? = nil,
+        reliableExpectedTestCount: Int? = nil
     ) async throws -> TestRunResult {
         // Written inside the sandbox, so concurrent mutants cannot overwrite one
         // another's report — and so it disappears with the sandbox rather than
@@ -285,7 +286,10 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
             result: result
         )
 
-        return Self.classify(result: result, command: command, xunitOutput: xunitOutput)
+        return Self.classify(
+            result: result, command: command, xunitOutput: xunitOutput,
+            reliableExpectedTestCount: reliableExpectedTestCount
+        )
     }
 
     /// Classifies a `swift test` run from its exit status and its xunit report.
@@ -297,10 +301,27 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
     /// caught the mutant. When no report was written the counts are reported as
     /// unknown rather than invented: a fabricated "1 test failed" would be
     /// indistinguishable downstream from a measured one.
+    ///
+    /// - Parameter reliableExpectedTestCount: how many tests a narrowed,
+    ///   all-Swift-Testing selection named (`TestIdentifier.isSwiftTestingShaped`),
+    ///   or `nil` for an unnarrowed run, or a selection that includes an
+    ///   XCTest identifier. `swift test --filter` exits 0 even when it
+    ///   selects zero tests (P12-B Finding C, confirmed live: SwiftPM emits
+    ///   `warning: No matching test cases were run` on stderr and still
+    ///   exits 0) — a run that tested nothing must never be indistinguishable
+    ///   from one that passed. Restricted to all-Swift-Testing selections
+    ///   because Swift Testing's own `--xunit-output` sibling report
+    ///   (`XUnitParser`) reflects real executed counts unconditionally,
+    ///   while XCTest's report is written only when `tests.parallel` is on
+    ///   — under the (safe) default, an XCTest identifier's absence from it
+    ///   proves nothing, so mixing frameworks or trusting an XCTest-only
+    ///   selection here would misclassify a real, passing default-config
+    ///   run as a shortfall.
     static func classify(
         result: ProcessResult,
         command: CommandRecord,
-        xunitOutput: URL? = nil
+        xunitOutput: URL? = nil,
+        reliableExpectedTestCount: Int? = nil
     ) -> TestRunResult {
         let summary = xunitOutput.flatMap { XUnitParser.summary(forRequestedOutput: $0) }
         if result.timedOut {
@@ -327,6 +348,22 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         }
 
         if result.exitCode == 0 {
+            if let reliableExpectedTestCount,
+               let xunitOutput,
+               let executedCount = XUnitParser.rawExecutedCount(forRequestedOutput: xunitOutput),
+               executedCount < reliableExpectedTestCount {
+                return TestRunResult(
+                    status: .infrastructureFailure,
+                    summary: summary,
+                    command: command,
+                    resultArtifactPath: xunitOutput,
+                    diagnosis: """
+                    This run was narrowed to \(reliableExpectedTestCount) Swift Testing test(s), but the xunit \
+                    report records only \(executedCount) executed. Something in the selection did not run and \
+                    left no failure record explaining why, so the shortfall is not scored as a pass.
+                    """
+                )
+            }
             return TestRunResult(
                 status: .passed,
                 summary: summary,
@@ -394,7 +431,8 @@ extension SwiftPackageMacOSAdapter: SchemataTestable {
             timeoutSeconds: timeoutSeconds,
             enableCoverage: false,
             extraEnvironment: environment,
-            testFilters: Self.testFilterArguments(for: selectedTests)
+            testFilters: Self.testFilterArguments(for: selectedTests),
+            reliableExpectedTestCount: Self.reliableExpectedCount(for: selectedTests)
         )
     }
 }
@@ -438,7 +476,8 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
             in: workspace,
             timeoutSeconds: timeoutSeconds,
             enableCoverage: false,
-            testFilters: Self.testFilterArguments(for: selectedTests)
+            testFilters: Self.testFilterArguments(for: selectedTests),
+            reliableExpectedTestCount: Self.reliableExpectedCount(for: selectedTests)
         )
     }
 
@@ -450,6 +489,20 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
     /// below) so the rule can never drift between the two.
     fileprivate static func testFilterArguments(for selectedTests: Set<TestIdentifier>?) -> [String]? {
         selectedTests.flatMap { $0.isEmpty ? nil : $0.map(\.swiftTestFilterArgument) }
+    }
+
+    /// How many tests a narrowed selection should produce, when that count
+    /// can actually be trusted against SwiftPM's own `--xunit-output` — see
+    /// `classify(reliableExpectedTestCount:)`. `nil` for an unrestricted run
+    /// (nothing to compare against) and for any selection that includes an
+    /// XCTest identifier (its own report requires `tests.parallel`, so its
+    /// absence proves nothing under the default configuration); a mixed
+    /// selection is left unchecked rather than guessing which half of a
+    /// merged count to trust.
+    fileprivate static func reliableExpectedCount(for selectedTests: Set<TestIdentifier>?) -> Int? {
+        guard let selectedTests, !selectedTests.isEmpty,
+              selectedTests.allSatisfy(\.isSwiftTestingShaped) else { return nil }
+        return selectedTests.count
     }
 
     /// Runs every test `swift test list` reports, one at a time, with
@@ -495,7 +548,8 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
                 in: workspace,
                 timeoutSeconds: timeoutSeconds,
                 enableCoverage: true,
-                testFilters: [test.swiftTestFilterArgument]
+                testFilters: [test.swiftTestFilterArgument],
+                reliableExpectedTestCount: test.isSwiftTestingShaped ? 1 : nil
             ), run.status == .passed else { continue }
 
             guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { continue }
@@ -616,6 +670,18 @@ private extension TestIdentifier {
         let escapedQualifiedName = NSRegularExpression.escapedPattern(for: qualifiedName)
         return "^\(escapedTarget)\\.\(escapedQualifiedName)(?:/.*)?$"
     }
+
+    /// Whether `swift test list` shaped this identifier the way it shapes
+    /// every Swift Testing test: `qualifiedName` ending in the test
+    /// function's own call parentheses (`Suite/method()`, or
+    /// `Suite/method(label:)` for a parameterised one) — confirmed live in
+    /// B0 reproduction against this package's own fixtures. An XCTest
+    /// identifier's `qualifiedName` never does (`Class/method`, no trailing
+    /// `()`). See `SwiftPackageMacOSAdapter.reliableExpectedCount(for:)` for
+    /// why this specific, real distinction — not a guess — is what this
+    /// adapter trusts before treating a narrowed selection's executed count
+    /// as reliable evidence.
+    var isSwiftTestingShaped: Bool { qualifiedName.hasSuffix(")") }
 }
 
 // MARK: - Project adapter

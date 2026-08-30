@@ -110,3 +110,65 @@ struct XUnitFabricationTests {
         #expect(summary.failingTests == ["S/bad"])
     }
 }
+
+/// `rawExecutedCount` is the opposite fact `summary` protects against
+/// fabricating: proof that a real zero was recorded (P12-B Finding C), not
+/// proof that a nonzero measurement exists. It must never collapse a real,
+/// structured zero the way `summary` deliberately does.
+@Suite("Regression: raw executed counts are never collapsed")
+struct XUnitRawExecutedCountTests {
+    private func write(_ contents: [String: String]) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xunit-raw-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, xml) in contents {
+            try Data(xml.utf8).write(to: directory.appendingPathComponent(name))
+        }
+        return directory.appendingPathComponent("report.xml")
+    }
+
+    /// The exact shape a zero-match Swift Testing selection leaves behind
+    /// (confirmed live in B0): a real report file exists, and it really
+    /// says zero.
+    @Test("An all-zero report reads as a real zero, not as no data")
+    func allZeroReportReadsAsZero() throws {
+        let requested = try write([
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" errors="0" tests="0" failures="0" skipped="0" time="0.0001" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.rawExecutedCount(forRequestedOutput: requested) == 0)
+    }
+
+    /// No report of any kind was written at all -- genuinely unknown, unlike
+    /// a report that exists and says zero.
+    @Test("A missing report stays unknown")
+    func missingReportStaysUnknown() throws {
+        let requested = try write([:])
+        #expect(XUnitParser.rawExecutedCount(forRequestedOutput: requested) == nil)
+    }
+
+    @Test("Counts from both frameworks are summed")
+    func bothFrameworksAreSummed() throws {
+        let requested = try write([
+            "report.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="LibTests" tests="2" failures="0" skipped="0" time="0.06" />
+            </testsuites>
+            """,
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="1" failures="0" skipped="0" time="0.001" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.rawExecutedCount(forRequestedOutput: requested) == 3)
+    }
+}
