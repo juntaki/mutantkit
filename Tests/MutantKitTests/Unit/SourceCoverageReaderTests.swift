@@ -167,6 +167,45 @@ struct SourceCoverageReaderTests {
         #expect(lines == [10])
     }
 
+    /// A region that opens *and closes* on the same line — a single-line
+    /// early return or a one-statement branch body is exactly this shape —
+    /// must still count that line as executed. The half-open
+    /// `start.line ..< line` range used to close a region collapses to
+    /// empty when the closing segment sits on the identical line (a later
+    /// column, not tracked here), so the region's own only line was
+    /// silently dropped.
+    ///
+    /// Traced (not just theorized) to a real correctness gap, not merely a
+    /// cosmetic line-attribution quirk: `MutationRunner`'s
+    /// `coverage.isKnownUncovered(point)` fast path skips building and
+    /// testing a mutant entirely — reporting it `noCoverage` — whenever its
+    /// line is absent from this map, with no fallback that would catch a
+    /// wrongly-dropped-but-genuinely-executed line. A mutation planted on a
+    /// single-statement branch body shaped like this would be silently
+    /// skipped even though the suite really did execute it, exactly the
+    /// "mutation is never run" failure mode P12's own trust invariants
+    /// treat as unacceptable.
+    ///
+    /// First observed (and deliberately worked around, not fixed) during
+    /// P12-B: `SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests` chose
+    /// line 24 over the fixture's own line 26 (`bulkDiscountRate`'s
+    /// single-statement `return 0.0` branch) specifically because line 26
+    /// exhibits this.
+    @Test("A region that opens and closes on the same line still counts that line")
+    func sameLineRegionIsNotDropped() throws {
+        let segments: [[Any]] = [
+            [10, 5, 5, true, true, false], // enclosing region entry, count 5
+            [26, 9, 3, true, true, false], // single-line region entry (e.g. `return 0.0`), count 3
+            [26, 20, 5, false, false, false], // closing boundary, SAME line, not a region entry
+            [30, 1, 0, false, false, false] // next boundary, further down
+        ]
+        let lines = SourceCoverageReader.executedLines(from: segments)
+        #expect(lines.contains(26), "line 26's region opened and closed on the same line, but was dropped")
+        // The enclosing and following regions are unaffected by the fix.
+        #expect(lines.isSuperset(of: 10 ..< 26))
+        #expect(!lines.contains(30))
+    }
+
     @Test("Empty segments produce empty output")
     func emptySegments() {
         #expect(SourceCoverageReader.executedLines(from: []).isEmpty)
