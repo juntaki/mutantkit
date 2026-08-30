@@ -177,6 +177,44 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
         #expect(bulkDiscountLine?.contains(seniorRateBoundary) != true)
     }
 
+    /// Every discovered test's own `runTests` call inside
+    /// `measurePerTestCoverage`'s loop now gets a unique xunit report path
+    /// (an independent audit's finding: the earlier fixed-path-plus-cleanup
+    /// design could leave a stale report behind on a failed delete). Left
+    /// entirely uncleaned, a real project with many discovered tests would
+    /// accumulate one report pair per test in this one sandbox for as long
+    /// as it lives — this pins that the loop cleans up after itself once
+    /// each report has been read, not just that classification itself still
+    /// works.
+    ///
+    /// Deliberately its own, freshly-staged workspace rather than the
+    /// shared `staged` fixture every other test in this suite uses: those
+    /// other tests call `runMutant`/`runSchemataToken` against that same
+    /// shared workspace, which legitimately (and correctly) leave *their*
+    /// own xunit reports uncleaned — cleanup here is scoped to
+    /// `measurePerTestCoverage`'s own loop only, never a real mutant run's
+    /// result, which downstream evidence-preservation still needs intact.
+    /// Sharing that workspace would make this assertion racy against
+    /// whichever sibling test happens to run concurrently.
+    @Test("measurePerTestCoverage does not leave per-test xunit reports behind in the workspace")
+    func perTestCoverageDoesNotAccumulateXUnitReports() async throws {
+        let workspace = try Acceptance.stageFixture("SwiftPackageMacOS")
+        let adapter = SwiftPackageMacOSAdapter(configuration: Configuration())
+        let artifact = try await adapter.buildBaseline(in: workspace)
+        let perTestCoverage = await adapter.measurePerTestCoverage(
+            artifact: artifact, in: workspace, timeoutSeconds: 60
+        )
+        _ = try #require(perTestCoverage, "measurePerTestCoverage produced no attribution at all")
+
+        let leftoverReports = try FileManager.default
+            .contentsOfDirectory(at: workspace, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("mutantkit-xunit") }
+        #expect(
+            leftoverReports.isEmpty,
+            "measurePerTestCoverage left \(leftoverReports.count) xunit report(s) behind: \(leftoverReports.map(\.lastPathComponent))"
+        )
+    }
+
     // MARK: B5 — the schemata selected-test path shares the same fix
 
     /// `SchemataTestable.runSchemataToken(selectedTests:)` is the third

@@ -578,7 +578,16 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
                 enableCoverage: true,
                 testFilters: [test.swiftTestFilterArgument],
                 reliableExpectedTestCount: test.isSwiftTestingShaped ? 1 : nil
-            ), run.status == .passed else { return nil }
+            ) else { return nil }
+            // `runTests`'s xunit report path is unique per invocation (never
+            // reused by a later iteration), and this loop -- unlike a real
+            // mutant run -- never preserves it as evidence afterward: once
+            // this iteration is done with it, it is pure disk usage a
+            // project with many discovered tests would otherwise accumulate
+            // one report pair per test, for the lifetime of this whole
+            // method's loop, inside one sandbox.
+            defer { Self.removeXUnitReports(at: run.resultArtifactPath) }
+            guard run.status == .passed else { return nil }
 
             guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { return nil }
             Self.invert(map, coveredBy: test, into: &coveringTests)
@@ -586,6 +595,20 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
 
         guard !coveringTests.isEmpty else { return nil }
         return PerTestCoverageMap(coveringTests: coveringTests, source: "swiftpm-codecov-per-test")
+    }
+
+    /// Removes the xunit report(s) one `measurePerTestCoverage` iteration's
+    /// `runTests` call wrote, once this loop is done reading them. Best-
+    /// effort: unlike the freshness fix this exists alongside, a failed
+    /// removal here is not a correctness risk -- the path is unique per
+    /// invocation and is never read again by anything, so a leftover file
+    /// is at worst a little unclaimed disk space, not a stale report a
+    /// later run could mistake for its own.
+    private static func removeXUnitReports(at resultArtifactPath: URL?, fileManager: FileManager = .default) {
+        guard let resultArtifactPath else { return }
+        for candidate in XUnitParser.candidatePaths(for: resultArtifactPath) {
+            try? fileManager.removeItem(at: candidate)
+        }
     }
 
     /// Merges one test's whole-run coverage map into the running per-line
