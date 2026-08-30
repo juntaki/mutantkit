@@ -106,11 +106,14 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
     /// own filtered run really execute", not "did it execute alone".
     ///
     /// (Line 26, `return 0.0` — the branch only `bulkDiscountRoughly` can
-    /// reach — would be a cleaner, single-test-exclusive choice, but a
-    /// separate, pre-existing quirk in `SourceCoverageReader.executedLines`
-    /// drops a region's own closing line when it is not itself a region
-    /// entry; confirmed by direct reproduction to be unrelated to this
-    /// filter fix, and out of scope for P12-B.)
+    /// reach — was investigated as a stronger, single-test-exclusive choice
+    /// after #27 fixed a same-line region-closing drop, but real coverage
+    /// segments here (checked directly, not assumed) show line 26 is not
+    /// that shape: it is dropped by a different, deeper gap — the reader
+    /// tracks only one open region at a time, so it cannot "pop back" to an
+    /// enclosing region's count after a nested one (the `if`-branch here)
+    /// closes via a non-entry segment. #27's fix does not reach this case.
+    /// Out of scope for F0; left as `.contains` on line 24, unchanged.)
     @Test("The bulkDiscountRoughly() identifier's own filtered run is attributed to it")
     func bulkDiscountRoughlyRoundTrips() async throws {
         let staged = try await self.staged()

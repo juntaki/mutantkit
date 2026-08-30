@@ -6,21 +6,16 @@ import Testing
 
 /// P12-B (Phase B1), Finding D: `measurePerTestCoverage`'s per-test loop must
 /// never let one test's unprovable run quietly become "this test covers
-/// nothing" instead of "this test's coverage is unknown". Today it does
-/// exactly that — `continue`-ing past any test whose isolated run does not
-/// return `.passed`, then still returning whatever partial map the
-/// *successful* tests built.
+/// nothing" instead of "this test's coverage is unknown" — a test whose
+/// isolated run does not return `.passed` (or whose coverage cannot be
+/// read) invalidates the whole map, `return nil`, rather than a partial map
+/// built from whichever tests happened to succeed.
 ///
 /// Uses a dedicated XCTest fixture (`Fixtures/PerTestProfilingPartialFailure`)
-/// rather than the Swift Testing filter bug this phase is also fixing:
-/// SwiftPM filters XCTest itself, so `widgetBNeverProfiles` reliably fails
-/// its own isolated run today, independent of Phase B2 — this contract
-/// stays meaningful, and this test keeps exercising it, before, during and
-/// after that filter bug is fixed.
-///
-/// Expected to fail against current `main`: `measurePerTestCoverage`
-/// currently returns a non-`nil` map missing `widgetB()`'s attribution
-/// entirely, rather than `nil`.
+/// rather than the Swift Testing filter bug Phase B2 fixed: SwiftPM filters
+/// XCTest itself, so `widgetBNeverProfiles` reliably fails its own isolated
+/// run independent of that filter's own correctness — this contract stays
+/// meaningful regardless of which framework's filter path is under test.
 @Suite(
     "Acceptance: per-test coverage fails closed when one test cannot be measured",
     .enabled(if: Acceptance.isEnabled)

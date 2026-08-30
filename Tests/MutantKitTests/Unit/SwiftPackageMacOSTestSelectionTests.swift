@@ -325,3 +325,44 @@ struct SwiftPackageMacOSShortfallClassificationTests {
         #expect(result.status == .passed)
     }
 }
+
+/// `swiftTestBuildFlags`'s own contract, pinned independently of any real
+/// `swift test` invocation: `measurePerTestCoverage`'s loop passes
+/// `skipBuild: true` from its second iteration on to avoid paying for
+/// SwiftPM's build-graph check on every one of what can be hundreds of
+/// per-test invocations. Without a test at this level, an acceptance suite
+/// passing proves only that *some* set of flags happened to work, not that
+/// this optimization's own flags are the ones actually produced.
+@Suite("SwiftPM test build flags")
+struct SwiftPackageMacOSTestBuildFlagTests {
+    @Test("Ordinary test runs preserve skip-build")
+    func ordinaryRunSkipsBuild() {
+        #expect(
+            SwiftPackageMacOSAdapter.swiftTestBuildFlags(enableCoverage: false, skipBuild: nil) == ["--skip-build"]
+        )
+    }
+
+    @Test("Coverage defaults to allowing the instrumentation build")
+    func firstCoverageRunDoesNotSkipBuild() {
+        #expect(
+            SwiftPackageMacOSAdapter.swiftTestBuildFlags(enableCoverage: true, skipBuild: nil)
+                == ["--enable-code-coverage"]
+        )
+    }
+
+    @Test("Coverage can explicitly reuse the already-built artifact")
+    func repeatedCoverageRunSkipsBuild() {
+        #expect(
+            SwiftPackageMacOSAdapter.swiftTestBuildFlags(enableCoverage: true, skipBuild: true)
+                == ["--enable-code-coverage", "--skip-build"]
+        )
+    }
+
+    @Test("Explicit false still permits a coverage rebuild")
+    func explicitFalseDoesNotSkipBuild() {
+        #expect(
+            SwiftPackageMacOSAdapter.swiftTestBuildFlags(enableCoverage: true, skipBuild: false)
+                == ["--enable-code-coverage"]
+        )
+    }
+}

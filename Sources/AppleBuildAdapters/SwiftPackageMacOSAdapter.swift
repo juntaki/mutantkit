@@ -199,10 +199,36 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         try await runTests(in: workspace, timeoutSeconds: timeoutSeconds, enableCoverage: false)
     }
 
+    /// The `swift test` build-related flags for one invocation, factored out
+    /// so the exact contract is unit-testable without spawning a toolchain.
+    ///
+    /// - `enableCoverage`: whether `--enable-code-coverage` is passed.
+    /// - `skipBuild`: whether `--skip-build` is passed. `nil` reproduces the
+    ///   original either/or default (skip only when coverage is off, since a
+    ///   coverage-enabled run may need SwiftPM's own one-shot instrumented
+    ///   rebuild); an explicit `true`/`false` overrides that default,
+    ///   letting a caller that already knows the current artifact's state —
+    ///   `measurePerTestCoverage`'s loop, from its second iteration on —
+    ///   request both flags together.
+    static func swiftTestBuildFlags(enableCoverage: Bool, skipBuild: Bool?) -> [String] {
+        var flags: [String] = []
+
+        if enableCoverage {
+            flags.append("--enable-code-coverage")
+        }
+
+        if skipBuild ?? !enableCoverage {
+            flags.append("--skip-build")
+        }
+
+        return flags
+    }
+
     private func runTests(
         in workspace: URL,
         timeoutSeconds: Double,
         enableCoverage: Bool = false,
+        skipBuild: Bool? = nil,
         extraEnvironment: [String: String] = [:],
         testFilters: [String]? = nil,
         reliableExpectedTestCount: Int? = nil
@@ -232,12 +258,14 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         // re-build with instrumentation. That rebuild is bounded and one-shot,
         // and letting SwiftPM do it inside `swift test` is simpler and more
         // reliable than re-deriving the flag's effect on `swift build`.
+        //
+        // `skipBuild` lets a caller that already knows the coverage-
+        // instrumented artifact is current — `measurePerTestCoverage`'s loop,
+        // from its second iteration on — pass both flags together. `nil`
+        // reproduces the exact pre-existing either/or default: skip only when
+        // coverage is off.
         var arguments = ["swift", "test"]
-        if enableCoverage {
-            arguments.append("--enable-code-coverage")
-        } else {
-            arguments.append("--skip-build")
-        }
+        arguments.append(contentsOf: Self.swiftTestBuildFlags(enableCoverage: enableCoverage, skipBuild: skipBuild))
         arguments.append(contentsOf: ["--xunit-output", xunitOutput.path])
 
         // Opt-in only. SwiftPM writes the XCTest half of the xunit report only in
@@ -529,10 +557,17 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
     /// baseline — no separate coverage build step: `swift test
     /// --enable-code-coverage` re-instruments as a side effect the same way
     /// `runBaseline`'s own coverage pass already relies on (see its doc
-    /// comment above), so the first of these per-test invocations pays that
-    /// one-shot rebuild and every later one is an incremental no-op against
-    /// unchanged sources. Each individual run's codecov JSON is read right
-    /// after that run finishes and merged into a reverse index.
+    /// comment above), so only the first of these per-test invocations needs
+    /// to pay for that one-shot rebuild. Every later one passes `skipBuild:
+    /// true` explicitly — sources never change between iterations of this
+    /// loop, so there is nothing for SwiftPM's own build-graph check to
+    /// find, and skipping it outright avoids paying for that check on every
+    /// one of what can be hundreds of invocations, with no change to what
+    /// coverage gets attributed to which test (confirmed: `swift test
+    /// --skip-build --enable-code-coverage` still exports a fresh, correct,
+    /// unaccumulated `codecov/*.json` per invocation). Each individual run's
+    /// codecov JSON is read right after that run finishes and merged into a
+    /// reverse index.
     ///
     /// A one-time cost paid once per execution, not per mutant: worth it on
     /// a real project, where the fixed cost of re-running an entire suite
@@ -571,11 +606,21 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         guard !tests.isEmpty else { return nil }
 
         var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
+        // Set only once a coverage-enabled run has actually completed *and*
+        // its coverage was actually read — not merely after the first
+        // iteration's status check — so a failed first invocation (build
+        // error, infra failure, unreadable coverage) can never leave a later
+        // iteration skipping the build against an artifact that may not
+        // exist or may be stale. Moot in practice: any failure here already
+        // returns `nil` below, ending the loop, but this ordering is the
+        // contract this field exists to guarantee, not an incidental detail.
+        var coverageArtifactBuilt = false
         for test in tests {
             guard let run = try? await runTests(
                 in: workspace,
                 timeoutSeconds: timeoutSeconds,
                 enableCoverage: true,
+                skipBuild: coverageArtifactBuilt,
                 testFilters: [test.swiftTestFilterArgument],
                 reliableExpectedTestCount: test.isSwiftTestingShaped ? 1 : nil
             ) else { return nil }
@@ -590,6 +635,7 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
             guard run.status == .passed else { return nil }
 
             guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { return nil }
+            coverageArtifactBuilt = true
             Self.invert(map, coveredBy: test, into: &coveringTests)
         }
 
