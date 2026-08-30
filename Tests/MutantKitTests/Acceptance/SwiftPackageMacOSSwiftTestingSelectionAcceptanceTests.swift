@@ -105,15 +105,19 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
     /// test — the round trip this pins is only "did `bulkDiscountRoughly`'s
     /// own filtered run really execute", not "did it execute alone".
     ///
-    /// (Line 26, `return 0.0` — the branch only `bulkDiscountRoughly` can
-    /// reach — was investigated as a stronger, single-test-exclusive choice
-    /// after #27 fixed a same-line region-closing drop, but real coverage
-    /// segments here (checked directly, not assumed) show line 26 is not
-    /// that shape: it is dropped by a different, deeper gap — the reader
-    /// tracks only one open region at a time, so it cannot "pop back" to an
-    /// enclosing region's count after a nested one (the `if`-branch here)
-    /// closes via a non-entry segment. #27's fix does not reach this case.
-    /// Out of scope for F0; left as `.contains` on line 24, unchanged.)
+    /// Line 26, `return 0.0` — the branch only `bulkDiscountRoughly()`
+    /// (`itemCount: 3`) can reach; `totalWithLoyalty()`/`totalWithoutLoyalty()`
+    /// both call `total(...)` with `itemCount: 50` only, never low enough to
+    /// take this branch — is the single-test-exclusive check `.contains`
+    /// above can't be. #27 alone did not reach it (that fix only closed a
+    /// same-line region-closing drop; line 26's own drop was a deeper,
+    /// separate gap in how the reader carried region counts across a nested
+    /// region's non-entry closing segment). The follow-up
+    /// `SourceCoverageReader` rewrite (a direct LLVM `LineCoverageStats`
+    /// port, not an independently-derived rule) closes that gap too —
+    /// confirmed directly against this exact fixture's own real,
+    /// live-captured segments (`SourceCoverageReaderTests
+    /// .realBulkDiscountRateSegmentsCoverLine26`) before relying on it here.
     @Test("The bulkDiscountRoughly() identifier's own filtered run is attributed to it")
     func bulkDiscountRoughlyRoundTrips() async throws {
         let staged = try await self.staged()
@@ -124,6 +128,15 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
         #expect(
             coverers?.contains(bulkDiscountRoughly) == true,
             "line 24 (bulkDiscountRate's itemCount>10 branch) was not attributed to bulkDiscountRoughly()'s own filtered run"
+        )
+
+        let exclusiveCoverers = map.testsCovering(file: "Sources/Pricing/Pricing.swift", line: 26)
+        #expect(
+            exclusiveCoverers == [bulkDiscountRoughly],
+            """
+            line 26 (bulkDiscountRate's itemCount<=10 branch, reachable only by bulkDiscountRoughly()) \
+            was not attributed exactly to it: \(String(describing: exclusiveCoverers))
+            """
         )
     }
 
