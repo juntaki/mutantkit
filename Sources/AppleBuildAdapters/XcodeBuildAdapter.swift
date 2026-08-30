@@ -1216,6 +1216,35 @@ extension XcodeBuildAdapter: TestSelecting {
         )
     }
 
+    public func measurePerTestCoverage(
+        artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async -> PerTestCoverageMap? {
+        switch await measurePerTestCoverageFast(
+            artifact: artifact,
+            in: workspace,
+            timeoutSeconds: timeoutSeconds
+        ) {
+        case .complete(let map):
+            return map
+        case .unavailable:
+            return await measurePerTestCoverageSerial(
+                artifact: artifact,
+                in: workspace,
+                timeoutSeconds: timeoutSeconds
+            )
+        }
+    }
+
+    private func measurePerTestCoverageFast(
+        artifact: BuildArtifact,
+        in workspace: URL,
+        timeoutSeconds: Double
+    ) async -> PerTestCoverageProfileAttempt {
+        .unavailable(reason: "no fast per-test coverage backend is implemented yet")
+    }
+
     /// Runs every test the baseline bundle reports, one at a time, against
     /// the artifact already built for the baseline — no rebuild — with
     /// coverage enabled and its own scratch result bundle, and merges what
@@ -1257,7 +1286,7 @@ extension XcodeBuildAdapter: TestSelecting {
     ///   every individual test run, exactly the same "instrumented copy is
     ///   never what activation evidence is measured against" split
     ///   `readCoverage` makes.
-    public func measurePerTestCoverage(
+    private func measurePerTestCoverageSerial(
         artifact: BuildArtifact,
         in workspace: URL,
         timeoutSeconds: Double
