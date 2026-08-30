@@ -190,12 +190,22 @@ runs:
   steps:
     - name: Validate mode
       shell: bash
+      # `env:`, never `${{ inputs.mode }}` interpolated directly into the
+      # script below (codex-independent audit): GitHub textually substitutes
+      # a `${{ }}` expression into the `run:` source *before* bash ever
+      # parses it, so a value containing shell metacharacters (or a `$(...)`
+      # command substitution) becomes shell syntax, not inert data. Setting
+      # it via `env:` instead hands bash a plain environment variable, which
+      # is never re-parsed for further expansion. Applied to every `run:`
+      # step below that touches `inputs.*` or a step output derived from one.
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
       run: |
         set -euo pipefail
-        case "${{ inputs.mode }}" in
+        case "$INPUT_MODE" in
           install|ci) ;;
           *)
-            echo "::error::Unknown mode '${{ inputs.mode }}'. Expected 'install' or 'ci'." >&2
+            echo "::error::Unknown mode '$INPUT_MODE'. Expected 'install' or 'ci'." >&2
             exit 1
             ;;
         esac
@@ -220,6 +230,10 @@ runs:
       id: resolve-paths
       if: inputs.mode == 'ci'
       shell: bash
+      env:
+        INPUT_PROJECT_ROOT: ${{ inputs.project-root }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_BASELINE_SCOPE: ${{ inputs.baseline-scope }}
       run: |
         set -euo pipefail
         # One absolute path, computed once, used by every step below —
@@ -232,14 +246,14 @@ runs:
         # already-absolute root to every step, and always writing
         # plan.json/report.json/gate-result.json under it explicitly,
         # collapses that into a single, unambiguous contract.
-        if [ ! -d "${{ inputs.project-root }}" ]; then
-          echo "::error::project-root '${{ inputs.project-root }}' does not exist or is not a directory." >&2
+        if [ ! -d "$INPUT_PROJECT_ROOT" ]; then
+          echo "::error::project-root '$INPUT_PROJECT_ROOT' does not exist or is not a directory." >&2
           exit 1
         fi
-        project_root="$(cd "${{ inputs.project-root }}" && pwd)"
+        project_root="$(cd "$INPUT_PROJECT_ROOT" && pwd)"
         echo "project-root=$project_root" >> "$GITHUB_OUTPUT"
 
-        config_input="${{ inputs.config }}"
+        config_input="$INPUT_CONFIG"
         if [ -n "$config_input" ]; then
           case "$config_input" in
             /*) config_path="$config_input" ;;
@@ -270,7 +284,7 @@ runs:
         # otherwise normalize to one shared baseline-dir while the cache key
         # still treats them as different scopes and misses, silently
         # reintroducing the exact leak this hashing exists to close.
-        scope_key="${{ inputs.baseline-scope }}::${{ inputs.project-root }}"
+        scope_key="$INPUT_BASELINE_SCOPE::$INPUT_PROJECT_ROOT"
         scope_hash="$(printf '%s' "$scope_key" | shasum -a 256 | cut -c1-16)"
         echo "baseline-dir=${{ runner.temp }}/mutantkit-baseline-$scope_hash" >> "$GITHUB_OUTPUT"
 
@@ -327,11 +341,13 @@ runs:
     - name: Write job summary
       if: inputs.mode == 'ci' && always()
       shell: bash
+      env:
+        PROJECT_ROOT: ${{ steps.resolve-paths.outputs.project-root }}
       run: |
         set -euo pipefail
         "${{ github.action_path }}/Scripts/action/summarize-gate.sh" \
-          "${{ steps.resolve-paths.outputs.project-root }}/gate-result.json" \
-          "${{ steps.resolve-paths.outputs.project-root }}/.mutantkit/summary.md"
+          "$PROJECT_ROOT/gate-result.json" \
+          "$PROJECT_ROOT/.mutantkit/summary.md"
 
     # Only a report that passed its own gate becomes tomorrow's baseline (a
     # regressed run must never rewrite the bar it will next be judged
@@ -344,10 +360,13 @@ runs:
     - name: Copy report.json into the baseline-cache path
       if: inputs.mode == 'ci' && inputs.diff == '' && success() && github.event_name != 'pull_request'
       shell: bash
+      env:
+        PROJECT_ROOT: ${{ steps.resolve-paths.outputs.project-root }}
+        BASELINE_DIR: ${{ steps.resolve-paths.outputs.baseline-dir }}
       run: |
         set -euo pipefail
-        mkdir -p "${{ steps.resolve-paths.outputs.baseline-dir }}"
-        cp "${{ steps.resolve-paths.outputs.project-root }}/report.json" "${{ steps.resolve-paths.outputs.baseline-dir }}/report.json"
+        mkdir -p "$BASELINE_DIR"
+        cp "$PROJECT_ROOT/report.json" "$BASELINE_DIR/report.json"
 
     # `cache-hit` (from the restore step) is only `true` on an *exact* key
     # match — i.e. this exact commit's baseline was already saved by an
@@ -377,12 +396,14 @@ runs:
     - name: Stage report artifacts
       if: inputs.mode == 'ci' && always()
       shell: bash
+      env:
+        PROJECT_ROOT: ${{ steps.resolve-paths.outputs.project-root }}
       run: |
         set -euo pipefail
         "${{ github.action_path }}/Scripts/action/stage-artifacts.sh" \
-          "${{ steps.resolve-paths.outputs.project-root }}" \
-          "${{ steps.resolve-paths.outputs.project-root }}/report.json" \
-          "${{ steps.resolve-paths.outputs.project-root }}/gate-result.json" \
+          "$PROJECT_ROOT" \
+          "$PROJECT_ROOT/report.json" \
+          "$PROJECT_ROOT/gate-result.json" \
           "${{ runner.temp }}/mutantkit-artifact-staging"
 
     - name: Upload mutation report artifacts

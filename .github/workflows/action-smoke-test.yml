@@ -797,6 +797,85 @@ jobs:
             fi
           fi
 
+  ci-mode-input-hardening:
+    name: "inputs are treated as data, never as shell source (project-root/baseline-scope with shell metacharacters)"
+    needs: build-from-source
+    runs-on: macos-15
+    steps:
+      - name: Checkout mutantkit (action.yml)
+        uses: actions/checkout@v4
+        with:
+          path: mutantkit-src
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutantkit-from-source
+          path: test-binary
+      - run: chmod +x test-binary/mutantkit
+        shell: bash
+
+      # Every occurrence of `${{ inputs.* }}` (and step outputs derived from
+      # one) used to be interpolated directly into action.yml's own `run:`
+      # script bodies — GitHub substitutes that text *before* bash ever
+      # parses it, so a value containing shell metacharacters becomes shell
+      # syntax, not inert data (an independent audit's finding, fixed by
+      # routing every such value through `env:` instead). This directory
+      # name and the `baseline-scope` input below are deliberately shaped
+      # like the exact failure mode: spaces, a double quote, and a
+      # `$(...)`-shaped substring that a vulnerable script would evaluate as
+      # a real command substitution.
+      #
+      # Single-quoted in bash so the literal characters (including `$(...)`)
+      # land in the directory name verbatim, never evaluated here either.
+      - name: Stage the fixture under an adversarially-named project-root
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_root='adversarial project root $(marker) "quoted"'
+          mkdir -p "$project_root"
+          cp -R "mutantkit-src/Fixtures/SwiftPackageMacOS/." "$project_root/"
+          cat > "$project_root/mutantkit.yml" <<'YAML'
+          version: 1
+          project:
+            kind: swiftPackageMacOS
+          sources:
+            include: [Sources/**]
+          operators:
+            profile: default
+          execution:
+            strategy: isolated
+            workers: 2
+          reports: [console]
+          YAML
+          rm -f "$RUNNER_TEMP/mutantkit-injection-marker"
+
+      # `baseline-scope`'s value is a real `$(touch ...)` command
+      # substitution *as text* — GitHub only substitutes `${{ runner.temp }}`
+      # to build this string once, here; it never executes `touch` itself.
+      # If action.yml's own scripts ever evaluate this string as shell
+      # source again, the touch really runs and the marker file appears.
+      - name: "Run mutantkit via action.yml with adversarial project-root and baseline-scope inputs"
+        id: mutantkit
+        uses: ./mutantkit-src
+        with:
+          mode: ci
+          project-root: 'adversarial project root $(marker) "quoted"'
+          internal-test-binary-dir: ${{ github.workspace }}/test-binary
+          baseline-scope: "$(touch ${{ runner.temp }}/mutantkit-injection-marker)"
+          artifact-name: mutantkit-report-input-hardening
+
+      - name: Assert no injected command ran, and the adversarial project-root was still used as real data
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/mutantkit-injection-marker" ]; then
+            echo "::error::an input value was evaluated as shell source instead of treated as literal data" >&2
+            exit 1
+          fi
+          project_root='adversarial project root $(marker) "quoted"'
+          test -s "$project_root/report.json" \
+            || { echo "::error::the run against an adversarially-named project-root did not produce a report.json"; exit 1; }
+
   ci-mode-baseline:
     name: "baseline cache: fresh miss, same-SHA rerun has no save collision, scopes stay isolated"
     needs: build-from-source
