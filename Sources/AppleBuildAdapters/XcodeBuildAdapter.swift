@@ -1229,10 +1229,21 @@ extension XcodeBuildAdapter: TestSelecting {
     /// leased devices concurrently is a further optimisation, not attempted
     /// here.
     ///
-    /// A test that does not pass in isolation (order-dependent, needs a
-    /// sibling's side effect) contributes no attribution and is silently
-    /// skipped — the mutant it would have covered simply falls back to the
-    /// full configured test list, which is always correct, just slower.
+    /// All-or-nothing (parity with `SwiftPackageMacOSAdapter.measurePerTestCoverage`,
+    /// P12-B Finding D): a test whose isolated run cannot be proven —
+    /// order-dependent and failing alone, crashed, timed out, or its
+    /// coverage export could not be read — invalidates the whole map, not
+    /// just that one test's own entry. A version of this method that
+    /// `continue`d past such a test, returning whatever the *successful*
+    /// tests alone had built, produces a map that still looks complete and
+    /// usable while silently missing the unprovable test's real coverage —
+    /// if another test also covers the same line, that line stays
+    /// non-empty and never falls back to the full suite, so a mutant only
+    /// the unprovable test would have killed can be scored against the
+    /// wrong, narrower selection and turn into a false survivor. A test
+    /// that legitimately covers nothing (a genuine, successfully-read empty
+    /// coverage export) is not this case — that test's own turn simply
+    /// contributes no lines, same as before, and the loop continues.
     /// - Parameter artifact: `runBaseline`'s own, uninstrumented artifact —
     ///   kept only to enumerate test identifiers from its already-produced
     ///   bundle; never built or tested against directly. Per-test coverage
@@ -1261,9 +1272,10 @@ extension XcodeBuildAdapter: TestSelecting {
                 timeoutSeconds: timeoutSeconds,
                 testFilters: [test.onlyTestingArgument],
                 enableCoverage: true
-            ), run.status == .passed, let bundle = run.resultArtifactPath else { continue }
+            ) else { return nil }
+            guard run.status == .passed, let bundle = run.resultArtifactPath else { return nil }
 
-            guard let map = await XccovCoverageReader.read(archive: bundle, projectRoot: workspace) else { continue }
+            guard let map = await XccovCoverageReader.read(archive: bundle, projectRoot: workspace) else { return nil }
             for (file, lines) in map.executedLines {
                 for line in lines {
                     coveringTests[file, default: [:]][line, default: []].insert(test)

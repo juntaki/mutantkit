@@ -92,6 +92,31 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
 
+  # F1-P0: mirrors Fixtures/PerTestProfilingPartialFailure (SwiftPM) so
+  # XcodeBuildAdapter.measurePerTestCoverage's own all-or-nothing contract
+  # can be pinned against a real xcodebuild run, the same way P12-B pinned
+  # it for SwiftPM. Isolated on its own scheme for the same reason
+  # HangContainmentTests/SwiftTestingCheckoutTests are: `xcodebuild -scheme
+  # Checkout ...` — every other suite sharing this fixture — must never
+  # build or run it.
+  PerTestWidgets:
+    type: framework
+    platform: iOS
+    sources: [PerTestWidgets]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  PerTestProfilingPartialFailureTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [PerTestProfilingPartialFailureTests]
+    dependencies:
+      - target: PerTestWidgets
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Checkout:
     build:
@@ -129,3 +154,12 @@ schemes:
         SwiftTestingCheckoutTests: [test]
     test:
       targets: [SwiftTestingCheckoutTests]
+
+  # Isolated the same way HangContainmentDemo is above.
+  PerTestProfilingPartialFailureDemo:
+    build:
+      targets:
+        PerTestWidgets: all
+        PerTestProfilingPartialFailureTests: [test]
+    test:
+      targets: [PerTestProfilingPartialFailureTests]
