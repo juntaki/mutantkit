@@ -60,6 +60,20 @@ set -euo pipefail
 rm -f "$PLAN_PATH" "$REPORT_JSON_PATH" "$GATE_RESULT_PATH"
 rm -f "$PROJECT_ROOT/.mutantkit/report.html" "$PROJECT_ROOT/.mutantkit/summary.md"
 
+# This action's own `baseline-applied` output (action.yml) is documented as
+# "false" whenever no baseline was applied, including a failure that never
+# reaches the point below that decides it (codex review: `set -e` on a
+# diff-preflight/doctor/plan failure would otherwise leave the output
+# unset, not "false", breaking that contract for a consumer using
+# `continue-on-error` to inspect it after a failed invocation). Initialized
+# here and written via an EXIT trap, so every exit path — success, a
+# deliberate `exit 1` below, or an unexpected failure under `set -e` —
+# writes exactly one real value.
+baseline_applied=false
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  trap 'echo "baseline-applied=$baseline_applied" >> "$GITHUB_OUTPUT"' EXIT
+fi
+
 common_args=(--project-root "$PROJECT_ROOT")
 if [ -n "${CONFIG_PATH:-}" ]; then
   common_args+=(--config "$CONFIG_PATH")
@@ -144,7 +158,15 @@ gate_args=("${common_args[@]}" --report "$REPORT_JSON_PATH" --json)
 # skipping the check (see this repo's README, "Quality gate" section) — that
 # existing contract is what protects a diff-scoped PR run here, not a
 # heuristic this script invents.
-baseline_applied=false
+#
+# `baseline_applied` (declared, initialized "false", near the top of this
+# script) is flipped to "true" below only when a baseline is actually
+# handed to `gate` — the EXIT trap installed there writes whichever value
+# this variable holds when the script exits, on every path. Exposed as
+# this action's own `baseline-applied` output, distinct from the cache
+# action's own `cache-hit`, which only reflects the cache KEY matching, not
+# what file `gate` actually received (see action.yml's own comment on this
+# output for why that distinction matters).
 if [ -n "${DIFF_BASE:-}" ]; then
   if [ -f "${BASELINE_REPORT_PATH:-/nonexistent}" ]; then
     echo "Diff-scoped run (--diff-base $DIFF_BASE): ignoring the restored baseline at $BASELINE_REPORT_PATH — its whole-project scope is not comparable to this run's diff-scoped mutation corpus. If qualityGate.regression is configured, gate will fail closed rather than compare mismatched scopes."
@@ -153,13 +175,6 @@ elif [ -f "${BASELINE_REPORT_PATH:-/nonexistent}" ]; then
   echo "Baseline found at $BASELINE_REPORT_PATH (whole-project run) — regression checks enabled."
   gate_args+=(--baseline "$BASELINE_REPORT_PATH")
   baseline_applied=true
-fi
-# Exposed as this action's own `baseline-applied` output — distinct from
-# the cache action's own `cache-hit`, which only reflects the cache KEY
-# matching, not what file `gate` actually received (see action.yml's own
-# comment on this output for why that distinction matters).
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  echo "baseline-applied=$baseline_applied" >> "$GITHUB_OUTPUT"
 fi
 # `tee`, not plain redirection: the verdict stays visible in this step's own
 # live log, while also landing on disk at a fixed path the summary/artifact

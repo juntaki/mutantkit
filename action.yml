@@ -262,7 +262,15 @@ runs:
         # into the on-disk directory name gives every scope its own
         # location by construction, not by remembering to clean up after
         # each invocation.
-        scope_key="${{ inputs.baseline-scope }}::$project_root"
+        #
+        # Hashed from the *raw* `inputs.project-root` — the exact same
+        # string the cache key below uses — not the normalized `$project_root`
+        # computed above (codex review): two invocations that spell the same
+        # directory differently (e.g. "." vs. its absolute equivalent) would
+        # otherwise normalize to one shared baseline-dir while the cache key
+        # still treats them as different scopes and misses, silently
+        # reintroducing the exact leak this hashing exists to close.
+        scope_key="${{ inputs.baseline-scope }}::${{ inputs.project-root }}"
         scope_hash="$(printf '%s' "$scope_key" | shasum -a 256 | cut -c1-16)"
         echo "baseline-dir=${{ runner.temp }}/mutantkit-baseline-$scope_hash" >> "$GITHUB_OUTPUT"
 
