@@ -1,11 +1,45 @@
-# Composite GitHub Action wrapping the exact tarball-install recipe the
-# README's "In CI" section documents (curl the release tarball + SHA256SUMS,
-# verify, extract, add to PATH) — so a consumer writes
+# Composite GitHub Action with two distinct modes (`inputs.mode`):
+#
+#   mode: install (the default, and the ONLY behavior this action has ever
+#   had before P13) — installs the MutantKit CLI from a release tarball with
+#   GitHub artifact attestation (Sigstore-backed build provenance, not code
+#   signing), no Homebrew, no repo checkout required beyond this action
+#   itself, and adds it to PATH. A consumer who only ever wrote
 #
 #     - uses: juntaki/mutantkit@v1
 #
-# instead of copy-pasting that shell recipe into every workflow. Schema per
-# GitHub's "Metadata syntax for GitHub Actions" docs
+#   for the binary keeps getting exactly that after adopting this version —
+#   see the P13 review this action.yml was rebuilt from: an earlier
+#   prototype made `install -> doctor -> plan -> run -> gate` unconditional,
+#   which would have started a mutation campaign under every existing
+#   install-only consumer the next time they picked up a new tag. That is
+#   the one thing this file must never do again.
+#
+#   mode: ci — everything `mode: install` does, plus doctor -> plan -> run ->
+#   gate against the checked-out project's own `mutantkit.yml`, a persisted
+#   baseline for gate's regression checks, a job summary, and a report
+#   artifact upload:
+#
+#     - uses: juntaki/mutantkit@v1
+#       with:
+#         mode: ci
+#         diff: origin/main   # optional — see README "CI" section
+#
+# Design boundary (kept intentionally narrow — see ADR-style note in the P13
+# review this action was built from): this file's job is installation,
+# orchestration, persistence (the baseline cache) and presentation (the job
+# summary, the artifact). It never recomputes a mutation score, never
+# re-derives a quality-gate verdict, and never treats an unrecognized or
+# missing structured result as a pass. Every one of those decisions is made
+# once, by the `mutantkit` CLI itself, and this action only calls it and
+# reacts to its exit code and `--json` output. The actual orchestration
+# shell lives in `Scripts/action/*.sh`, not inlined here, so
+# `.github/workflows/action-smoke-test.yml` can exercise the exact same
+# logic against a `mutantkit` binary built from this repo's own PR HEAD —
+# see `Scripts/action/orchestrate-ci.sh`'s own doc comment for why that
+# matters and `install.sh`'s `MUTANTKIT_ACTION_TEST_BINARY_DIR` for how.
+#
+# Schema per GitHub's "Metadata syntax for GitHub Actions" docs
 # (https://docs.github.com/en/actions/sharing-automations/creating-actions/metadata-syntax-for-github-actions):
 # a composite action's top-level keys are name/description/inputs/outputs/
 # runs, and `runs.using: composite` requires every `run` step to declare its
@@ -13,73 +47,413 @@
 name: "Setup MutantKit"
 description: >-
   Installs the MutantKit Swift mutation-testing CLI from a release tarball
-  with GitHub artifact attestation (Sigstore-backed build provenance, not
-  code signing) — no Homebrew, no repo checkout — and adds it to PATH.
+  with GitHub artifact attestation (no Homebrew, no repo checkout) and adds
+  it to PATH (mode: install, the default) — or does that, then runs the
+  project's own mutation campaign end to end: doctor, plan, run, a
+  regression-aware quality gate, a job summary, and a report artifact
+  upload (mode: ci).
 author: "juntaki"
 
 inputs:
+  mode:
+    description: >-
+      "install" (default) installs the mutantkit binary and stops there —
+      identical to every release of this action before P13. "ci" does that,
+      then runs doctor -> plan -> run -> gate against this project's own
+      mutantkit.yml, restores/saves a baseline for gate's regression checks,
+      writes a job summary, and uploads the reports as a build artifact. Any
+      other value fails immediately, before anything is downloaded.
+    required: false
+    default: "install"
+
   version:
     description: >-
-      MutantKit release to install. "latest" (the default) tracks the
-      newest GitHub Release; pin to an exact tag (e.g. "v0.1.0") for a job
-      that should not change behavior mid-week on its own — see the
-      README's "In CI" section for the same tradeoff spelled out for the
-      manual recipe this action wraps.
+      MutantKit release to install, e.g. "v0.3.0", or the literal "latest".
+      Always wins when set, including the literal "latest" typed out loud.
+      Left unset (the default), the resolution is: if this action itself was
+      invoked at a release-tag ref (`uses: juntaki/mutantkit@vX.Y.Z`), that
+      exact release is installed — pinning the action ref alone is enough
+      for a reproducible install, no separate `version:` needed. Only a ref
+      that is not itself a release tag (`uses: juntaki/mutantkit@main`, or a
+      local `uses: ./` checkout) falls back to the floating "latest" GitHub
+      Release, and does so with a visible `::warning::` — that is the one
+      path where the installed binary can change between two runs of an
+      otherwise-unmodified workflow.
     required: false
-    default: "latest"
+    default: ""
+
+  project-root:
+    description: >-
+      Path (relative to the workspace, or absolute) to the project mutantkit
+      should test. Defaults to the workspace root. Every mode: ci step
+      (doctor/plan/run/gate/report paths/baseline cache/artifact staging)
+      resolves this to one absolute path and uses it consistently — this
+      action never `cd`s into it, so relative paths you pass to other steps
+      in the same job are unaffected.
+    required: false
+    default: "."
+
+  config:
+    description: >-
+      Path to mutantkit.yml, if it is not at "<project-root>/mutantkit.yml".
+      Relative paths are resolved against project-root, not the workspace
+      root. Ignored in mode: install.
+    required: false
+    default: ""
+
+  diff:
+    description: >-
+      Optional git ref to scope mutation testing to lines changed against
+      it (e.g. "origin/main"), passed straight through as `mutantkit plan
+      --diff-base <ref>`. A normal `actions/checkout` is a shallow clone, so
+      this ref must actually be fetched first (see the README's "In CI"
+      section for a `fetch-depth` example) — this action verifies the ref
+      resolves before planning and fails with an actionable message if it
+      does not, rather than fetching one on your behalf. Leave unset to plan
+      the whole project every run. A diff-scoped run never applies a
+      baseline for gate's regression checks (see this action's own baseline
+      comment below) — thresholds and report formats are configured in the
+      project's own mutantkit.yml, not here.
+    required: false
+    default: ""
+
+  artifact-name:
+    description: >-
+      Name for the uploaded report artifact (mode: ci only). The default is
+      fine for a single invocation per workflow run; give each one a unique
+      name if a matrix, multiple jobs, or multiple invocations of this
+      action can run in the same workflow run — `actions/upload-artifact`
+      errors on a name collision within one run.
+    required: false
+    default: "mutantkit-report"
+
+  baseline-scope:
+    description: >-
+      Extra text folded into the baseline cache key (mode: ci only), on top
+      of project-root and the target branch, which are already part of the
+      key by default. Set this when one workflow run drives this action
+      more than once for what would otherwise be an identical
+      project-root/branch pair (e.g. a matrix dimension) and each
+      invocation needs its own baseline.
+    required: false
+    default: ""
+
+  attestation-token:
+    description: >-
+      Token used only to call `gh attestation verify` against
+      juntaki/mutantkit's own public build-provenance attestations —
+      raises the API rate limit; grants no access to anything private and
+      is not "authorization" to install. Left unset (the default), this
+      job's own ambient `github.token` is used, which is enough for
+      normal use.
+    required: false
+    default: ""
+
+  internal-test-binary-dir:
+    description: >-
+      INTERNAL / TEST-ONLY. When set, skips downloading a release entirely
+      and uses this directory's own `mutantkit` binary verbatim (no
+      checksum, no attestation verification). Exists so this repo's own
+      .github/workflows/action-smoke-test.yml can exercise mode: ci against
+      a binary built from the exact commit under review, which has no
+      published release yet. Do not set this in a real workflow.
+    required: false
+    default: ""
 
 outputs:
   version:
-    description: "The mutantkit version string reported by `mutantkit --version` after install."
+    description: "The mutantkit version string reported by `mutantkit --version` after install (single line, e.g. \"mutantkit 0.3.0\")."
     value: ${{ steps.install.outputs.version }}
+  baseline-cache-hit:
+    description: >-
+      "true" only on an exact baseline-cache key match (mode: ci, no
+      `diff:`) — empty otherwise (mode: install, a diff-scoped run, or no
+      cache entry yet). Mostly useful for this repo's own
+      action-smoke-test.yml to prove the same-SHA-rerun and distinct-scope
+      cache behaviors without needing a real workflow rerun.
+    value: ${{ steps.restore-baseline.outputs.cache-hit }}
+  baseline-applied:
+    description: >-
+      "true" only when `mutantkit gate` actually ran with `--baseline`
+      pointed at a real, on-disk report this invocation restored (mode: ci,
+      no `diff:`) — "false" otherwise, including a diff-scoped run (which
+      never applies one) and a cache miss. Distinct from
+      `baseline-cache-hit`, which reflects only the cache action's own key
+      match: this instead reflects the physical file `gate` was actually
+      handed, so action-smoke-test.yml can prove a differently-scoped
+      invocation's gate step never applies another scope's baseline, not
+      merely that its cache key missed.
+    value: ${{ steps.run-mutantkit.outputs.baseline-applied }}
 
 runs:
   using: "composite"
   steps:
-    # The prebuilt binary this action installs is macOS arm64 only (see the
-    # README's "Install" section: "Requires macOS 14+ on Apple Silicon") —
-    # failing here with a clear message beats an opaque 404 a few lines
-    # down when a workflow accidentally targets ubuntu-latest or an Intel
-    # runner.
-    - name: Check platform support
+    # Routing a value through `env:` (below, and throughout this file) keeps
+    # it out of the *shell source itself*, but it can still reach two other
+    # newline-delimited formats downstream: `$GITHUB_OUTPUT` (Resolve project
+    # paths writes `project-root=$project_root` as one line per record — an
+    # embedded newline in the value forges an extra record, letting one
+    # input override an unrelated output) and a `::error::`/`::warning::`
+    # workflow-command annotation (this file's own error messages include
+    # some of these values verbatim — an embedded newline could start what
+    # looks like a second, forged command). None of these inputs has any
+    # legitimate reason to contain a CR or LF, so every one that reaches
+    # either format downstream is rejected here, before anything echoes any
+    # of them anywhere — closed by construction, not by remembering to
+    # escape output at each site that consumes it later.
+    - name: Reject input values containing a newline
       shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_PROJECT_ROOT: ${{ inputs.project-root }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_DIFF: ${{ inputs.diff }}
+        INPUT_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        INPUT_BASELINE_SCOPE: ${{ inputs.baseline-scope }}
+        INPUT_INTERNAL_TEST_BINARY_DIR: ${{ inputs.internal-test-binary-dir }}
       run: |
         set -euo pipefail
-        os="$(uname -s)"
-        arch="$(uname -m)"
-        if [ "$os" != "Darwin" ] || [ "$arch" != "arm64" ]; then
-          echo "::error::juntaki/mutantkit only ships a macOS arm64 binary (got $os/$arch). Run this action on a macos-* Apple Silicon runner (e.g. macos-14 or macos-15)." >&2
-          exit 1
-        fi
+        check_no_newline() {
+          local name="$1" value="$2"
+          case "$value" in
+            *$'\n'*|*$'\r'*)
+              echo "::error::input '$name' must not contain a newline." >&2
+              exit 1
+              ;;
+          esac
+        }
+        check_no_newline "mode" "$INPUT_MODE"
+        check_no_newline "version" "$INPUT_VERSION"
+        check_no_newline "project-root" "$INPUT_PROJECT_ROOT"
+        check_no_newline "config" "$INPUT_CONFIG"
+        check_no_newline "diff" "$INPUT_DIFF"
+        check_no_newline "artifact-name" "$INPUT_ARTIFACT_NAME"
+        check_no_newline "baseline-scope" "$INPUT_BASELINE_SCOPE"
+        check_no_newline "internal-test-binary-dir" "$INPUT_INTERNAL_TEST_BINARY_DIR"
 
-    - name: Install mutantkit ${{ inputs.version }}
+    - name: Validate mode
+      shell: bash
+      # `env:`, never `${{ inputs.mode }}` interpolated directly into the
+      # script below (codex-independent audit): GitHub textually substitutes
+      # a `${{ }}` expression into the `run:` source *before* bash ever
+      # parses it, so a value containing shell metacharacters (or a `$(...)`
+      # command substitution) becomes shell syntax, not inert data. Setting
+      # it via `env:` instead hands bash a plain environment variable, which
+      # is never re-parsed for further expansion. Applied to every `run:`
+      # step below that touches `inputs.*` or a step output derived from one.
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$INPUT_MODE" in
+          install|ci) ;;
+          *)
+            echo "::error::Unknown mode '$INPUT_MODE'. Expected 'install' or 'ci'." >&2
+            exit 1
+            ;;
+        esac
+
+    # Covers both modes: mode: ci needs the binary on PATH exactly the same
+    # way mode: install does, before anything else can happen.
+    - name: Install mutantkit
       id: install
       shell: bash
       env:
-        MUTANTKIT_VERSION: ${{ inputs.version }}
+        MUTANTKIT_ACTION_VERSION_INPUT: ${{ inputs.version }}
+        MUTANTKIT_ACTION_REF: ${{ github.action_ref }}
+        MUTANTKIT_ACTION_GH_TOKEN: ${{ inputs.attestation-token || github.token }}
+        MUTANTKIT_ACTION_TEST_BINARY_DIR: ${{ inputs.internal-test-binary-dir }}
+      run: ${{ github.action_path }}/Scripts/action/install.sh
+
+    # Everything below is mode: ci only. A plain `mode: install` consumer's
+    # job ends at the step above, identical to every pre-P13 release of this
+    # action.
+
+    - name: Resolve project paths
+      id: resolve-paths
+      if: inputs.mode == 'ci'
+      shell: bash
+      env:
+        INPUT_PROJECT_ROOT: ${{ inputs.project-root }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_BASELINE_SCOPE: ${{ inputs.baseline-scope }}
       run: |
         set -euo pipefail
+        # One absolute path, computed once, used by every step below —
+        # never a `cd` mixed with a relative `--project-root` (P13 review,
+        # item 5): `mutantkit run --output`/`plan --output`/`gate --report`
+        # are all CWD-relative regardless of `--project-root` (see
+        # RunCommand/PlanCommand/GateCommand — none of them join a relative
+        # output path against project-root), while `.mutantkit/report.html`/
+        # `summary.md` are always project-root-relative. Passing one
+        # already-absolute root to every step, and always writing
+        # plan.json/report.json/gate-result.json under it explicitly,
+        # collapses that into a single, unambiguous contract.
+        if [ ! -d "$INPUT_PROJECT_ROOT" ]; then
+          echo "::error::project-root '$INPUT_PROJECT_ROOT' does not exist or is not a directory." >&2
+          exit 1
+        fi
+        project_root="$(cd "$INPUT_PROJECT_ROOT" && pwd)"
+        echo "project-root=$project_root" >> "$GITHUB_OUTPUT"
 
-        if [ "$MUTANTKIT_VERSION" = "latest" ]; then
-          base_url="https://github.com/juntaki/mutantkit/releases/latest/download"
+        config_input="$INPUT_CONFIG"
+        if [ -n "$config_input" ]; then
+          case "$config_input" in
+            /*) config_path="$config_input" ;;
+            *) config_path="$project_root/$config_input" ;;
+          esac
+          echo "config-path=$config_path" >> "$GITHUB_OUTPUT"
         else
-          base_url="https://github.com/juntaki/mutantkit/releases/download/${MUTANTKIT_VERSION}"
+          echo "config-path=" >> "$GITHUB_OUTPUT"
         fi
 
-        install_dir="$RUNNER_TEMP/mutantkit-install"
-        mkdir -p "$install_dir"
-        cd "$install_dir"
+        # `actions/cache/restore@v4`'s cache KEY is already scoped by
+        # baseline-scope + project-root (below), but its on-disk `path:` was
+        # a single fixed location shared by every invocation in the job
+        # (P13 review: multi-invocation baseline contamination). A
+        # differently-scoped invocation's cache miss does not clear that
+        # path — `actions/cache/restore` never removes anything on a miss —
+        # so a still-present file from an earlier, differently-scoped
+        # invocation in the same job could be read as this invocation's own
+        # baseline. Hashing the same scope string the cache key already uses
+        # into the on-disk directory name gives every scope its own
+        # location by construction, not by remembering to clean up after
+        # each invocation.
+        #
+        # Hashed from the *raw* `inputs.project-root` — the exact same
+        # string the cache key below uses — not the normalized `$project_root`
+        # computed above (codex review): two invocations that spell the same
+        # directory differently (e.g. "." vs. its absolute equivalent) would
+        # otherwise normalize to one shared baseline-dir while the cache key
+        # still treats them as different scopes and misses, silently
+        # reintroducing the exact leak this hashing exists to close.
+        scope_key="$INPUT_BASELINE_SCOPE::$INPUT_PROJECT_ROOT"
+        scope_hash="$(printf '%s' "$scope_key" | shasum -a 256 | cut -c1-16)"
+        echo "baseline-dir=${{ runner.temp }}/mutantkit-baseline-$scope_hash" >> "$GITHUB_OUTPUT"
 
-        # Same recipe the README documents for "In CI", plus -f so a bad
-        # URL (e.g. a mistyped version tag) fails the curl step loudly
-        # instead of silently downloading a GitHub 404 HTML page that then
-        # fails confusingly at `shasum -c` or `tar` a few lines later.
-        curl -fLO "$base_url/mutantkit-macos-arm64.tar.gz"
-        curl -fLO "$base_url/SHA256SUMS"
-        shasum -a 256 -c SHA256SUMS
-        tar xzf mutantkit-macos-arm64.tar.gz
-        echo "$install_dir/mutantkit-macos-arm64" >> "$GITHUB_PATH"
+    # Cache miss (first run ever for this scope, or nothing saved yet) is
+    # not an error: `restore-keys`' prefix match resolves to the newest
+    # baseline for this scope if one exists, and the restored path simply
+    # stays absent if none does — orchestrate-ci.sh treats that exactly like
+    # `--baseline` never being requested. Skipped entirely for a diff-scoped
+    # run: see orchestrate-ci.sh's own comment on why a diff-scoped report
+    # never gets a baseline applied regardless of what is cached.
+    #
+    # Key includes project-root and baseline-scope (P13 review, item 11) so
+    # two different projects/matrix legs sharing one repo do not silently
+    # share one baseline — project-root alone already separates a monorepo's
+    # own projects by default; baseline-scope is for anything project-root
+    # cannot distinguish (e.g. two matrix legs testing the identical
+    # project-root differently).
+    - name: Restore mutation baseline
+      id: restore-baseline
+      if: inputs.mode == 'ci' && inputs.diff == ''
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
+        key: mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::${{ github.sha }}
+        restore-keys: |
+          mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::
 
-        installed_version="$("$install_dir/mutantkit-macos-arm64/mutantkit" --version)"
-        echo "version=$installed_version" >> "$GITHUB_OUTPUT"
-        echo "Installed mutantkit $installed_version"
+    # doctor -> (diff-ref preflight ->) plan -> run -> gate. See
+    # Scripts/action/orchestrate-ci.sh for the full script and its own
+    # extensive doc comments — this step's only job is threading the
+    # already-resolved absolute paths into it as env vars. This step's own
+    # exit code is `mutantkit gate`'s (see orchestrate-ci.sh's own tail) and
+    # is this job's authoritative pass/fail signal: nothing after this step
+    # recomputes or overrides it.
+    - name: Run mutantkit (doctor, plan, run, gate)
+      id: run-mutantkit
+      if: inputs.mode == 'ci'
+      shell: bash
+      env:
+        PROJECT_ROOT: ${{ steps.resolve-paths.outputs.project-root }}
+        CONFIG_PATH: ${{ steps.resolve-paths.outputs.config-path }}
+        DIFF_BASE: ${{ inputs.diff }}
+        PLAN_PATH: ${{ steps.resolve-paths.outputs.project-root }}/plan.json
+        REPORT_JSON_PATH: ${{ steps.resolve-paths.outputs.project-root }}/report.json
+        GATE_RESULT_PATH: ${{ steps.resolve-paths.outputs.project-root }}/gate-result.json
+        BASELINE_REPORT_PATH: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
+      run: ${{ github.action_path }}/Scripts/action/orchestrate-ci.sh
+
+    # `always()`: a job that never got past doctor/plan/run should still end
+    # with a job summary saying so, not just a bare red X (see
+    # Scripts/action/summarize-gate.sh's own handling of a missing/malformed
+    # gate-result.json). Writing this summary never changes the job's own
+    # pass/fail status either way — that was decided by the step above.
+    - name: Write job summary
+      if: inputs.mode == 'ci' && always()
+      shell: bash
+      env:
+        PROJECT_ROOT: ${{ steps.resolve-paths.outputs.project-root }}
+      run: |
+        set -euo pipefail
+        "${{ github.action_path }}/Scripts/action/summarize-gate.sh" \
+          "$PROJECT_ROOT/gate-result.json" \
+          "$PROJECT_ROOT/.mutantkit/summary.md"
+
+    # Only a report that passed its own gate becomes tomorrow's baseline (a
+    # regressed run must never rewrite the bar it will next be judged
+    # against — `success()` here is this composite's own steps, so a failed
+    # `gate` above already makes this false), never on a diff-scoped run
+    # (see orchestrate-ci.sh's own comment — a partial-corpus report is not
+    # a valid whole-project baseline), and never on a `pull_request` event —
+    # a PR run must not mutate the target branch's own baseline before the
+    # PR has even merged.
+    - name: Copy report.json into the baseline-cache path
+      if: inputs.mode == 'ci' && inputs.diff == '' && success() && github.event_name != 'pull_request'
+      shell: bash
+      env:
+        PROJECT_ROOT: ${{ steps.resolve-paths.outputs.project-root }}
+        BASELINE_DIR: ${{ steps.resolve-paths.outputs.baseline-dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$BASELINE_DIR"
+        cp "$PROJECT_ROOT/report.json" "$BASELINE_DIR/report.json"
+
+    # `cache-hit` (from the restore step) is only `true` on an *exact* key
+    # match — i.e. this exact commit's baseline was already saved by an
+    # earlier attempt of this same job. Skipping the save in that case is
+    # what makes a same-SHA workflow rerun safe: `actions/cache/save` errors
+    # on saving an already-existing key, so retrying a rerun without this
+    # guard would fail the job on this step alone, even after every real
+    # check passed (P13 review, item 11).
+    - name: Save mutation baseline
+      if: inputs.mode == 'ci' && inputs.diff == '' && success() && github.event_name != 'pull_request' && steps.restore-baseline.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
+        key: mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::${{ github.sha }}
+
+    # Copies only the four known report files into a flat, non-hidden
+    # staging directory first (P13 review, item 9): `.mutantkit/report.html`/
+    # `summary.md` live under a dotdir `actions/upload-artifact@v4` will not
+    # pick up without an explicit hidden-files flag, and the fix here is
+    # narrowing what gets uploaded to exactly these four files rather than
+    # widening the upload to `.mutantkit/**` (which would also upload
+    # run-locks, checkpoints, sandboxes — everything else this project's
+    # `.mutantkit/` accumulates). `always()`: a job that failed before `run`
+    # ever produced output should still finish red on its own step, not
+    # additionally fail this upload for having nothing to stage —
+    # `if-no-files-found: warn` below is the same reasoning one step later.
+    - name: Stage report artifacts
+      if: inputs.mode == 'ci' && always()
+      shell: bash
+      env:
+        PROJECT_ROOT: ${{ steps.resolve-paths.outputs.project-root }}
+      run: |
+        set -euo pipefail
+        "${{ github.action_path }}/Scripts/action/stage-artifacts.sh" \
+          "$PROJECT_ROOT" \
+          "$PROJECT_ROOT/report.json" \
+          "$PROJECT_ROOT/gate-result.json" \
+          "${{ runner.temp }}/mutantkit-artifact-staging"
+
+    - name: Upload mutation report artifacts
+      if: inputs.mode == 'ci' && always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/mutantkit-artifact-staging
+        if-no-files-found: warn

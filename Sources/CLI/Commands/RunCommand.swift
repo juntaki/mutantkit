@@ -23,6 +23,17 @@ struct RunCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Report formats. Overrides the config file.")
     var report: [String] = []
 
+    // Additive counterpart to `--report`: report formats *belong* to the
+    // project's `mutantkit.yml` (see `--report`'s own help text above), so a
+    // caller that only wants to make sure a couple of extra formats are
+    // produced — CI orchestration wiring `github-actions`/`ci-summary`
+    // reports on top of whatever a project already configures, say — should
+    // not have to first read that config file just to avoid clobbering it.
+    // `--report` keeps its existing override semantics unchanged; this is a
+    // second, independent flag, not a mode switch on the first one.
+    @Option(name: .long, help: "Additional report formats, appended to (and deduped against) --report/the config's reports.")
+    var alsoReport: [String] = []
+
     @Flag(name: .long, help: "Exit non-zero if any mutant survives.")
     var failOnSurvivors = false
 
@@ -49,9 +60,7 @@ struct RunCommand: AsyncParsableCommand {
 
         try ConfigurationPreflight.run(settings)
 
-        if !report.isEmpty {
-            settings.reports = try Self.resolvedReports(from: report)
-        }
+        settings.reports = try Self.resolvedFinalReports(configured: settings.reports, report: report, alsoReport: alsoReport)
 
         let planURL = URL(fileURLWithPath: plan)
         guard FileManager.default.fileExists(atPath: planURL.path) else {
@@ -550,6 +559,44 @@ struct RunCommand: AsyncParsableCommand {
             return resolvedDestination.destinationArgument
         }
         return configuredDestination ?? "auto"
+    }
+}
+
+/// `--report`/`--also-report` resolution, split out of the main struct body
+/// (a `type_body_length`-baselined file already at its cap) rather than
+/// inlined in `run()` — same motive as `resolveTestAdapter`/`lockIdentity`
+/// above: directly testable without a real project, and it keeps `run()`
+/// itself down to one line for this whole concern instead of two `if`s.
+extension RunCommand {
+    /// `report` (if given) replaces the config's own `reports:` outright,
+    /// exactly as it always has; `alsoReport` (if given) is then folded on
+    /// top *additively* — see `mergedReports` below. Called unconditionally
+    /// from `run()`; both being empty is the plain "just use the config"
+    /// case and returns `configured` untouched.
+    static func resolvedFinalReports(configured: [ReportKind], report: [String], alsoReport: [String]) throws -> [ReportKind] {
+        var reports = configured
+        if !report.isEmpty {
+            reports = try resolvedReports(from: report)
+        }
+        if !alsoReport.isEmpty {
+            reports = mergedReports(base: reports, additional: try resolvedReports(from: alsoReport))
+        }
+        return reports
+    }
+
+    /// `--also-report`'s entire effect: `base` with `additional` appended in
+    /// the order given, skipping any kind already present in `base` or
+    /// already added earlier in `additional` — so a CI wrapper that always
+    /// passes the same fixed list of kinds can never duplicate one the
+    /// project's own config already requested.
+    static func mergedReports(base: [ReportKind], additional: [ReportKind]) -> [ReportKind] {
+        var seen = Set(base)
+        var merged = base
+        for kind in additional where !seen.contains(kind) {
+            seen.insert(kind)
+            merged.append(kind)
+        }
+        return merged
     }
 }
 

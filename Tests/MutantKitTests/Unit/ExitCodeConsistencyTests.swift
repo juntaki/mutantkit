@@ -61,6 +61,49 @@ struct ExitCodeConsistencyTests {
         #expect(resolved == [.console, .json])
     }
 
+    // MARK: - --also-report: additive, not another override (P13 CI Action)
+
+    @Test("mergedReports appends additional kinds after the config's own, in order")
+    func mergedReportsAppendsInOrder() {
+        let merged = RunCommand.mergedReports(base: [.console, .sonar], additional: [.json, .html])
+        #expect(merged == [.console, .sonar, .json, .html])
+    }
+
+    @Test("mergedReports dedupes a kind already present in the config's own reports")
+    func mergedReportsDedupesAgainstBase() {
+        let merged = RunCommand.mergedReports(base: [.console, .json], additional: [.json, .html])
+        #expect(merged == [.console, .json, .html])
+    }
+
+    @Test("mergedReports dedupes repeats within --also-report itself")
+    func mergedReportsDedupesWithinAdditional() {
+        let merged = RunCommand.mergedReports(base: [.console], additional: [.json, .json, .html])
+        #expect(merged == [.console, .json, .html])
+    }
+
+    @Test("mergedReports with no additional kinds returns the config's own reports untouched")
+    func mergedReportsNoAdditionalIsIdentity() {
+        let merged = RunCommand.mergedReports(base: [.console, .json], additional: [])
+        #expect(merged == [.console, .json])
+    }
+
+    @Test("An unknown --also-report kind exits with MutantKitExit.operationalError, not a ValidationError")
+    func unknownAlsoReportKindExitsOperationally() throws {
+        #expect(throws: ExitCode(MutantKitExit.operationalError)) {
+            _ = try RunCommand.resolvedReports(from: ["not-a-real-report-kind"])
+        }
+    }
+
+    @Test("--also-report parses as a repeatable option distinct from --report")
+    func alsoReportParsesAsRepeatableOption() throws {
+        let command = try RunCommand.parse([
+            "--report", "console",
+            "--also-report", "json", "--also-report", "github-actions"
+        ])
+        #expect(command.report == ["console"])
+        #expect(command.alsoReport == ["json", "github-actions"])
+    }
+
     // MARK: - 2. Unwrapped decode failures → MutantKitExit.operationalError
 
     @Test("MutantKitExit.onFailure maps a plain thrown error to operationalError, explicitly")

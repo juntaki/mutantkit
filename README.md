@@ -66,8 +66,19 @@ swift build -c release
 
 ### In CI
 
-The tarball path (above) needs no Homebrew and no repo checkout — the same
-job that verifies a clean-machine install (`release.yml`) does exactly this:
+On GitHub Actions, the bundled composite action wraps the tarball recipe
+below (checksum-verified, attestation-verified) in one step:
+
+```yaml
+- uses: juntaki/mutantkit@v0.3.0   # pin an exact release tag
+```
+
+That is the entire effect — install, verify, add to `PATH`, stop. It is
+exactly what this action has always done (`mode: install`, the default) and
+never starts a mutation campaign on its own. See "Using the bundled GitHub
+Action" under [CI](#ci) below for the `mode: ci` variant that also runs
+doctor/plan/run/gate for you, and for anything not on GitHub Actions, the
+manual recipe:
 
 ```yaml
 - name: Install mutantkit
@@ -258,6 +269,96 @@ mutantkit reproduce mut_a1b2c3d4e5f6a7b8
 ```
 
 ## CI
+
+### Using the bundled GitHub Action
+
+`- uses: juntaki/mutantkit@<ref>` on its own (`mode: install`, the default —
+see "In CI" under [Install](#install)) only installs the binary. Add `mode:
+ci` to run doctor → plan → run → gate end to end against the checked-out
+project's own `mutantkit.yml`, with a persisted baseline for regression
+checks, a job summary, and a downloadable report artifact:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0        # only needed if you pass `diff:` below
+
+- uses: juntaki/mutantkit@v0.3.0
+  with:
+    mode: ci
+    diff: origin/main      # optional — scope planning to lines changed against this ref
+```
+
+This is the same doctor/plan/run/gate sequence as the manual recipe below —
+the action does not invent scope, thresholds, or report formats of its own.
+Thresholds and report formats still live entirely in the project's own
+`mutantkit.yml` (`qualityGate:`/`reports:`); the action only adds four report
+kinds it needs for its own summary/artifact (`json`, `github-actions`,
+`html`, `ci-summary`) *on top of* whatever the project already configured —
+it never replaces the project's `reports:` list.
+
+Inputs beyond `mode`/`version`/`diff`:
+
+| Input | Default | Notes |
+| --- | --- | --- |
+| `project-root` | `.` | Path to the project to test, for a monorepo or a checkout where MutantKit's project is not at the workspace root. Every `mode: ci` step (doctor/plan/run/gate, report paths, baseline cache, artifact staging) resolves this to one absolute path and is consistent about it. |
+| `config` | *(auto)* | Path to `mutantkit.yml`, if not at `<project-root>/mutantkit.yml`. Relative paths resolve against `project-root`. |
+| `artifact-name` | `mutantkit-report` | Give each invocation a unique name if a matrix, multiple jobs, or multiple invocations of this action run in the same workflow run — `actions/upload-artifact` errors on a name collision within one run. |
+| `baseline-scope` | *(empty)* | Extra text folded into the baseline cache key, on top of `project-root` and the target branch (already part of the key). Set this when one workflow run drives the action more than once for what would otherwise be an identical `project-root`/branch pair (e.g. a matrix dimension), so each invocation gets its own baseline. |
+| `attestation-token` | *(this job's own token)* | Only used to call `gh attestation verify` against MutantKit's own public build-provenance attestations — raises the API rate limit; not "authorization" to install anything. |
+
+**Version pinning.** An explicit `version:` always wins. Otherwise, pinning
+the action itself to a release tag also pins the binary — `uses:
+juntaki/mutantkit@v0.3.0` installs `v0.3.0`, no separate `version:` needed.
+Only a ref that is not itself a release tag (`uses: juntaki/mutantkit@main`,
+or a local `uses: ./` checkout of this repo) falls back to the floating
+`latest` GitHub Release, and says so with a visible `::warning::` in the
+log — that is the one case where the installed binary can change between two
+runs of an otherwise-unmodified workflow.
+
+**Scoping to a diff.** `diff: origin/main` needs that ref to actually be
+fetched — a plain `actions/checkout@v4` is a shallow, current-branch-only
+clone. Either `fetch-depth: 0` (shown above) or a narrower fetch (`git fetch
+origin main:refs/remotes/origin/main` with `fetch-depth: 1`) works; the
+action verifies the ref resolves before planning and fails immediately with
+an actionable message if it does not, rather than fetching one on your
+behalf or letting `mutantkit plan` fail confusingly several lines later. A
+diff-scoped run never applies a baseline for gate's regression checks (see
+below) — the project's own `mutantkit.yml` still owns thresholds and report
+formats.
+
+**Baseline.** On a non-`pull_request` run with no `diff:` set, a passing
+run's `report.json` is cached (`actions/cache`) and restored on the next run
+targeting the same branch/`project-root`/`baseline-scope`, so
+`qualityGate.regression`/`survived.newMaximum` have something to compare
+against. A diff-scoped mutation corpus is a strict subset of a whole-project
+one — its score has a different denominator — so a diff-scoped run never
+applies a restored baseline, cached or not; if `regression`/`survived` are
+configured, `gate` fails closed on the missing baseline rather than
+comparing mismatched scopes (see "Quality gate" below). A `pull_request` run
+never writes a new baseline, so a PR cannot mutate the target branch's own
+baseline before merging. A same-commit workflow rerun reuses its own
+already-saved baseline rather than erroring on a cache-key collision.
+
+**Reading the result.** The action's own exit code is `mutantkit gate`'s —
+`0` (passed), `1` (operational error: doctor/plan/run could not proceed, or
+`gate` itself could not read a report), `2` (integrity failure: the run
+completed but its invariants did not reconcile, so no score exists to
+gate), or `4` (a trusted report missed a configured threshold). The job
+summary ($GITHUB_STEP_SUMMARY) reports which case occurred without
+recomputing the verdict itself, and the artifact (`report.json`,
+`gate-result.json`, `report.html`, `summary.md`) is uploaded regardless of
+which one it was — a failing or inconclusive gate is exactly when you want
+the evidence.
+
+**Requires** the same macOS arm64 Apple Silicon runner (e.g. `macos-14`,
+`macos-15`) as every other use of this binary — see [Install](#install).
+
+### Manual CI recipe
+
+The action above is a thin wrapper around this — useful directly for a CI
+system other than GitHub Actions, or for a shape (sharding, a custom report
+pipeline) the action does not cover:
 
 ```bash
 mutantkit plan --output plan.json
