@@ -188,6 +188,50 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Routing a value through `env:` (below, and throughout this file) keeps
+    # it out of the *shell source itself*, but it can still reach two other
+    # newline-delimited formats downstream: `$GITHUB_OUTPUT` (Resolve project
+    # paths writes `project-root=$project_root` as one line per record — an
+    # embedded newline in the value forges an extra record, letting one
+    # input override an unrelated output) and a `::error::`/`::warning::`
+    # workflow-command annotation (this file's own error messages include
+    # some of these values verbatim — an embedded newline could start what
+    # looks like a second, forged command). None of these inputs has any
+    # legitimate reason to contain a CR or LF, so every one that reaches
+    # either format downstream is rejected here, before anything echoes any
+    # of them anywhere — closed by construction, not by remembering to
+    # escape output at each site that consumes it later.
+    - name: Reject input values containing a newline
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_PROJECT_ROOT: ${{ inputs.project-root }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_DIFF: ${{ inputs.diff }}
+        INPUT_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        INPUT_BASELINE_SCOPE: ${{ inputs.baseline-scope }}
+        INPUT_INTERNAL_TEST_BINARY_DIR: ${{ inputs.internal-test-binary-dir }}
+      run: |
+        set -euo pipefail
+        check_no_newline() {
+          local name="$1" value="$2"
+          case "$value" in
+            *$'\n'*|*$'\r'*)
+              echo "::error::input '$name' must not contain a newline." >&2
+              exit 1
+              ;;
+          esac
+        }
+        check_no_newline "mode" "$INPUT_MODE"
+        check_no_newline "version" "$INPUT_VERSION"
+        check_no_newline "project-root" "$INPUT_PROJECT_ROOT"
+        check_no_newline "config" "$INPUT_CONFIG"
+        check_no_newline "diff" "$INPUT_DIFF"
+        check_no_newline "artifact-name" "$INPUT_ARTIFACT_NAME"
+        check_no_newline "baseline-scope" "$INPUT_BASELINE_SCOPE"
+        check_no_newline "internal-test-binary-dir" "$INPUT_INTERNAL_TEST_BINARY_DIR"
+
     - name: Validate mode
       shell: bash
       # `env:`, never `${{ inputs.mode }}` interpolated directly into the

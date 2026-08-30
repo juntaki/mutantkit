@@ -162,6 +162,52 @@ jobs:
             exit 1
           fi
 
+  newline-in-input-rejected:
+    name: "An input value containing a newline fails closed (GITHUB_OUTPUT / workflow-command injection)"
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # `mode: install` on purpose — the newline-rejection step runs
+      # unconditionally, first, before anything else in the composite,
+      # regardless of mode. YAML's own double-quoted `\n` escape produces a
+      # real embedded newline in the resulting input value, the same shape
+      # a value trying to forge an extra `$GITHUB_OUTPUT` record or a second
+      # workflow-command annotation would need.
+      - name: "project-root containing an embedded newline"
+        id: newline-project-root
+        continue-on-error: true
+        uses: ./
+        with:
+          mode: install
+          project-root: "line-one\nproject-root=/hijacked"
+
+      - name: Assert it failed closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.newline-project-root.outcome }}" != "failure" ]; then
+            echo "::error::expected a project-root containing a newline to fail closed, got outcome '${{ steps.newline-project-root.outcome }}'" >&2
+            exit 1
+          fi
+
+      - name: "baseline-scope containing an embedded newline"
+        id: newline-baseline-scope
+        continue-on-error: true
+        uses: ./
+        with:
+          mode: install
+          baseline-scope: "line-one\nbaseline-applied=true"
+
+      - name: Assert it failed closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.newline-baseline-scope.outcome }}" != "failure" ]; then
+            echo "::error::expected a baseline-scope containing a newline to fail closed, got outcome '${{ steps.newline-baseline-scope.outcome }}'" >&2
+            exit 1
+          fi
+
   incompatible-cli-fails-closed:
     name: "mode: ci against a pre-P13 release fails at preflight, not mid-campaign"
     runs-on: macos-15
