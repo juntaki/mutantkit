@@ -316,6 +316,47 @@ struct SwiftTestingEventStreamParserTests {
         #expect(evidence.runEnded)
     }
 
+    @Test("A record missing its own top-level kind fails closed, not silently dropped")
+    func recordMissingTopLevelKindFailsClosed() {
+        let malformedRecord = """
+        {"payload":{"kind":"testEnded"},"version":0}
+        """
+        let stream = [StreamFixtures.runStarted, malformedRecord, StreamFixtures.runEndedPass].joined(separator: "\n")
+
+        guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected unsupported -- a record with no top-level kind must not silently vanish")
+            return
+        }
+    }
+
+    @Test("A record with a wrong-typed top-level kind fails closed, not silently dropped")
+    func recordWrongTypedTopLevelKindFailsClosed() {
+        let malformedRecord = """
+        {"kind":123,"payload":{"kind":"testEnded"},"version":0}
+        """
+        let stream = [StreamFixtures.runStarted, malformedRecord, StreamFixtures.runEndedPass].joined(separator: "\n")
+
+        guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected unsupported")
+            return
+        }
+    }
+
+    @Test("A record with an unrecognized string top-level kind is safely ignored")
+    func recordWithUnrecognizedTopLevelKindStringIsIgnored() throws {
+        let futureRecord = """
+        {"kind":"someFutureRecordKind","payload":{}, "version":0}
+        """
+        let stream = [StreamFixtures.runStarted, futureRecord, StreamFixtures.runEndedPass].joined(separator: "\n")
+
+        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected a parsed result -- a well-typed but unrecognized top-level record kind must not fail the stream")
+            return
+        }
+        #expect(evidence.runStarted)
+        #expect(evidence.runEnded)
+    }
+
     @Test("testIdentifier(fromEventStreamID:) strips the source-location suffix and matches swift test list's own shape")
     func testIdentifierStripsSourceLocationSuffix() throws {
         let identifier = try #require(
@@ -524,5 +565,29 @@ struct SwiftTestingEventStreamParserOutcomeTests {
         }
         let expected = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/parameterized(_:)")
         #expect(evidence.cancelledTests == [expected])
+    }
+
+    @Test("A testEnded message with an unrecognized symbol fails closed, even alongside a recognized pass symbol")
+    func testEndedUnrecognizedSymbolFailsClosedEvenAlongsidePass() {
+        // The actual gap this regression pins: an unknown symbol alone is
+        // already caught by the terminal-outcome check (no recognized
+        // outcome found), but sitting *alongside* a real "pass" symbol it
+        // would otherwise be silently accepted as an ordinary pass.
+        let functionID = "WidgetsTests.WidgetsTests/widgetA()"
+        let eventID = "\(functionID)/WidgetsTests.swift:6:6"
+        let unrecognizedSymbolEnded = """
+        {"kind":"event","payload":{"kind":"testEnded","testID":"\(eventID)","messages":[{"symbol":"pass","text":"a"},{"symbol":"fatalFutureThing","text":"b"}]},"version":0}
+        """
+        let stream = [
+            StreamFixtures.functionDeclaration(id: functionID, name: "widgetA()"),
+            StreamFixtures.runStarted,
+            StreamFixtures.testStarted(id: eventID),
+            unrecognizedSymbolEnded
+        ].joined(separator: "\n")
+
+        guard case .unsupported = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+            Issue.record("expected unsupported -- an unrecognized symbol must not ride along with a recognized pass")
+            return
+        }
     }
 }

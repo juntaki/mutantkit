@@ -65,6 +65,20 @@ enum SwiftTestingEventStreamParser {
     /// wrong field worse than refusing to.
     static let supportedRecordVersions: Set<Int> = [0]
 
+    /// `messages[].symbol` values Swift Testing's v0 event-stream schema
+    /// defines: `default`, `skip`, `pass`, `passWithKnownIssue`, `fail`,
+    /// `difference`, `warning`, `details`. A symbol outside this set is
+    /// unsupported evidence, not a forward-compatible extra: this parser
+    /// already pins `supportedRecordVersions` to `[0]` specifically so a
+    /// schema it has never seen fails closed rather than being silently
+    /// half-understood, and a message symbol is no different -- especially
+    /// since `recordTerminalOutcome` would otherwise still recognize a
+    /// `"pass"` symbol sitting *alongside* one it does not, and read that
+    /// as an ordinary pass.
+    static let supportedMessageSymbols: Set<String> = [
+        "default", "skip", "pass", "passWithKnownIssue", "fail", "difference", "warning", "details"
+    ]
+
     /// Event kinds this parser understands the shape of and validates
     /// strictly (required `testID` where noted, required `messages`). Any
     /// other `payload.kind` is treated as a schema extension this parser
@@ -181,6 +195,17 @@ enum SwiftTestingEventStreamParser {
             guard let version = record["version"] as? Int, supportedRecordVersions.contains(version) else {
                 throw UnsupportedEvidence(reason: "unrecognized or missing event-stream record version: \(record["version"] ?? "nil")")
             }
+            // A top-level `kind` missing or wrong-typed is malformed --
+            // this schema always carries one, well-typed, on every real
+            // line. Only a well-typed but genuinely *unrecognized* string
+            // (a future record kind Swift Testing's own forward-
+            // compatibility stance says to ignore) is safely skipped;
+            // "test"/"event" are handled by declarations(in:)/events(in:)
+            // themselves via the same `record["kind"] as? String` read.
+            guard let kind = record["kind"] as? String else {
+                throw UnsupportedEvidence(reason: "a record was missing its own top-level kind, or it was wrong-typed")
+            }
+            guard kind == "test" || kind == "event" else { continue }
             records.append(record)
         }
         return records
@@ -403,8 +428,11 @@ enum SwiftTestingEventStreamParser {
             throw UnsupportedEvidence(reason: "a \(eventKind) event was missing its own messages array")
         }
         for message in messages {
-            guard message["symbol"] is String, message["text"] is String else {
+            guard let symbol = message["symbol"] as? String, message["text"] is String else {
                 throw UnsupportedEvidence(reason: "a \(eventKind) event had a message with a missing/wrong-typed symbol or text")
+            }
+            guard supportedMessageSymbols.contains(symbol) else {
+                throw UnsupportedEvidence(reason: "a \(eventKind) event had a message with an unrecognized symbol: \(symbol)")
             }
         }
         return messages
