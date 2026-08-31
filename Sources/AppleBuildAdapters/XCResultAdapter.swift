@@ -797,11 +797,24 @@ struct TestSummaryJSON: Decodable {
         ///
         /// A crash is reported as an ordinary failure with a non-zero count, so the
         /// only thing separating it from `XCTAssertEqual failed:` is how Xcode
-        /// prefixes this field — it writes `Crash: xctest at <test>` for a signal or
-        /// trap. This reads a structured field of the result bundle, not the
+        /// prefixes this field. Two distinct, platform-specific wordings, both
+        /// confirmed against real captured `xcresult` bundles (never assumed to be
+        /// the same shape across platforms):
+        /// - macOS: `Crash: xctest at <test>` — `xctest` is the macOS command-line
+        ///   test runner's own process name.
+        /// - iOS Simulator: `Test crashed with signal <name>.` (e.g. `Test crashed
+        ///   with signal trap.` for a `fatalError`/trap) — there is no `xctest`
+        ///   process name to reference on this platform, and Xcode phrases the
+        ///   field entirely differently. Found live: the macOS-only prefix check
+        ///   alone let a real, reproduced iOS Simulator `fatalError` crash fall
+        ///   through unclassified (read as an ordinary assertion failure instead),
+        ///   silently skipping `confirmCrashKills`'s own confirmation pass for
+        ///   every iOS Simulator crash.
+        ///
+        /// Both read this same structured field of the result bundle, never the
         /// runner's console output.
         var isCrash: Bool {
-            failureText.hasPrefix("Crash:")
+            failureText.hasPrefix("Crash:") || failureText.hasPrefix("Test crashed with signal ")
         }
 
         /// Whether XCTest's own native per-test execution-time allowance

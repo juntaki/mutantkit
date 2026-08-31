@@ -90,6 +90,33 @@ struct XCResultAdapterTests {
     }
     """.utf8)
 
+    /// Captured live from a real iOS Simulator `xcodebuild test-without-building`
+    /// run against a `fatalError`-crashing test (F2-P0's own iOS-Simulator
+    /// schemata confirmation spike) — the platform-specific wording `isCrash`
+    /// did not originally recognize: no `xctest` process name (there is none
+    /// on this platform), phrased as "Test crashed with signal <name>." instead
+    /// of macOS's "Crash: ...".
+    private static let iosSimulatorCrashSummary = Data("""
+    {
+        "devicesAndConfigurations": [],
+        "expectedFailures": 0,
+        "failedTests": 1,
+        "passedTests": 0,
+        "result": "Failed",
+        "skippedTests": 0,
+        "testFailures": [
+            {
+                "failureText": "Test crashed with signal trap.",
+                "targetName": "CrashProbeTests",
+                "testIdentifier": 1,
+                "testIdentifierString": "CrashProbeTests/testCrash()",
+                "testName": "testCrash()"
+            }
+        ],
+        "totalTestCount": 1
+    }
+    """.utf8)
+
     /// A genuine failure alongside an unrelated system failure in the same
     /// bundle — contrived (xcresult has not been observed to mix these), but
     /// guards the `count == totalTestCount` condition: a real failure must
@@ -282,6 +309,12 @@ struct XCResultAdapterTests {
     @Test("A crash is still classified crashed, not caught by the system-failure check")
     func crashIsStillCrashed() throws {
         let outcome = try classify(Self.crashSummary)
+        #expect(outcome.status == .crashed)
+    }
+
+    @Test("An iOS Simulator crash (a different wording than macOS's) is still classified crashed")
+    func iosSimulatorCrashIsStillCrashed() throws {
+        let outcome = try classify(Self.iosSimulatorCrashSummary)
         #expect(outcome.status == .crashed)
     }
 
