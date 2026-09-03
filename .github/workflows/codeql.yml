@@ -16,22 +16,28 @@ name: CodeQL
 # plain-C target the SwiftPM package builds); python is Scripts/
 # compare-wave-reports.py; actions is this directory's own workflow YAML.
 #
-# `build-mode: manual` rather than `autobuild`: this is a multi-target
-# SwiftPM package with a plain-C target (MutantKitSchemataRuntimeC) wrapped
-# in a product with an explicit `type: .static`, not a single generic
-# executable — exactly the shape autobuild's build-system heuristics are
-# least reliable on. A manual `swift build` step (the same invocation
-# ci.yml's `unit` job already trusts to build the whole package, including
-# the C target) is both simpler to reason about and guaranteed to match how
-# this package actually builds. `build-mode` only governs the two compiled
-# languages (swift, c-cpp) — one `swift build` invocation traces both, since
-# the C target compiles as part of the same package build. python and
-# actions are interpreted/config languages CodeQL scans directly with no
-# build step, unaffected by build-mode.
+# Two jobs, not one: a first version tried to `init` all four languages
+# together under one `build-mode: manual` and failed outright --
+# `codeql database init` rejects that combination with "GitHub Actions does
+# not support the manual build mode. Please try ... none." `build-mode`
+# applies to the whole init call, but swift/c-cpp (compiled, need a real
+# build to trace) and python/actions (scanned directly, no build step ever
+# applies) need different values, so they cannot share one job:
+#   - analyze-compiled (macos-15, needs the real Xcode/Swift toolchain --
+#     CodeQL's Swift extractor only runs on macOS): languages: swift, c-cpp,
+#     build-mode: manual. One `swift build` (the same invocation ci.yml's
+#     `unit` job already trusts to build the whole package, including the C
+#     target) traces both compiled languages at once -- `autobuild` was
+#     rejected here for the same reason noted below.
+#   - analyze-scanned (ubuntu-latest -- no compiler involved, so the
+#     cheaper/faster Linux runner is strictly better, not just adequate):
+#     languages: python, actions, no build-mode (these never build).
 #
-# macos-15, matching ci.yml/release.yml: this needs the real Xcode/Swift
-# toolchain, not a Linux runner — CodeQL's Swift extractor only runs on
-# macOS.
+# `build-mode: manual` rather than `autobuild` on analyze-compiled: this is
+# a multi-target SwiftPM package with a plain-C target
+# (MutantKitSchemataRuntimeC) wrapped in a product with an explicit
+# `type: .static`, not a single generic executable — exactly the shape
+# autobuild's build-system heuristics are least reliable on.
 
 on:
   push:
@@ -52,8 +58,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  analyze:
-    name: Analyze
+  analyze-compiled:
+    name: Analyze (swift, c-cpp)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -64,11 +70,25 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
-          languages: actions, c-cpp, python, swift
+          languages: swift, c-cpp
           build-mode: manual
 
       - name: Build
         run: swift build
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+
+  analyze-scanned:
+    name: Analyze (python, actions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python, actions
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
