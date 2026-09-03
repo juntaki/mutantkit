@@ -5,19 +5,20 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0008 §5 item 8 / §4(d), amended by Addendum 4: a mid-chunk recovery
-/// rebuild (triggered by a forced timeout-kill) can itself fail in the same
-/// four shapes the *initial* per-chunk build already handles — sandbox-
-/// creation error, untyped build error, a typed `BuildFailure`, and a
-/// swallowed receipt-resolution failure — and each must route through the
-/// *same* handler the initial build already uses for every not-yet-finalized
-/// entry the rebuild was protecting, never a manufactured shortcut. Three of
-/// the four still must never automatically fall back to isolated mode
-/// (sandbox-creation error, untyped build error, receipt-resolution
-/// failure); the fourth — a typed `BuildFailure`, chunk-level evidence only —
-/// now does fall back to isolated mode as of Addendum 4, joining hang-budget
-/// overflow as a second, independent dynamic-fallback trigger, never a
-/// manufactured `.unviable`.
+/// ADR-0008 §5 item 8 / §4(d), amended by Addendum 4: a mid-chunk
+/// recovery rebuild (triggered by a forced timeout-kill) can itself fail in
+/// the same four shapes the *initial* per-chunk build already handles —
+/// sandbox-creation error, untyped build error, a typed `BuildFailure`, and a
+/// receipt-resolution failure — and each must route through the *same*
+/// handler the initial build already uses for every not-yet-finalized entry
+/// the rebuild was protecting, never a manufactured shortcut. Two of the
+/// four still must never automatically fall back to isolated mode (sandbox-
+/// creation error, untyped build error) — both stay `.infrastructureFailure`
+/// with no fallback. The other two — a typed `BuildFailure` (chunk-level
+/// evidence only, Addendum 4) and a receipt-resolution failure (no
+/// longer silently swallowed via `try?`) — both fall back to isolated mode,
+/// joining hang-budget overflow as further independent dynamic-fallback
+/// triggers, never a manufactured `.unviable`.
 @Suite("SchemataMutationRunner: ADR-0008 recovery-rebuild failure parity")
 struct SchemataMutationRunnerRecoveryRebuildFailureTests {
     // MARK: - Fixture: a 2-entry chunk, entry 0 always primary-times-out to trigger Trigger 1's mandatory rebuild
@@ -300,13 +301,13 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
         }
     }
 
-    // MARK: - Sub-case 4: build-receipt resolution fails during the rebuild (swallowed, not thrown)
+    // MARK: - Sub-case 4: build-receipt resolution fails during the rebuild (routes to isolated fallback, never absorbed)
 
     @Test("""
-    A recovery rebuild whose receipt resolution fails is absorbed as a nil receipt — entries proceed and are not auto-routed \
-    to fallback
+    A recovery rebuild whose receipt resolution fails routes every protected entry to dynamic isolated fallback \
+    (.buildReceiptUnavailable), never scored against an unproven receipt
     """)
-    func receiptResolutionFailureDuringRebuildIsAbsorbedAsNilReceipt() async throws {
+    func receiptResolutionFailureDuringRebuildRoutesToIsolatedFallback() async throws {
         let fixture = try ChunkFixture.make()
         let adapter = FakeSchemataAdapter()
         scriptEntry0TimesOut(fixture, adapter: adapter)
@@ -314,19 +315,25 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
 
         let result = try await run(fixture, adapter: adapter)
 
-        // Not a `.failed` `ChunkPreparationOutcome` at all — the rebuild's
-        // build step succeeds, only receipt resolution fails, swallowed via
-        // `try?` exactly like the initial build's own path. Both entries
-        // proceed and actually run against the rebuilt (receiptless)
-        // artifact, landing on the *same* "missing build receipt ->
-        // infrastructureFailure, no fallback" classification an existing,
-        // unrelated verifier-level test already pins for this exact chain
-        // shape (`MutationVerdictVerifierSchemataChainTests`, "G: passed +
-        // missing build receipt -> no fallback, stays infrastructureFailure").
-        #expect(result.isolatedFallbacks.isEmpty)
-        #expect(result.results.count == 2)
-        #expect(try outcome(for: fixture.sortedPoints[0].id, in: result).outcome == .infrastructureFailure)
-        #expect(try outcome(for: fixture.sortedPoints[1].id, in: result).outcome == .infrastructureFailure)
-        #expect(result.sharedChunkBuildFailureEvents.isEmpty, "receipt resolution failure is not a build failure and reports no event")
+        // The rebuild's build step succeeds, but receipt resolution
+        // throwing is no longer swallowed via `try?` into a `nil` receipt —
+        // it is now the same `ChunkPreparationOutcome.failed` shape as a
+        // typed `BuildFailure`, just with `.buildReceiptUnavailable` instead
+        // of `.sharedChunkBuildFailure`. Both protected entries are routed
+        // to isolated fallback, never scored against an unproven receipt.
+        #expect(result.results.isEmpty, "a receipt-unavailable fallback must not also leave a schemata-scored result behind")
+        #expect(Set(result.isolatedFallbacks.map(\.mutationID)) == Set(fixture.sortedPoints.map(\.id)))
+        for fallback in result.isolatedFallbacks {
+            #expect(fallback.reason == .buildReceiptUnavailable)
+        }
+        #expect(
+            result.sharedChunkBuildFailureEvents.isEmpty, "receipt resolution failure is not a compile failure and reports no such event"
+        )
+
+        let event = try #require(result.infrastructureFallbackEvents.first)
+        #expect(result.infrastructureFallbackEvents.count == 1, "one aggregate event, not one per affected entry")
+        #expect(event.chunkID == "chunk-A")
+        #expect(event.reason == .buildReceiptUnavailable)
+        #expect(event.affectedMutationCount == 2)
     }
 }

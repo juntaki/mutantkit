@@ -144,10 +144,6 @@ public enum ProcessSupervisorError: Error, CustomStringConvertible {
 ///    `kill(-pgid)` reach every descendant that stays in the group. `Process`
 ///    gives the child *our* group, where the same call would kill the tool itself.
 ///
-///    Necessary but not sufficient: a descendant may leave the group, and the one
-///    that does is `swiftpm-testing-helper`, which runs the mutated tests. See
-///    `wait(for:timeoutSeconds:gracePeriodSeconds:)` and `ProcessTree`.
-///
 /// 2. **No shell, ever.** Arguments are passed as an array straight to
 ///    `posix_spawn`. Nothing is concatenated into a command string, so no source
 ///    path, scheme name or destination can be interpreted as shell syntax.
@@ -155,6 +151,77 @@ public enum ProcessSupervisorError: Error, CustomStringConvertible {
 /// The timeout is ours, not the runner's. `xcodebuild` and `swift test` cannot be
 /// relied on to bound their own runtime, and the design requires that this tool
 /// always terminates.
+///
+/// ## Ownership contract (F3 zero-base review)
+///
+/// This type guarantees deterministic ownership and cleanup for:
+///
+/// - the supervised root process; and
+/// - every process that remains within the supervisor-owned process group
+///   (the group `POSIX_SPAWN_SETPGROUP` establishes at spawn time) through
+///   `closeOutOwnedGroup`'s own close-out.
+///
+/// A descendant that independently leaves that process group — calls its
+/// own `setsid()`/`setpgid()` — before this type has ever individually
+/// observed it via `detectRootExit`'s continuous ancestry polling is
+/// **outside** this guarantee. `swiftpm-testing-helper`, which actually
+/// runs a mutant's tests, is exactly this shape: it moves itself into a
+/// new process group on its own. Such an escaped descendant may still be
+/// found and cleaned up — `ProcessTree`'s own continuous polling, paired
+/// with the group signal, reaches it whenever the escape happened to be
+/// observed at least once before the root exited — but that discovery is
+/// **best-effort, not an invariant** of this unprivileged Darwin
+/// implementation: no available macOS API (a `kqueue`/`EVFILT_PROC`
+/// bounded spike found `NOTE_TRACK`/`NOTE_CHILD` — the one primitive that
+/// could make this atomic — `ENOTSUP` on Darwin, and bare `NOTE_FORK`
+/// carries no child-pid payload; Endpoint Security could, in principle,
+/// but requires a restricted entitlement no ordinary CLI can assume) lets
+/// this be closed for the case where the escape and the root's own exit
+/// land in the same, arbitrarily narrow observation window. See
+/// `Tests/MutantKitTests/Diagnostics
+/// /ProcessSupervisorEscapedDescendantOwnershipBoundaryDiagnostic.swift`
+/// for the deterministic proof of this exact boundary.
+///
+/// ## Remaining risks (F3 verdict-contamination audit)
+///
+/// Whether an escaped, undiscovered descendant surviving is *only* a
+/// resource-cleanup limitation, or can also contaminate a *different*,
+/// later mutation run's own evidence, was audited across every consumer
+/// of a `ProcessSupervisor`-run result. Two real, reproducible instances
+/// were found and fixed within F3, both in `MutationRunner`: a
+/// `retestKilledMutants` confirmation retest reran directly in the
+/// primary test's own sandbox, and `confirmTimeout`'s own internal
+/// same-artifact retest reran directly in its confirming rebuild's own
+/// sandbox. Both now retest in an independently-cloned workspace,
+/// established before the run being confirmed ever started — see
+/// `PreparedMutant.confirmationSandbox` and
+/// `MutationConfirmationCoordinator.timeoutInnerConfirmKillIfNeeded`. Regression-tested
+/// with real, group-escaped descendants continuously writing observable
+/// state (`MutationRunnerConfirmKillWorkspaceIsolationTests`,
+/// `MutationRunnerTimeoutConfirmationInnerRetestIsolationTests`).
+///
+/// One further path was probed and left unmitigated, as an **accepted,
+/// unproven limitation — not a proven-safe one**: on Darwin, an
+/// unobserved descendant may leave the supervisor-owned process group
+/// before root exit and survive close-out. In incremental-build mode
+/// (`MutationRunner.runIncrementalWorker`/`runIncrementalBuildWorkerSequential`/
+/// `runPipelinedBuildWorker`), worker sandboxes are intentionally reused
+/// across mutations; therefore such an escaped descendant could in
+/// principle retain access to a reused workspace. No deterministic
+/// cross-mutant verdict contamination was reproduced in F3, so automatic
+/// sandbox poisoning/recreation is not implemented — doing so on an
+/// unreproduced hypothesis would bake a large, unvalidated change into
+/// incremental-build's own execution contract (worker sandboxes are
+/// deliberately long-lived; the whole performance case for incremental
+/// mode depends on that). If such contamination is reproduced, the
+/// affected worker sandbox must no longer be considered reusable.
+///
+/// Trigger for reopening this — all three, together, actually
+/// reproduced: an escaped process from mutant A, *plus* observable
+/// write/read interference in mutant B's own reused workspace, *plus* a
+/// resulting change to mutant B's build/test/classification evidence. An
+/// escaped process existing on its own, with no shown effect on another
+/// mutant's evidence, does not meet this bar.
 public enum ProcessSupervisor {
     /// How long to keep reading a killed process's output before giving up on it.
     ///
@@ -163,16 +230,84 @@ public enum ProcessSupervisor {
     private static let drainGracePeriodSeconds: Double = 5
 
     /// The descendant-tracking poll interval on an unloaded machine — see
-    /// `wait(for:timeoutSeconds:gracePeriodSeconds:)`'s own doc comment for
+    /// `wait(for:policy:)`'s own doc comment for
     /// the measurements behind this specific number.
-    private static let baselinePollIntervalMicroseconds: useconds_t = 1000
-    /// The ceiling `wait(for:timeoutSeconds:gracePeriodSeconds:)`'s adaptive
+    static let baselinePollIntervalMicroseconds: useconds_t = 1000
+    /// The ceiling `wait(for:policy:)`'s adaptive
     /// backoff will not exceed, however slow `sysctl(KERN_PROC_ALL)` itself
     /// gets under load — still an order of magnitude tighter than the
     /// original design's 100 ms fixed throttle, so even a fully backed-off
     /// poll remains meaningfully better than the gap this feature exists to
     /// close, never literally unbounded.
-    private static let maxPollIntervalMicroseconds: useconds_t = 50000
+    static let maxPollIntervalMicroseconds: useconds_t = 50000
+
+    /// F3 zero-base review Finding 2: a test-only observation seam, never
+    /// read by any production code path. Records the exact ordering of
+    /// the events the PID-reuse safety contract depends on — every
+    /// `-pid`/process-group signal must happen before the final, consuming
+    /// reap that frees `pid` for the kernel to recycle — so a deterministic
+    /// regression test can assert that ordering directly (see
+    /// `ProcessSupervisorZeroBaseReviewFindingsTests`) instead of trying to
+    /// force an actual PID-reuse collision, which no portable API can do on
+    /// demand.
+    ///
+    /// Deliberately **not** process-global mutable state (an earlier
+    /// version of this was a single `static var`, flagged in review:
+    /// concurrent `ProcessSupervisor.run` invocations — real, ordinary
+    /// usage, not a test-only edge case — would all have observed and
+    /// mutated the same one hook, corrupting each other's event logs and
+    /// introducing a genuine data race this codebase's own concurrency
+    /// model has no other reason to need). Instead threaded through
+    /// `SupervisionPolicy` below like every other per-invocation setting,
+    /// via the `internal`-only `run(...)` overload beneath the public one
+    /// — each invocation captures its own, independent hook closure (or
+    /// `nil`, the overwhelming common case, costing one already-cheap
+    /// optional-closure call per event site), so nothing here is shared
+    /// across invocations at all.
+    enum LifecycleEvent: Equatable {
+        case groupSignal(pid: pid_t, signal: Int32)
+        case finalReap(pid: pid_t)
+    }
+
+    /// F3: Swift Task cancellation must own-tree-teardown exactly like a
+    /// timeout — never leave the underlying blocking thread to run out its
+    /// own `timeoutSeconds` regardless of the calling Task's own fate. This
+    /// blocking implementation has no cooperative suspension points of its
+    /// own to check `Task.isCancelled` at, so `withTaskCancellationHandler`'s
+    /// `onCancel` (which fires synchronously, from whatever thread requests
+    /// cancellation, the instant it happens — including *before*
+    /// `operation` ever starts, if the task was already cancelled) is the
+    /// only way in: it flips this shared, lock-protected flag, which
+    /// `wait(for:...)`'s own poll loop below checks every tick alongside its
+    /// existing deadline check, breaking out into the *identical*
+    /// TERM → grace → KILL escalation an absolute timeout already uses —
+    /// one mechanism, two triggers, never two independently-maintained
+    /// teardown paths (see this function's own doc comment). Once that
+    /// teardown (and the same bounded, EOF-driven drain wait every other
+    /// path already goes through) completes, `run` rethrows
+    /// `CancellationError` rather than returning a `ProcessResult` at all —
+    /// matching this codebase's own established convention
+    /// (`SimulatorPool.attemptBoot`'s identical "a `CancellationError` is
+    /// rethrown as-is, never folded into an ordinary result" rule) — so a
+    /// caller's own `try await` naturally keeps propagating cancellation
+    /// instead of receiving a `ProcessResult` that merely *looks* like an
+    /// ordinary timeout.
+    final class CancellationFlag: @unchecked Sendable {
+        private var flag = false
+        private let lock = NSLock()
+
+        func cancel() {
+            lock.lock()
+            flag = true
+            lock.unlock()
+        }
+
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return flag
+        }
+    }
 
     public static func run(
         executable: String,
@@ -183,60 +318,115 @@ public enum ProcessSupervisor {
         terminationGracePeriodSeconds: Double = 5,
         stallDetection: StallDetection? = nil
     ) async throws -> ProcessResult {
-        try await withCheckedThrowingContinuation { continuation in
-            // A dedicated thread: the supervision loop blocks, and we must not
-            // occupy a cooperative-pool thread while a build runs for minutes.
-            let thread = Thread {
-                do {
-                    let result = try runBlocking(
-                        executable: executable,
-                        arguments: arguments,
-                        workingDirectory: workingDirectory,
-                        environment: environment,
-                        timeoutSeconds: timeoutSeconds,
-                        terminationGracePeriodSeconds: terminationGracePeriodSeconds,
-                        stallDetection: stallDetection
-                    )
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(throwing: error)
+        try await run(
+            executable: executable, arguments: arguments, workingDirectory: workingDirectory,
+            environment: environment, timeoutSeconds: timeoutSeconds,
+            terminationGracePeriodSeconds: terminationGracePeriodSeconds, stallDetection: stallDetection,
+            lifecycleEventHook: nil
+        )
+    }
+
+    /// The real implementation behind the public `run(...)` above —
+    /// `internal`, not `private`, purely so a test can supply
+    /// `lifecycleEventHook` (see its own doc comment) via `@testable
+    /// import`; every ordinary caller goes through the public overload,
+    /// which always passes `nil`.
+    static func run(
+        executable: String,
+        arguments: [String],
+        workingDirectory: URL,
+        environment: [String: String],
+        timeoutSeconds: Double,
+        terminationGracePeriodSeconds: Double = 5,
+        stallDetection: StallDetection? = nil,
+        lifecycleEventHook: (@Sendable (LifecycleEvent) -> Void)?
+    ) async throws -> ProcessResult {
+        let cancellationFlag = CancellationFlag()
+        return try await withTaskCancellationHandler(
+            operation: {
+                try await withCheckedThrowingContinuation { continuation in
+                    // A dedicated thread: the supervision loop blocks, and we must not
+                    // occupy a cooperative-pool thread while a build runs for minutes.
+                    let thread = Thread {
+                        do {
+                            let result = try runBlocking(
+                                executable: executable,
+                                arguments: arguments,
+                                workingDirectory: workingDirectory,
+                                environment: environment,
+                                policy: SupervisionPolicy(
+                                    timeoutSeconds: timeoutSeconds,
+                                    terminationGracePeriodSeconds: terminationGracePeriodSeconds,
+                                    stallDetection: stallDetection,
+                                    cancellationFlag: cancellationFlag,
+                                    lifecycleEventHook: lifecycleEventHook
+                                )
+                            )
+                            if cancellationFlag.isCancelled {
+                                continuation.resume(throwing: CancellationError())
+                            } else {
+                                continuation.resume(returning: result)
+                            }
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                    thread.stackSize = 512 * 1024
+                    // `wait(for:...)`'s own doc comment already documents the one gap its
+                    // polling design cannot fully close: a descendant forked and its
+                    // parent exiting within the same single poll tick. That window is
+                    // ~1 ms on an idle machine, but this thread has no scheduling
+                    // priority over anything else by default -- under heavy contention
+                    // (many concurrent test-spawned processes competing for very few
+                    // cores, the exact shape of a GitHub Actions macOS runner under full
+                    // Swift Testing parallelism), the OS scheduler can leave this thread
+                    // waiting to run for far longer than 1 ms between iterations,
+                    // stretching that documented gap wide enough to matter in practice
+                    // (observed for real: `ProcessSupervisorResidueTests`'s
+                    // process-group-escape scenario intermittently failing in CI even
+                    // after the residue-check's own timing was independently hardened).
+                    // `.userInteractive` asks the scheduler to run this loop promptly
+                    // whenever it is runnable, the same signal used for anything whose
+                    // job is to react within a tight latency budget -- it does not
+                    // close the gap outright (no polling design can, short of a kernel
+                    // event source), but it materially narrows it by keeping this
+                    // thread's own scheduling latency out of the equation.
+                    thread.qualityOfService = .userInteractive
+                    thread.start()
                 }
+            },
+            onCancel: {
+                cancellationFlag.cancel()
             }
-            thread.stackSize = 512 * 1024
-            // `wait(for:...)`'s own doc comment already documents the one gap its
-            // polling design cannot fully close: a descendant forked and its
-            // parent exiting within the same single poll tick. That window is
-            // ~1 ms on an idle machine, but this thread has no scheduling
-            // priority over anything else by default -- under heavy contention
-            // (many concurrent test-spawned processes competing for very few
-            // cores, the exact shape of a GitHub Actions macOS runner under full
-            // Swift Testing parallelism), the OS scheduler can leave this thread
-            // waiting to run for far longer than 1 ms between iterations,
-            // stretching that documented gap wide enough to matter in practice
-            // (observed for real: `ProcessSupervisorResidueTests`'s
-            // process-group-escape scenario intermittently failing in CI even
-            // after the residue-check's own timing was independently hardened).
-            // `.userInteractive` asks the scheduler to run this loop promptly
-            // whenever it is runnable, the same signal used for anything whose
-            // job is to react within a tight latency budget -- it does not
-            // close the gap outright (no polling design can, short of a kernel
-            // event source), but it materially narrows it by keeping this
-            // thread's own scheduling latency out of the equation.
-            thread.qualityOfService = .userInteractive
-            thread.start()
-        }
+        )
     }
 
     // MARK: - Blocking implementation
+
+    /// Bundles the supervision-policy parameters `runBlocking`/`wait` share
+    /// — everything that governs *how long* to wait and *how* to notice the
+    /// caller wants out, as opposed to *what* to run — into one value.
+    /// Keeps `runBlocking`'s own parameter count from growing every time a
+    /// new supervision trigger (like F3's `cancellationFlag`) is added
+    /// alongside the pre-existing `timeoutSeconds`/
+    /// `terminationGracePeriodSeconds`/`stallDetection`.
+    struct SupervisionPolicy {
+        let timeoutSeconds: Double
+        let terminationGracePeriodSeconds: Double
+        let stallDetection: StallDetection?
+        let cancellationFlag: CancellationFlag
+        /// See `LifecycleEvent`'s own doc comment — `nil` for every
+        /// ordinary caller, a per-invocation closure only ever set by a
+        /// test going through the `internal` `run(...)` overload.
+        let lifecycleEventHook: (@Sendable (LifecycleEvent) -> Void)?
+    }
 
     private static func runBlocking(
         executable: String,
         arguments: [String],
         workingDirectory: URL,
         environment: [String: String],
-        timeoutSeconds: Double,
-        terminationGracePeriodSeconds: Double,
-        stallDetection: StallDetection? = nil
+        policy: SupervisionPolicy
     ) throws -> ProcessResult {
         var outPipe: [Int32] = [0, 0]
         var errPipe: [Int32] = [0, 0]
@@ -308,8 +498,61 @@ public enum ProcessSupervisor {
         // POSIX_SPAWN_SETPGROUP with group 0 makes the child its own group
         // leader, so its pgid equals its pid. This is the entire basis for
         // being able to kill the whole subtree later.
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        //
+        // POSIX_SPAWN_SETSIGMASK / POSIX_SPAWN_SETSIGDEF, F3 zero-base
+        // review: `posix_spawn` otherwise inherits the *calling thread's*
+        // signal mask into the new process — and the dedicated `Thread`
+        // `run(...)` spawns this blocking work onto has `SIGTERM` blocked
+        // on *that thread* (confirmed directly: `pthread_sigmask` reports
+        // it blocked there — apparently held blocked by this test binary's
+        // own GCD/Swift-Testing signal-handling infrastructure on its own
+        // worker threads, not something this codebase set deliberately,
+        // and not necessarily true of every thread in the process). A
+        // blocked signal is queued pending, never delivered, until the
+        // receiving thread unblocks it — so every process this spawns, and
+        // everything it in turn forks (inheriting the same mask), silently
+        // never actually acted on a SIGTERM this code sent, no matter how
+        // many times: only SIGKILL (which cannot be blocked) ever took
+        // effect, which is exactly what made `closeOutOwnedGroup`'s
+        // TERM-first escalation measurably indistinguishable from "wait
+        // out the full grace period, then KILL" for *every* prompt-exit
+        // descendant that needed it — a real, confirmed root cause, not a
+        // hypothesis (a C-language reproduction outside Swift with an
+        // unblocked mask reliably kills such a descendant; the identical
+        // scenario run *inside* this test binary, mask uninspected, did
+        // not, and matched exactly once this fix's own mask/disposition
+        // reset was added — see
+        // `ProcessSupervisorSpawnedProcessSignalStateTests` for the
+        // regression this pins directly).
+        //
+        // Deliberately narrower than "start with an empty mask entirely":
+        // only `SIGTERM` — the one signal this codebase's own escalation
+        // contract (`TERM -> grace -> KILL`) depends on actually being
+        // deliverable — is forced into a known-good state; every other
+        // signal's mask bit is left exactly as the calling thread already
+        // had it, so this does not silently change behavior this fix was
+        // never asked to touch. `POSIX_SPAWN_SETSIGDEF` covers the other
+        // half of the same hazard `SETSIGMASK` alone cannot: an *ignored*
+        // (`SIG_IGN`, not merely blocked) `SIGTERM` disposition is also
+        // inherited across `exec`, and a masked-but-not-ignored signal
+        // becoming unmasked would still do nothing if its disposition was
+        // `SIG_IGN` — resetting it to `SIG_DFL` here guarantees the
+        // spawned process starts able to be terminated by `SIGTERM` the
+        // ordinary way, independent of whatever this test binary's own
+        // process-wide disposition happens to be for unrelated reasons.
+        // The spawned program remains completely free to install its own
+        // handler or re-block/re-ignore `SIGTERM` after it starts (Mode D,
+        // `runIgnoringSIGTERM`, exercises exactly that) — grace-then-KILL
+        // is what covers that case, unaffected by any of this.
+        var spawnSignalMask = sigset_t()
+        pthread_sigmask(0, nil, &spawnSignalMask)
+        sigdelset(&spawnSignalMask, SIGTERM)
+        var sigtermOnly = sigset_t()
+        sigemptyset(&sigtermOnly); sigaddset(&sigtermOnly, SIGTERM)
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
         posix_spawnattr_setpgroup(&attributes, 0)
+        posix_spawnattr_setsigmask(&attributes, &spawnSignalMask)
+        posix_spawnattr_setsigdefault(&attributes, &sigtermOnly)
 
         var pid: pid_t = 0
         let argv = CStringArray([executable] + arguments)
@@ -339,46 +582,93 @@ public enum ProcessSupervisor {
         drain(outPipe[0], into: outBox, group: drainGroup)
         drain(errPipe[0], into: errBox, group: drainGroup)
 
-        let (status, timedOut, stalled) = wait(
-            for: pid,
-            timeoutSeconds: timeoutSeconds,
-            gracePeriodSeconds: terminationGracePeriodSeconds,
-            stallDetection: stallDetection
-        )
+        // F3 zero-base review, Findings 2 & 3: `detectRootExit` below only
+        // ever *peeks* at whether `pid` has exited (`waitid(...,
+        // WNOWAIT)`), never reaps it — `pid` is guaranteed to remain
+        // reserved (not recyclable to an unrelated process, and in
+        // particular not recyclable as an unrelated process-group leader,
+        // since forming a new group requires `setpgid`'s pgid argument to
+        // equal the creating process's own, still-occupied pid) for as
+        // long as this function defers the real, consuming reap below.
+        // Every `-pid`/process-group signal in this function — whichever
+        // of the three paths below sends one — happens strictly before
+        // that deferred reap, never after.
+        var pollIntervalMicroseconds = baselinePollIntervalMicroseconds
+        let detected = detectRootExit(for: pid, policy: policy, pollIntervalMicroseconds: &pollIntervalMicroseconds)
+        var observed = detected.observed
 
-        // Bounded, never `wait()`. The drain ends when every writer closes the
-        // pipe, and a process that escaped the kill still holds one — so an
-        // unbounded wait makes a single surviving grandchild hang the supervisor
-        // permanently. That is the failure this type exists to prevent, so it must
-        // not be reachable from inside it. Anything not drained by now is output
-        // from a process that outlived a SIGKILL, and is not worth waiting on —
-        // but whether that happened must never be discarded the way a bare
-        // `_ = ...wait(...)` would: `.success` is the only outcome that proves
-        // `outBox`/`errBox` below hold everything the process wrote: a
-        // `.timedOut` outcome means some writer — the process itself or
-        // something else still holding its pipe open — had not been drained to
-        // EOF when this deadline passed, so whatever bytes were captured so far
-        // must be treated as possibly truncated, not as the complete record.
-        let drainOutcome = drainGroup.wait(timeout: .now() + drainGracePeriodSeconds)
-        // `drainOutcome == .success` only proves the drain loops *exited* —
-        // both a real EOF (`read()` returning `0`) and a genuine `read()`
-        // error (`errno != EINTR`, rare on a real pipe, but real) break the
-        // identical loop the identical way and signal this group the
-        // identical way. Only the former is actual proof every byte the
-        // writer produced was seen; the latter is a read failure that says
-        // nothing about whether the writer was done. `reachedEOF` is set
-        // only on the `count == 0` branch (see `drain` below), so both must
-        // be true, independently, for either stream to count as evidence.
-
-        let exitCode: Int32
-        var terminatingSignal: Int32?
-        if status & 0x7F == 0 {
-            exitCode = (status >> 8) & 0xFF
-        } else {
-            terminatingSignal = status & 0x7F
-            // Mirror the shell convention so a signalled process still reads as failure.
-            exitCode = 128 + (status & 0x7F)
+        var drainOutcome: DispatchTimeoutResult = .timedOut
+        if detected.rootExitedOnItsOwn {
+            // Root exited before any deadline/cancellation/stall fired —
+            // give the drain its own fair, bounded chance to reach EOF
+            // *before* any signal is sent, exactly as F3 Phase 5 requires:
+            // a same-group descendant that legitimately finishes writing
+            // to the inherited pipe after confirming root has exited must
+            // never be preempted by an eager kill (an earlier version of
+            // this fix called `ProcessTree.reap(observed)` immediately on
+            // detecting root's exit and reproduced exactly that flake —
+            // `ProcessSupervisorOutputCompletenessTests
+            // .descendantSentinelWrittenAfterRootExitIsCapturedComplete`
+            // failed 1 of 3 runs). Unlike a single, uninterruptible
+            // `drainGroup.wait(timeout:)` call, `waitForDrain` below polls
+            // in short slices so a cancellation arriving mid-wait (F3
+            // zero-base review Finding 3) breaks out immediately into
+            // ownership close-out below, rather than silently waiting out
+            // the rest of `drainGracePeriodSeconds` the way the previous
+            // implementation measurably did (~5s, confirmed by
+            // `ProcessSupervisorZeroBaseReviewFindingsTests
+            // .cancellationAfterRootExitEscalatesPromptlyRatherThanWaitingOutTheDrain`).
+            drainOutcome = waitForDrain(
+                drainGroup, timeoutSeconds: drainGracePeriodSeconds, cancellationFlag: policy.cancellationFlag
+            )
         }
+
+        // Ownership close-out: TERM -> bounded grace -> KILL if still
+        // alive, on the original process group and every individually
+        // tracked identity — unconditional, run every time, regardless of
+        // `detected.rootExitedOnItsOwn` or of whether the drain above
+        // already succeeded. For a same-group descendant that neither
+        // writes to nor holds the monitored pipe at all (e.g. one that
+        // redirects its own stdio elsewhere), the drain already reached
+        // EOF with nothing left to interrupt, and this is a pure,
+        // unconditional cleanup pass — proven directly by
+        // `ProcessSupervisorResidueTests.promptExitReapsAChildInTheSameGroup`'s
+        // own fixture, a hard `RED` the one time this was gated on the
+        // drain's own outcome instead. Safe regardless of *when* it runs
+        // relative to the drain above because `pid` has still not been
+        // reaped either way — see this function's own comment above.
+        closeOutOwnedGroup(pid: pid, observed: &observed, policy: policy, pollIntervalMicroseconds: &pollIntervalMicroseconds)
+
+        // Only now — strictly after every signal above — does root's pid
+        // become reusable.
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
+        policy.lifecycleEventHook?(.finalReap(pid: pid))
+
+        let timedOut = !detected.rootExitedOnItsOwn
+        let stalled = detected.stalled
+
+        // The drain did not already get (or did not survive) its own fair
+        // chance above — either root never exited on its own (a real
+        // timeout/cancellation while it was still running) or it did but
+        // the wait above ran out. A short, bounded second check now that
+        // ownership close-out has actually run is what lets the EOF a
+        // forced KILL should now produce actually be observed; if nothing
+        // reachable this way was actually holding the pipe (e.g.
+        // `ForcedIncompleteOutputFixture`'s deliberately non-descendant,
+        // group-escaped holder nothing here can ever reach), this second
+        // wait still times out and `outputComplete` correctly stays
+        // `false` below — a documented, deliberate F3 scope boundary (see
+        // `ProcessSupervisorResidueTests
+        // .promptExitReapsAChildThatEscapedItsProcessGroup`'s own doc
+        // comment), not something this silently papers over.
+        if drainOutcome != .success {
+            drainOutcome = drainGroup.wait(timeout: .now() + 2)
+        }
+
+        let terminatingSignal: Int32? = status & 0x7F == 0 ? nil : status & 0x7F
+        // Mirror the shell convention so a signalled process still reads as failure.
+        let exitCode: Int32 = status & 0x7F == 0 ? (status >> 8) & 0xFF : 128 + (status & 0x7F)
 
         return ProcessResult(
             exitCode: exitCode,
@@ -390,181 +680,6 @@ public enum ProcessSupervisor {
             stalled: stalled,
             outputComplete: drainOutcome == .success && outBox.reachedEOF && errBox.reachedEOF
         )
-    }
-
-    /// Waits for the child, tracking its descendants continuously so any of
-    /// them still running once the child itself is gone — whether it exited
-    /// promptly on its own or had to be killed on a timeout — can be
-    /// reclaimed either way, escalating SIGTERM → SIGKILL only for the
-    /// child itself on a timeout.
-    ///
-    /// **Why continuous tracking, not a single snapshot.** The process group
-    /// is the first defense but cannot be the only one: spawning the child as
-    /// a group leader makes `kill(-pgid)` reach everything that stays in that
-    /// group, and some things do not — SwiftPM's `swiftpm-testing-helper`
-    /// puts *itself* into a new group, so the process actually running the
-    /// mutated tests is unreachable that way. Measured: after killing the
-    /// group of a mutant whose test loops forever, the helper survived with
-    /// `PGID == PID` and `PPID == 1`, still burning half a core, and still
-    /// holding the write end of our stdout pipe, so EOF never arrived and the
-    /// supervisor itself blocked forever draining it. A *second*, independent
-    /// gap sits beside that one: this same escape is reachable from a process
-    /// that exits *promptly* too (a crash, not only a hang) — a snapshot
-    /// taken only once, at the moment of a timeout, never fires at all on
-    /// that path, so a descendant left behind by an otherwise-ordinary,
-    /// on-time exit was previously never even looked for. Fixing that
-    /// requires knowing the tree *before* the root is gone, since ancestry is
-    /// the only proof a descendant is really ours, and it disappears the
-    /// instant the root exits (reparented to launchd). **How fast that
-    /// window closes was measured directly, not assumed, and the answer
-    /// forced the polling interval below far tighter than the original
-    /// `waitpid` loop's own 10 ms:** a script that forks a background child
-    /// and then exits can complete that *entire* round trip — including a
-    /// fresh `python3` interpreter's own startup — in under 10 ms often
-    /// enough that 10 ms polling missed the descendant roughly 9 times out
-    /// of 10 in repeated real trials; even 5 ms polling still missed it
-    /// more often than not. 2 ms was the first interval that caught it
-    /// reliably (10/10), so this polls at 1 ms — one safety margin below
-    /// that measured threshold, not an arbitrarily "tight-sounding" number.
-    /// This is not a throttle-vs-correctness judgment call left to
-    /// intuition: an earlier version of this fix polled every 100 ms
-    /// specifically to bound `sysctl(KERN_PROC_ALL)` overhead, reasoning
-    /// that the *existing* 10 ms `waitpid` cadence already had "plenty of
-    /// spare time" above it — measurement disproved that reasoning outright,
-    /// not just the number chosen. The cost side was measured too, not just
-    /// the correctness side: `sysctl(KERN_PROC_ALL)` on real hardware costs
-    /// on the order of 0.1 ms per call, so 1 ms polling spends roughly a
-    /// tenth of this function's own dedicated supervisor thread (already a
-    /// separate `Thread`, never the cooperative pool) continuously polling
-    /// — a real, bounded cost paid by one monitoring thread, not by the
-    /// supervised build/test process itself, and not something that slows
-    /// the actual work down on any machine with more than one core.
-    /// Accumulating every identity `ProcessTree.descendantIdentities(of:)`
-    /// observes across every poll (not just the latest snapshot) is what
-    /// makes that ancestry proof available *after* the root is already
-    /// gone: `ProcessTree.reap(_:)` re-verifies each one (PID *and*
-    /// recorded start time, surviving PID reuse) against the live table
-    /// before ever signalling it, so nothing here trades that safety away
-    /// for the tighter window. The one gap this cannot close is a
-    /// descendant spawned and the root exiting within the same ~1 ms tick —
-    /// bounded, not eliminated, the same shape of limitation the original
-    /// single-snapshot design already had (a descendant spawned between
-    /// that snapshot and the kill call), just far smaller and covering the
-    /// entire run now instead of a single instant.
-    ///
-    /// **Adaptive, not a fixed 1 ms forever.** Flagged in review: a fixed
-    /// interval with no floor on the *cost* of a single poll has no circuit
-    /// breaker if `sysctl(KERN_PROC_ALL)` itself becomes slow — a large
-    /// process table under real system load, not the light table this
-    /// interval was measured against. `pollDescendants` below times its own
-    /// `descendantIdentities(of:)` call and backs the interval off
-    /// (doubling, capped at `maxPollIntervalMicroseconds`) whenever a single
-    /// poll's own cost meaningfully exceeds the current interval, and relaxes
-    /// back toward the 1 ms baseline once polls are cheap again — so a
-    /// contended machine degrades this loop's own overhead gracefully
-    /// instead of hammering an already-slow `sysctl` at a fixed cadence
-    /// regardless of what that cadence now actually costs.
-    private static func wait(
-        for pid: pid_t,
-        timeoutSeconds: Double,
-        gracePeriodSeconds: Double,
-        stallDetection: StallDetection? = nil
-    ) -> (status: Int32, timedOut: Bool, stalled: Bool) {
-        var status: Int32 = 0
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        var observed: Set<ProcessTree.ProcessIdentity> = []
-        var pollIntervalMicroseconds = baselinePollIntervalMicroseconds
-
-        func pollDescendants() {
-            let pollStarted = Date()
-            observed.formUnion(ProcessTree.descendantIdentities(of: pid))
-            let pollDurationMicroseconds = Date().timeIntervalSince(pollStarted) * 1_000_000
-            if pollDurationMicroseconds > Double(pollIntervalMicroseconds) {
-                pollIntervalMicroseconds = min(pollIntervalMicroseconds * 2, maxPollIntervalMicroseconds)
-            } else if pollIntervalMicroseconds > baselinePollIntervalMicroseconds {
-                pollIntervalMicroseconds = max(pollIntervalMicroseconds / 2, baselinePollIntervalMicroseconds)
-            }
-        }
-
-        // Gate 3 Phase H10: tracks `stallDetection.progressFilePath`'s own
-        // size — deliberately just a byte count, not any understanding of
-        // what the file contains — resetting `lastProgressAt` whenever it
-        // grows, checked no more often than `checkIntervalSeconds` so this
-        // never adds meaningful overhead to the tight descendant-polling
-        // loop above. `nil` `stallDetection` (every caller before this
-        // phase, and every caller that does not opt in) makes this whole
-        // block dead code — `lastStallCheckAt`/`lastProgressSize` never
-        // read, `isStalled()` never called.
-        func progressFileSize() -> Int64? {
-            guard let stallDetection else { return nil }
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: stallDetection.progressFilePath.path) else {
-                return nil
-            }
-            return attributes[.size] as? Int64
-        }
-
-        var lastProgressSize = progressFileSize() ?? 0
-        var lastProgressAt = Date()
-        var lastStallCheckAt = Date()
-
-        func isStalled() -> Bool {
-            guard let stallDetection else { return false }
-            let now = Date()
-            guard now.timeIntervalSince(lastStallCheckAt) >= stallDetection.checkIntervalSeconds else { return false }
-            lastStallCheckAt = now
-            if let currentSize = progressFileSize(), currentSize > lastProgressSize {
-                lastProgressSize = currentSize
-                lastProgressAt = now
-                return false
-            }
-            return now.timeIntervalSince(lastProgressAt) >= stallDetection.stallTimeoutSeconds
-        }
-
-        var stalledCause = false
-
-        while true {
-            pollDescendants()
-            if waitpid(pid, &status, WNOHANG) == pid {
-                // An on-time, non-timeout exit — the path a single
-                // at-deadline snapshot could never reach at all.
-                ProcessTree.reap(observed)
-                return (status, false, false)
-            }
-
-            if Date() >= deadline { break }
-            if isStalled() {
-                stalledCause = true
-                break
-            }
-            // 1 ms baseline, not the coarser granularity a build's own
-            // timeout would suggest is "plenty" — see this function's own
-            // doc comment for the measurements that ruled out every coarser
-            // fixed interval tried, and for why this adapts upward under load.
-            usleep(pollIntervalMicroseconds)
-        }
-
-        // Politely first, to the group and to anything that left it —
-        // `reap(_:)` re-verifies provenance before this ever reaches a
-        // stale/reused PID, so a SIGTERM is exactly as safe to send here as
-        // the SIGKILL below.
-        kill(-pid, SIGTERM)
-        ProcessTree.signal(observed, SIGTERM)
-
-        let graceDeadline = Date().addingTimeInterval(gracePeriodSeconds)
-        while Date() < graceDeadline {
-            pollDescendants()
-            if waitpid(pid, &status, WNOHANG) == pid {
-                // The process we launched is gone; its escapees need not be.
-                ProcessTree.reap(observed)
-                return (status, true, stalledCause)
-            }
-            usleep(pollIntervalMicroseconds)
-        }
-
-        kill(-pid, SIGKILL)
-        ProcessTree.reap(observed)
-        waitpid(pid, &status, 0)
-        return (status, true, stalledCause)
     }
 
     /// The three ways a single `read()` call on a drained pipe fd can end
@@ -626,65 +741,4 @@ public enum ProcessSupervisor {
     }
 }
 
-// MARK: - Support
-
-/// Accumulates pipe output from a drain thread.
-private final class DataBox: @unchecked Sendable {
-    private var storage = Data()
-    /// Set only when this stream's drain loop observed real EOF
-    /// (`read() == 0`) — never on a `read()` error. See `drain`'s own
-    /// comments and `ProcessResult.outputComplete`'s doc comment for why
-    /// the two must stay distinguishable.
-    private var eofReached = false
-    private let lock = NSLock()
-
-    func append(_ data: Data) {
-        lock.lock()
-        storage.append(data)
-        lock.unlock()
-    }
-
-    func markEOF() {
-        lock.lock()
-        eofReached = true
-        lock.unlock()
-    }
-
-    var value: Data {
-        lock.lock()
-        defer { lock.unlock() }
-        return storage
-    }
-
-    var reachedEOF: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return eofReached
-    }
-}
-
-/// Holds a NULL-terminated `char *[]` alive for the duration of a spawn.
-///
-/// The buffer is heap-allocated rather than bridged from a Swift `Array`:
-/// taking a pointer to an array's storage yields one valid only for that
-/// expression, and `posix_spawn` needs it to survive the whole call.
-private final class CStringArray {
-    let pointers: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
-    private let capacity: Int
-
-    init(_ strings: [String]) {
-        capacity = strings.count + 1
-        pointers = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: capacity)
-        for (index, string) in strings.enumerated() {
-            pointers[index] = strdup(string)
-        }
-        pointers[strings.count] = nil
-    }
-
-    deinit {
-        for index in 0 ..< (capacity - 1) {
-            free(pointers[index])
-        }
-        pointers.deallocate()
-    }
-}
+// Support types (`DataBox`, `CStringArray`) live in ProcessSupervisorSupport.swift.

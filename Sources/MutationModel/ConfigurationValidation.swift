@@ -530,7 +530,8 @@ public enum ConfigurationJSONSchema {
             "earlyAbortSelectedTests": { "type": "boolean" },
             "testBatchSize": { "type": ["integer", "null"], "minimum": 1 },
             "noOpCanarySampleRate": { "type": "number", "minimum": 0, "maximum": 1 },
-            "simulatorPool": { "type": "boolean" }
+            "simulatorPool": { "type": "boolean" },
+            "sharedModuleCache": { "type": "boolean" }
           }
         },
         "timeouts": {

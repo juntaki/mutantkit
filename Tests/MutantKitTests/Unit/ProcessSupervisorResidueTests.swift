@@ -266,32 +266,42 @@ struct ProcessSupervisorResidueTests {
     /// scenario up to `maxAttempts` times, returning as soon as one attempt
     /// reports no survivors.
     ///
-    /// Exists for exactly one documented, pre-existing architectural
-    /// limitation, not new to this session: `ProcessSupervisor.wait()`'s
-    /// own doc comment already admits a descendant forked and its parent
-    /// exiting within the same single poll tick cannot be caught by
-    /// provenance tracking, since ancestry — the only proof a descendant is
-    /// ours — is severed the instant the parent exits. A real public-CI
-    /// investigation (`Research/mutation-testing-hardening-2026-08/
-    /// PROGRESS.md`) confirmed this empirically, not just theoretically: a
-    /// real run's own residue check still found a survivor after a
-    /// genuinely generous 60-second poll (`eventuallyNoSurvivors`'s own
-    /// `timeoutSeconds` above) — proof the kill was never issued at all (a
-    /// true miss, not a slow reap), since no amount of *waiting* fixes a
-    /// kill that never happened. Only a *fresh* attempt (a new process
-    /// pair, a new independent chance for the poll loop to actually observe
-    /// the fork) can — `scenario` must generate fresh marker/process state
-    /// each call, never reuse a failed attempt's own state.
+    /// F3 (`ProcessSupervisor` deterministic ownership) closed this race
+    /// **structurally** for any descendant that stays in the supervised
+    /// root's own process group: `ProcessSupervisor.runBlocking`'s prompt-exit
+    /// path now unconditionally sends `kill(-pid, SIGKILL)` to the whole
+    /// process group once root has exited — after giving the post-exit
+    /// drain its own first, bounded, fair chance to reach EOF on its own —
+    /// in addition to the pre-existing provenance-tracked reap. A
+    /// group-kill reaches a member process by its PGID alone — a
+    /// kernel-tracked attribute independent of
+    /// whether continuous polling ever individually *observed* that
+    /// descendant, and independent of the original group leader's own
+    /// lifetime — so it no longer matters whether the fork-then-parent-exit
+    /// race lands inside or outside a poll tick. Proven race-free under
+    /// genuine concurrent contention (not just a single sequential trial,
+    /// which is misleadingly always-green even pre-fix on an uncontended
+    /// machine) by `ProcessSupervisorOwnershipTests
+    /// .fastParentExitUnderConcurrentContention` — 0 survivors across 200+
+    /// concurrent attempts, using a *tighter* race construction than the
+    /// scripts here (a blocking pipe handshake minimizing root's own delay
+    /// before exit, vs. the plain `Popen`-then-`SystemExit` shape below).
+    /// Per F3 Phase 10, retry is removed at every call site below whose
+    /// descendant stays in the root's own process group.
     ///
-    /// This does not weaken what these tests prove for the ordinary case —
-    /// reaping still must succeed, and quickly, on every attempt that
-    /// doesn't hit this specific race — it only stops one documented,
-    /// pre-existing, adversarial-timing edge case from being a hard CI
-    /// failure. Production code's own outer timeout/supervisor safety nets
-    /// (Gate 3/4) are unaffected by this test-only accommodation. A proper
-    /// fix, if ever pursued, needs its own dedicated design work on the
-    /// reaping/provenance mechanism itself — out of scope for a CI-green
-    /// checkpoint.
+    /// One call site — `promptExitReapsAChildThatEscapedItsProcessGroup` —
+    /// still uses this helper, because it remains genuinely unaddressed:
+    /// a `setsid()`-escaped descendant has no PGID in common with the root,
+    /// so the group-kill above cannot reach it, and reaping still depends
+    /// entirely on continuous provenance polling having observed it before
+    /// the root exited — the exact single-poll-tick race this helper was
+    /// originally written for. F3's own explicit scope (see its Phase 4
+    /// non-goals) forbids expanding the ownership mechanism to cover
+    /// session/group-escaping descendants absent a real, observed necessity
+    /// in this codebase's actual spawned toolchains (none was found) — so
+    /// this remaining race is a deliberate, documented F3 scope boundary,
+    /// not an oversight. `scenario` must generate fresh marker/process
+    /// state each call, never reuse a failed attempt's own state.
     private func retryingKnownForkRaceWindow(
         maxAttempts: Int = 3, _ scenario: () async throws -> [String]
     ) async rethrows -> [String] {
@@ -344,26 +354,24 @@ struct ProcessSupervisorResidueTests {
     @Test("A promptly-exiting process that already forked a background child in its own process group: the child is reaped")
     func promptExitReapsAChildInTheSameGroup() async throws {
         // No group/session escape here: this child stays in the supervised
-        // process's own group, the ordinary case. It must still be reaped —
-        // the prompt-exit path never sends any group signal at all (that
-        // only happens on the timeout branch), so only the new continuous
-        // descendant tracking can catch this one. Retried per
-        // `retryingKnownForkRaceWindow`'s own doc comment — see there for
-        // why. `exitCode`/`timedOut` are asserted every attempt, never
-        // retried: those are a different invariant entirely and any real
-        // failure there must still fail the test immediately.
-        let survivors = try await retryingKnownForkRaceWindow {
-            let marker = markerPath("same-group-child")
-            let result = try await ProcessSupervisor.run(
-                executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: marker)],
-                workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
-            )
-            #expect(result.exitCode == 1)
-            #expect(!result.timedOut)
-            defer { killByMarker(marker); try? FileManager.default.removeItem(atPath: marker) }
-            return await eventuallyNoSurvivors(referencing: marker)
-        }
-        #expect(survivors.isEmpty, "residue left behind by a prompt exit, across repeated fresh attempts: \(survivors)")
+        // process's own group, the ordinary case. The prompt-exit path now
+        // unconditionally sends a group-kill (`kill(-pid, SIGKILL)`) once
+        // root has exited (after the post-exit drain's own first, bounded,
+        // fair chance to reach EOF on its own), in addition to the
+        // pre-existing provenance-tracked reap — a structural guarantee
+        // independent of polling timing, not a retried race. See
+        // `retryingKnownForkRaceWindow`'s doc comment for why this is no
+        // longer wrapped in it.
+        let marker = markerPath("same-group-child")
+        let result = try await ProcessSupervisor.run(
+            executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: marker)],
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
+        )
+        #expect(result.exitCode == 1)
+        #expect(!result.timedOut)
+        defer { killByMarker(marker); try? FileManager.default.removeItem(atPath: marker) }
+        let survivors = await eventuallyNoSurvivors(referencing: marker)
+        #expect(survivors.isEmpty, "residue left behind by a prompt exit: \(survivors)")
     }
 
     // MARK: - Item 5: a child that escapes into its own process group, on a prompt exit
@@ -377,9 +385,17 @@ struct ProcessSupervisorResidueTests {
         // still finds it because ancestry (ppid), not group membership, is
         // what it walks — this test exists to confirm the *reap* step
         // (provenance-verified kill) also reaches a group-escaped process
-        // when the exit is prompt, not just when it's a timeout. Retried
-        // per `retryingKnownForkRaceWindow`'s own doc comment — see there
-        // for why.
+        // when the exit is prompt, not just when it's a timeout.
+        //
+        // Still retried, deliberately, per `retryingKnownForkRaceWindow`'s
+        // own (now-narrowed) doc comment: F3's group-kill mechanism cannot
+        // reach a `setsid()`-escaped descendant (no shared PGID), so this
+        // scenario — unlike its same-group sibling above — still depends
+        // entirely on continuous provenance polling having observed the
+        // fork before the root exited. F3's explicit scope forbids handling
+        // session/group escapes further absent real, observed necessity in
+        // this codebase's own spawned toolchains (none was found), so this
+        // is a deliberate, documented boundary, not an unresolved bug.
         let survivors = try await retryingKnownForkRaceWindow {
             let marker = markerPath("escaped-group-child")
             let script = """
@@ -423,55 +439,51 @@ struct ProcessSupervisorResidueTests {
 
         // A supervised process with a real, *different* descendant of its
         // own — proving reaping is actually exercised in this test, not
-        // skipped because nothing was ever observed. Retried per
-        // `retryingKnownForkRaceWindow`'s own doc comment — see there for
-        // why.
-        let ownSurvivors = try await retryingKnownForkRaceWindow {
-            let ownMarker = markerPath("own")
-            _ = try await ProcessSupervisor.run(
-                executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: ownMarker)],
-                workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
-            )
-            defer { killByMarker(ownMarker); try? FileManager.default.removeItem(atPath: ownMarker) }
-            return await eventuallyNoSurvivors(referencing: ownMarker)
-        }
+        // skipped because nothing was ever observed. Same-group child: no
+        // retry needed — see `retryingKnownForkRaceWindow`'s doc comment
+        // for why F3's group-kill makes this a structural guarantee.
+        let ownMarker = markerPath("own")
+        _ = try await ProcessSupervisor.run(
+            executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: ownMarker)],
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
+        )
+        defer { killByMarker(ownMarker); try? FileManager.default.removeItem(atPath: ownMarker) }
+        let ownSurvivors = await eventuallyNoSurvivors(referencing: ownMarker)
         #expect(unrelated.isRunning, "an unrelated process must never be killed just because it shares an executable name")
-        #expect(ownSurvivors.isEmpty, "the supervised process's own descendant should have been reaped, across repeated fresh attempts")
+        #expect(ownSurvivors.isEmpty, "the supervised process's own descendant should have been reaped")
     }
 
     // MARK: - Item 7: repeated invocations do not leak provenance between runs
 
     @Test("Two sequential invocations each reap only their own descendant, with no leakage between them")
     func repeatedInvocationsDoNotLeakProvenance() async throws {
-        // Each leg retried independently per `retryingKnownForkRaceWindow`'s
-        // own doc comment — see there for why. A fresh marker every attempt
-        // (including within one leg's own retries) keeps run A and run B
-        // independent regardless of how many attempts either needed.
-        let survivorsA = try await retryingKnownForkRaceWindow {
-            let markerA = markerPath("run-a")
-            let resultA = try await ProcessSupervisor.run(
-                executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: markerA)],
-                workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
-            )
-            #expect(resultA.exitCode == 1)
-            defer { killByMarker(markerA); try? FileManager.default.removeItem(atPath: markerA) }
-            return await eventuallyNoSurvivors(referencing: markerA)
-        }
-        #expect(survivorsA.isEmpty, "run A's own descendant must be reaped after run A, across repeated fresh attempts")
-
-        let survivorsB = try await retryingKnownForkRaceWindow {
-            let markerB = markerPath("run-b")
-            let resultB = try await ProcessSupervisor.run(
-                executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: markerB)],
-                workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
-            )
-            #expect(resultB.exitCode == 1)
-            defer { killByMarker(markerB); try? FileManager.default.removeItem(atPath: markerB) }
-            return await eventuallyNoSurvivors(referencing: markerB)
-        }
-        #expect(
-            survivorsB.isEmpty,
-            "run B's own descendant must be reaped after run B, independently of run A, across repeated fresh attempts"
+        // Both legs are same-group children — no retry needed, per
+        // `retryingKnownForkRaceWindow`'s doc comment. A fresh marker each
+        // leg keeps run A and run B independent.
+        let markerA = markerPath("run-a")
+        let resultA = try await ProcessSupervisor.run(
+            executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: markerA)],
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
         )
+        #expect(resultA.exitCode == 1)
+        let survivorsA: [String]
+        do {
+            defer { killByMarker(markerA); try? FileManager.default.removeItem(atPath: markerA) }
+            survivorsA = await eventuallyNoSurvivors(referencing: markerA)
+        }
+        #expect(survivorsA.isEmpty, "run A's own descendant must be reaped after run A")
+
+        let markerB = markerPath("run-b")
+        let resultB = try await ProcessSupervisor.run(
+            executable: "/usr/bin/python3", arguments: ["-c", backgroundingScript(marker: markerB)],
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: Self.promptExitTimeoutSeconds
+        )
+        #expect(resultB.exitCode == 1)
+        let survivorsB: [String]
+        do {
+            defer { killByMarker(markerB); try? FileManager.default.removeItem(atPath: markerB) }
+            survivorsB = await eventuallyNoSurvivors(referencing: markerB)
+        }
+        #expect(survivorsB.isEmpty, "run B's own descendant must be reaped after run B, independently of run A")
     }
 }

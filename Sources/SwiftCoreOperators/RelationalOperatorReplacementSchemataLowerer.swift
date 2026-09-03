@@ -85,6 +85,14 @@ public struct RelationalOperatorReplacementSchemataLowerer: SchemataLowerer {
         guard !OperatorExclusions.isInsideResultBuilderBody(Syntax(resolved.infix)) else {
             return .isolatedOnly(reason: .resultBuilderBody)
         }
+        // `while 5 < 10 { }` compiles with no trailing return, the
+        // same reachability fact `while true` does — see
+        // `OperatorExclusions.isInsideLoopConditionExpressionTree`'s own
+        // doc comment for the confirmed-empirically-broader hazard this
+        // guards against.
+        guard !OperatorExclusions.isInsideLoopConditionExpressionTree(Syntax(resolved.infix)) else {
+            return .isolatedOnly(reason: .controlFlowConstant)
+        }
         // `try`/`await` can wrap the *whole* comparison (`try (a < throwingB())`)
         // rather than sitting inside either operand — an operand-only check
         // would miss that shape. Checked here, at the infix level, in

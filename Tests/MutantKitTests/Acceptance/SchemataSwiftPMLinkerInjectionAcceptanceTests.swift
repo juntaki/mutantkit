@@ -15,10 +15,9 @@ import Testing
 /// in; that is not a viable path for a real user's existing project (this
 /// tool cannot rewrite someone else's `Package.swift` to add a dependency
 /// on MutantKit's own repo). This suite proves the actual mechanism a real
-/// integration must use instead: `-Xlinker -L<dir> -Xlinker
-/// -lMutantKitSchemataRuntime` appended to the command line, the SwiftPM
-/// analogue of the Xcode path's `OTHER_LDFLAGS`/`LIBRARY_SEARCH_PATHS`
-/// build-setting overrides (`SchemataXcodeRuntimeAcceptanceTests`) — same
+/// integration must use instead: `-Xlinker <archivePath>` appended to the
+/// command line, the SwiftPM analogue of the Xcode path's `OTHER_LDFLAGS`
+/// build-setting override (`SchemataXcodeRuntimeAcceptanceTests`) — same
 /// "no manifest edit" discipline, proven the same way: a real build
 /// against a project that has no idea MutantKit exists.
 ///
@@ -90,10 +89,10 @@ struct SchemataSwiftPMLinkerInjectionAcceptanceTests {
     /// flags survive whatever product `swift build` produces, matching
     /// what a schemata build actually needs (a runnable binary, whether it
     /// is a plain executable here or a real test bundle in production).
-    private func buildWithInjectedLinkerFlags(at directory: URL, libraryDirectory: URL) throws {
+    private func buildWithInjectedLinkerFlags(at directory: URL, archivePath: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["swift", "build"] + SwiftPMLinkerInjector.extraArguments(libraryDirectory: libraryDirectory)
+        process.arguments = ["swift", "build"] + SwiftPMLinkerInjector.extraArguments(archivePath: archivePath)
         process.currentDirectoryURL = directory
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -151,7 +150,7 @@ struct SchemataSwiftPMLinkerInjectionAcceptanceTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let located = try SchemataRuntimeLibraryLocator.locate(for: .macOS)
-        try buildWithInjectedLinkerFlags(at: directory, libraryDirectory: located.libraryDirectory)
+        try buildWithInjectedLinkerFlags(at: directory, archivePath: located.archivePath)
 
         let unmutated = try runSpikeExecutable(at: directory, environment: [:])
         #expect(unmutated.output.contains("ORIGINAL"), "no requested token must behave exactly like the original program")
@@ -259,11 +258,11 @@ struct SchemataSwiftPMLinkerInjectionAcceptanceTests {
     /// Builds the test bundle (`--build-tests`) with the injected linker
     /// flags — this is the step whose link behavior Stage 2's orchestration
     /// actually depends on, not the plain-executable case above.
-    private func buildTestsWithInjectedLinkerFlags(at directory: URL, libraryDirectory: URL) throws {
+    private func buildTestsWithInjectedLinkerFlags(at directory: URL, archivePath: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
         process.arguments = ["swift", "build", "--build-tests"] +
-            SwiftPMLinkerInjector.extraArguments(libraryDirectory: libraryDirectory)
+            SwiftPMLinkerInjector.extraArguments(archivePath: archivePath)
         process.currentDirectoryURL = directory
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -309,7 +308,7 @@ struct SchemataSwiftPMLinkerInjectionAcceptanceTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let located = try SchemataRuntimeLibraryLocator.locate(for: .macOS)
-        try buildTestsWithInjectedLinkerFlags(at: directory, libraryDirectory: located.libraryDirectory)
+        try buildTestsWithInjectedLinkerFlags(at: directory, archivePath: located.archivePath)
 
         let unmutated = try runTestBundle(at: directory, environment: [:])
         #expect(unmutated.testsPassed, "no requested token must behave exactly like the original program:\n\(unmutated.output)")

@@ -69,6 +69,13 @@ public struct SchemataMutationRunner: Sendable {
         /// is, not diluted into what would otherwise look like many
         /// unremarkable individual fallbacks with no visible shared cause.
         public let sharedChunkBuildFailureEvents: [SharedChunkBuildFailureEvent]
+        /// The identical fan-out/observability shape as
+        /// `sharedChunkBuildFailureEvents`, for `SchemataInfrastructureFallbackEvent`
+        /// instead — currently, a chunk whose own build succeeded but whose
+        /// build receipt could not be resolved (`.buildReceiptUnavailable`).
+        /// Every `MutationID` such a chunk covered still appears,
+        /// individually, in `isolatedFallbacks` above.
+        public let infrastructureFallbackEvents: [SchemataInfrastructureFallbackEvent]
     }
 
     /// One shared schemata chunk build (initial or mid-chunk recovery
@@ -88,6 +95,33 @@ public struct SchemataMutationRunner: Sendable {
             self.chunkID = chunkID
             self.affectedMutationCount = affectedMutationCount
             self.diagnosticReference = diagnosticReference
+        }
+    }
+
+    /// One shared-chunk-level infrastructure condition (currently: the
+    /// chunk's own build succeeded, but the compilation-unit-to-built-image
+    /// receipt could not be resolved for it) that sent every `MutationID`
+    /// it covers to isolated fallback — the same "one aggregate event per
+    /// occurrence, never one per affected `MutationID`" shape
+    /// `SharedChunkBuildFailureEvent` already uses, kept as a distinct type
+    /// (not folded into that one) because the *meaning* is different: this
+    /// is not a compile failure at all, the chunk built and is otherwise
+    /// usable, only its receipt could not be established. `reason` is
+    /// carried explicitly (rather than being implied by which event type
+    /// this is, the way `SharedChunkBuildFailureEvent` implies "compile
+    /// failure") so this type can grow further infrastructure-only fallback
+    /// causes later without becoming a second flavor of `SharedChunkBuildFailureEvent`.
+    public struct SchemataInfrastructureFallbackEvent: Sendable, Hashable {
+        public let chunkID: String
+        public let reason: SchemataFallbackReason
+        public let affectedMutationCount: Int
+        public let diagnosis: String
+
+        public init(chunkID: String, reason: SchemataFallbackReason, affectedMutationCount: Int, diagnosis: String) {
+            self.chunkID = chunkID
+            self.reason = reason
+            self.affectedMutationCount = affectedMutationCount
+            self.diagnosis = diagnosis
         }
     }
 
@@ -121,6 +155,18 @@ public struct SchemataMutationRunner: Sendable {
         /// on a mutation this same shared coverage data already knew was
         /// unreachable).
         case knownUncovered
+        /// The chunk's own shared build succeeded, but the compilation-
+        /// unit-to-built-image receipt required to prove which built image
+        /// this chunk's mutations actually reached could not be resolved
+        /// (`SchemataBuildable.resolveSchemataBuildReceipt` threw, or
+        /// resolved ambiguously). Never scored as if the receipt were
+        /// simply absent (`receipt: nil` silently proceeding) — a build
+        /// whose own image identity cannot be proven is schemata-unusable
+        /// for every `MutationID` it covers, the same all-or-nothing
+        /// discipline `.sharedChunkBuildFailure` already applies to a
+        /// genuine compile failure, applied here to a different
+        /// infrastructure failure with the identical consequence.
+        case buildReceiptUnavailable
     }
 
     /// One mutation this run could not prove activation for from schemata
@@ -378,6 +424,7 @@ public struct SchemataMutationRunner: Sendable {
         // accumulation order as the old `for program in programs` loop.
         var entryOutcomes: [EntryRunOutcome] = []
         var buildFailureEvents: [SharedChunkBuildFailureEvent] = []
+        var infrastructureFallbackEvents: [SchemataInfrastructureFallbackEvent] = []
         let workerCount = max(1, workers)
 
         await withTaskGroup(of: ChunkTaskOutcome.self) { group in
@@ -396,6 +443,7 @@ public struct SchemataMutationRunner: Sendable {
             while let result = await group.next() {
                 entryOutcomes.append(contentsOf: result.outcomes)
                 buildFailureEvents.append(contentsOf: result.buildFailureEvents)
+                infrastructureFallbackEvents.append(contentsOf: result.infrastructureFallbackEvents)
                 if let program = remainingPrograms.next() {
                     group.addTask {
                         await self.runChunkTracked(
@@ -443,7 +491,8 @@ public struct SchemataMutationRunner: Sendable {
             .sorted { $0.mutationID.rawValue < $1.mutationID.rawValue }
         return Outcome(
             baseline: baseline, results: results, multiTargetVerdicts: verdicts, isolatedFallbacks: isolatedFallbacks,
-            sharedChunkBuildFailureEvents: buildFailureEvents
+            sharedChunkBuildFailureEvents: buildFailureEvents,
+            infrastructureFallbackEvents: infrastructureFallbackEvents
         )
     }
 
@@ -506,6 +555,7 @@ public struct SchemataMutationRunner: Sendable {
     private struct ChunkTaskOutcome: Sendable {
         let outcomes: [EntryRunOutcome]
         let buildFailureEvents: [SharedChunkBuildFailureEvent]
+        let infrastructureFallbackEvents: [SchemataInfrastructureFallbackEvent]
     }
 
     /// One task-group child's whole lifecycle: run the chunk with a live
@@ -547,7 +597,10 @@ public struct SchemataMutationRunner: Sendable {
         // not something the current single consumer can be made to expose a
         // passing-vs-failing test for.
         await tracker.fold(in: Set(chunkResult.outcomes.map(\.mutationID)))
-        return ChunkTaskOutcome(outcomes: chunkResult.outcomes, buildFailureEvents: chunkResult.buildFailureEvents)
+        return ChunkTaskOutcome(
+            outcomes: chunkResult.outcomes, buildFailureEvents: chunkResult.buildFailureEvents,
+            infrastructureFallbackEvents: chunkResult.infrastructureFallbackEvents
+        )
     }
 
     /// How many of `programs`' own (embedded) entries exist for each
@@ -762,8 +815,31 @@ public struct SchemataMutationRunner: Sendable {
     private struct ChunkRunResult {
         let outcomes: [EntryRunOutcome]
         let buildFailureEvents: [SharedChunkBuildFailureEvent]
+        let infrastructureFallbackEvents: [SchemataInfrastructureFallbackEvent]
 
-        static let empty = ChunkRunResult(outcomes: [], buildFailureEvents: [])
+        static let empty = ChunkRunResult(outcomes: [], buildFailureEvents: [], infrastructureFallbackEvents: [])
+
+        init(
+            outcomes: [EntryRunOutcome], buildFailureEvents: [SharedChunkBuildFailureEvent],
+            infrastructureFallbackEvents: [SchemataInfrastructureFallbackEvent]
+        ) {
+            self.outcomes = outcomes
+            self.buildFailureEvents = buildFailureEvents
+            self.infrastructureFallbackEvents = infrastructureFallbackEvents
+        }
+
+        /// Positional convenience for `runEntries`'s own several early-return
+        /// sites, which repeatedly reconstruct this from the same three
+        /// loop-local accumulators — the keyword form's three long labels
+        /// made every one of those sites needlessly wide.
+        init(
+            _ outcomes: [EntryRunOutcome], _ buildFailureEvents: [SharedChunkBuildFailureEvent],
+            _ infrastructureFallbackEvents: [SchemataInfrastructureFallbackEvent]
+        ) {
+            self.outcomes = outcomes
+            self.buildFailureEvents = buildFailureEvents
+            self.infrastructureFallbackEvents = infrastructureFallbackEvents
+        }
     }
 
     private func runChunk(
@@ -786,7 +862,7 @@ public struct SchemataMutationRunner: Sendable {
             let outcomes = embeddedEntries.compactMap {
                 infrastructureFailureResult(for: $0, reason: "the chunk sandbox could not be created: \(error)")
             }.map(EntryRunOutcome.verified)
-            return ChunkRunResult(outcomes: outcomes, buildFailureEvents: [])
+            return ChunkRunResult(outcomes: outcomes, buildFailureEvents: [], infrastructureFallbackEvents: [])
         }
 
         let result = await runChunk(
@@ -808,8 +884,11 @@ public struct SchemataMutationRunner: Sendable {
         tracker: CompletedPlacementsTracker
     ) async -> ChunkRunResult {
         switch await prepareChunkState(program: program, entries: embeddedEntries, in: sandbox) {
-        case let .failed(outcomes, buildFailureEvent):
-            return ChunkRunResult(outcomes: outcomes, buildFailureEvents: buildFailureEvent.map { [$0] } ?? [])
+        case let .failed(outcomes, buildFailureEvent, infrastructureFallbackEvent):
+            return ChunkRunResult(
+                outcomes: outcomes, buildFailureEvents: buildFailureEvent.map { [$0] } ?? [],
+                infrastructureFallbackEvents: infrastructureFallbackEvent.map { [$0] } ?? []
+            )
         case let .ready(state):
             return await runEntries(
                 embeddedEntries, program: program, state: state, timeoutController: timeoutController,
@@ -840,10 +919,16 @@ public struct SchemataMutationRunner: Sendable {
     private enum ChunkPreparationOutcome {
         case ready(ChunkExecutionState)
         /// `buildFailureEvent` is non-`nil` only for the typed-`BuildFailure`
-        /// shape (ADR-0008 Addendum 4) — the other three failure shapes
-        /// never populate it, matching Addendum 4's requirement that only a
-        /// genuine shared-build compile failure gets an aggregate event.
-        case failed([EntryRunOutcome], buildFailureEvent: SharedChunkBuildFailureEvent? = nil)
+        /// shape (ADR-0008 Addendum 4); `infrastructureFallbackEvent` is
+        /// non-`nil` only for the build-receipt-unavailable shape. Mutually
+        /// exclusive in practice (each failure path populates at most one),
+        /// kept as two separate optionals rather than one combined enum so
+        /// each aggregation site downstream can accumulate the two kinds
+        /// into their own separate arrays without an extra unwrap.
+        case failed(
+            [EntryRunOutcome], buildFailureEvent: SharedChunkBuildFailureEvent? = nil,
+            infrastructureFallbackEvent: SchemataInfrastructureFallbackEvent? = nil
+        )
     }
 
     /// The single entry point for turning a sandbox into a built,
@@ -856,8 +941,9 @@ public struct SchemataMutationRunner: Sendable {
     /// is chunk-level evidence, not per-mutant compile evidence, so it must
     /// not directly establish `.unviable` for entries it merely happened to
     /// contain), untyped error / nil product hash -> `infrastructureFailure`
-    /// (unchanged), receipt-resolution failure -> absorbed via `try?`,
-    /// entries proceed (unchanged).
+    /// (unchanged), receipt-resolution failure -> whole-chunk
+    /// `.buildReceiptUnavailable` isolated fallback — no schemata execution
+    /// ever proceeds without a proven receipt.
     private func prepareChunkState(
         program: SchemataProgram, entries embeddedEntries: [SchemataPlanEntry], in sandbox: URL
     ) async -> ChunkPreparationOutcome {
@@ -945,11 +1031,34 @@ public struct SchemataMutationRunner: Sendable {
             planID: planID, workUnitID: workUnitID, chunkID: program.chunkID,
             toolchainHash: toolchainHash, buildArgumentsHash: buildArgumentsHash
         )
-        let receipt: SchemataBuildReceipt? = try? await build.resolveSchemataBuildReceipt(
-            for: Array(uniqueRequestsByUnit.values), artifact: artifact, in: sandbox, context: receiptContext
-        )
-
-        return .ready(ChunkExecutionState(sandbox: sandbox, artifact: artifact, receipt: receipt))
+        // `SchemataBuildable.resolveSchemataBuildReceipt`'s own protocol
+        // contract: fail closed (throw) when the built image cannot be
+        // resolved to a provably unique identity — never resolve
+        // ambiguously and never stand in a placeholder. A previous version
+        // of this call absorbed that throw via a bare `try?`, letting the
+        // chunk proceed with `receipt: nil` and every one of its
+        // mutations scored (or not) with no proof of which built image
+        // they actually reached. Receipt resolution failing is not a
+        // per-mutant infrastructure failure — it means schemata itself
+        // cannot vouch for this chunk at all, so every `MutationID` it
+        // covers falls back to isolated mode as a whole, the identical
+        // all-or-nothing shape `.sharedChunkBuildFailure` already uses for
+        // a genuine compile failure.
+        do {
+            let receipt = try await build.resolveSchemataBuildReceipt(
+                for: Array(uniqueRequestsByUnit.values), artifact: artifact, in: sandbox, context: receiptContext
+            )
+            return .ready(ChunkExecutionState(sandbox: sandbox, artifact: artifact, receipt: receipt))
+        } catch {
+            return .failed(
+                embeddedEntries.map { .isolatedFallback(mutationID: $0.mutationID, reason: .buildReceiptUnavailable) },
+                infrastructureFallbackEvent: SchemataInfrastructureFallbackEvent(
+                    chunkID: program.chunkID, reason: .buildReceiptUnavailable,
+                    affectedMutationCount: embeddedEntries.count,
+                    diagnosis: "the chunk's own build receipt could not be resolved: \(error)"
+                )
+            )
+        }
     }
 
     /// ADR-0008 §2 Option B item 1 / §3.2: the containment mechanism. Called
@@ -1084,6 +1193,14 @@ public struct SchemataMutationRunner: Sendable {
         var state = initialState
         var results: [EntryRunOutcome] = []
         var buildFailureEvents: [SharedChunkBuildFailureEvent] = []
+        var infrastructureFallbackEvents: [SchemataInfrastructureFallbackEvent] = []
+        // Bundles the three accumulators above at whatever point a caller
+        // below needs to return early — kept as one function so a later
+        // fourth accumulator never needs its own 1-line change repeated at
+        // every one of this loop's several early-return sites. Positional,
+        // via `ChunkRunResult`'s own convenience `init` — see its doc
+        // comment.
+        func currentResult() -> ChunkRunResult { ChunkRunResult(results, buildFailureEvents, infrastructureFallbackEvents) }
         // ADR-0008 §3.3: increments only on a verifier-confirmed
         // `.verifiedTimeout`, never on a raw forced kill — a primary timeout
         // whose confirmation resolves normally stays `.flaky` and must never
@@ -1114,18 +1231,17 @@ public struct SchemataMutationRunner: Sendable {
         /// case, since every entry this call was protecting has already been
         /// given its final `EntryRunOutcome` for this chunk: a verdict-
         /// bearing failure outcome for the two shapes that are genuine
-        /// failures (sandbox-creation error, untyped build error), or a
+        /// failures (sandbox-creation error, untyped build error), an
         /// `.isolatedFallback(reason: .sharedChunkBuildFailure)` — never a
-        /// fabricated verdict — for a typed `BuildFailure` (Addendum 4).
-        /// Receipt-resolution failure is not among these outcomes at all: it
-        /// is absorbed via `try?` inside `prepareChunkState`, so `rebuild`
-        /// returns `true` for it (a successful rebuild, just with `receipt:
-        /// nil`), and entries proceed normally.
+        /// fabricated verdict — for a typed `BuildFailure` (Addendum 4), or
+        /// an `.isolatedFallback(reason: .buildReceiptUnavailable)` when the
+        /// rebuild succeeded but its own receipt could not be resolved.
         func rebuild(protecting remainingEntries: [SchemataPlanEntry]) async -> Bool {
             switch await rebuildChunkState(program: program, entries: remainingEntries, state: state) {
-            case let .failed(failureOutcomes, buildFailureEvent):
+            case let .failed(failureOutcomes, buildFailureEvent, infrastructureFallbackEvent):
                 results.append(contentsOf: failureOutcomes)
                 if let buildFailureEvent { buildFailureEvents.append(buildFailureEvent) }
+                if let infrastructureFallbackEvent { infrastructureFallbackEvents.append(infrastructureFallbackEvent) }
                 return false
             case let .ready(newState):
                 state = newState
@@ -1157,7 +1273,7 @@ public struct SchemataMutationRunner: Sendable {
                 // confirmation must never reuse a sandbox a forced kill just
                 // left in an unverified state.
                 if handoff.primaryTimedOut {
-                    guard await rebuild(protecting: Array(embeddedEntries[index...])) else { return ChunkRunResult(outcomes: results, buildFailureEvents: buildFailureEvents) }
+                    guard await rebuild(protecting: Array(embeddedEntries[index...])) else { return currentResult() }
                 }
 
                 // If Trigger 1 just rebuilt, `handoff.request`'s receipt is
@@ -1214,7 +1330,7 @@ public struct SchemataMutationRunner: Sendable {
                     expectedPlacementsByMutationID: expectedPlacementsByMutationID,
                     completedPlacementsByMutationID: latestCompleted
                 ))
-                return ChunkRunResult(outcomes: results, buildFailureEvents: buildFailureEvents)
+                return currentResult()
             }
 
             // Trigger 2: only when a next entry actually exists to protect
@@ -1222,12 +1338,12 @@ public struct SchemataMutationRunner: Sendable {
             // is wasted work, verified by construction here, not assumed).
             let remaining = Array(embeddedEntries[(index + 1)...])
             if rawTimedOut, !remaining.isEmpty {
-                guard await rebuild(protecting: remaining) else { return ChunkRunResult(outcomes: results, buildFailureEvents: buildFailureEvents) }
+                guard await rebuild(protecting: remaining) else { return currentResult() }
             }
 
             index += 1
         }
-        return ChunkRunResult(outcomes: results, buildFailureEvents: buildFailureEvents)
+        return currentResult()
     }
 
     /// Closes out every not-yet-fully-finalized `MutationID` in this chunk
@@ -1553,7 +1669,7 @@ public struct SchemataMutationRunner: Sendable {
         // runner re-derives on its own (ADR-0006 Stage 3).
         //
         // Never a cascade of more than one confirmation, unlike
-        // `MutationRunner.confirmTimeout`'s own nested `retestKilledMutants`/
+        // `MutationConfirmationCoordinator.confirmTimeout`'s own nested `retestKilledMutants`/
         // `confirmCrashKills` calls: that cascade only fires for a
         // *batch-attributed* timeout (`TestRunResult.isBatchAttributedTimeout`,
         // set only by isolated mode's own `runBatch`). Schemata batching
@@ -2034,7 +2150,7 @@ private extension SchemataMutationRunner {
     }
 
     /// A synthetic run standing in for "a confirmation attempt could not
-    /// even launch" — mirrors `MutationRunner.infrastructureFailureRun`
+    /// even launch" — mirrors `MutationConfirmationCoordinator.infrastructureFailureRun`
     /// exactly, the same convention for the same reason: represented as an
     /// ordinary `TestRunResult` so it flows through `ConfirmationObservation`
     /// like any other confirming run.

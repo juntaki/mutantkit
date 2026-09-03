@@ -86,6 +86,47 @@ struct WorkspaceManagerCloneProductsTests {
         #expect(try Data(contentsOf: binary) == Data("second-mutant".utf8))
     }
 
+    /// SwiftPM's own products directory shape: `.build/debug` is not a real
+    /// directory, always a *relative* symlink to `.build/<triple>/debug`
+    /// (`arm64-apple-macosx/debug`, here). A real regression found via
+    /// `SchemataConfirmationDifferentialAcceptanceTests`'s own isolated-
+    /// backend confirmation retest: cloning that symlink with
+    /// `CLONE_NOFOLLOW` (correct for a symlink found *inside* a cloned tree,
+    /// see `populate`'s own doc comment) recreated the same relative link
+    /// text at the clone's destination — which resolved to a sibling
+    /// directory that was never cloned, since only the products directory
+    /// itself is cloned out, not `.build` as a whole. The clone looked
+    /// populated (`fileExists` on the symlink itself succeeds) but every
+    /// path inside it was unreachable — surfacing downstream as a raw
+    /// `posix_spawn`-level launch failure (`chdir` into a dangling symlink)
+    /// with no obvious connection to a clone gone wrong.
+    @Test("A products directory that is itself a relative symlink (SwiftPM's `.build/debug`) clones as a real, independent directory")
+    func clonesThroughATopLevelRelativeSymlinkCorrectly() async throws {
+        let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratchRoot)
+
+        let buildDir = projectRoot.appendingPathComponent(".build-\(UUID().uuidString)")
+        let realProducts = buildDir.appendingPathComponent("arm64-apple-macosx/debug")
+        let bundle = realProducts.appendingPathComponent("Fake.xctest")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try Data("binary-bytes".utf8).write(to: bundle.appendingPathComponent("Fake"))
+
+        // A *relative* symlink, exactly as SwiftPM creates `.build/debug`:
+        // `arm64-apple-macosx/debug`, relative to `.build` itself — the
+        // shape that breaks if the clone destination is anywhere else.
+        let debugSymlink = buildDir.appendingPathComponent("debug")
+        try FileManager.default.createSymbolicLink(
+            atPath: debugSymlink.path, withDestinationPath: "arm64-apple-macosx/debug"
+        )
+
+        let clone = try await workspaces.cloneProducts(from: debugSymlink, id: "mut_symlinked")
+
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: clone.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue, "the clone destination must be a real, independent directory, not another dangling symlink")
+        let binary = clone.appendingPathComponent("Fake.xctest/Fake")
+        #expect(try Data(contentsOf: binary) == Data("binary-bytes".utf8))
+    }
+
     @Test("destroySandbox deletes a products clone unmodified, same as a sandbox")
     func destroySandboxDeletesAClone() async throws {
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratchRoot)

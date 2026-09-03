@@ -56,14 +56,31 @@ struct CoreOperatorExpansionAcceptanceTests {
 
         let integrity = run.report.integrity
         #expect(integrity.violations.isEmpty, "\(integrity.violations.map(\.detail))")
-        #expect(integrity.discovered == 12)
-        #expect(integrity.planned == 12)
-        #expect(integrity.sourceApplied == 12)
+        // 14, not the 12 an earlier version of this test expected: besides
+        // the 9 sites each operator's own doc comment in Ops.swift names
+        // directly, `experimental` profile discovery also (correctly)
+        // finds 3 incidental `relational-operator-replacement` candidates
+        // (`label`'s own `score >= 60`, two replacement directions, and
+        // `bonus`'s own `tier == 3`) and, not accounted for by any prior
+        // version of this count, 2 incidental `side-effect-call-removal`
+        // candidates inside `validate`'s own two `notes.append(...)` calls
+        // — a real, independently-matched operator finding real
+        // side-effecting calls that happen to live inside the function
+        // added to demonstrate `else-clause-deletion`, not a dedicated
+        // fixture site of their own. Verified empirically (`mutantkit plan`
+        // + `mutantkit run` against this exact fixture) before updating
+        // this number: all 14 are genuine, correctly-classified candidates
+        // — 13 `killedByAssertion`, 1 `unviable` — not a discovery bug. See
+        // `sideEffectCallRemovalCandidatesInsideValidate` and
+        // `incidentalRelationalCandidates` below for the pinned shapes.
+        #expect(integrity.discovered == 14)
+        #expect(integrity.planned == 14)
+        #expect(integrity.sourceApplied == 14)
         // One mutant (the generic-`Numeric` arithmetic replacement) never
         // builds -- see `arithmeticReplacementOnANumericGenericFailsToBuild`.
-        #expect(integrity.buildObserved == 11)
-        #expect(integrity.classified == 12)
-        #expect(integrity.reported == 12)
+        #expect(integrity.buildObserved == 13)
+        #expect(integrity.classified == 14)
+        #expect(integrity.reported == 14)
 
         #expect(run.exitCode == 0)
     }
@@ -104,6 +121,48 @@ struct CoreOperatorExpansionAcceptanceTests {
         #expect(arithmetic.count == 2)
         #expect(arithmetic.filter { $0.outcome == .killedByAssertion }.count == 1)
         #expect(arithmetic.filter { $0.outcome == .unviable }.count == 1)
+    }
+
+    /// `Ops.validate` is `else-clause-deletion`'s own dedicated fixture
+    /// function, not `side-effect-call-removal`'s — but its two branches
+    /// each call a real, side-effecting `notes.append(...)`, and
+    /// `side-effect-call-removal` independently matches both. This is a
+    /// genuine, correctly-caught incidental candidate, not a dedicated site
+    /// the way `newOperatorIDs`' own seven are; pinned separately here
+    /// (shape and outcome, not just a count) so a future discovery-logic
+    /// regression that silently drops or misclassifies either one is
+    /// caught, the same way `runIsInternallyConsistent`'s own `14` would
+    /// have caught the reverse (a phantom addition).
+    @Test("side-effect-call-removal independently catches both of validate's own notes.append(...) calls")
+    func sideEffectCallRemovalCandidatesInsideValidate() throws {
+        let run = try self.run()
+
+        let matches = run.report.results.filter { $0.point.operatorID == "swift.core.side-effect-call-removal" }
+        #expect(matches.count == 2, "expected exactly validate's own two notes.append(...) calls, got \(matches.count)")
+        #expect(matches.allSatisfy { $0.outcome == .killedByAssertion })
+
+        let originals = Set(matches.map(\.point.originalText))
+        #expect(originals == ["notes.append(\"ok\")", "notes.append(\"warning\")"])
+    }
+
+    /// Two functions this fixture added for a *different* operator each
+    /// also contain a real relational comparison `relational-operator-
+    /// replacement` independently matches: `label`'s own `score >= 60`
+    /// (two replacement directions — `<` and `>` — from the same `>=`
+    /// site) and `bonus`'s own `tier == 3`. Genuine incidental candidates,
+    /// same reasoning as the side-effect-call-removal pair above.
+    @Test("relational-operator-replacement independently catches label's >= and bonus's ==")
+    func incidentalRelationalCandidates() throws {
+        let run = try self.run()
+
+        let matches = run.report.results.filter { $0.point.operatorID == "swift.core.relational-operator-replacement" }
+        #expect(matches.count == 3)
+        #expect(matches.allSatisfy { $0.outcome == .killedByAssertion })
+
+        // `label`'s own `>=` produces two candidates (one per replacement
+        // direction); `bonus`'s own `==` produces one.
+        let shapes = matches.map { "\($0.point.originalText)->\($0.point.replacementText)" }.sorted()
+        #expect(shapes == ["==->!=", ">=-><", ">=->>"].sorted())
     }
 
     /// The concrete evidence that arithmetic/assignment replacement's

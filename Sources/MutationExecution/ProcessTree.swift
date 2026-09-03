@@ -168,9 +168,38 @@ enum ProcessTree {
 
     /// True only when `identity`'s exact process instance — not just its PID
     /// number — is still alive, per the same provenance check `reap(_:)`
-    /// uses. For tests and diagnosis.
+    /// uses. Deliberately does **not** distinguish a zombie (already
+    /// signalled and dead, just not yet reaped by whichever ancestor is
+    /// responsible — possibly launchd, for a descendant this process is
+    /// not the real parent of) from a genuinely still-running process: a
+    /// zombie still occupies its pid/table entry and still needs `reap(_:)`
+    /// (or an ancestor's own eventual wait) before that pid becomes safe to
+    /// recycle, so most existing callers correctly want "true" for either.
+    /// For tests and diagnosis, and (unlike `isRunning(_:)` below) safe to
+    /// use as a general-purpose "does this still occupy its slot" check.
     static func isAlive(_ identity: ProcessIdentity) -> Bool {
         processTable().contains { $0.identity == identity }
+    }
+
+    /// `true` only when `identity` is genuinely still running — a zombie
+    /// (exited, signalled, but not yet reaped) reports `false` here, unlike
+    /// `isAlive(_:)` above.
+    ///
+    /// Exists for exactly one shape of caller: something that already sent
+    /// a termination signal and needs to know "is there still more work to
+    /// do," where a zombie means no — `ProcessSupervisor`'s own
+    /// `closeOutOwnedGroup` escalation grace loop is the motivating case.
+    /// Using `isAlive(_:)` there instead measurably kept that loop waiting
+    /// out its *entire* configured grace period on every call, even for a
+    /// descendant SIGTERM had already and successfully killed seconds
+    /// earlier: a descendant `ProcessSupervisor` is not the real OS parent
+    /// of (a grandchild, reparented to launchd once its own direct parent
+    /// also exits) only ever gets reaped by launchd's own, unpredictably
+    /// timed pass — an ancestor-external event this process cannot cause
+    /// or observe faster by polling `isAlive(_:)` harder, and must not
+    /// wait on to decide whether escalation is still needed.
+    static func isRunning(_ identity: ProcessIdentity) -> Bool {
+        processTable().contains { $0.identity == identity && !$0.isZombie }
     }
 
     // MARK: - Kernel process table
@@ -180,6 +209,7 @@ enum ProcessTree {
         let ppid: pid_t
         let startTimeSeconds: Int
         let startTimeMicroseconds: Int32
+        let isZombie: Bool
 
         var identity: ProcessIdentity {
             ProcessIdentity(pid: pid, startTimeSeconds: startTimeSeconds, startTimeMicroseconds: startTimeMicroseconds)
@@ -206,10 +236,17 @@ enum ProcessTree {
         }
         guard result == 0 else { return [] }
 
+        // `p_stat == SZOMB` (5, `<sys/proc.h>` — not imported into Swift by
+        // the Darwin module, so the raw value is used directly, the same
+        // way this file already uses raw signal numbers elsewhere) is the
+        // kernel's own zombie marker: exited and signalled, occupying its
+        // table entry only until reaped.
+        let zombieState: Int8 = 5
         return buffer.prefix(length / stride).map {
             Entry(
                 pid: $0.kp_proc.p_pid, ppid: $0.kp_eproc.e_ppid,
-                startTimeSeconds: $0.kp_proc.p_starttime.tv_sec, startTimeMicroseconds: Int32($0.kp_proc.p_starttime.tv_usec)
+                startTimeSeconds: $0.kp_proc.p_starttime.tv_sec, startTimeMicroseconds: Int32($0.kp_proc.p_starttime.tv_usec),
+                isZombie: $0.kp_proc.p_stat == zombieState
             )
         }
     }

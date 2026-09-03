@@ -596,6 +596,33 @@ extension XcodeBuildAdapter: TestAdapter {
     /// leasing anyway costs nothing and keeps "at most one lease per
     /// device" a real invariant the pool enforces, not one this call site
     /// merely assumes.
+    /// The uninstall-then-launch decision itself, factored out of
+    /// `leaseAndRunTests` so `XcodeBuildAdapterUninstallFailureTests` can
+    /// drive it directly with a hand-built `SimulatorLease` — the same
+    /// reason `uninstallStaleApp` itself is `internal`, not `private`: a
+    /// real `SimulatorPool` lease needs a real, already-booted device, which
+    /// a launch-suppression regression has no need to depend on. This is
+    /// also the one place that actually enforces the fail-closed uninstall
+    /// contract: a failed uninstall must never reach `runTestsOnDestination` at all.
+    func runTestsAfterUninstall(
+        lease: SimulatorLease,
+        artifact: BuildArtifact,
+        in workspace: URL,
+        label: String,
+        timeoutSeconds: Double,
+        testFilters: [String]? = nil,
+        enableCoverage: Bool = false,
+        expectedTestCount: Int? = nil
+    ) async throws -> TestRunResult {
+        if case let .failed(bundleID, detail) = await uninstallStaleApp(artifact: artifact, from: lease) {
+            return Self.uninstallFailureResult(bundleID: bundleID, udid: lease.device.udid, detail: detail, command: artifact.command)
+        }
+        return try await runTestsOnDestination(
+            lease.destination, artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
+            testFilters: testFilters, enableCoverage: enableCoverage, expectedTestCount: expectedTestCount
+        )
+    }
+
     private func leaseAndRunTests(
         artifact: BuildArtifact,
         in workspace: URL,
@@ -606,9 +633,8 @@ extension XcodeBuildAdapter: TestAdapter {
         expectedTestCount: Int? = nil
     ) async throws -> TestRunResult {
         func run(_ lease: SimulatorLease) async throws -> TestRunResult {
-            await uninstallStaleApp(artifact: artifact, from: lease)
-            return try await runTestsOnDestination(
-                lease.destination, artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
+            try await runTestsAfterUninstall(
+                lease: lease, artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
                 testFilters: testFilters, enableCoverage: enableCoverage, expectedTestCount: expectedTestCount
             )
         }
@@ -658,31 +684,37 @@ extension XcodeBuildAdapter: TestAdapter {
     /// variable outright rather than trusting `test-without-building` to
     /// notice the difference.
     ///
-    /// **Not fail-closed — a genuine `simctl uninstall` failure never blocks
-    /// or fails this mutant's run.** Confirmed directly against a real
-    /// simulator (corrects this method's own prior doc comment, which
-    /// assumed the opposite): `simctl uninstall` on a bundle ID that was
-    /// never installed still **exits 0**, with no error output at all —
-    /// "nothing to uninstall" is not distinguishable from "uninstalled
-    /// successfully" at the exit-code level, and does not need to be, since
-    /// both are the fully-expected, ordinary case this method exists to
-    /// handle silently. That means a *non-zero* exit here is never the
-    /// ordinary case — it is always a real failure (a busy device, a
-    /// transient CoreSimulator fault, the same class of flake `SimulatorPool.prepare`'s own retry logic exists to absorb
-    /// elsewhere), and swallowing it via a bare `try?` (as this method did
-    /// before) discarded that fact entirely, with no diagnostic reaching
-    /// anyone — a real asymmetry against how this codebase treats the
-    /// analogous `boot`/`bootstatus` failure class. Named in
+    /// **Fail-closed: a genuine `simctl uninstall` failure blocks
+    /// this mutant's run** — the caller must never proceed to launch
+    /// `xcodebuild test-without-building` once this returns `.failed`.
+    /// Confirmed directly against a real simulator: `simctl uninstall` on a
+    /// bundle ID that was never installed still **exits 0**, with no error
+    /// output at all — "nothing to uninstall" is not distinguishable from
+    /// "uninstalled successfully" at the exit-code level, and does not need
+    /// to be, since both are the fully-expected, ordinary case this method
+    /// exists to handle silently (`.ready`). That means a *non-zero* exit
+    /// here is never the ordinary case — it is always a real failure (a busy
+    /// device, a transient CoreSimulator fault, the same class of flake
+    /// `SimulatorPool.prepare`'s own retry logic exists to absorb
+    /// elsewhere).
+    ///
+    /// This method previously only logged a genuine failure (stderr) and let
+    /// the caller proceed regardless — an earlier version of its own doc
+    /// comment reasoned that surfacing the fact was enough. It was not:
+    /// named in
     /// `Research/known-issues/schemata-confirm-timeout-image-uuid-mismatch.md`
-    /// as a plausible, unconfirmed contributor to that issue: a stale
-    /// install surviving an uninstall failure immediately before a
-    /// `confirmTimeout` retry could plausibly explain a runtime image UUID
-    /// that disagrees with the build receipt, without needing a rebuild at
-    /// all. Surfaced here as an observable, logged fact (stderr, mirroring
-    /// `MutationRunner`'s own established convention for an infrastructure
-    /// hiccup that must not vanish silently) rather than fixed outright:
-    /// confirming or refuting the actual correlation needs a real Xcode/iOS-Simulator schemata timeout fixture run repeatedly under
-    /// load, which is its own, larger, not-yet-scheduled piece of work.
+    /// as a plausible contributor to that issue, a stale install surviving
+    /// an uninstall failure immediately before the next test run can make a
+    /// runtime image UUID disagree with the build receipt, or a leftover
+    /// process shadow a fresh mutant's own result, without needing a rebuild
+    /// at all — exactly the class of infrastructure hazard this codebase
+    /// otherwise never launches a real test run on top of (see the
+    /// `boot`/`bootstatus` failure class, retried and diagnosed, never
+    /// silently proceeded past). `report` still fires on every failure
+    /// (mirroring `MutationRunner`'s own convention for an infrastructure
+    /// hiccup that must not vanish silently from a human's view), but the
+    /// return value is now what a caller must actually act on.
+    ///
     /// `report` is a seam, not a production knob: every real caller uses the
     /// default (a real `FileHandle.standardError.write`), and
     /// `XcodeBuildAdapterUninstallFailureTests` overrides it to capture
@@ -694,12 +726,17 @@ extension XcodeBuildAdapter: TestAdapter {
     /// that would otherwise require a real build and a real lease to reach
     /// it at all.
     /// `processRunner`: `AdapterSupport.swift`'s `ProcessRunner` seam, letting a test force `outputComplete == false` deterministically.
+    enum StaleAppUninstallOutcome: Sendable, Equatable {
+        case ready
+        case failed(bundleID: String, detail: String)
+    }
+
     func uninstallStaleApp(
         artifact: BuildArtifact, from lease: SimulatorLease,
         report: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) },
         processRunner: ProcessRunner = defaultProcessRunner
-    ) async {
-        guard let xctestrun = artifact.xctestrunPath else { return }
+    ) async -> StaleAppUninstallOutcome {
+        guard let xctestrun = artifact.xctestrunPath else { return .ready }
         for bundleID in Self.bundleIdentifiers(inXCTestRun: xctestrun) {
             let result: ProcessResult?
             do {
@@ -710,8 +747,9 @@ extension XcodeBuildAdapter: TestAdapter {
                     30
                 )
             } catch {
-                report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: "\(error)"))
-                result = nil
+                let detail = "\(error)"
+                report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: detail))
+                return .failed(bundleID: bundleID, detail: detail)
             }
             if let result, !result.succeeded {
                 // See `ProcessResult.outputComplete`: truncated output on a real failure must say so, not report an empty detail.
@@ -719,8 +757,23 @@ extension XcodeBuildAdapter: TestAdapter {
                     ? OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400).trimmingCharacters(in: .whitespacesAndNewlines)
                     : "subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"
                 report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: detail))
+                return .failed(bundleID: bundleID, detail: detail)
             }
         }
+        return .ready
+    }
+
+    /// The `TestRunResult` a caller reports when `uninstallStaleApp` returns
+    /// `.failed`, in place of ever launching `xcodebuild
+    /// test-without-building` — the diagnosis text is the same
+    /// `uninstallFailureWarning` a human watching the run sees on stderr, so
+    /// a report reader sees exactly why this mutant never got a real test
+    /// verdict.
+    static func uninstallFailureResult(bundleID: String, udid: String, detail: String, command: CommandRecord) -> TestRunResult {
+        TestRunResult(
+            status: .infrastructureFailure, summary: nil, command: command, resultArtifactPath: nil,
+            diagnosis: uninstallFailureWarning(bundleID: bundleID, udid: udid, detail: detail).trimmingCharacters(in: .newlines)
+        )
     }
 
     /// The exact text `uninstallStaleApp` reports for a genuine failure —
@@ -884,7 +937,7 @@ extension XcodeBuildAdapter: SchemataBuildable {
             throw SchemataRuntimeLibraryLocator.LocatorError.unsupportedDestination(target)
         }
         let located = try SchemataRuntimeLibraryLocator.locate(for: platform)
-        let linkerArguments = XcodeLinkerInjector.extraArguments(libraryDirectory: located.libraryDirectory)
+        let linkerArguments = XcodeLinkerInjector.extraArguments(archivePath: located.archivePath)
         let buildStart = GateTimingRecorder.shared.now()
         let artifact = try await build(in: workspace, extraArguments: linkerArguments)
         await GateTimingRecorder.shared.record("chunk.build", chunkID: workspace.lastPathComponent, start: buildStart)
@@ -970,16 +1023,33 @@ extension XcodeBuildAdapter: SchemataTestable {
         }
     }
 
+    /// The schemata-path counterpart to `runTestsAfterUninstall` — same
+    /// reason it exists as a directly-testable, `internal` seam: proving
+    /// the fail-closed uninstall contract holds for the schemata launch path too, without
+    /// needing a real `SimulatorPool` lease to reach it.
+    func runSchemataTokenAfterUninstall(
+        lease: SimulatorLease, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double,
+        environment: [String: String], testFilters: [String]?
+    ) async throws -> TestRunResult {
+        let uninstallStart = GateTimingRecorder.shared.now()
+        let uninstallOutcome = await uninstallStaleApp(artifact: artifact, from: lease)
+        await GateTimingRecorder.shared.record("token.uninstall", start: uninstallStart)
+        if case let .failed(bundleID, detail) = uninstallOutcome {
+            return Self.uninstallFailureResult(bundleID: bundleID, udid: lease.device.udid, detail: detail, command: artifact.command)
+        }
+        return try await runSchemataTokenOnDestination(
+            lease.destination, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment,
+            testFilters: testFilters
+        )
+    }
+
     private func leaseAndRunSchemataToken(
         artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String], testFilters: [String]?
     ) async throws -> TestRunResult {
         func run(_ lease: SimulatorLease) async throws -> TestRunResult {
-            let uninstallStart = GateTimingRecorder.shared.now()
-            await uninstallStaleApp(artifact: artifact, from: lease)
-            await GateTimingRecorder.shared.record("token.uninstall", start: uninstallStart)
-            return try await runSchemataTokenOnDestination(
-                lease.destination, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: environment,
-                testFilters: testFilters
+            try await runSchemataTokenAfterUninstall(
+                lease: lease, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds,
+                environment: environment, testFilters: testFilters
             )
         }
 

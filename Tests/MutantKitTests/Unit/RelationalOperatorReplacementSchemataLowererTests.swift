@@ -140,6 +140,28 @@ struct RelationalOperatorReplacementSchemataLowererTests {
         #expect(reason == .resultBuilderBody)
     }
 
+    /// `while 5 < 10 { }` compiles with no trailing return, the same
+    /// reachability fact `while true` does (confirmed empirically, real
+    /// `swiftc -typecheck`) — a lowering here would rewrite it into a
+    /// runtime selector call, the same whole-chunk-build hazard
+    /// `.controlFlowConstant` already exists for
+    /// `BoolLiteralSchemataLowerer`.
+    @Test("A comparison used as a while loop's whole condition falls back to isolated — controlFlowConstant")
+    func whileLoopConditionNotEligible() throws {
+        let source = """
+        func f() -> Int {
+            while 5 < 10 {
+            }
+        }
+        """
+        let mutation = try point(source, replacement: "<=")
+        guard case let .isolatedOnly(reason) = lowerer.analyze(mutation, source: Data(source.utf8)) else {
+            Issue.record("expected .isolatedOnly")
+            return
+        }
+        #expect(reason == .controlFlowConstant)
+    }
+
     @Test("A function-call operand falls back to isolated")
     func functionCallOperandFallsBack() throws {
         let source = "func lhs() -> Int { 1 }\nfunc f(b: Int) -> Bool { lhs() < b }"
@@ -343,5 +365,47 @@ struct RelationalOperatorReplacementSchemataLowererTests {
 
         #expect(lhsEvaluations == 1, "lhs must be evaluated exactly once regardless of which branch's operator text is selected")
         #expect(rhsEvaluations == 1, "rhs must be evaluated exactly once regardless of which branch's operator text is selected")
+    }
+
+    // MARK: - Neutral-path equivalence (competitive-proof corpus C3)
+
+    /// The property this test exists to pin: `lower(_:sources:)`'s own
+    /// real, produced source text — not a hand-written stand-in — must put
+    /// the bare, unmutated `<` in the branch selected when
+    /// `__mutantkitIsActiveV3` returns `false` (the neutral path — the
+    /// case for every embedded mutation's own dispatch site during every
+    /// *other* mutation's own test run, not a rare corner case), and the
+    /// replacement `>=` in the branch selected when it returns `true` —
+    /// the same true-branch-gets-replacementText,
+    /// false-branch-gets-originalText order
+    /// `ternarySelectsOnlyOneBranchAtRuntime` above already uses for the
+    /// active side. Calls the real lowerer and regex-matches the real
+    /// lowered source text, the same technique
+    /// `BoolLiteralSchemataLowererTests.lowersTwoPointsInSameFile` uses —
+    /// so a regression that swaps `point.replacementText`/
+    /// `point.originalText` in the lowerer's own template
+    /// (`RelationalOperatorReplacementSchemataLowerer.swift`) flips which
+    /// operator lands in which branch and makes this regex fail to match.
+    /// (Verified locally: swapping those two identifiers in the production
+    /// template makes this test fail; reverting makes it pass again.)
+    @Test("The neutral (inactive-token) branch lowers to exactly the bare unmutated < expression, verbatim, in the false-branch position")
+    func neutralBranchMatchesBareUnmutatedExpression() throws {
+        let source = "func f(a: Int, b: Int) -> Bool { a < b }"
+        let mutation = try point(source, replacement: ">=")
+        let chunk = SchemataChunk(
+            chunkID: "chunk-1", points: [mutation], projectIdentity: "P", target: "T", module: "M", product: "Prod"
+        )
+        let program = try lowerer.lower(chunk, sources: [SchemataSourceFile(relativePath: "Sample.swift", contents: source)])
+        let lowered = try #require(program.loweredSources.first)
+        // The real lowered shape: `isActive(...) ? (lhs replacementText rhs) : (lhs originalText rhs)`.
+        // Neutral (false) branch must be exactly the bare, unmutated
+        // `a < b`; active (true) branch must carry the replacement
+        // `a >= b`.
+        #expect(
+            lowered.contents.contains(
+                #/__mutantkitIsActiveV3\(__mutantkitUnitDescriptor_[0-9a-f]{12}, \d+, \d+\) \? \(a >= b\) : \(a < b\)/#
+            ),
+            "neutral (false) branch must be the bare unmutated `a < b`; active (true) branch must be the replacement `a >= b`"
+        )
     }
 }

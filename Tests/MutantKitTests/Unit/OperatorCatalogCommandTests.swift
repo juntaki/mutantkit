@@ -135,4 +135,45 @@ struct OperatorCatalogCommandTests {
         #expect(object["confidence"] as? String == "high")
         #expect(object["reachableProfile"] as? String == "conservative")
     }
+
+    // MARK: - Schemata eligibility
+
+    /// The exact set this command must report `true` for — the 6 operators
+    /// with a real, registered `SchemataLowererRegistry` lowerer, all of
+    /// which happen to also be the `default`-profile operators today. Pinned
+    /// as a literal ID list, not derived from the registry in this test, so
+    /// a regression that breaks `MutationRegistry.effectiveDescriptor(for:)`
+    /// itself can't also quietly break the thing checking it.
+    private static let schemataEligibleOperatorIDs: Set<String> = [
+        "swift.core.bool-literal-inversion",
+        "swift.core.logical-connector-replacement",
+        "swift.core.relational-operator-replacement",
+        "swift.core.ternary-branch-swap",
+        "swift.core.unary-not-removal",
+        "swift.core.return-value-replacement"
+    ]
+
+    /// Human table/detail output and `--json` output must agree with each
+    /// other and with the pinned set above — this is the exact regression
+    /// `descriptor.schemataEligible` being stale once produced: every
+    /// operator, including these 6, reported `false` here.
+    @Test("schemataEligible is true for exactly the 6 operators with a registered schemata lowerer, everywhere this command reports it")
+    func schemataEligibleMatchesRegisteredLowerers() throws {
+        let entries = OperatorCatalogCommand.entries()
+        #expect(entries.count == MutationRegistry.builtIn.count)
+
+        for entry in entries {
+            let expected = Self.schemataEligibleOperatorIDs.contains(entry.id)
+            #expect(entry.schemataEligible == expected, "\(entry.id): expected schemataEligible == \(expected)")
+
+            // Detail-view human rendering.
+            let detail = OperatorCatalogCommand.renderDetail(entry)
+            #expect(detail.contains("Schemata eligible     \(expected ? "yes" : "no")"), "\(entry.id) detail rendering")
+
+            // --json output, decoded independently of OperatorCatalogEntry's own Codable conformance.
+            let json = try OperatorCatalogCommand.jsonString(entry)
+            let object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+            #expect(object["schemataEligible"] as? Bool == expected, "\(entry.id) --json output")
+        }
+    }
 }

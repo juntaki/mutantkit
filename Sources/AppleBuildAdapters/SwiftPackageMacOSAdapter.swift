@@ -28,13 +28,34 @@ public struct SwiftPackageMacOSAdapter: Sendable {
 
 extension SwiftPackageMacOSAdapter: BuildAdapter {
     public func buildBaseline(in workspace: URL) async throws -> BuildArtifact {
-        try await build(in: workspace)
+        try await build(in: workspace, extraArguments: moduleCacheArguments(for: workspace))
     }
 
     /// The mutated source is already on disk in this workspace, so a mutant build
     /// is the same command as the baseline's.
     public func buildMutant(_ mutation: AppliedMutation, in workspace: URL) async throws -> BuildArtifact {
-        try await build(in: workspace)
+        try await build(in: workspace, extraArguments: moduleCacheArguments(for: workspace))
+    }
+
+    /// `-Xswiftc -module-cache-path` arguments routing this build's Clang/
+    /// Swift module cache to the external, run-scoped, shared directory
+    /// every sandbox under this run's own scratch root may point at -- see
+    /// `Configuration.execution.sharedModuleCache`'s own doc comment for
+    /// what this changes and why it is safe, and
+    /// `WorkspaceManager.moduleCachePath(forSandbox:)` for where the
+    /// directory actually lives.
+    ///
+    /// Empty -- meaning "today's default: a private cache nested inside
+    /// this sandbox's own `.build`" -- unless the flag is on. Called from
+    /// `buildBaseline`/`buildMutant` only, deliberately never from
+    /// `buildSchemataChunk`: the flag's safety case (every mutant needs
+    /// only the module set the baseline build already warmed, because a
+    /// mutation never changes an import) was checked against the isolated
+    /// backend's build shape, not schemata's.
+    private func moduleCacheArguments(for workspace: URL) -> [String] {
+        guard configuration.execution.sharedModuleCache else { return [] }
+        let path = WorkspaceManager.moduleCachePath(forSandbox: workspace)
+        return ["-Xswiftc", "-module-cache-path", "-Xswiftc", path.path]
     }
 
     private func build(in workspace: URL, extraArguments: [String] = []) async throws -> BuildArtifact {
@@ -108,7 +129,7 @@ extension SwiftPackageMacOSAdapter: SchemataBuildable {
         }
 
         let located = try SchemataRuntimeLibraryLocator.locate(for: .macOS)
-        let linkerArguments = SwiftPMLinkerInjector.extraArguments(libraryDirectory: located.libraryDirectory)
+        let linkerArguments = SwiftPMLinkerInjector.extraArguments(archivePath: located.archivePath)
         return try await build(in: workspace, extraArguments: linkerArguments)
     }
 

@@ -87,6 +87,39 @@ public actor WorkspaceManager {
         // compare two spellings of the same directory and reject them.
         try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
         self.scratchRoot = scratchRoot.resolvingSymlinksInPath().standardizedFileURL
+
+        // Best-effort, and unconditional: this runs whether or not the
+        // caller ends up using `Configuration.execution.sharedModuleCache`
+        // at all, so every process that ever constructs a `WorkspaceManager`
+        // against a given scratch root -- `mutantkit run`, `reproduce`,
+        // `dry-run`, `SchemataChunkBuildProbe` alike -- starts from a
+        // provably empty shared module cache rather than one a previous
+        // invocation (possibly under a different toolchain) left behind.
+        // This is what keeps "the shared cache is stale from a prior run,
+        // or was built by a compiler version that no longer matches"
+        // outside this feature's own correctness surface entirely: there is
+        // no cross-invocation reuse to reason about, because nothing is
+        // *meant* to survive between invocations. "Best-effort" above is
+        // literal, not decorative: `try?` swallows the removal's own error
+        // rather than surfacing or logging it, so a failed wipe (permission
+        // denied, a file busy from something else touching the same path)
+        // is silently ignored, not merely unlikely. The directory is left
+        // absent afterwards -- `-Xswiftc -module-cache-path` creates it
+        // lazily on first use (confirmed empirically,
+        // `Research/isolated-build-reuse-2026-09`), so there is nothing
+        // useful to recreate here.
+        //
+        // This wipe is also unconditional in a second sense worth flagging
+        // here, not just at `sharedModuleCache`'s own doc comment: it is
+        // keyed on `scratchRoot` alone, which is stable (`<projectRoot>/
+        // .mutantkit`) rather than per-run, and it races a concurrent
+        // `WorkspaceManager` construction against the *same* project from a
+        // *different* destination's run -- see
+        // `ExecutionSettings.sharedModuleCache`'s doc comment for the full
+        // shape of that limitation.
+        try? FileManager.default.removeItem(
+            at: self.scratchRoot.appendingPathComponent(Self.moduleCacheDirectoryName, isDirectory: true)
+        )
     }
 
     // MARK: - Lifecycle
@@ -118,6 +151,33 @@ public actor WorkspaceManager {
     /// something callers may assert against.
     public static func directoryName(for id: String) -> String {
         "sbx_" + ContentHash.shortDigest(of: id, length: 20)
+    }
+
+    /// Fixed name for the shared, run-scoped Clang/Swift module cache
+    /// directory every sandbox under one scratch root may point its build
+    /// at -- see `Configuration.execution.sharedModuleCache`. A literal
+    /// constant, not a hashed digest like `directoryName(for:)` above: there
+    /// is at most one of these per scratch root, so nothing about it needs
+    /// to be unique or unguessable, and a stable, greppable name makes it
+    /// easy to find on disk while debugging. Dot-prefixed so it reads
+    /// unmistakably as this manager's own infrastructure, never mistaken
+    /// for a mutant sandbox (`sbx_...`) or a products clone (`prd_...`).
+    public static let moduleCacheDirectoryName = ".module-cache"
+
+    /// Where the shared module cache lives for a sandbox this manager
+    /// created -- one path component up from the sandbox itself, i.e.
+    /// directly under this manager's own `scratchRoot`.
+    ///
+    /// A `BuildAdapter` never sees `scratchRoot` directly, only the sandbox
+    /// URL it is asked to build in -- this lets it recover the shared
+    /// cache's location anyway, without threading a second path through
+    /// every adapter-construction call site. Safe because `createSandbox`'s
+    /// own contract (see its doc comment) guarantees every sandbox this
+    /// type ever hands out is exactly one path component below its scratch
+    /// root, always -- so `sandbox`'s parent directory *is* that scratch
+    /// root, whichever `WorkspaceManager` produced it.
+    public nonisolated static func moduleCachePath(forSandbox sandbox: URL) -> URL {
+        sandbox.deletingLastPathComponent().appendingPathComponent(moduleCacheDirectoryName, isDirectory: true)
     }
 
     /// Builds a fresh sandbox for `id` and returns its canonical location.
@@ -228,9 +288,24 @@ public actor WorkspaceManager {
             throw WorkspaceError.sandboxOutsideScratchRoot(path: destination.path, scratchRoot: scratchRoot.path)
         }
 
-        guard fileManager.fileExists(atPath: productsDirectory.path) else {
+        // `clone(_:to:)` below uses `CLONE_NOFOLLOW` so a symlink *inside* a
+        // cloned tree is recreated as a symlink, never dereferenced into a
+        // copy (see that function's own doc comment) — correct for
+        // `populate`'s recursive walk, but wrong here: `productsDirectory`
+        // itself, the top-level source, is routinely a symlink (SwiftPM's
+        // own `.build/debug`, always a relative symlink to
+        // `.build/<triple>/debug`). Cloning that top-level symlink with
+        // `CLONE_NOFOLLOW` would recreate the same *relative* link text at
+        // `destination` — pointing at `destination/../<triple>/debug`, which
+        // does not exist, since only the products directory is cloned out,
+        // never its siblings. Resolving here, once, before either the clone
+        // or its existence check, makes `destination` a real, independent
+        // directory whatever `productsDirectory` itself was.
+        let resolvedProductsDirectory = productsDirectory.resolvingSymlinksInPath()
+
+        guard fileManager.fileExists(atPath: resolvedProductsDirectory.path) else {
             throw WorkspaceError.unreadable(
-                path: productsDirectory.path,
+                path: resolvedProductsDirectory.path,
                 underlying: "no such directory"
             )
         }
@@ -241,12 +316,12 @@ public actor WorkspaceManager {
         // prior clone has already been destroyed) overwrites cleanly.
         try? fileManager.removeItem(at: destination)
 
-        if supportsAPFSClone(), clone(productsDirectory, to: destination) {
+        if supportsAPFSClone(), clone(resolvedProductsDirectory, to: destination) {
             return destination
         }
 
         do {
-            try fileManager.copyItem(at: productsDirectory, to: destination)
+            try fileManager.copyItem(at: resolvedProductsDirectory, to: destination)
         } catch {
             throw WorkspaceError.unwritable(path: destination.path, underlying: error.localizedDescription)
         }

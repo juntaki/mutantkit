@@ -456,6 +456,40 @@ struct MutationPlannerEndToEndTests {
         #expect(plan.skipped.isEmpty)
         #expect(plan.discoveredCount == 0)
     }
+
+    // MARK: - Schemata eligibility
+
+    /// `plan.operators` is what `MutationRegistry.resolve(_:)` hands back,
+    /// embedded verbatim (`MutationPlanner.swift`: "operators:
+    /// resolution.descriptors") — so this is the actual serialized artifact
+    /// an external consumer reads, not a proxy for it. Requests every
+    /// operator (`.experimental` admits all 12) so both `true` and `false`
+    /// values are exercised, then round-trips through the same JSON
+    /// encoding `MutationPlan.write(to:)` uses, confirming the fix survives
+    /// the exact path a real plan file on disk takes.
+    @Test("A plan's embedded operator descriptors carry the effective schemataEligible answer, through JSON round-trip")
+    func planOperatorsCarryEffectiveSchemataEligible() async throws {
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Sources"), withIntermediateDirectories: true
+        )
+        let configuration = Configuration(operators: OperatorSettings(profile: .experimental))
+        let plan = try await makePlan(configuration: configuration)
+        #expect(plan.operators.count == MutationRegistry.builtIn.count)
+
+        func checkSchemataEligible(_ descriptors: [OperatorDescriptor], context: String) {
+            for descriptor in descriptors {
+                #expect(
+                    descriptor.schemataEligible == schemataEligibleOperatorIDs.contains(descriptor.id),
+                    "\(descriptor.id) \(context)"
+                )
+            }
+        }
+
+        checkSchemataEligible(plan.operators, context: "in plan.operators")
+        let data = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(MutationPlan.self, from: data)
+        checkSchemataEligible(decoded.operators, context: "after JSON round-trip")
+    }
 }
 
 private extension MutationPlan {
@@ -465,3 +499,14 @@ private extension MutationPlan {
         IntegrityChecker.validatePlan(self).isEmpty
     }
 }
+
+/// The 6 operators with a real, registered `SchemataLowererRegistry`
+/// lowerer today — see `planOperatorsCarryEffectiveSchemataEligible`.
+private let schemataEligibleOperatorIDs: Set<String> = [
+    "swift.core.bool-literal-inversion",
+    "swift.core.logical-connector-replacement",
+    "swift.core.relational-operator-replacement",
+    "swift.core.ternary-branch-swap",
+    "swift.core.unary-not-removal",
+    "swift.core.return-value-replacement"
+]

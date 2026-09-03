@@ -12,15 +12,16 @@ public struct OperationalIssue: Codable, Sendable, Hashable {
         case error
     }
 
-    /// Four cases today: `MutationRunner.finalize`'s checkpoint write, a
+    /// Five cases today: `MutationRunner.finalize`'s checkpoint write, a
     /// shared schemata chunk build that genuinely failed to compile
     /// (ADR-0008 Addendum 4's fan-out/observability requirement — one issue
-    /// per failed chunk, never one per affected `MutationID`), and a
-    /// `noOpCanarySampleRate`-sampled mutant whose build product hashed
-    /// identical to baseline yet whose real test run did not simply pass —
-    /// see `Configuration.execution.noOpCanarySampleRate`'s own doc comment.
-    /// New kinds get added here as they're given the same treatment — this
-    /// is not a general-purpose error bucket.
+    /// per failed chunk, never one per affected `MutationID`), a chunk whose
+    /// build succeeded but whose own build receipt could not be resolved,
+    /// and a `noOpCanarySampleRate`-sampled mutant whose build product
+    /// hashed identical to baseline yet whose real test run did not simply
+    /// pass — see `Configuration.execution.noOpCanarySampleRate`'s own doc
+    /// comment. New kinds get added here as they're given the same
+    /// treatment — this is not a general-purpose error bucket.
     public enum Kind: String, Codable, Sendable {
         case checkpointWriteFailed
         /// One chunk's shared lowered program did not compile, so every
@@ -30,6 +31,15 @@ public struct OperationalIssue: Codable, Sendable, Hashable {
         /// verdict) — it is a cost/health signal, which is exactly what
         /// `operationalIssues` is for.
         case schemataChunkBuildFailed
+        /// One chunk's own shared lowered program built successfully, but
+        /// its build receipt (the provably-unique image identity schemata
+        /// verification depends on) could not be resolved, so every
+        /// `MutationID` it covered forfeited schemata's fast path and was
+        /// re-run through isolated mode instead. Distinct from
+        /// `schemataChunkBuildFailed`: the build itself succeeded, only its
+        /// identity proof did not. Never affects score or integrity, for the
+        /// same reason `schemataChunkBuildFailed` does not.
+        case schemataChunkReceiptUnavailable
         case noOpCanaryUnexpectedOutcome
     }
 

@@ -15,9 +15,24 @@ public struct OperatorDescriptor: Codable, Sendable, Hashable {
     public let summary: String
     public let defaultEnabled: Bool
     public let confidence: MutationConfidence
-    /// Whether Phase 4 may batch this operator into a schemata build. Every
-    /// operator starts `false` and only earns `true` by passing the differential
-    /// test against isolated execution.
+    /// Whether Phase 4 may batch this operator into a schemata build.
+    ///
+    /// This is *effective, serialized* metadata, not a value an operator's
+    /// own source file gets to declare authoritatively: `MutationRegistry`
+    /// overwrites whatever an operator's own `static let descriptor`
+    /// literal says with the true answer — whether `SchemataLowererRegistry`
+    /// actually has a lowerer registered for this operator's ID — for every
+    /// descriptor it hands out (`allDescriptors`, `resolve(_:).descriptors`,
+    /// and therefore every `MutationPlan` these end up embedded in). An
+    /// operator's own `descriptor` still needs *some* literal here (this
+    /// initializer has no other default), but that literal is never read as
+    /// the runtime answer once it passes through `MutationRegistry` — see
+    /// that type's own `effectiveDescriptor(for:)` for where the real
+    /// answer comes from. This field used to be read directly instead
+    /// of through that resolver, and the two drifted: 6 lowerers were
+    /// promoted into `SchemataLowererRegistry.builtIn` over several
+    /// sessions without this field ever being touched in any of those
+    /// commits.
     public let schemataEligible: Bool
     /// `true` means the operator needs type/symbol information it cannot get
     /// from syntax alone; such operators stay disabled until Phase 5 wires up an
@@ -47,6 +62,21 @@ public struct OperatorDescriptor: Codable, Sendable, Hashable {
         self.schemataEligible = schemataEligible
         self.requiresSymbolResolution = requiresSymbolResolution
         self.faultEvidence = faultEvidence
+    }
+
+    /// A copy with `schemataEligible` replaced — every other field
+    /// unchanged. The one place this exists to serve is
+    /// `MutationRegistry.effectiveDescriptor(for:)`, overwriting an
+    /// operator's own declared literal with the real answer from
+    /// `SchemataLowererRegistry` before this descriptor is ever handed to
+    /// an external consumer.
+    public func withSchemataEligible(_ schemataEligible: Bool) -> OperatorDescriptor {
+        OperatorDescriptor(
+            id: id, version: version, category: category, summary: summary,
+            defaultEnabled: defaultEnabled, confidence: confidence,
+            schemataEligible: schemataEligible,
+            requiresSymbolResolution: requiresSymbolResolution, faultEvidence: faultEvidence
+        )
     }
 }
 

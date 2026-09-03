@@ -69,8 +69,7 @@ import SwiftSyntax
 /// identical problem) and its accepted gaps.
 ///
 /// This blanket rule was proven *over*-conservative for at least one real
-/// builder (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`'s
-/// P2.3 entry): a real, compiled, run fixture showed a builder
+/// builder: a real, compiled, run fixture showed a builder
 /// implementing both `buildEither` *and* `buildOptional` compiles the
 /// else-deleted form fine and produces a genuinely different runtime
 /// result, while a second fixture implementing `buildEither` alone
@@ -102,9 +101,38 @@ import SwiftSyntax
 /// `buildOptional`-specific proof says nothing about for them.
 ///
 /// **`defaultEnabled: false`, `confidence: .experimental`.** A brand-new
-/// operator with no Muter analogue and no real-project corpus measurement
-/// yet — held to the same bar every other unvalidated operator in this
-/// catalog is (see `Research/operator-catalog/README.md`'s quality gate).
+/// operator with no Muter analogue — held to the same bar every other
+/// unvalidated operator in this catalog is.
+///
+/// **Known, corpus-measured compile-risk gap:**
+/// `isSafePosition` above guards exactly one completeness hazard — the
+/// deleted `else` being the block's own implicit-return/missing-return value
+/// at the *last* statement of a non-`Void` function. It has **no guard at
+/// all** for a `let`/`var` binding, or a `self` stored property/`self.init`
+/// delegation, that becomes definitely-initialized only because *both* the
+/// `if` and `else` branches assign it — regardless of position within the
+/// block. A real-build sweep of 19 candidates from a `swift-argument-parser`
+/// sample found 10 (52.6%) actually fail to compile this way (8
+/// definite-assignment, 2 initializer-completeness); a second, structurally
+/// unrelated corpus (`swift-syntax`'s `SwiftParser`, 25 candidates)
+/// confirmed the pattern is not project-specific — 20 (80.0%), all
+/// definite-assignment. See
+/// `ElseClauseDeletionCompileCorrectnessAcceptanceTests` for two RED
+/// fixtures reproducing both classes. A narrow syntax-local guard
+/// cannot close this gap without either missing real unsound candidates
+/// (a diverging `throw`/`return`/`fatalError` in the deleted branch shares
+/// no assignment target with the `if`-branch to key off of) or rejecting
+/// real safe ones that share the identical "both branches assign the same
+/// target" surface form (`elements[key] = ...`, a `var` already holding a
+/// value from its own declaration). Closing this correctly needs a
+/// backward-scope-declaration walk plus a control-flow-divergence
+/// classifier — real, bounded, pure-syntax work, but a new capability class
+/// beyond this operator's existing node-local checks, deliberately not
+/// undertaken here. **This is exactly the risk `defaultEnabled: false`/
+/// `confidence: .experimental` exists to contain — every mutant this
+/// produces from the pattern above is correctly reported `unviable`
+/// (confirmed via `mutantkit reproduce --run` against real corpus mutation
+/// IDs), never miscounted as `survived`.**
 public struct ElseClauseDeletionOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.else-clause-deletion",

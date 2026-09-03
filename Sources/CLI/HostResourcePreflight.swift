@@ -209,51 +209,44 @@ enum HostResourcePreflight {
     /// `nil` on any failure to run, parse, or finish within
     /// `simctlTimeoutSeconds` — absence of the count, not a fabricated zero,
     /// mirroring `ResourceSnapshot.freeMemoryBytes`.
+    ///
+    /// A fifth review, found the hard way during a real full acceptance-
+    /// suite run (thousands of concurrent `ProcessSupervisor`-spawned
+    /// processes churning in the same test binary): the previous
+    /// hand-rolled version raced a raw `Foundation.Process`/`Pipe` against
+    /// this same timeout, but `Process.waitUntilExit()` depends on
+    /// Foundation's own process-wide, SIGCHLD-driven completion tracking to
+    /// unblock — and under enough concurrent child-process churn from
+    /// *other*, unrelated processes in the same binary, that notification
+    /// can be lost for this specific child. The watchdog task still killed
+    /// the process on schedule, `readDataToEndOfFile()` still unblocked once
+    /// its pipe closed, but `waitUntilExit()` afterward hung indefinitely —
+    /// the timeout this function exists to guarantee was not actually a hard
+    /// bound. `ProcessSupervisor` (see that type's own doc comments) exists
+    /// for exactly this reason: it reaps its own children by directly
+    /// polling `waitpid`, never depending on Foundation's shared SIGCHLD
+    /// dispatch, so this delegates to it instead of re-solving the same
+    /// problem a second, less robust way.
     static func bootedSimulatorCount() async -> Int? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "list", "devices", "booted", "--json"]
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = FileHandle.nullDevice
-
+        let result: ProcessResult
         do {
-            try process.run()
+            result = try await ProcessSupervisor.run(
+                executable: "/usr/bin/xcrun",
+                arguments: ["simctl", "list", "devices", "booted", "--json"],
+                workingDirectory: FileManager.default.temporaryDirectory,
+                timeoutSeconds: Double(simctlTimeoutSeconds),
+                terminationGracePeriodSeconds: Double(simctlKillGraceSeconds)
+            )
         } catch {
             return nil
         }
-
-        // Raced against a timeout rather than a shared mutable flag: the
-        // read side blocks synchronously on `readDataToEndOfFile()`
-        // (`Process`/`Pipe` have no async-native API), so the timeout has to
-        // win the race by terminating the process, which closes the pipe
-        // and unblocks the read with whatever partial data got written —
-        // not by trying to interrupt the blocking call directly.
-        let data: Data? = await withTaskGroup(of: Data?.self) { group in
-            group.addTask {
-                let data = stdout.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                return process.terminationStatus == 0 ? data : nil
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: simctlTimeoutSeconds * 1_000_000_000)
-                guard process.isRunning else { return nil }
-                process.terminate()
-                try? await Task.sleep(nanoseconds: simctlKillGraceSeconds * 1_000_000_000)
-                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                return nil
-            }
-            let first = await group.next().flatMap { $0 }
-            group.cancelAll()
-            return first
-        }
-        guard let data else { return nil }
+        guard result.succeeded else { return nil }
 
         struct Payload: Decodable {
             struct Device: Decodable { let state: String }
             let devices: [String: [Device]]
         }
-        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return nil }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: result.standardOutput) else { return nil }
         return payload.devices.values.flatMap { $0 }.filter { $0.state == "Booted" }.count
     }
 }

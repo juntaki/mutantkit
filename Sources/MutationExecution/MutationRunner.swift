@@ -21,6 +21,18 @@ import SwiftFrontend
 ///    are sorted back into `MutationID` order before anything reads them. Two
 ///    runs of the same plan produce the same report.
 ///
+/// Everything `MutationRunner.establishConfirmationSandbox(_:startedAt:)`
+/// needs, bundled so that call stays within swiftlint's parameter-count
+/// limit — see that method's own doc comment for what it does with these.
+private struct ConfirmationSandboxRequest {
+    let point: MutationPoint
+    let applied: AppliedMutation
+    let artifact: BuildArtifact
+    let activation: ActivationEvidence?
+    let coverage: CoverageObservation?
+    let buildDurationSeconds: Double
+}
+
 /// The adapters are injected: this type knows about building and testing, and
 /// nothing about `xcodebuild`, `swift test`, or simulators.
 public struct MutationRunner: Sendable {
@@ -50,21 +62,25 @@ public struct MutationRunner: Sendable {
     /// --strategy isolated`.
     private let preEstablishedBaseline: SharedBaselineEstablisher.Outcome?
 
+    /// Retesting a decided outcome (same-artifact confirmation for a kill,
+    /// fresh-rebuild confirmation for a crash or a timeout) and the
+    /// test-running primitive every one of those, and this runner's own
+    /// primary test run, executes through — see that type's own doc
+    /// comment. Phase A1 extraction out of this type: constructed once in
+    /// `init`, from the same `workspaces`/`build`/`test`/`configuration`
+    /// this runner itself was given.
+    private let confirmationCoordinator: MutationConfirmationCoordinator
+
+    /// Turning raw build/test/application observations into a reportable
+    /// `MutationResult` — see that type's own doc comment. Phase A1
+    /// extraction out of this type: constructed once in `init`, sharing
+    /// this runner's own `operationalIssues` log by reference (not a copy),
+    /// so a warning `finalize` records still reaches this run's own
+    /// `RunReport.operationalIssues` below.
+    private let evidenceAssembler: MutationEvidenceAssembler
+
     /// Cannot collide with a mutant's sandbox: every mutation ID starts `mut_`.
     private static let baselineSandboxID = "baseline"
-
-    /// The confirmation policy this run is actually gated on — passed to
-    /// `MutationVerdictVerifier.verify` so it can require the confirmation
-    /// `finishAfterTest`'s own `configuration.execution.retestKilledMutants`/
-    /// `confirmCrashKills` checks promise, rather than trusting whatever
-    /// `confirmations` a reverified `MutationObservations` happens to carry.
-    private var verificationPolicy: MutationVerdictVerifier.VerdictVerificationPolicy {
-        MutationVerdictVerifier.VerdictVerificationPolicy(
-            retestKilledMutants: configuration.execution.retestKilledMutants,
-            confirmCrashKills: configuration.execution.confirmCrashKills,
-            confirmTimedOutMutants: configuration.execution.confirmTimedOutMutants
-        )
-    }
 
     /// - Parameters:
     ///   - checkpoints: when supplied, results are persisted as they land and
@@ -150,6 +166,19 @@ public struct MutationRunner: Sendable {
         self.progress = progress
         self.preEstablishedBaseline = preEstablishedBaseline
         self.monotonicNow = monotonicNow
+        self.confirmationCoordinator = MutationConfirmationCoordinator(
+            workspaces: workspaces, build: build, test: test, configuration: configuration
+        )
+        self.evidenceAssembler = MutationEvidenceAssembler(
+            plan: plan,
+            configuration: configuration,
+            checkpoints: checkpoints,
+            artifactsRoot: artifactsRoot,
+            resultCache: resultCache,
+            resultCacheDigest: resultCacheDigest,
+            progress: progress,
+            operationalIssues: operationalIssues
+        )
     }
 
     // MARK: - Run
@@ -329,6 +358,12 @@ public struct MutationRunner: Sendable {
     /// same fate a per-mutant sandbox failure has on the non-incremental
     /// path, so every planned mutation still owes the integrity check a
     /// result.
+    ///
+    /// F3 verdict-contamination audit: this sandbox's deliberate reuse
+    /// across mutations is an accepted, *unproven*, not proven-safe risk
+    /// — see `ProcessSupervisor`'s own "Remaining risks" doc comment for
+    /// the full reasoning and the exact reopening trigger. No production
+    /// mitigation here on purpose.
     private func runIncrementalWorker(
         id: String, queue: MutationQueue, baseline: BaselineContext
     ) async -> [MutationResult] {
@@ -339,7 +374,7 @@ public struct MutationRunner: Sendable {
             sandbox = try await workspaces.createSandbox(id: id)
         } catch {
             while let point = await queue.next() {
-                let result = await infrastructureFailureResult(
+                let result = await evidenceAssembler.infrastructureFailureResult(
                     point: point,
                     diagnosis: "No persistent incremental-build sandbox could be created for this worker: \(error)",
                     durationSeconds: 0
@@ -524,6 +559,10 @@ public struct MutationRunner: Sendable {
     /// than silently dropping its share of the plan. It returns `sandbox:
     /// nil` in that case — there is nothing for the caller to keep alive or
     /// destroy.
+    ///
+    /// Same accepted, unproven cross-mutant reuse risk as
+    /// `runIncrementalWorker` — see that method's own doc comment and
+    /// `ProcessSupervisor`'s "Remaining risks" section.
     private func runIncrementalBuildWorkerSequential(
         id: String, queue: MutationQueue, baseline: BaselineContext
     ) async -> (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: URL?) {
@@ -535,7 +574,7 @@ public struct MutationRunner: Sendable {
             sandbox = try await workspaces.createSandbox(id: id)
         } catch {
             while let point = await queue.next() {
-                let result = await infrastructureFailureResult(
+                let result = await evidenceAssembler.infrastructureFailureResult(
                     point: point,
                     diagnosis: "No persistent incremental-build sandbox could be created for this worker: \(error)",
                     durationSeconds: 0
@@ -557,10 +596,10 @@ public struct MutationRunner: Sendable {
                     )
                     readyToTest.append(Self.relocating(prepared, to: clone))
                 } catch {
-                    let result = await infrastructureFailureResult(
+                    let result = await evidenceAssembler.infrastructureFailureResult(
                         point: point,
                         diagnosis: "This mutant's build could not be cloned out for batched testing: \(error)",
-                        evidence: evidence(
+                        evidence: evidenceAssembler.evidence(
                             prepared.applied, artifact: prepared.artifact, activation: prepared.activation
                         ),
                         durationSeconds: Date().timeIntervalSince(started)
@@ -601,6 +640,10 @@ public struct MutationRunner: Sendable {
     /// test lane's `receive` loop only ends once every worker has reported
     /// itself finished; a worker that returned early without reporting in
     /// would leave the test lane, and the whole pipeline, waiting forever.
+    ///
+    /// Same accepted, unproven cross-mutant reuse risk as
+    /// `runIncrementalWorker` — see that method's own doc comment and
+    /// `ProcessSupervisor`'s "Remaining risks" section.
     private func runPipelinedBuildWorker(
         id: String, queue: MutationQueue, baseline: BaselineContext,
         collector: PipelineCollector, coordinator: PipelineCoordinator
@@ -611,7 +654,7 @@ public struct MutationRunner: Sendable {
         } catch {
             await coordinator.registerWorker(id, sandbox: nil)
             while let point = await queue.next() {
-                let result = await infrastructureFailureResult(
+                let result = await evidenceAssembler.infrastructureFailureResult(
                     point: point,
                     diagnosis: "No persistent incremental-build sandbox could be created for this worker: \(error)",
                     durationSeconds: 0
@@ -636,10 +679,10 @@ public struct MutationRunner: Sendable {
                     )
                     await coordinator.send(Self.relocating(prepared, to: clone), workerID: id)
                 } catch {
-                    let result = await infrastructureFailureResult(
+                    let result = await evidenceAssembler.infrastructureFailureResult(
                         point: point,
                         diagnosis: "This mutant's build could not be cloned out for batched testing: \(error)",
-                        evidence: evidence(
+                        evidence: evidenceAssembler.evidence(
                             prepared.applied, artifact: prepared.artifact, activation: prepared.activation
                         ),
                         durationSeconds: Date().timeIntervalSince(started)
@@ -769,10 +812,14 @@ public struct MutationRunner: Sendable {
     /// it. `productHash`/`command` describe the build itself, not where it
     /// happens to be stored, so they carry over unchanged — only the paths
     /// move. Reassigning `sandbox` alongside `artifact` (never one without
-    /// the other) is what keeps `confirmKill`'s same-sandbox retest
-    /// (see `confirmKill` below) testing the actual mutant it is
-    /// confirming, rather than whatever the worker has since rebuilt.
-    private static func relocating(_ prepared: PreparedMutant, to clone: URL) -> PreparedMutant {
+    /// the other) is what keeps `MutationConfirmationCoordinator.confirmKill`'s
+    /// same-sandbox retest testing the actual mutant it is confirming,
+    /// rather than whatever the worker has since rebuilt.
+    ///
+    /// Phase A1 extraction: `internal` (not `private`), because
+    /// `MutationConfirmationCoordinator.confirmKillIfNeeded`, in its own
+    /// file, calls this too — see that method's own doc comment.
+    static func relocating(_ prepared: PreparedMutant, to clone: URL) -> PreparedMutant {
         let artifact = BuildArtifact(
             productsDirectory: clone,
             productHash: prepared.artifact.productHash,
@@ -788,7 +835,14 @@ public struct MutationRunner: Sendable {
             observation: prepared.observation,
             selectedTests: prepared.selectedTests,
             startedAt: prepared.startedAt,
-            buildDurationSeconds: prepared.buildDurationSeconds
+            buildDurationSeconds: prepared.buildDurationSeconds,
+            // Untouched by this relocation: `confirmationSandbox` is its own,
+            // separately established independent clone (see that field's own
+            // doc comment) — relocating *this* mutant's primary-test home
+            // (the whole point of this function, for a persistent worker's
+            // own sandbox) has nothing to do with where its confirmation
+            // retest, if any, already lives.
+            confirmationSandbox: prepared.confirmationSandbox
         )
     }
 
@@ -827,7 +881,7 @@ public struct MutationRunner: Sendable {
                     } catch {
                         return (
                             URL(fileURLWithPath: "/"),
-                            .finished(await self.infrastructureFailureResult(
+                            .finished(await self.evidenceAssembler.infrastructureFailureResult(
                                 point: point,
                                 diagnosis: "No sandbox could be created for this mutant: \(error)",
                                 durationSeconds: Date().timeIntervalSince(started)
@@ -935,7 +989,7 @@ public struct MutationRunner: Sendable {
             // batch execution summary.
             for prepared in readyToTest {
                 let testStarted = Date()
-                let run = try? await runMutantTests(
+                let run = try? await confirmationCoordinator.runMutantTests(
                     prepared.point, artifact: prepared.artifact, in: prepared.sandbox,
                     timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: prepared.selectedTests),
                     selectedTests: prepared.selectedTests
@@ -1478,7 +1532,7 @@ public struct MutationRunner: Sendable {
                     // lives in would let the first survivor's preserve MOVE
                     // it away, leaving nothing for the rest. Passing a
                     // sandbox the artifact is never inside forces a copy.
-                    let preservedArtifact = preserve(
+                    let preservedArtifact = evidenceAssembler.preserve(
                         run.resultArtifactPath, for: survivor.prepared.point, in: survivor.prepared.sandbox,
                         label: "wave-\(waveIndex)"
                     )
@@ -1552,7 +1606,7 @@ public struct MutationRunner: Sendable {
         // always does — no known selection, run the full configured list —
         // preserved rather than collapsed into an empty `Set`.
         let timeoutSeconds = baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests)
-        let run = try? await runMutantTests(
+        let run = try? await confirmationCoordinator.runMutantTests(
             prepared.point, artifact: prepared.artifact, in: prepared.sandbox,
             timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
         )
@@ -1691,7 +1745,10 @@ public struct MutationRunner: Sendable {
 
     // MARK: - Baseline
 
-    private struct BaselineContext: Sendable {
+    // Phase A1 extraction: `internal` (not `fileprivate`) because
+    // `MutationConfirmationCoordinator`, in its own file, takes this as a
+    // parameter to every confirmation retest method.
+    struct BaselineContext: Sendable {
         let record: BaselineRecord
         let productHash: String?
         let timeouts: TimeoutController
@@ -1960,7 +2017,11 @@ public struct MutationRunner: Sendable {
     /// A mutant that finished everything up through its build and is ready
     /// for a test run — shared shape between the per-mutant path and
     /// `evaluateInBatches`.
-    fileprivate struct PreparedMutant: Sendable {
+    ///
+    /// Phase A1 extraction: `internal` (not `fileprivate`) because
+    /// `MutationConfirmationCoordinator`, in its own file, takes this as a
+    /// parameter to `confirmKillIfNeeded`.
+    struct PreparedMutant: Sendable {
         let point: MutationPoint
         let sandbox: URL
         let applied: AppliedMutation
@@ -1972,6 +2033,21 @@ public struct MutationRunner: Sendable {
         /// Every `PreparedMutant` by construction came from a successful
         /// `build.buildMutant` call, so this is never `nil`.
         let buildDurationSeconds: Double
+        /// F3 zero-base review, verdict-contamination audit: an independent
+        /// clone of this mutant's own build products, established by
+        /// `prepare(_:in:baseline:startedAt:)` immediately after the build
+        /// succeeds — strictly *before* the primary test run below ever
+        /// starts, and therefore before any `ProcessSupervisor`-spawned
+        /// process from that primary run, escaped or not, has ever had any
+        /// chance to write into it. `confirmKill` uses this instead of
+        /// `sandbox` — see that function's own doc comment for the actual
+        /// threat this closes. `nil` only when
+        /// `Configuration.execution.retestKilledMutants` is off (no
+        /// confirmation retest will ever be attempted, so nothing needs
+        /// isolating) or the eager clone itself failed (`prepare`'s own
+        /// `.finished(.infrastructureFailure)` short-circuit in that case —
+        /// see there).
+        let confirmationSandbox: URL?
 
         /// A copy narrowed to exactly one test — used when a wave's
         /// detection came from a single covering test, so a confirmation
@@ -1982,7 +2058,8 @@ public struct MutationRunner: Sendable {
             PreparedMutant(
                 point: point, sandbox: sandbox, applied: applied, artifact: artifact,
                 activation: activation, observation: observation, selectedTests: [test],
-                startedAt: startedAt, buildDurationSeconds: buildDurationSeconds
+                startedAt: startedAt, buildDurationSeconds: buildDurationSeconds,
+                confirmationSandbox: confirmationSandbox
             )
         }
     }
@@ -2002,7 +2079,7 @@ public struct MutationRunner: Sendable {
         do {
             sandbox = try await workspaces.createSandbox(id: point.id.rawValue)
         } catch {
-            return await infrastructureFailureResult(
+            return await evidenceAssembler.infrastructureFailureResult(
                 point: point,
                 diagnosis: "No sandbox could be created for this mutant: \(error)",
                 durationSeconds: Date().timeIntervalSince(started)
@@ -2027,7 +2104,7 @@ public struct MutationRunner: Sendable {
             let testStarted = Date()
             let run: TestRunResult
             do {
-                run = try await runMutantTests(
+                run = try await confirmationCoordinator.runMutantTests(
                     point,
                     artifact: prepared.artifact,
                     in: sandbox,
@@ -2035,10 +2112,10 @@ public struct MutationRunner: Sendable {
                     selectedTests: prepared.selectedTests
                 )
             } catch {
-                return await infrastructureFailureResult(
+                return await evidenceAssembler.infrastructureFailureResult(
                     point: point,
                     diagnosis: "The mutant's tests could not be run: \(error)",
-                    evidence: evidence(
+                    evidence: evidenceAssembler.evidence(
                         prepared.applied, artifact: prepared.artifact, activation: prepared.activation
                     ),
                     durationSeconds: Date().timeIntervalSince(startedAt),
@@ -2073,7 +2150,7 @@ public struct MutationRunner: Sendable {
             infrastructureFailureDiagnosis: String? = nil,
             buildDurationSeconds: Double? = nil
         ) async -> PrepareOutcome {
-            .finished(await finalize(
+            .finished(await evidenceAssembler.finalize(
                 point: point,
                 sourceApplication: sourceApplication,
                 build: build,
@@ -2135,7 +2212,7 @@ public struct MutationRunner: Sendable {
         if let coverage = baseline.coverage, coverage.isKnownUncovered(point) {
             let observation = coverage.observation(forFile: point.file, line: point.line)
             return await finished(
-                sourceApplication: .applied(evidence(applied)),
+                sourceApplication: .applied(evidenceAssembler.evidence(applied)),
                 coverage: CoverageObservation(mutatedLineWasExecuted: false, source: observation?.source ?? "baseline coverage")
             )
         }
@@ -2156,20 +2233,20 @@ public struct MutationRunner: Sendable {
             artifact = try await build.buildMutant(applied, in: sandbox)
         } catch let failure as BuildFailure {
             return await finished(
-                sourceApplication: .applied(evidence(applied, buildCommand: failure.command)),
+                sourceApplication: .applied(evidenceAssembler.evidence(applied, buildCommand: failure.command)),
                 build: BuildObservation(outcome: .failed(kind: failure.kind, diagnosis: failure.diagnosis, command: failure.command)),
                 buildDurationSeconds: Date().timeIntervalSince(buildStarted)
             )
         } catch {
             return await infrastructureFailure(
                 "The mutant's build could not be run: \(error)",
-                evidence: evidence(applied),
+                evidence: evidenceAssembler.evidence(applied),
                 buildDurationSeconds: Date().timeIntervalSince(buildStarted)
             )
         }
         let buildDurationSeconds = Date().timeIntervalSince(buildStarted)
 
-        let activation = Self.activationEvidence(
+        let activation = MutationEvidenceAssembler.activationEvidence(
             mutantHash: artifact.productHash,
             baselineHash: baseline.productHash
         )
@@ -2224,7 +2301,7 @@ public struct MutationRunner: Sendable {
         // deterministic, opt-in slice of it this reopens.
         if case .buildProductIdenticalToBaseline? = activation, !isNoOpCanarySample(point.id) {
             return await finished(
-                sourceApplication: .applied(evidence(applied, artifact: artifact, activation: activation)),
+                sourceApplication: .applied(evidenceAssembler.evidence(applied, artifact: artifact, activation: activation)),
                 build: BuildObservation(
                     outcome: .succeeded(buildProductHash: artifact.productHash, command: artifact.command),
                     durationSeconds: buildDurationSeconds
@@ -2238,6 +2315,27 @@ public struct MutationRunner: Sendable {
             )
         }
 
+        // F3 zero-base review, verdict-contamination audit: cloned here —
+        // immediately after the build succeeds, strictly *before* the
+        // caller ever runs this mutant's primary test — so that
+        // `confirmKill`'s later retest (see that function's own doc
+        // comment) never executes anywhere a `ProcessSupervisor`-escaped
+        // descendant from *this exact* primary run could still be writing.
+        // Cloning any later than this — even "right before `confirmKill`
+        // itself runs" — would not be safe: that descendant is still alive
+        // for however long it happens to survive, so a clone taken after
+        // the primary run merely races it instead of avoiding it entirely.
+        // See `establishConfirmationSandbox` for the clone itself and its
+        // own infrastructure-failure handling.
+        let (confirmationSandbox, confirmationFailure) = await establishConfirmationSandbox(
+            ConfirmationSandboxRequest(
+                point: point, applied: applied, artifact: artifact, activation: activation,
+                coverage: observation, buildDurationSeconds: buildDurationSeconds
+            ),
+            startedAt: startedAt
+        )
+        if let confirmationFailure { return confirmationFailure }
+
         return .readyToTest(PreparedMutant(
             point: point,
             sandbox: sandbox,
@@ -2247,8 +2345,65 @@ public struct MutationRunner: Sendable {
             observation: observation,
             selectedTests: selectedTests,
             startedAt: startedAt,
-            buildDurationSeconds: buildDurationSeconds
+            buildDurationSeconds: buildDurationSeconds,
+            confirmationSandbox: confirmationSandbox
         ))
+    }
+
+    /// Clones this mutant's own independent confirmation workspace out of
+    /// its just-built products directory, before `prepare` ever hands this
+    /// mutant off for its primary test.
+    ///
+    /// F3 zero-base review, verdict-contamination audit: called
+    /// immediately after the build succeeds, strictly *before* this
+    /// mutant's primary test ever runs — so that `confirmKill`'s later
+    /// retest (see that function's own doc comment) never executes
+    /// anywhere a `ProcessSupervisor`-escaped descendant from *this exact*
+    /// primary run could still be writing. Calling this any later — even
+    /// "right before `confirmKill` itself runs" — would not be safe: that
+    /// descendant is still alive for however long it happens to survive,
+    /// so a clone taken after the primary run merely races it instead of
+    /// avoiding it entirely. Only paid when a confirmation retest could
+    /// ever actually be attempted; `cloneProducts` clones the already-built
+    /// products directory (`clonefile` on APFS — not a real byte-for-byte
+    /// copy) rather than rebuilding, so this stays cheap relative to the
+    /// build that already happened, even though it runs for every mutant
+    /// this gate applies to, not just the ones that end up `.failed`.
+    ///
+    /// Returns `(nil, nil)` when no confirmation could ever be attempted
+    /// (`retestKilledMutants` off), `(url, nil)` with the clone's location,
+    /// or `(nil, outcome)` carrying the already-finalized `PrepareOutcome`
+    /// for the caller — `prepare`'s own — to return directly.
+    private func establishConfirmationSandbox(
+        _ request: ConfirmationSandboxRequest, startedAt: Date
+    ) async -> (sandbox: URL?, failure: PrepareOutcome?) {
+        guard configuration.execution.retestKilledMutants else { return (nil, nil) }
+        do {
+            let sandbox = try await workspaces.cloneProducts(
+                from: request.artifact.productsDirectory, id: "\(request.point.id.rawValue)-confirm"
+            )
+            return (sandbox, nil)
+        } catch {
+            let result = await evidenceAssembler.finalize(
+                point: request.point,
+                sourceApplication: .applied(
+                    evidenceAssembler.evidence(request.applied, artifact: request.artifact, activation: request.activation)
+                ),
+                build: BuildObservation(
+                    outcome: .succeeded(buildProductHash: request.artifact.productHash, command: request.artifact.command),
+                    durationSeconds: request.buildDurationSeconds
+                ),
+                coverage: request.coverage,
+                infrastructureFailureDiagnosis: """
+                This mutant built successfully, but its own independent confirmation workspace could not be \
+                cloned out ahead of testing: \(error). Testing was skipped rather than proceed without \
+                confirmKill's own required isolation from this run's primary test.
+                """,
+                durationSeconds: Date().timeIntervalSince(startedAt),
+                buildDurationSeconds: request.buildDurationSeconds
+            )
+            return (nil, .finished(result))
+        }
     }
 
     /// Deterministic membership test for `Configuration.execution
@@ -2358,13 +2513,17 @@ public struct MutationRunner: Sendable {
         // the failure mode this guards against is a flake being mistaken
         // for a kill, not the reverse. See `Configuration.execution
         // .retestKilledMutants`.
-        if configuration.execution.retestKilledMutants, run.status == .failed, activationProven {
-            let confirmationStarted = Date()
-            confirmations.append(await confirmKill(
-                prepared.point, artifact: prepared.artifact, in: prepared.sandbox, baseline: baseline,
-                selectedTests: prepared.selectedTests, originalFailingTests: run.summary?.failingTests
-            ))
-            confirmationDurationSeconds = (confirmationDurationSeconds ?? 0) + Date().timeIntervalSince(confirmationStarted)
+        // F3 zero-base review, verdict-contamination audit: `confirmKill`
+        // always reuses whatever sandbox/artifact it is handed — never
+        // `prepared.sandbox`/`prepared.artifact` directly (the primary
+        // run's own home) — always `prepared.confirmationSandbox`, an
+        // independent clone `prepare` established before this mutant's
+        // primary test ever ran. See `confirmKillIfNeeded`.
+        if let (observation, durationSeconds) = await confirmationCoordinator.confirmKillIfNeeded(
+            prepared, baseline: baseline, run: run, activationProven: activationProven
+        ) {
+            confirmations.append(observation)
+            confirmationDurationSeconds = (confirmationDurationSeconds ?? 0) + durationSeconds
         }
 
         // A crash gets a fresh, independent rebuild rather than a same-sandbox
@@ -2373,7 +2532,7 @@ public struct MutationRunner: Sendable {
         // assertion kills is not enough here.
         if configuration.execution.confirmCrashKills, run.status == .crashed, activationProven {
             let confirmationStarted = Date()
-            let (observation, crashEvidence) = await confirmCrashKill(
+            let (observation, crashEvidence) = await confirmationCoordinator.confirmCrashKill(
                 prepared.point, baseline: baseline, selectedTests: prepared.selectedTests, originalDiagnosis: run.diagnosis
             )
             confirmations.append(observation)
@@ -2392,7 +2551,7 @@ public struct MutationRunner: Sendable {
         // proof, not require it up front.
         if configuration.execution.confirmTimedOutMutants, run.status == .timedOut {
             let confirmationStarted = Date()
-            let confirmed = await confirmTimeout(
+            let confirmed = await confirmationCoordinator.confirmTimeout(
                 prepared.point, baseline: baseline, selectedTests: prepared.selectedTests,
                 wasBatchAttributed: run.isBatchAttributedTimeout
             )
@@ -2402,7 +2561,19 @@ public struct MutationRunner: Sendable {
             confirmationDurationSeconds = (confirmationDurationSeconds ?? 0) + Date().timeIntervalSince(confirmationStarted)
         }
 
-        let resultArtifact = preserve(run.resultArtifactPath, for: prepared.point, in: prepared.sandbox)
+        // `confirmationSandbox` was created eagerly, before this mutant's
+        // verdict was known (see its own doc comment on `PreparedMutant`),
+        // so it must be disposed here unconditionally — whether or not
+        // `run.status == .failed` actually used it above. `finishAfterTest`
+        // is this mutant's one terminal call (every caller reaches it
+        // exactly once — wave-based early kill carries `prepared` forward
+        // across waves without ever re-preparing it), so this is not
+        // reachable more than once per mutant.
+        if let confirmationSandbox = prepared.confirmationSandbox {
+            try? await workspaces.destroySandbox(at: confirmationSandbox)
+        }
+
+        let resultArtifact = evidenceAssembler.preserve(run.resultArtifactPath, for: prepared.point, in: prepared.sandbox)
         var testAttempts = priorTestAttempts
         if appendCurrentAttempt {
             testAttempts.append(TestAttemptEvidence(
@@ -2415,9 +2586,9 @@ public struct MutationRunner: Sendable {
             ))
         }
 
-        return await finalize(
+        return await evidenceAssembler.finalize(
             point: prepared.point,
-            sourceApplication: .applied(evidence(
+            sourceApplication: .applied(evidenceAssembler.evidence(
                 prepared.applied,
                 artifact: prepared.artifact,
                 activation: prepared.activation,
@@ -2436,526 +2607,6 @@ public struct MutationRunner: Sendable {
             testDurationSeconds: testDurationSeconds,
             confirmationDurationSeconds: confirmationDurationSeconds
         )
-    }
-
-    /// A synthetic run standing in for "a confirmation attempt could not
-    /// even launch" (no sandbox, no build, no process) — represented as an
-    /// ordinary `TestRunResult` with `.infrastructureFailure` status so it
-    /// flows through `ConfirmationObservation` like any other confirming
-    /// run, rather than needing a separate short-circuit path. The verifier
-    /// treats an `.infrastructureFailure`-status confirmation uniformly,
-    /// regardless of kind — see `MutationVerdictVerifier.confirm`.
-    private func infrastructureFailureRun(_ diagnosis: String) -> TestRunResult {
-        TestRunResult(
-            status: .infrastructureFailure, summary: nil,
-            command: CommandRecord(executable: "", arguments: [], workingDirectory: ""),
-            resultArtifactPath: nil, diagnosis: diagnosis
-        )
-    }
-
-    /// Runs a mutant's tests a second time, on the artifact already built for it.
-    ///
-    /// A confirmation that could not even run — a launch failure, an
-    /// adapter/simulator/process problem — is represented as an
-    /// `.infrastructureFailure`-status run (see `infrastructureFailureRun`),
-    /// which the verifier always treats as unconfirmed regardless of kind —
-    /// `killedByAssertion` is not proven until a retest reproduces it, so a
-    /// confirmation that never got that far is excluded from the score, the
-    /// same as any other mutant this tool could not reach a verdict on.
-    private func confirmKill(
-        _ point: MutationPoint,
-        artifact: BuildArtifact,
-        in sandbox: URL,
-        baseline: BaselineContext,
-        selectedTests: Set<TestIdentifier>?,
-        originalFailingTests: [String]?
-    ) async -> ConfirmationObservation {
-        let confirmingRun: TestRunResult
-        do {
-            // Same per-mutant timeout the primary run this is confirming
-            // used — derived the same way, from the same `selectedTests`,
-            // never recomputed independently or widened to the whole suite.
-            confirmingRun = try await runMutantTests(
-                point, artifact: artifact, in: sandbox,
-                timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests),
-                selectedTests: selectedTests
-            )
-        } catch {
-            confirmingRun = infrastructureFailureRun("a confirmation run could not be started: \(error)")
-        }
-        return ConfirmationObservation(kind: .kill, run: confirmingRun, originalFailingTests: originalFailingTests)
-    }
-
-    /// Rebuilds a mutant from scratch in an independent sandbox and re-tests
-    /// it, to confirm a `killedByCrash` verdict before trusting it.
-    ///
-    /// Unlike `confirmKill`, this does not reuse the artifact or sandbox the
-    /// first attempt built. Found necessary on a real project: a
-    /// `killedByCrash` verdict whose crash was attributed to test methods
-    /// with no connection to the mutated file did not reproduce when the
-    /// identical mutant was rebuilt independently and tested by hand — a
-    /// same-sandbox retest, still holding onto whatever state produced that
-    /// crash, would have had no chance of ruling it out.
-    ///
-    /// Returns both the raw `ConfirmationObservation` (what the verifier
-    /// actually judges) and the `CrashConfirmation` display evidence
-    /// (`crashedAgain` computed the identical way the verifier's own
-    /// `confirmCrash` derives it — a real crash, with the identical,
-    /// normalized diagnosis text) — kept in sync deliberately, not by
-    /// sharing code across the module boundary between `MutationExecution`
-    /// and `MutationModel`.
-    private func confirmCrashKill(
-        _ point: MutationPoint,
-        baseline: BaselineContext,
-        selectedTests: Set<TestIdentifier>?,
-        originalDiagnosis: String
-    ) async -> (observation: ConfirmationObservation, evidence: CrashConfirmation) {
-        func unconfirmed(_ diagnosis: String) -> (ConfirmationObservation, CrashConfirmation) {
-            (
-                ConfirmationObservation(kind: .crash, run: infrastructureFailureRun(diagnosis), originalDiagnosis: originalDiagnosis),
-                CrashConfirmation(confirmingBuildCommand: nil, confirmingTestCommand: nil, crashedAgain: false, diagnosis: diagnosis)
-            )
-        }
-
-        let sandbox: URL
-        do {
-            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-crash-confirm")
-        } catch {
-            return unconfirmed("No confirmation sandbox could be created: \(error)")
-        }
-
-        let sourceURL: URL
-        do {
-            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
-        }
-
-        let applied: AppliedMutation
-        do {
-            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
-        }
-
-        let artifact: BuildArtifact
-        do {
-            artifact = try await build.buildMutant(applied, in: sandbox)
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The confirmation rebuild did not build: \(error)")
-        }
-
-        let confirmingRun: TestRunResult
-        do {
-            confirmingRun = try await runMutantTests(
-                point, artifact: artifact, in: sandbox,
-                // Same per-mutant timeout the primary run this is confirming
-                // used — derived the same way, from the same
-                // `selectedTests`, never recomputed independently or widened
-                // to the whole suite.
-                timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests),
-                selectedTests: selectedTests
-            )
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
-        }
-
-        try? await workspaces.destroySandbox(at: sandbox)
-
-        let normalizedOriginal = originalDiagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedConfirming = confirmingRun.diagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
-        let crashedAgain = confirmingRun.status == .crashed && normalizedOriginal == normalizedConfirming
-
-        return (
-            ConfirmationObservation(kind: .crash, run: confirmingRun, originalDiagnosis: originalDiagnosis),
-            CrashConfirmation(
-                confirmingBuildCommand: artifact.command,
-                confirmingTestCommand: confirmingRun.command,
-                crashedAgain: crashedAgain,
-                diagnosis: confirmingRun.diagnosis
-            )
-        )
-    }
-
-    /// Rebuilds a `.timedOut` mutant from scratch, in a sandbox independent
-    /// of the one the original timeout was observed in.
-    ///
-    /// Same shape as `confirmCrashKill`, same reasoning: a hang has no diff
-    /// to check against, and was found — empirically, on a real project — to
-    /// sometimes be a fact about *this* evaluation's execution context (a
-    /// concurrent worker pool vs. running alone, or even just which machine
-    /// ran it) rather than a fact about the mutant. Runs under the *same*
-    /// timeout limit as the original attempt.
-    ///
-    /// A confirming rebuild that turns out to be a kill or a crash (a
-    /// batch-attributed `.timedOut` carries no real information about this
-    /// specific mutant, so the confirming rebuild is that mutant's first
-    /// real observation) is routed through the *same* confirmation gates
-    /// any other first-observed kill/crash would go through —
-    /// `retestKilledMutants`/`confirmCrashKills` — gated on the confirming
-    /// run's own raw status and activation, exactly as `finishAfterTest`
-    /// gates its own first-pass confirmations, never on a classification.
-    /// Returns every observation gathered, in order (the timeout attempt,
-    /// then whichever cascade fired) — `MutationVerdictVerifier` folds them
-    /// in that same order.
-    private struct TimeoutConfirmationResult {
-        let observations: [ConfirmationObservation]
-        let timeoutConfirmation: TimeoutConfirmation
-        let crashConfirmation: CrashConfirmation?
-    }
-
-    private func confirmTimeout(
-        _ point: MutationPoint,
-        baseline: BaselineContext,
-        selectedTests: Set<TestIdentifier>?,
-        wasBatchAttributed: Bool
-    ) async -> TimeoutConfirmationResult {
-        func unconfirmed(_ diagnosis: String) -> TimeoutConfirmationResult {
-            TimeoutConfirmationResult(
-                observations: [ConfirmationObservation(
-                    kind: .timeout, run: infrastructureFailureRun(diagnosis), wasBatchAttributed: wasBatchAttributed
-                )],
-                timeoutConfirmation: TimeoutConfirmation(
-                    confirmingBuildCommand: nil, confirmingTestCommand: nil, timedOutAgain: false, diagnosis: diagnosis
-                ),
-                crashConfirmation: nil
-            )
-        }
-
-        let sandbox: URL
-        do {
-            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-timeout-confirm")
-        } catch {
-            return unconfirmed("No confirmation sandbox could be created: \(error)")
-        }
-
-        let sourceURL: URL
-        do {
-            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
-        }
-
-        let applied: AppliedMutation
-        do {
-            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
-        }
-
-        let artifact: BuildArtifact
-        do {
-            artifact = try await build.buildMutant(applied, in: sandbox)
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The confirmation rebuild did not build: \(error)")
-        }
-
-        let confirmingRun: TestRunResult
-        do {
-            confirmingRun = try await runMutantTests(
-                point, artifact: artifact, in: sandbox,
-                // Same per-mutant timeout the primary run this is confirming
-                // used — derived the same way, from the same
-                // `selectedTests`, never recomputed independently or widened
-                // to the whole suite.
-                timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests),
-                selectedTests: selectedTests
-            )
-        } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
-            return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
-        }
-
-        let confirmingActivation = Self.activationEvidence(mutantHash: artifact.productHash, baselineHash: baseline.productHash)
-        let confirmingActivationProven = confirmingActivation?.provesActivation ?? false
-        var observations: [ConfirmationObservation] = [
-            ConfirmationObservation(
-                kind: .timeout, run: confirmingRun, activation: confirmingActivation,
-                confirmingBuildProductHash: artifact.productHash, wasBatchAttributed: wasBatchAttributed
-            )
-        ]
-
-        // Same-artifact retest, on the confirming rebuild's own sandbox —
-        // still alive at this point precisely so this can reuse it, the
-        // same way a normal assertion kill's retest reuses its own
-        // artifact rather than rebuilding again.
-        if configuration.execution.retestKilledMutants, wasBatchAttributed,
-           confirmingRun.status == .failed, confirmingActivationProven {
-            observations.append(await confirmKill(
-                point, artifact: artifact, in: sandbox, baseline: baseline, selectedTests: selectedTests,
-                originalFailingTests: confirmingRun.summary?.failingTests
-            ))
-        }
-
-        try? await workspaces.destroySandbox(at: sandbox)
-
-        // A crash, unlike an assertion kill, is never confirmed on the same
-        // artifact (see `confirmCrashKill`'s doc comment) — its own fresh,
-        // independent rebuild, same as any other first-observed crash.
-        var crashConfirmationEvidence: CrashConfirmation?
-        if configuration.execution.confirmCrashKills, wasBatchAttributed,
-           confirmingRun.status == .crashed, confirmingActivationProven {
-            let (crashObservation, crashEvidence) = await confirmCrashKill(
-                point, baseline: baseline, selectedTests: selectedTests, originalDiagnosis: confirmingRun.diagnosis
-            )
-            observations.append(crashObservation)
-            crashConfirmationEvidence = crashEvidence
-        }
-
-        let timeoutConfirmation = TimeoutConfirmation(
-            confirmingBuildCommand: artifact.command,
-            confirmingTestCommand: confirmingRun.command,
-            timedOutAgain: confirmingRun.status == .timedOut && confirmingActivationProven,
-            diagnosis: confirmingRun.diagnosis
-        )
-
-        return TimeoutConfirmationResult(
-            observations: observations, timeoutConfirmation: timeoutConfirmation, crashConfirmation: crashConfirmationEvidence
-        )
-    }
-
-    /// Runs a mutant's tests, narrowed to `selectedTests` when the adapter
-    /// can honour that (`TestSelecting`) and a set was supplied, and
-    /// running the full configured test list otherwise — the same fallback
-    /// `TestSelecting.runMutant` itself applies for `selectedTests == nil`,
-    /// mirrored here so a coverage-blind adapter (no `TestSelecting`
-    /// conformance at all) behaves identically.
-    ///
-    /// Used for a mutant's first test run and for every confirmation rerun
-    /// of it: a confirmation is meant to reproduce the original observation,
-    /// not test a different, wider or narrower, slice of the suite than the
-    /// one that produced the verdict being confirmed.
-    private func runMutantTests(
-        _ point: MutationPoint,
-        artifact: BuildArtifact,
-        in sandbox: URL,
-        timeoutSeconds: Double,
-        selectedTests: Set<TestIdentifier>?
-    ) async throws -> TestRunResult {
-        if let selecting = test as? any TestSelecting {
-            return try await selecting.runMutant(
-                point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
-            )
-        }
-        return try await test.runMutant(point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds)
-    }
-
-    // MARK: - Evidence
-
-    /// Whether the mutation reached the binary the tests ran against.
-    ///
-    /// In isolated mode the edit is compiled in, so a mutant product identical
-    /// to the baseline's is proof the mutation did *not* run — whatever the
-    /// source diff says. `nil` means the adapter could not tell us, which is not
-    /// the same as either answer.
-    private static func activationEvidence(mutantHash: String?, baselineHash: String?) -> ActivationEvidence? {
-        guard let mutantHash, let baselineHash else { return nil }
-        return mutantHash == baselineHash
-            ? .buildProductIdenticalToBaseline(hash: mutantHash)
-            : .buildProductDiffersFromBaseline(mutantHash: mutantHash, baselineHash: baselineHash)
-    }
-
-    /// ADR-0006 Stage 1: the single path from raw observations to a
-    /// reportable result — `MutationObservations -> MutationVerdictVerifier
-    /// -> MutationResult` projection. There is no other way for this file
-    /// to produce a `MutationResult`: `prepare`'s `finished` closure,
-    /// `finishAfterTest`, and every pre-classification infrastructure-
-    /// failure early exit (sandbox creation, a build/test launch failure)
-    /// all route through here — including the early exits, which PR B
-    /// (ADR-0005) deliberately left outside the verifier because there was
-    /// "no classification decision to sit in front of." That reasoning
-    /// under-weighted the actual goal: the point was never "re-check a
-    /// classifier's judgment," it is "nothing constructs a `MutationResult`
-    /// outside this one path." An infrastructure failure has an outcome
-    /// (`.infrastructureFailure`) and a diagnosis; that is enough for
-    /// `MutationObservations.infrastructureFailureDiagnosis` today.
-    ///
-    /// `workUnitID` is `plan.workUnitID` (a real shard identity, not
-    /// `plan.planID`, which stays constant across every shard of the same
-    /// plan and so cannot distinguish them) — `plan.planID` was used here
-    /// before Stage 1; that was a real bug this stage fixes, not a
-    /// simplification.
-    /// The single choke point from raw observations to a persisted,
-    /// reportable result — every result-producing path in this file ends
-    /// here, directly or through `finishAfterTest`/`infrastructureFailureResult`.
-    ///
-    /// ADR-0006 Stage 1 (second review round): persistence now happens
-    /// *here*, not at each of this function's ~20 call sites. Previously
-    /// every call site did its own `checkpoints?.record(result)` right
-    /// after obtaining `result` — one call per finalized mutant, but
-    /// scattered, so a future new call site could forget it. Centralizing
-    /// the write next to the one place `observations` (the thing that
-    /// actually gets persisted, not `result`) is already in scope removes
-    /// that possibility structurally, and is what makes storing raw
-    /// `MutationObservations` — rather than the already-decided
-    /// `MutationResult` — for the cache/checkpoint to later re-verify
-    /// practical without threading a second return value through every
-    /// caller and task-group element type in this file.
-    private func finalize(
-        point: MutationPoint,
-        sourceApplication: SourceApplicationOutcome? = nil,
-        build: BuildObservation? = nil,
-        coverage: CoverageObservation? = nil,
-        test: SingleTestObservation? = nil,
-        confirmations: [ConfirmationObservation] = [],
-        infrastructureFailureDiagnosis: String? = nil,
-        durationSeconds: Double,
-        buildDurationSeconds: Double? = nil,
-        testDurationSeconds: Double? = nil,
-        confirmationDurationSeconds: Double? = nil
-    ) async -> MutationResult {
-        let ref = PlannedMutationRef.forPoint(point, planID: plan.planID, workUnitID: plan.workUnitID)
-        let observations = MutationObservations(
-            plannedMutation: ref,
-            sourceApplication: sourceApplication,
-            build: build,
-            coverage: coverage,
-            test: test,
-            confirmations: confirmations,
-            infrastructureFailureDiagnosis: infrastructureFailureDiagnosis
-        )
-        let record = MutationVerdictVerifier.verify(observations, policy: verificationPolicy)
-        let result: MutationResult
-        do {
-            result = try MutationResult.projected(
-                from: record, point: point, planID: plan.planID, workUnitID: plan.workUnitID,
-                durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
-                testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds
-            )
-        } catch {
-            // Unreachable in practice: `ref` above was computed from `point`
-            // via the identical call `projected` uses to check it, so they
-            // can never disagree — but `projected` is intentionally not
-            // `try!`-callable from outside `MutationModel`, and duplicating
-            // its guarantee here as a crash would be worse than a loud,
-            // honest infrastructure failure if some future change ever did
-            // make this reachable.
-            preconditionFailure("finalize's own ref must always match projected's recomputation: \(error)")
-        }
-
-        do {
-            try await checkpoints?.record(
-                observations, durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
-                testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds
-            )
-        } catch {
-            // Best-effort by design (score integrity never depends on a
-            // checkpoint), but silent failure here quietly breaks the
-            // "resume after interruption" contract without anyone noticing
-            // until the machine actually goes down mid-run — surfacing it
-            // both to stderr (for a human watching the run live) and to
-            // `RunReport.operationalIssues` (for a reader of `report.json`
-            // afterward) is worth more than either alone.
-            let diagnosis = "checkpoint write failed for \(point.id): \(error)"
-            FileHandle.standardError.write(Data("warning: \(diagnosis)\n".utf8))
-            await operationalIssues.append(
-                OperationalIssue(severity: .warning, kind: .checkpointWriteFailed, mutationID: point.id, diagnosis: diagnosis)
-            )
-        }
-        if let resultCache, let resultCacheDigest {
-            await resultCache.store(
-                observations, durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
-                testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds,
-                for: MutationResultCache.Key(mutationID: point.id, contextDigest: resultCacheDigest)
-            )
-        }
-        await progress?.recordCompletion()
-        return result
-    }
-
-    /// `finalize` for the pre-classification infrastructure-failure early
-    /// exits: no build/test observation exists yet, only a diagnosis (and,
-    /// when the mutation was at least applied, its source evidence).
-    private func infrastructureFailureResult(
-        point: MutationPoint,
-        diagnosis: String,
-        evidence: MutationEvidence? = nil,
-        durationSeconds: Double,
-        buildDurationSeconds: Double? = nil,
-        testDurationSeconds: Double? = nil
-    ) async -> MutationResult {
-        await finalize(
-            point: point,
-            sourceApplication: evidence.map { .applied($0) },
-            infrastructureFailureDiagnosis: diagnosis,
-            durationSeconds: durationSeconds,
-            buildDurationSeconds: buildDurationSeconds,
-            testDurationSeconds: testDurationSeconds
-        )
-    }
-
-    /// The source-level proof from the application, plus whatever the build and
-    /// test stages added to it.
-    private func evidence(
-        _ applied: AppliedMutation,
-        artifact: BuildArtifact? = nil,
-        activation: ActivationEvidence? = nil,
-        buildCommand: CommandRecord? = nil,
-        testCommand: CommandRecord? = nil,
-        resultArtifact: String? = nil,
-        crashConfirmation: CrashConfirmation? = nil,
-        timeoutConfirmation: TimeoutConfirmation? = nil,
-        testAttempts: [TestAttemptEvidence] = []
-    ) -> MutationEvidence {
-        MutationEvidence(
-            sourceBeforeHash: applied.evidence.sourceBeforeHash,
-            sourceAfterHash: applied.evidence.sourceAfterHash,
-            sourceDiff: applied.evidence.sourceDiff,
-            buildProductHash: artifact?.productHash,
-            applicationEvidence: activation.map(MutationApplicationEvidence.isolated),
-            buildCommand: artifact?.command ?? buildCommand,
-            testCommand: testCommand,
-            resultArtifact: resultArtifact,
-            crashConfirmation: crashConfirmation,
-            timeoutConfirmation: timeoutConfirmation,
-            testAttempts: testAttempts
-        )
-    }
-
-    /// Moves a result bundle somewhere it will outlive its sandbox.
-    ///
-    /// Recording a path under a directory this run is about to delete would be
-    /// worse than recording nothing: `inspect` would offer evidence that is not
-    /// there.
-    ///
-    /// `label`, when supplied, is folded into the destination filename —
-    /// needed when a mutant is preserved more than once (wave-based early
-    /// kill preserves one artifact per wave it survived, plus its final
-    /// one): without a distinguishing label, a later wave's identically-named
-    /// bundle would land at the same destination path as an earlier one.
-    private func preserve(_ url: URL?, for point: MutationPoint, in sandbox: URL, label: String? = nil) -> String? {
-        guard let url, let artifactsRoot, FileManager.default.fileExists(atPath: url.path) else { return nil }
-
-        let filename = label.map { "\($0)-\(url.lastPathComponent)" } ?? url.lastPathComponent
-        let relative = point.id.rawValue + "/" + filename
-        let destination = artifactsRoot.appendingPathComponent(relative)
-
-        do {
-            try FileManager.default.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try? FileManager.default.removeItem(at: destination)
-
-            // Copy rather than move when the bundle lives outside the sandbox:
-            // there it may be a directory the adapter still owns.
-            if url.resolvingSymlinksInPath().path.hasPrefix(sandbox.path + "/") {
-                try FileManager.default.moveItem(at: url, to: destination)
-            } else {
-                try FileManager.default.copyItem(at: url, to: destination)
-            }
-        } catch {
-            return nil
-        }
-
-        return relative
     }
 }
 

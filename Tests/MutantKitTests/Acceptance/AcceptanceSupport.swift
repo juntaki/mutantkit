@@ -49,6 +49,32 @@ enum Acceptance {
         return url
     }
 
+    /// Root of a real, packaged `mutantkit` release install — produced by
+    /// `scripts/release-build.sh` and extracted from its tarball, never the
+    /// `swift build` debug binary `binary()` points at. Set only by the
+    /// release-package E2E CI jobs (see `.github/workflows/ci.yml`); `nil`
+    /// everywhere else, including an ordinary `MUTANTKIT_ACCEPTANCE=1` run
+    /// — see `ReleaseBundledSchemataRuntimeAcceptanceTests`, the one suite
+    /// that reads it.
+    static var releasePackageRoot: URL? {
+        guard let raw = ProcessInfo.processInfo.environment["MUTANTKIT_RELEASE_PACKAGE_ROOT"], !raw.isEmpty else { return nil }
+        return URL(fileURLWithPath: raw)
+    }
+
+    /// The `mutantkit` executable inside `releasePackageRoot` — a missing
+    /// binary here is a real failure for the same reason `binary()`'s own
+    /// doc comment gives, once the suite has actually been enabled.
+    static func releasePackageBinary() throws -> URL {
+        guard let root = releasePackageRoot else {
+            throw AcceptanceError.binaryMissing("MUTANTKIT_RELEASE_PACKAGE_ROOT is not set")
+        }
+        let url = root.appendingPathComponent("mutantkit")
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            throw AcceptanceError.binaryMissing(url.path)
+        }
+        return url
+    }
+
     /// Copies a fixture into a temporary directory.
     ///
     /// Never runs against `Fixtures/` in place: a run writes sandboxes, DerivedData
@@ -120,10 +146,14 @@ enum Acceptance {
         return "platform=iOS Simulator,name=\(device)"
     }
 
+    /// - Parameter binary: which `mutantkit` executable to run — defaults to the
+    ///   `swift build` debug binary. `ReleaseBundledSchemataRuntimeAcceptanceTests`
+    ///   passes `releasePackageBinary()` instead, to drive a real packaged release
+    ///   install rather than this checkout's own debug build.
     @discardableResult
-    static func run(_ arguments: [String], in directory: URL) throws -> (exitCode: Int32, output: String) {
+    static func run(_ arguments: [String], in directory: URL, binary: URL? = nil) throws -> (exitCode: Int32, output: String) {
         let process = Process()
-        process.executableURL = try binary()
+        process.executableURL = try binary ?? Acceptance.binary()
         process.arguments = arguments
         process.currentDirectoryURL = directory
 
@@ -166,10 +196,13 @@ enum Acceptance {
     }
 
     /// Plans and runs a fixture, returning the parsed report.
+    ///
+    /// - Parameter binary: forwarded to `run(_:in:binary:)` — see its own doc comment.
     static func planAndRun(
         fixture: String,
         configuration: String? = nil,
-        extraRunArguments: [String] = []
+        extraRunArguments: [String] = [],
+        binary: URL? = nil
     ) throws -> AcceptanceRun {
         let directory = try stageFixture(fixture)
 
@@ -178,14 +211,14 @@ enum Acceptance {
                 .write(to: directory.appendingPathComponent("mutantkit.yml"), options: .atomic)
         }
 
-        let plan = try run(["plan", "--output", "plan.json"], in: directory)
+        let plan = try run(["plan", "--output", "plan.json"], in: directory, binary: binary)
         guard plan.exitCode == 0 else {
             throw AcceptanceError.commandFailed(command: "plan", exitCode: plan.exitCode, output: plan.output)
         }
 
         let execution = try run(
             ["run", "--plan", "plan.json", "--report", "json"] + extraRunArguments,
-            in: directory
+            in: directory, binary: binary
         )
 
         let reportURL = directory.appendingPathComponent(".mutantkit/report.json")

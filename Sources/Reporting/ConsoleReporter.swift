@@ -169,25 +169,74 @@ public struct ConsoleReporter: Reporter {
         return lines.joined(separator: "\n")
     }
 
+    /// Grouped via the shared `SurvivorPresentation` model — the identical
+    /// rows `CISummaryReporter` and `HTMLReporter` render from, so all three
+    /// agree on cluster identity, membership, and counts for the same run.
+    /// Unlike `CISummaryReporter`'s compact PR-comment scope, this is a full
+    /// local report: both actionable reasons are shown, split into their own
+    /// subsections, and every clustered mutant's own diff stays printed —
+    /// grouping only avoids repeating the declaration/location header, it
+    /// never hides a member's own change the way an earlier version's
+    /// single-representative-per-row design did.
     private func survivorSection(_ report: RunReport) -> String {
-        let survivors = report.survivors
-        var lines = [palette.bold("Surviving mutants (\(survivors.count))")]
+        let rows = SurvivorPresentationBuilder.build(from: report).rows
 
-        guard !survivors.isEmpty else {
-            lines.append("  none — every mutant that ran was killed")
-            return lines.joined(separator: "\n")
+        guard !rows.isEmpty else {
+            return [
+                palette.bold("Actionable test gaps (0)"),
+                "  none — every mutant that ran was killed"
+            ].joined(separator: "\n")
         }
 
-        for result in survivors {
-            let point = result.point
-            lines.append("")
-            lines.append("  \(palette.yellow(point.displayLocation))  \(palette.dim(point.operatorID))")
-            lines.append("    in \(point.enclosingDeclaration.description)")
-            lines.append("    \(result.diagnosis)")
+        let notCovered = rows.filter { $0.reason == .mutationSiteNotCovered }
+        let survived = rows.filter { $0.reason != .mutationSiteNotCovered }
+        let aggregate = rows.aggregate
 
-            // A survivor is only actionable if the reader can see what changed;
-            // an ID and a line number ask them to go re-derive the mutation.
-            if let diff = result.evidence?.sourceDiff, !diff.isEmpty {
+        var lines = [
+            palette.bold("Actionable test gaps (\(aggregate.totalMutants), \(aggregate.distinctIssues) distinct issue(s))")
+        ]
+
+        if !notCovered.isEmpty {
+            lines.append("")
+            lines.append(palette.bold("Not covered — \(notCovered.aggregate.totalMutants) mutant(s)"))
+            for row in notCovered { lines.append(contentsOf: renderRow(row)) }
+        }
+        if !survived.isEmpty {
+            lines.append("")
+            lines.append(palette.bold("Covered but survived — \(survived.aggregate.totalMutants) mutant(s)"))
+            for row in survived { lines.append(contentsOf: renderRow(row)) }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func renderRow(_ row: SurvivorPresentation.Row) -> [String] {
+        let countSuffix = row.count > 1 ? "  \(palette.dim("(×\(row.count))"))" : ""
+        var lines: [String] = [
+            "", "  \(palette.dim("in \(row.declaration) (\(row.operatorIDs.joined(separator: ", ")))"))\(countSuffix)"
+        ]
+
+        switch row.reason {
+        case .mutationSiteNotCovered:
+            lines.append("  Fix: add or extend a test that reaches this exact path.")
+        case .coveredButNotCaught:
+            switch row.testScope {
+            case .none, .unknown:
+                lines.append("  Tests run: unknown — the run's own evidence does not record which tests ran here.")
+            case .fullSuite:
+                lines.append("  Tests run: full configured suite.")
+            case let .narrowed(tests):
+                lines.append("  Tests run: \(tests.joined(separator: ", "))")
+            }
+        }
+
+        // Every clustered mutant keeps its own header line, diagnosis, and
+        // diff — clustering means "these share one root-cause story," not
+        // "these are the same mutation," so no member's own change is ever
+        // dropped to make room for another's.
+        for member in row.members {
+            lines.append("  \(palette.yellow(member.displayLocation))  [\(member.mutantID)]")
+            lines.append("    \(member.diagnosis)")
+            if let diff = member.sourceDiff, !diff.isEmpty {
                 for line in diff.split(separator: "\n", omittingEmptySubsequences: false) {
                     lines.append("    \(diffColored(String(line)))")
                 }
@@ -195,7 +244,7 @@ public struct ConsoleReporter: Reporter {
                 lines.append("    \(palette.dim("(no diff recorded)"))")
             }
         }
-        return lines.joined(separator: "\n")
+        return lines
     }
 
     // MARK: Colour

@@ -655,6 +655,14 @@ execution:
   # its mutants instead of a fresh build for each — real Swift incremental
   # compilation savings on a project with more than a handful of mutants.
   incrementalBuild: true
+  # Off by default. Routes every isolated-backend SwiftPM sandbox's Clang/
+  # Swift module cache (system frameworks only, never project code) to one
+  # external directory shared across sandboxes instead of each rebuilding
+  # its own — real speedup on cold system-framework compilation, wiped and
+  # rebuilt fresh at the start of every process. Not safe to combine with
+  # concurrent `mutantkit run`s against the same project on different
+  # destinations — see `ExecutionSettings.sharedModuleCache`'s doc comment.
+  # sharedModuleCache: true
   # Provisions one real simulator clone per worker (`simctl clone`) so
   # `workers > 1` genuinely parallelizes test execution across distinct
   # devices, instead of every worker serializing on one shared destination.
@@ -879,17 +887,24 @@ fighting over one simulator. If you touch the execution path, run them.
 
 Add `MUTANTKIT_ACCEPTANCE_SIMULATOR=0` to skip the suites needing a simulator.
 
+See `docs/apple-support-matrix.md` for the real, stated support contract
+across Swift/Xcode/macOS versions, project kind, test framework, iOS
+Simulator, and `isolated`/`schemata` mode — separated into supported,
+tested, best-effort, and unsupported, each backed by a citation.
+
 Schemata execution (`execution.strategy: schemata`) links a small C runtime
-(`MutantKitSchemataRuntime`) into the project under test; point
+(`MutantKitSchemataRuntime`) into the project under test. A released
+`mutantkit` binary resolves this on its own — it bundles both the macOS and
+iOS-Simulator archives under `lib/mutantkit/schemata/` next to itself, no
+extra setup required (see `docs/schemata-support-matrix.md`). For running
+the acceptance suite from a source checkout, though, `swift test` itself has
+no bundled runtime to fall back on, so point
 `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` at the directory `swift build
 --build-tests` puts `libMutantKitSchemataRuntime.a` in (e.g.
-`.build/arm64-apple-macosx/debug`) to exercise it. For an Xcode/iOS-Simulator
-project specifically, that directory also needs an `iphonesimulator/`
+`.build/arm64-apple-macosx/debug`). For an Xcode/iOS-Simulator project
+specifically, that directory also needs an `iphonesimulator/`
 subdirectory — `swift build` never produces one (it only builds for the host,
-macOS), so run `scripts/build-schemata-runtime.sh` once from a source checkout
-first. This is a source-checkout-only step: it compiles
-`Sources/MutantKitSchemataRuntimeC` directly, which a released `mutantkit`
-binary does not include.
+macOS), so run `scripts/build-schemata-runtime.sh` once first.
 
 ### Operators
 

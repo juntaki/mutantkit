@@ -1,4 +1,36 @@
 // swift-tools-version:6.0
+//
+// Public-projection overlay for the root Package.swift (see
+// .public-tree.toml's [overlay] source_dir = "oss-public"). This file is
+// NOT auto-derived from the private Package.swift -- git-projector's
+// overlay step copies it verbatim over whatever the private manifest
+// declares, so it has to be kept in sync BY HAND whenever a *production*
+// target's name, dependencies, or products change there.
+//
+// It differs from the private manifest in exactly one way: five
+// executable targets that exist only as research/investigation tooling
+// (never referenced by CLI, by any library target, or by any other
+// target's `dependencies:`) are omitted, along with their `Sources/`
+// directories (excluded via .public-tree.toml's `exclude_paths`, not
+// here -- an overlay can only ADD/REPLACE files at the paths it contains,
+// it can't delete a private-tree directory this file doesn't mention):
+//
+//   - BudgetV2Eval             (Research/budget-selection-v2 evaluation tool)
+//   - PlanSubsetDerivation     (Research/budget-selection-v2 evaluation tool)
+//   - PlanStats                (TEMP muter-comparison diagnostic, not a frozen protocol)
+//   - SchemataChunkBuildProbe  (TEMP muter-comparison diagnostic, not a frozen protocol)
+//   - DirectXCTestInvokeProbe  (standalone prototype, not wired into any production path)
+//
+// `SchemataEligibilityClassifier` is also research-labeled in the private
+// manifest's own comment (Research/adr-0008-validation), but is
+// deliberately KEPT here: `Tests/MutantKitTests/Unit/SchemataEligibilityClassifierTests.swift`
+// (part of the shipped `MutantKitTests` target, which the public repo's
+// own CI builds and runs) does `@testable import SchemataEligibilityClassifier`
+// to pin real `EligibilityClassifier` behavior. Dropping the target here
+// would break that test target's compile in the public snapshot -- not a
+// hygiene win, a regression. Removing it would require first relocating
+// or deleting that test file, which is a separate decision this pass
+// doesn't make.
 import PackageDescription
 
 let package = Package(
@@ -103,36 +135,6 @@ let package = Package(
         ),
         .testTarget(name: "BenchmarkRunnerTests", dependencies: ["BenchmarkRunner"]),
 
-        // MARK: Budget Selection v2 evaluation (task #25/#26, Research/budget-selection-v2)
-
-        // Post-processes plan.json/report.json produced by the real
-        // `mutantkit plan`/`run` CLI (which does all discovery/execution) —
-        // this target only needs in-process access to `BudgetSelectorV2`
-        // for the proxy-dependence screen's synthetic weight-vector
-        // resampling, which must run thousands of times fast and cannot
-        // reasonably shell out per round.
-        .executableTarget(
-            name: "BudgetV2Eval",
-            dependencies: [
-                "MutationModel", "MutationPlanner",
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
-            ]
-        ),
-
-        // Research-only execution-vehicle tool for
-        // Research/budget-selection-v2/evaluation-protocol.md §4.1
-        // (revision 7): derives a standalone plan scoped to a pre-computed
-        // outcome execution universe U', through MutationPlan/PlanSharding's
-        // own model-level decode/encode APIs — never by hand-editing plan
-        // JSON. See Sources/PlanSubsetDerivation/main.swift's doc comment.
-        .executableTarget(
-            name: "PlanSubsetDerivation",
-            dependencies: [
-                "MutationModel", "MutationPlanner",
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
-            ]
-        ),
-
         // Research-only, outcome-blind classification tool for
         // Research/adr-0008-validation/protocol.md's Protocol v3 addendum
         // (Corpus B calibration population selection rule): actually runs
@@ -141,6 +143,11 @@ let package = Package(
         // embedded membership, not just a lowerer's own `analyze()`. See
         // Sources/SchemataEligibilityClassifier/EligibilityClassification.swift's
         // doc comment.
+        //
+        // Kept in this public manifest (unlike its research siblings)
+        // because `MutantKitTests` — the shipped test target this repo's
+        // own CI builds — `@testable import`s it; see this file's header
+        // comment.
         .executableTarget(
             name: "SchemataEligibilityClassifier",
             dependencies: [
@@ -148,44 +155,6 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ]
         ),
-
-        // TEMP diagnostic tool for the muter-comparison Phase 3 slowdown
-        // investigation (Research/muter-comparison) — computes, from a
-        // plan.json alone (no test execution), what SchemataChunkPlanner
-        // would actually embed vs. fall back, broken down by operator, plus
-        // chunk composition. Not part of any frozen protocol; not intended
-        // to be a long-lived target.
-        .executableTarget(
-            name: "PlanStats",
-            dependencies: [
-                "MutationModel", "MutationPlanner", "SwiftCoreOperators", "SwiftFrontend", "AppleBuildAdapters"
-            ]
-        ),
-
-        // TEMP diagnostic tool for the muter-comparison bool-literal-inversion
-        // schemata chunk build-failure investigation — build-only reproducer
-        // (never runs tests) for delta-debugging which MutationID(s) in a
-        // failing chunk are actually responsible. Not part of any frozen
-        // protocol; not intended to be a long-lived target.
-        .executableTarget(
-            name: "SchemataChunkBuildProbe",
-            dependencies: [
-                "MutationModel", "MutationPlanner", "MutationExecution", "AppleBuildAdapters",
-                "SwiftCoreOperators", "SwiftFrontend"
-            ]
-        ),
-
-        // TEMP diagnostic tool for the "direct test-binary invocation"
-        // prototype (does bypassing `xcrun swift test`'s own CLI layer and
-        // invoking an already-built .xctest bundle straight through `xcrun
-        // xctest -XCTest <Class>/<method> <bundle>` save wall time for a
-        // single-test SwiftPM/macOS run?). Standalone — no dependency on
-        // any MutantKit module; it measures a mechanism against an
-        // arbitrary already-built SwiftPM package, not MutantKit's own
-        // runner. Not part of any frozen protocol; not intended to be a
-        // long-lived target, and NOT wired into AppleBuildAdapters or
-        // MutationRunner — that integration is a later step.
-        .executableTarget(name: "DirectXCTestInvokeProbe"),
 
         // MARK: Tests
 

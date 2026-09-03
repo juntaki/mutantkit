@@ -174,9 +174,13 @@ instead of restarting from zero.
 `project.kind`/`scheme`/`destination` (Xcode projects only),
 `sources.include`/`exclude`, `tests.targets`, `operators.profile`
 (`conservative`/`default`/`experimental`), `execution.budget.maxMutants`,
-`execution.strategy` (`isolated` default; `schemata` is faster but is
-fail-closed, not a silent fallback — it errors clearly if the resolved
-project adapter doesn't support it, currently SwiftPM only). CLI flags
+`execution.strategy` (`isolated` default; `schemata` is faster and supported
+for `swiftPackageMacOS` and `xcodeProject` — see
+`docs/schemata-support-matrix.md` for the full, measured matrix, including
+`swiftPackageApple`/`xcodeWorkspace`, which still fall back to isolated for
+every mutation today). Every mutation's own result is fail-closed regardless
+of strategy: a schemata verdict that cannot prove its own runtime evidence
+never gets guessed at, it re-runs isolated instead. CLI flags
 override the config file, which overrides environment, which overrides
 defaults.
 

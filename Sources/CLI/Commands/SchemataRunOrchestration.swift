@@ -382,7 +382,8 @@ enum SchemataRunOrchestration {
             // failed checkpoint write, for the same reason: a systemic,
             // many-mutant event that is invisible in both places is one
             // nobody ever learns about.
-            for issue in sharedChunkBuildFailureIssues(outcome.sharedChunkBuildFailureEvents) {
+            for issue in sharedChunkBuildFailureIssues(outcome.sharedChunkBuildFailureEvents)
+                + schemataInfrastructureFallbackIssues(outcome.infrastructureFallbackEvents) {
                 print("! \(issue.diagnosis)")
             }
             return .succeeded(outcome)
@@ -506,6 +507,7 @@ enum SchemataRunOrchestration {
             // per-mutation issues the fallback pass it caused went on to
             // produce.
             operationalIssues: sharedChunkBuildFailureIssues(schemataOutcome?.sharedChunkBuildFailureEvents ?? [])
+                + schemataInfrastructureFallbackIssues(schemataOutcome?.infrastructureFallbackEvents ?? [])
                 + (fallbackReport?.operationalIssues ?? [])
         )
     }
@@ -540,6 +542,29 @@ enum SchemataRunOrchestration {
         }
     }
 
+    /// The identical fan-out/observability treatment as
+    /// `sharedChunkBuildFailureIssues` above, for a chunk whose own shared
+    /// build succeeded but whose build receipt could not be resolved
+    /// (`SchemataFallbackReason.buildReceiptUnavailable`) — a structurally
+    /// different event (the build itself did not fail), so it gets its own
+    /// `OperationalIssue.Kind` rather than being folded into
+    /// `schemataChunkBuildFailed`, which would misstate what happened.
+    static func schemataInfrastructureFallbackIssues(
+        _ events: [SchemataMutationRunner.SchemataInfrastructureFallbackEvent]
+    ) -> [OperationalIssue] {
+        events.map { event in
+            OperationalIssue(
+                severity: .warning, kind: .schemataChunkReceiptUnavailable, mutationID: nil,
+                diagnosis: """
+                Schemata chunk \(event.chunkID) built successfully but its build receipt could not be \
+                resolved (\(event.diagnosis)); \(event.affectedMutationCount) \
+                \(event.affectedMutationCount == 1 ? "mutant" : "mutants") \
+                forfeited schemata execution and ran in isolated mode instead.
+                """
+            )
+        }
+    }
+
     /// A count histogram of every *dynamic* fallback reason the schemata
     /// backend reported, for `ExecutionStrategyReport.fallbackReasonCounts`.
     /// Keys are stable, machine-greppable strings derived from
@@ -554,6 +579,7 @@ enum SchemataRunOrchestration {
             case .hangBudgetExceeded: "hangBudgetExceeded"
             case .sharedChunkBuildFailure: "sharedChunkBuildFailure"
             case .knownUncovered: "knownUncovered"
+            case .buildReceiptUnavailable: "buildReceiptUnavailable"
             }
             counts[key, default: 0] += 1
         }

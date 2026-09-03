@@ -62,6 +62,34 @@ public struct MutationRegistry: Sendable {
 
     private let ordered: [any MutationOperator]
 
+    /// The canonical schemata-support answer, derived directly from
+    /// `SchemataLowererRegistry.builtIn` rather than from any operator's own
+    /// declared `descriptor.schemataEligible` literal — see
+    /// `effectiveDescriptor(for:)` and `OperatorDescriptor.schemataEligible`'s
+    /// own doc comment for why a second, hand-maintained copy of this fact
+    /// must never exist. Reads the lowerers' own `supportedOperatorIDs`
+    /// directly rather than constructing a full `SchemataLowererRegistry`
+    /// (whose own `init` also validates no two lowerers claim the same
+    /// operator or `lowererID` — a real invariant, but one a display/
+    /// serialization fact has no need to re-validate on every call; see
+    /// `MutationRegistryTests`'s own "Schemata eligibility" section for the
+    /// test that keeps that invariant checked anyway).
+    private static let schemataSupportedOperatorIDs: Set<String> = Set(
+        SchemataLowererRegistry.builtIn.flatMap(\.descriptor.supportedOperatorIDs)
+    )
+
+    /// The descriptor `MutationRegistry` actually hands to every external
+    /// consumer (`allDescriptors`, `resolve(_:).descriptors`, and therefore
+    /// every `MutationPlan`) — `candidate.descriptor` with
+    /// `schemataEligible` overwritten by the real
+    /// `SchemataLowererRegistry`-derived answer, never the operator's own
+    /// declared literal.
+    private static func effectiveDescriptor(for candidate: any MutationOperator) -> OperatorDescriptor {
+        candidate.descriptor.withSchemataEligible(
+            schemataSupportedOperatorIDs.contains(candidate.descriptor.id)
+        )
+    }
+
     public init(operators: [any MutationOperator] = MutationRegistry.builtIn) {
         var seen: Set<String> = []
         for candidate in operators {
@@ -73,7 +101,7 @@ public struct MutationRegistry: Sendable {
 
     /// Every known operator's descriptor, enabled or not. What `inspect` lists.
     public var allDescriptors: [OperatorDescriptor] {
-        ordered.map { $0.descriptor }
+        ordered.map { Self.effectiveDescriptor(for: $0) }
     }
 
     public func `operator`(withID id: String) -> (any MutationOperator)? {
@@ -121,7 +149,7 @@ public struct MutationRegistry: Sendable {
 
         return Resolution(
             enabledOperators: selected,
-            descriptors: selected.map { $0.descriptor },
+            descriptors: selected.map { Self.effectiveDescriptor(for: $0) },
             profile: settings.profile,
             explicitlyEnabledOperatorIDs: Set(settings.enable).subtracting(settings.disable)
         )

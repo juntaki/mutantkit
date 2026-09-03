@@ -117,6 +117,28 @@ struct UnaryNotRemovalSchemataLowererTests {
         #expect(reason == .resultBuilderBody)
     }
 
+    /// `while !false { }` compiles with no trailing return, the same
+    /// reachability fact `while true` does (confirmed empirically, real
+    /// `swiftc -typecheck`) — a lowering here would rewrite it into a
+    /// runtime selector call, the same whole-chunk-build hazard
+    /// `.controlFlowConstant` already exists for `BoolLiteralSchemataLowerer`.
+    @Test("A negation used as a while loop's whole condition falls back to isolated — controlFlowConstant")
+    func whileLoopConditionNotEligible() throws {
+        let source = """
+        func f() -> Int {
+            while !false {
+            }
+        }
+        """
+        let mutation = try point(source)
+        let eligibility = lowerer.analyze(mutation, source: Data(source.utf8))
+        guard case let .isolatedOnly(reason) = eligibility else {
+            Issue.record("expected .isolatedOnly, got \(eligibility)")
+            return
+        }
+        #expect(reason == .controlFlowConstant)
+    }
+
     @Test("A function-call operand falls back to isolated — the common `!isValid()` shape")
     func functionCallOperandFallsBack() throws {
         let source = "func isValid() -> Bool { true }\nfunc f() -> Bool { !isValid() }"
@@ -171,6 +193,51 @@ struct UnaryNotRemovalSchemataLowererTests {
         #expect(lowered.contents.contains("(!a)"), "must reference the real, discovered originalText")
         #expect(program.entries.count == 1)
         #expect(program.entries.first?.mutationID == mutation.id)
+    }
+
+    // MARK: - Neutral-path equivalence (trust corpus, 2026-09)
+
+    /// The property this test exists to pin: `lower(_:sources:)`'s own real,
+    /// produced source text — not a hand-written stand-in — must put the
+    /// bare, unmutated `!a` in the branch selected when
+    /// `__mutantkitIsActiveV3` returns `false` (the neutral path — the case
+    /// for every embedded mutation's own dispatch site during every *other*
+    /// mutation's own test run), and the replacement `a` in the branch
+    /// selected when it returns `true`.
+    ///
+    /// The test directly above this one (`loweredCodeReferencesRealOperator
+    /// TextVerbatim`) checks `.contains("(a)")` and `.contains("(!a)")`
+    /// *separately* — which cannot tell a correct lowering from one that
+    /// swapped which branch gets which text, since both substrings are
+    /// still present in the output either way. `RelationalOperatorReplacement
+    /// SchemataLowererTests`/`LogicalConnectorReplacementSchemataLowererTests`
+    /// already closed this exact gap for their own two lowerers (competitive-
+    /// proof corpus C3); this closes the same gap here, the one registered
+    /// lowerer (`SchemataLowererRegistry.builtIn`) that had not yet had it
+    /// closed. Falsified locally per that same review's own instruction:
+    /// temporarily swapping `point.replacementText`/`point.originalText` in
+    /// `UnaryNotRemovalSchemataLowerer.swift`'s own template makes this test
+    /// fail (while `loweredCodeReferencesRealOperatorTextVerbatim` above
+    /// stays green, proving that test alone would have missed the swap);
+    /// reverting makes it pass again.
+    @Test("The neutral (inactive-token) branch lowers to exactly the bare unmutated !a expression, verbatim, in the false-branch position")
+    func neutralBranchMatchesBareUnmutatedExpression() throws {
+        let source = "func f(a: Bool) -> Bool { !a }"
+        let mutation = try point(source)
+        let chunk = SchemataChunk(
+            chunkID: "chunk-1", points: [mutation], projectIdentity: "P", target: "T", module: "M", product: "Prod"
+        )
+        let program = try lowerer.lower(chunk, sources: [SchemataSourceFile(relativePath: "Sample.swift", contents: source)])
+        let lowered = try #require(program.loweredSources.first)
+        // The real lowered shape: `isActive(...) ? (replacementText) : (originalText)`.
+        // Neutral (false) branch must be exactly the bare, unmutated `!a`;
+        // active (true) branch must carry the replacement `a`.
+        #expect(
+            lowered.contents.contains(
+                #/__mutantkitIsActiveV3\(__mutantkitUnitDescriptor_[0-9a-f]{12}, \d+, \d+\) \? \(a\) : \(!a\)/#
+            ),
+            "neutral (false) branch must be the bare unmutated `!a`; active (true) branch must be the replacement `a`"
+        )
     }
 
     @Test("A point from another operator makes lower(_:sources:) throw")

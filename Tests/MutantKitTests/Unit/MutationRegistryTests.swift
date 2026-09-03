@@ -215,6 +215,68 @@ struct MutationRegistryTests {
         #expect(OperatorProfile.default.siteConfidenceFloor == nil)
         #expect(OperatorProfile.experimental.siteConfidenceFloor == nil)
     }
+
+    // MARK: - Schemata eligibility
+
+    /// The structural invariant `MutationRegistry.effectiveDescriptor(for:)`
+    /// exists to guarantee, checked directly against the real, shipped
+    /// `SchemataLowererRegistry.builtIn` — not a stub — so a future
+    /// promotion or demotion that updates the lowerer registry but forgets
+    /// nothing else (there is nothing else to forget any more) still shows
+    /// up correctly here without anyone touching this test.
+    @Test("Every built-in operator's effective schemataEligible matches whether SchemataLowererRegistry actually has a lowerer for it")
+    func schemataEligibleMatchesLowererRegistry() throws {
+        let lowererRegistry = try SchemataLowererRegistry()
+        for descriptor in MutationRegistry().allDescriptors {
+            let hasLowerer = lowererRegistry.lowerer(forOperatorID: descriptor.id) != nil
+            #expect(
+                descriptor.schemataEligible == hasLowerer,
+                "\(descriptor.id): schemataEligible == \(descriptor.schemataEligible) but a registered lowerer \(hasLowerer ? "exists" : "does not exist")"
+            )
+        }
+    }
+
+    /// `resolve(_:)`'s own descriptors are a second, independent code path
+    /// from `allDescriptors` — both must carry the fix, not just one (this
+    /// is exactly the shape `OperatorCatalogCommand` bypassing `resolve`
+    /// entirely, reading `allDescriptors` directly, already proved matters).
+    @Test("resolve(_:)'s descriptors also carry the effective schemataEligible answer")
+    func resolveDescriptorsAlsoCarryEffectiveSchemataEligible() throws {
+        let registry = MutationRegistry()
+        let lowererRegistry = try SchemataLowererRegistry()
+        let resolution = try registry.resolve(OperatorSettings(profile: .experimental))
+
+        #expect(!resolution.descriptors.isEmpty)
+        for descriptor in resolution.descriptors {
+            let hasLowerer = lowererRegistry.lowerer(forOperatorID: descriptor.id) != nil
+            #expect(descriptor.schemataEligible == hasLowerer, "\(descriptor.id) mismatched via resolve(_:)")
+        }
+    }
+
+    /// The cross-registry half of the same invariant: a lowerer that claims
+    /// an operator ID `MutationRegistry.builtIn` doesn't know about would
+    /// silently never route any real candidate — `SchemataChunkPlanner`
+    /// would just never see a matching operator ID to ask about, no error,
+    /// no `schemataEligible == true` for anything real. Caught here instead
+    /// of discovered as "why does this lowerer never seem to fire."
+    @Test("No registered lowerer claims an operator ID outside MutationRegistry.builtIn")
+    func noLowererClaimsAnUnknownOperatorID() throws {
+        // Constructed for its own side effect too: SchemataLowererRegistry's
+        // init throws on a duplicate lowererID or two lowerers claiming the
+        // same operator ID — today's builtIn list staying self-consistent
+        // is exercised here, not just the unknown-operator-ID check below.
+        _ = try SchemataLowererRegistry()
+
+        let knownOperatorIDs = Set(MutationRegistry.builtIn.map(\.descriptor.id))
+        for lowerer in SchemataLowererRegistry.builtIn {
+            for operatorID in lowerer.descriptor.supportedOperatorIDs {
+                #expect(
+                    knownOperatorIDs.contains(operatorID),
+                    "\(lowerer.descriptor.lowererID) claims unknown operator ID '\(operatorID)'"
+                )
+            }
+        }
+    }
 }
 
 // MARK: - Stub operators

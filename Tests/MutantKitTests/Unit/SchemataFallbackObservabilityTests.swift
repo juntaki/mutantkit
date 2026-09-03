@@ -151,6 +151,87 @@ struct SchemataFallbackObservabilityTests {
         #expect(issues.first?.diagnosis.contains("1 mutant forfeited") == true, "\(String(describing: issues.first?.diagnosis))")
     }
 
+    // MARK: - The receipt-unavailable counterpart channel
+
+    /// One real `SchemataMutationRunner` run whose single chunk's build
+    /// succeeds but whose receipt resolution throws — the production runner's
+    /// own reproduction of `.buildReceiptUnavailable`, mirroring
+    /// `outcomeFromSyntheticSharedChunkBuildFailure` above.
+    private func outcomeFromSyntheticReceiptUnavailable() async throws -> SchemataMutationRunner.Outcome {
+        let points = try threePoints()
+        let entries = points.enumerated().map { index, point in
+            entry(mutationID: point.id, chunkID: "chunk-A", localIndex: UInt32(index + 1), namespace: 1)
+        }
+        let adapter = FakeSchemataAdapter()
+        adapter.buildFailureScript[1] = .throwOnReceiptResolution
+        let runner = SchemataMutationRunner(
+            planID: "plan-1", workUnitID: "wu-1", programs: [program(chunkID: "chunk-A", entries: entries)],
+            points: Dictionary(uniqueKeysWithValues: points.map { ($0.id, $0) }),
+            originalSources: [Self.relativePath: Data(Self.source.utf8)],
+            build: adapter, test: adapter,
+            workspaces: try WorkspaceManager(
+                projectRoot: Self.makeTempDir(prefix: "mutantkit-receipt-observability-project"),
+                scratchRoot: Self.makeTempDir(prefix: "mutantkit-receipt-observability-scratch")
+            ),
+            timeouts: TimeoutSettings(baselineSeconds: 30),
+            toolchainHash: "toolchain", buildArgumentsHash: "args", policy: .permissive
+        )
+        return try await runner.run()
+    }
+
+    @Test("""
+    A receipt-unavailable chunk becomes exactly one non-empty operational issue naming the chunk, the mutant count it cost, \
+    and why the receipt could not be resolved
+    """)
+    func receiptUnavailableBecomesOneOperationalIssue() async throws {
+        let outcome = try await outcomeFromSyntheticReceiptUnavailable()
+        #expect(outcome.infrastructureFallbackEvents.count == 1, "precondition: the runner produced the event this suite reports")
+
+        let issues = SchemataRunOrchestration.schemataInfrastructureFallbackIssues(outcome.infrastructureFallbackEvents)
+        let issue = try #require(issues.first, "the event must not be silently dropped")
+        #expect(issues.count == 1, "one issue per affected chunk, never one per affected MutationID")
+        #expect(issue.kind == .schemataChunkReceiptUnavailable)
+        #expect(issue.severity == .warning, "every affected mutation still gets a real isolated verdict; score is unaffected")
+        #expect(issue.mutationID == nil, "the event is chunk-level; attributing it to one mutation would misstate what happened")
+        #expect(!issue.diagnosis.isEmpty)
+        #expect(issue.diagnosis.contains("chunk-A"), "\(issue.diagnosis)")
+        #expect(issue.diagnosis.contains("3 mutants"), "\(issue.diagnosis)")
+        #expect(issue.diagnosis.contains("isolated"), "\(issue.diagnosis)")
+    }
+
+    @Test("A receipt-unavailable operational issue survives a JSON round trip")
+    func receiptUnavailableIssueRoundTripsThroughJSON() async throws {
+        let outcome = try await outcomeFromSyntheticReceiptUnavailable()
+        let issues = SchemataRunOrchestration.schemataInfrastructureFallbackIssues(outcome.infrastructureFallbackEvents)
+        let decoded = try JSONDecoder().decode([OperationalIssue].self, from: JSONEncoder().encode(issues))
+        #expect(decoded == issues)
+        #expect(decoded.first?.kind == .schemataChunkReceiptUnavailable)
+    }
+
+    @Test("A run with no receipt-unavailable event reports no issue at all")
+    func noReceiptUnavailableEventProducesNoIssue() {
+        #expect(SchemataRunOrchestration.schemataInfrastructureFallbackIssues([]).isEmpty)
+    }
+
+    @Test("A one-mutant receipt-unavailable chunk is reported in the singular, so the message never reads '1 mutants'")
+    func singleAffectedMutationIsReportedInTheSingularForReceiptUnavailable() {
+        let issues = SchemataRunOrchestration.schemataInfrastructureFallbackIssues([
+            SchemataMutationRunner.SchemataInfrastructureFallbackEvent(
+                chunkID: "chunk-solo", reason: .buildReceiptUnavailable, affectedMutationCount: 1,
+                diagnosis: "the chunk's own build receipt could not be resolved: synthetic failure"
+            )
+        ])
+        #expect(issues.first?.diagnosis.contains("1 mutant forfeited") == true, "\(String(describing: issues.first?.diagnosis))")
+    }
+
+    @Test("A receipt-unavailable fallback reaches fallbackReasonCounts under its own distinct histogram key")
+    func receiptUnavailableReachesTheFallbackReasonHistogram() async throws {
+        let outcome = try await outcomeFromSyntheticReceiptUnavailable()
+        #expect(outcome.isolatedFallbacks.count == 3)
+        let counts = SchemataRunOrchestration.fallbackReasonCounts(outcome.isolatedFallbacks)
+        #expect(counts == ["buildReceiptUnavailable": 3])
+    }
+
     // MARK: - The per-mutation fallback reasons `merge` used to discard
 
     @Test("Every dynamic fallback reason reaches the report as a count histogram, instead of being reduced to bare MutationIDs")

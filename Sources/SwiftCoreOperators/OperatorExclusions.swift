@@ -15,8 +15,7 @@ enum OperatorExclusions {
     /// attribute is very often a `@propertyWrapper` (or an attached macro),
     /// and those take *ordinary* initializer arguments, evaluated and
     /// stored at runtime exactly like any other call. Proven wrong with a
-    /// real, compiled, run fixture (`Research/mutation-testing-hardening-
-    /// 2026-08/PROGRESS.md`, P2 exclusion audit): a `@propertyWrapper`
+    /// real, compiled, run fixture: a `@propertyWrapper`
     /// whose `init` reads an `enabled: Bool` argument and branches on it —
     /// flipping `enabled: true` to `enabled: false` in the attribute
     /// changed the compiled program's own printed output. That is the same
@@ -279,6 +278,71 @@ enum OperatorExclusions {
             }
             guard let tuple = parent.as(TupleExprSyntax.self), tuple.elements.count == 1 else { return false }
             current = Syntax(tuple)
+        }
+        return false
+    }
+
+    /// True when `node` sits anywhere inside the direct expression tree of
+    /// a `while` or `repeat`-`while` condition — the same
+    /// **reachability**, not merely typing, hazard
+    /// `isControlFlowConstantCondition` exists for, generalized to every
+    /// schemata lowerer whose own mutation target is a *sub-expression* of
+    /// a larger boolean expression (a relational/logical operator token, a
+    /// ternary's branches, a prefix `!`) rather than a bare literal that
+    /// might itself *be* the whole condition.
+    ///
+    /// A zero-base review of the 5 registered schemata lowerers other
+    /// than `BoolLiteralSchemataLowerer` confirmed empirically (real
+    /// `swiftc -typecheck`, not assumed) that Swift's reachability folding
+    /// for a `while`/`repeat`-`while` condition is **not** limited to the
+    /// bare `true`/`false` token `isControlFlowConstantCondition` alone
+    /// covers — `while 5 < 10`, `while true && true`, `while true ? true :
+    /// true`, and `while !false` all compile with no trailing `return`
+    /// exactly like `while true` does, meaning any of
+    /// `RelationalOperatorReplacementSchemataLowerer`,
+    /// `LogicalConnectorReplacementSchemataLowerer`,
+    /// `TernaryBranchSwapSchemataLowerer`, or
+    /// `UnaryNotRemovalSchemataLowerer` rewriting a site inside such a
+    /// condition into a runtime selector call risks the exact same
+    /// whole-chunk-build failure `isControlFlowConstantCondition`'s own
+    /// doc comment cites a real corpus incident for
+    /// (`AsyncThrottleSequence.swift`, 2026-08).
+    ///
+    /// Deliberately does **not** try to replicate Swift's own constant-
+    /// folding rules precisely (a syntactic tool has no principled way to
+    /// know which compound expressions the compiler will and will not
+    /// fold for reachability, only that the set is broader than the one
+    /// obvious case). Instead: any mutation target reachable from a
+    /// while/repeat condition slot by climbing only through other
+    /// expression nodes (`ExprSyntaxProtocol`) — parens, binary/ternary/
+    /// prefix operators, anything an ordinary compound boolean expression
+    /// is built from — is excluded from schemata lowering unconditionally,
+    /// whether or not the *original*, unmutated condition actually is
+    /// compile-time-constant. A false positive here costs one site its
+    /// schemata fast path, falling back to isolated mode where it runs
+    /// identically either way — never a broken chunk build, the same
+    /// asymmetric trade-off `isControlFlowConstantCondition`'s own doc
+    /// comment already accepts for its own, narrower check. Climbing stops
+    /// (and reports `false`) at the first non-expression ancestor — a
+    /// closure body, a call argument list boundary via a non-expression
+    /// wrapper, a statement, or a declaration — since a condition
+    /// expression's own reachability folding does not reach into what a
+    /// nested closure or called function does internally.
+    static func isInsideLoopConditionExpressionTree(_ node: some SyntaxProtocol) -> Bool {
+        var current = Syntax(node)
+        while let parent = current.parent {
+            if let repeatStatement = parent.as(RepeatStmtSyntax.self) {
+                return Syntax(repeatStatement.condition) == current
+            }
+            if let element = parent.as(ConditionElementSyntax.self) {
+                guard case let .expression(expression) = element.condition, Syntax(expression) == current,
+                      let list = element.parent?.as(ConditionElementListSyntax.self), list.count == 1,
+                      list.parent?.is(WhileStmtSyntax.self) == true
+                else { return false }
+                return true
+            }
+            guard parent.asProtocol(SyntaxProtocol.self) is ExprSyntaxProtocol else { return false }
+            current = parent
         }
         return false
     }

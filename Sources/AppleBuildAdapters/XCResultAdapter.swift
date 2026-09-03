@@ -82,6 +82,21 @@ public struct XCResultAdapter: Sendable {
             )
         }
 
+        // F3: an exit-0 `xcresulttool` whose stdout was not proven complete
+        // (see `ProcessSupervisor.run`'s own `ProcessResult.outputComplete`)
+        // is not distinguishable, from `succeeded` alone, from one that
+        // genuinely finished — a JSON decode failure below often, but not
+        // always, catches truncation that lands mid-token; one that happens
+        // to land on a syntactically valid boundary would not. Routed
+        // through the same `infrastructure(...)` outcome the decode-failure
+        // and non-zero-exit guards already use, never guessed at as a real
+        // pass/fail/survived verdict.
+        guard result.outputComplete else {
+            return infrastructure(
+                "xcresulttool's output for \(resultBundle.lastPathComponent) was not fully captured; the outcome cannot be established, so it is not guessed."
+            )
+        }
+
         let summary: TestSummaryJSON
         do {
             summary = try JSONDecoder().decode(TestSummaryJSON.self, from: result.standardOutput)
@@ -259,15 +274,17 @@ extension XCResultAdapter {
         configurationTestIdentifiers: [String: [String]]
     ) async -> [String: Outcome] {
         let configurationNames = Array(configurationTestIdentifiers.keys)
+        func fail(_ description: String) -> [String: Outcome] {
+            batchInfrastructureFailure(description, configurationNames: configurationNames)
+        }
 
         guard FileManager.default.fileExists(atPath: resultBundle.path) else {
-            let outcome = infrastructure(
+            return fail(
                 """
                 No result bundle was written at \(resultBundle.lastPathComponent). The batch \
                 test run produced no structured output, so no configuration in it has a known outcome.
                 """
             )
-            return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
         }
 
         let summaryArguments = [
@@ -277,41 +294,24 @@ extension XCResultAdapter {
         ]
 
         let summaryResult: ProcessResult
-        do {
-            summaryResult = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcrun,
-                arguments: summaryArguments,
-                workingDirectory: workingDirectory,
-                timeoutSeconds: timeoutSeconds
-            )
-        } catch {
-            let outcome = infrastructure("Could not run xcresulttool: \(error)")
-            return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
-        }
-
-        guard summaryResult.succeeded else {
-            let outcome = infrastructure(
-                """
-                xcresulttool could not read \(resultBundle.lastPathComponent) (exit \
-                \(summaryResult.exitCode)): \
-                \(OutputRedactor.redactAndTruncate(summaryResult.combinedOutput, limit: 400)
-                    .trimmingCharacters(in: .whitespacesAndNewlines))
-                """
-            )
-            return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
+        switch await runXcresulttool(
+            summaryArguments, workingDirectory: workingDirectory, readDescription: resultBundle.lastPathComponent,
+            outputLabel: "batch summary", resultBundle: resultBundle, fail: fail
+        ) {
+        case let .success(value): summaryResult = value
+        case let .failure(outcome): return outcome
         }
 
         let batch: BatchTestSummaryJSON
         do {
             batch = try JSONDecoder().decode(BatchTestSummaryJSON.self, from: summaryResult.standardOutput)
         } catch {
-            let outcome = infrastructure(
+            return fail(
                 """
                 xcresulttool produced batch summary JSON this version does not understand \
                 (\(error)). No configuration's outcome can be established, so none is guessed.
                 """
             )
-            return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
         }
 
         let treeArguments = [
@@ -321,44 +321,82 @@ extension XCResultAdapter {
         ]
 
         let treeResult: ProcessResult
-        do {
-            treeResult = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcrun,
-                arguments: treeArguments,
-                workingDirectory: workingDirectory,
-                timeoutSeconds: timeoutSeconds
-            )
-        } catch {
-            let outcome = infrastructure("Could not run xcresulttool: \(error)")
-            return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
-        }
-
-        guard treeResult.succeeded else {
-            let outcome = infrastructure(
-                """
-                xcresulttool could not read the per-test hierarchy of \
-                \(resultBundle.lastPathComponent) (exit \(treeResult.exitCode)): \
-                \(OutputRedactor.redactAndTruncate(treeResult.combinedOutput, limit: 400)
-                    .trimmingCharacters(in: .whitespacesAndNewlines))
-                """
-            )
-            return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
+        switch await runXcresulttool(
+            treeArguments, workingDirectory: workingDirectory, readDescription: "the per-test hierarchy of \(resultBundle.lastPathComponent)",
+            outputLabel: "per-test hierarchy", resultBundle: resultBundle, fail: fail
+        ) {
+        case let .success(value): treeResult = value
+        case let .failure(outcome): return outcome
         }
 
         let tree: BatchTestNodesJSON
         do {
             tree = try JSONDecoder().decode(BatchTestNodesJSON.self, from: treeResult.standardOutput)
         } catch {
-            let outcome = infrastructure(
+            return fail(
                 """
                 xcresulttool produced per-test hierarchy JSON this version does not understand \
                 (\(error)). No configuration's outcome can be established, so none is guessed.
                 """
             )
-            return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
         }
 
         return classify(batch: batch, tree: tree, configurationTestIdentifiers: configurationTestIdentifiers)
+    }
+
+    /// Every early-exit branch in `classifyBatch` above reports the same
+    /// `infrastructure` outcome for every configuration in the batch — none
+    /// of them can be told apart once the batch-wide read itself failed.
+    private func batchInfrastructureFailure(_ description: String, configurationNames: [String]) -> [String: Outcome] {
+        let outcome = infrastructure(description)
+        return Dictionary(uniqueKeysWithValues: configurationNames.map { ($0, outcome) })
+    }
+
+    /// Runs one `xcresulttool` invocation for `classifyBatch` and validates
+    /// it the same way both call sites there need: a real launch failure,
+    /// a non-zero exit, and (F3) an exit-0 result whose output was not
+    /// proven complete (`ProcessResult.outputComplete`) all route through
+    /// the identical `fail(...)` the caller passes in, never guessed at as
+    /// a real per-configuration verdict. `readDescription` fills the
+    /// non-zero-exit message ("could not read ..."); `outputLabel` fills
+    /// the incomplete-output message ("<label> output for ... was not
+    /// fully captured").
+    private func runXcresulttool(
+        _ arguments: [String],
+        workingDirectory: URL,
+        readDescription: String,
+        outputLabel: String,
+        resultBundle: URL,
+        fail: (String) -> [String: Outcome]
+    ) async -> BatchToolOutcome {
+        let result: ProcessResult
+        do {
+            result = try await ProcessSupervisor.run(
+                executable: ToolPaths.xcrun, arguments: arguments, workingDirectory: workingDirectory, timeoutSeconds: timeoutSeconds
+            )
+        } catch {
+            return .failure(fail("Could not run xcresulttool: \(error)"))
+        }
+        guard result.succeeded else {
+            return .failure(fail("""
+            xcresulttool could not read \(readDescription) (exit \(result.exitCode)): \
+            \(OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400).trimmingCharacters(in: .whitespacesAndNewlines))
+            """))
+        }
+        guard result.outputComplete else {
+            return .failure(fail(
+                "xcresulttool's \(outputLabel) output for \(resultBundle.lastPathComponent) was not fully captured; no configuration's outcome can be established, so none is guessed."
+            ))
+        }
+        return .success(result)
+    }
+
+    /// A plain `Result<ProcessResult, [String: Outcome]>` cannot exist —
+    /// `Error` conformance is required for `Result`'s failure type, and a
+    /// per-configuration outcome dictionary is not an `Error`.
+    private enum BatchToolOutcome {
+        case success(ProcessResult)
+        case failure([String: Outcome])
     }
 
     /// Separate from the process calls so the per-configuration attribution
@@ -797,11 +835,24 @@ struct TestSummaryJSON: Decodable {
         ///
         /// A crash is reported as an ordinary failure with a non-zero count, so the
         /// only thing separating it from `XCTAssertEqual failed:` is how Xcode
-        /// prefixes this field — it writes `Crash: xctest at <test>` for a signal or
-        /// trap. This reads a structured field of the result bundle, not the
+        /// prefixes this field. Two distinct, platform-specific wordings, both
+        /// confirmed against real captured `xcresult` bundles (never assumed to be
+        /// the same shape across platforms):
+        /// - macOS: `Crash: xctest at <test>` — `xctest` is the macOS command-line
+        ///   test runner's own process name.
+        /// - iOS Simulator: `Test crashed with signal <name>.` (e.g. `Test crashed
+        ///   with signal trap.` for a `fatalError`/trap) — there is no `xctest`
+        ///   process name to reference on this platform, and Xcode phrases the
+        ///   field entirely differently. Found live: the macOS-only prefix check
+        ///   alone let a real, reproduced iOS Simulator `fatalError` crash fall
+        ///   through unclassified (read as an ordinary assertion failure instead),
+        ///   silently skipping `confirmCrashKills`'s own confirmation pass for
+        ///   every iOS Simulator crash.
+        ///
+        /// Both read this same structured field of the result bundle, never the
         /// runner's console output.
         var isCrash: Bool {
-            failureText.hasPrefix("Crash:")
+            failureText.hasPrefix("Crash:") || failureText.hasPrefix("Test crashed with signal ")
         }
 
         /// Whether XCTest's own native per-test execution-time allowance

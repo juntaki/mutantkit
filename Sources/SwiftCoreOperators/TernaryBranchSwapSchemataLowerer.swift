@@ -54,6 +54,14 @@ public struct TernaryBranchSwapSchemataLowerer: SchemataLowerer {
         guard !OperatorExclusions.isInsideResultBuilderBody(Syntax(ternary)) else {
             return .isolatedOnly(reason: .resultBuilderBody)
         }
+        // `while true ? true : true { }` compiles with no trailing
+        // return, the same reachability fact `while true` does — see
+        // `OperatorExclusions.isInsideLoopConditionExpressionTree`'s own
+        // doc comment for the confirmed-empirically-broader hazard this
+        // guards against.
+        guard !OperatorExclusions.isInsideLoopConditionExpressionTree(Syntax(ternary)) else {
+            return .isolatedOnly(reason: .controlFlowConstant)
+        }
         if Self.isDirectlyWrappedInTryOrAwait(ternary) {
             return .isolatedOnly(reason: .asyncOrThrowingExpression)
         }

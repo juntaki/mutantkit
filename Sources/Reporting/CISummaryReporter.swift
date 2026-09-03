@@ -81,27 +81,61 @@ public struct CISummaryReporter: Reporter {
             + "These describe the tool run, not the test suite."
     }
 
+    /// Same scope as before this rendering changed (`.survived` only, never
+    /// `.noCoverage` — the exact set `report.survivors` itself names), just
+    /// grouped by declaration and clustered to one row per distinct root
+    /// cause instead of one row per mutant, via the shared
+    /// `SurvivorPresentation` model — the identical rows
+    /// `ConsoleReporter` and `HTMLReporter` render from, so all three agree
+    /// on cluster identity, membership, and counts for the same run. A
+    /// near-duplicate cluster (five mutants in one function, all run against
+    /// the same weak test scope) used to cost five rows of `survivorLimit`'s
+    /// own budget for one real story; now it costs one, so a PR comment
+    /// sized for the same budget surfaces more distinct issues, not more
+    /// repetition of the same one.
+    ///
+    /// "Tests run", not "caught by": these mutants are `.survived` — by
+    /// definition nothing caught them. The column names what the run's own
+    /// evidence establishes was exercised, not a claim about which test is
+    /// responsible for the miss.
     private func survivorSection(_ report: RunReport) -> String {
-        let survivors = report.survivors
-        guard !survivors.isEmpty else {
+        let rows = SurvivorPresentationBuilder.build(from: report).rows
+            .filter { $0.reason != .mutationSiteNotCovered }
+
+        guard !rows.isEmpty else {
             return report.score == nil ? "" : "No mutants survived."
         }
 
-        var lines = ["### Surviving mutants (\(survivors.count))", "", "| Location | Operator | Change |", "| --- | --- | --- |"]
+        let aggregate = rows.aggregate
+        var lines = [
+            "### Surviving mutants (\(aggregate.totalMutants), \(aggregate.distinctIssues) distinct issue(s))",
+            "", "| Location | Operator(s) | Change | Tests run |", "| --- | --- | --- | --- |"
+        ]
 
-        for result in survivors.prefix(survivorLimit) {
-            let point = result.point
+        for row in rows.prefix(survivorLimit) {
+            let representative = row.members[0]
+            let countSuffix = row.count > 1 ? " (×\(row.count))" : ""
             lines.append(
-                "| `\(point.displayLocation)` | `\(point.operatorID)` "
-                    + "| `\(inlineCode(point.originalText))` → `\(inlineCode(point.replacementText))` |"
+                "| `\(row.file):\(representative.line)`\(countSuffix) | `\(row.operatorIDs.joined(separator: ", "))` "
+                    + "| `\(inlineCode(representative.original))` → `\(inlineCode(representative.replacement))` "
+                    + "| \(testsRunLabel(row.testScope)) |"
             )
         }
 
-        if survivors.count > survivorLimit {
+        if rows.count > survivorLimit {
             lines.append("")
-            lines.append("_\(survivors.count - survivorLimit) more survivor(s) in the full report._")
+            lines.append("_\(rows.count - survivorLimit) more issue(s) in the full report._")
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func testsRunLabel(_ scope: SurvivorActionabilityReport.TestScope?) -> String {
+        switch scope {
+        case .none, .unknown: "unknown"
+        case .fullSuite: "full suite"
+        case let .narrowed(tests):
+            tests.prefix(2).joined(separator: ", ") + (tests.count > 2 ? ", …" : "")
+        }
     }
 
     private func footer(_ report: RunReport) -> String {

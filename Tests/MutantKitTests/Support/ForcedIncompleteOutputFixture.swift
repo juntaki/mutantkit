@@ -8,18 +8,24 @@ import Foundation
 ///
 /// ## Why this needs real fd-passing, not just a slow/forked child
 ///
-/// `ProcessSupervisor.wait(for:...)` already reaps (`ProcessTree.reap(_:)`,
-/// unrelated and untouched here) every descendant it observed, the instant
-/// the supervised process itself exits — including a background child that
-/// forked off to hold a pipe open. That reaping is synchronous and happens
-/// *before* the bounded drain wait even begins, so a plain
-/// `subprocess.Popen(...)` descendant gets killed, its copy of the pipe's
-/// write end closes with it, and the drain reaches EOF almost immediately
-/// regardless of how long that descendant meant to sleep — which would make
-/// the drain-timeout condition this fixture needs to force effectively
-/// unreproducible without racing that reap, which is exactly the kind of
-/// CI-timing flakiness the regression this fixture supports must not rely
-/// on.
+/// `ProcessSupervisor.runBlocking` reaps (`ProcessTree.reap(_:)`, unrelated
+/// and untouched here) every descendant it observed, and group-kills the
+/// supervised process's own process group, once the *first* bounded
+/// post-exit drain wait has had its own fair chance to run — including a
+/// background child that forked off to hold a pipe open (F3: this reap/
+/// group-kill used to fire immediately on the supervised process's own
+/// exit, before the drain wait even began, which killed a *legitimate*,
+/// quickly-finishing descendant mid-write; it is now unconditional on
+/// `!timedOut` but always runs *after* that first drain wait, giving such a
+/// descendant its fair chance first — see `ProcessSupervisor.swift`'s own
+/// doc comments on `wait`'s prompt-exit branch and on this ownership
+/// close-out in `runBlocking` for why). Either way, a plain
+/// `subprocess.Popen(...)` descendant that is only *sleeping*, never
+/// finishing on its own, still eventually gets reaped and its copy of the
+/// pipe's write end closes with it — which would make the drain-timeout
+/// condition this fixture needs to force effectively unreproducible
+/// without racing that reap, which is exactly the kind of CI-timing
+/// flakiness the regression this fixture supports must not rely on.
 ///
 /// So the fd is instead handed, via `SCM_RIGHTS` over a Unix domain socket,
 /// to a *second* process this fixture launches directly with

@@ -84,7 +84,7 @@ struct ConsoleReporterTests {
 
         let output = try ConsoleReporter(colorEnabled: false).render(report)
 
-        for section in ["Baseline", "Integrity", "Score", "Outcomes", "Surviving mutants"] {
+        for section in ["Baseline", "Integrity", "Score", "Outcomes", "Actionable test gaps"] {
             #expect(output.contains(section), "missing section header: \(section)")
         }
     }

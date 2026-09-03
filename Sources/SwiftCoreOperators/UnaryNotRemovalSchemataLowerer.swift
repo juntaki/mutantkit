@@ -63,6 +63,14 @@ public struct UnaryNotRemovalSchemataLowerer: SchemataLowerer {
         guard !OperatorExclusions.isInsideResultBuilderBody(Syntax(prefix)) else {
             return .isolatedOnly(reason: .resultBuilderBody)
         }
+        // `while !false { }` compiles with no trailing return, the
+        // same reachability fact `while true` does — see
+        // `OperatorExclusions.isInsideLoopConditionExpressionTree`'s own
+        // doc comment for the confirmed-empirically-broader hazard this
+        // guards against.
+        guard !OperatorExclusions.isInsideLoopConditionExpressionTree(Syntax(prefix)) else {
+            return .isolatedOnly(reason: .controlFlowConstant)
+        }
         if Self.isDirectlyWrappedInTryOrAwait(prefix) {
             return .isolatedOnly(reason: .asyncOrThrowingExpression)
         }

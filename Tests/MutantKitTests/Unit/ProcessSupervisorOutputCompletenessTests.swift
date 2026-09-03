@@ -43,4 +43,24 @@ struct ProcessSupervisorOutputCompletenessTests {
         let capturedStdout = String(decoding: result.standardOutput, as: UTF8.self)
         #expect(capturedStdout.contains("partial-output-before-drain-timeout"))
     }
+
+    /// F3 Phase 5's positive counterpart to the test above: root exits
+    /// promptly, but a same-process-group descendant survives it, actually
+    /// finishes writing to the inherited output pipe, then closes it and
+    /// exits on its own. Root exiting alone must never truncate this —
+    /// `DescendantSentinelAfterRootExitFixture`'s own doc comment explains
+    /// how the descendant confirms root has genuinely already exited before
+    /// writing, so this is not merely "the write usually finishes first".
+    @Test("A descendant that survives its root's prompt exit and finishes writing is captured in full, with outputComplete == true")
+    func descendantSentinelWrittenAfterRootExitIsCapturedComplete() async throws {
+        let result = try await DescendantSentinelAfterRootExitFixture.run()
+
+        #expect(result.exitCode == 0)
+        #expect(!result.timedOut)
+        #expect(result.terminatingSignal == nil)
+
+        let capturedStdout = String(decoding: result.standardOutput, as: UTF8.self)
+        #expect(capturedStdout.contains(DescendantSentinelAfterRootExitFixture.sentinel))
+        #expect(result.outputComplete, "a descendant that finished writing and closed its pipe must produce outputComplete == true")
+    }
 }

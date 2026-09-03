@@ -4,11 +4,11 @@ import Testing
 
 @Suite("SwiftPMLinkerInjector")
 struct SwiftPMLinkerInjectorTests {
-    @Test("Produces -Xlinker -L<dir> -Xlinker -lMutantKitSchemataRuntime, in that order")
+    @Test("Produces -Xlinker <archivePath>, the exact file, never a -L<dir>/-l<name> pair")
     func producesExpectedArguments() {
-        let directory = URL(fileURLWithPath: "/tmp/mutantkit-schemata-runtime-lib")
-        let arguments = SwiftPMLinkerInjector.extraArguments(libraryDirectory: directory)
-        #expect(arguments == ["-Xlinker", "-L/tmp/mutantkit-schemata-runtime-lib", "-Xlinker", "-lMutantKitSchemataRuntime"])
+        let archivePath = URL(fileURLWithPath: "/tmp/mutantkit-schemata-runtime-lib/libMutantKitSchemataRuntime.a")
+        let arguments = SwiftPMLinkerInjector.extraArguments(archivePath: archivePath)
+        #expect(arguments == ["-Xlinker", "/tmp/mutantkit-schemata-runtime-lib/libMutantKitSchemataRuntime.a"])
     }
 }
 
@@ -17,21 +17,35 @@ struct SchemataRuntimeLibraryLocatorTests {
     // Every case here passes `sourceDirectory: nil` explicitly, decoupling these tests from
     // this repo's own real file timestamps: `SchemataRuntimeStalenessGuardTests` covers the
     // staleness check itself in isolation, with fixtures it controls precisely.
+    //
+    // Every case that does NOT set the override also passes an explicit `executableURL`
+    // pointing at a controlled, empty temp directory — decoupling these tests from this
+    // test binary's own real location (never a genuine `mutantkit` install with a bundled
+    // runtime next to it) and from whatever this machine's real filesystem happens to hold.
 
-    @Test("Missing override throws missingOverride, not a silent no-op — unchanged for .macOS")
-    func missingOverrideThrows() {
-        #expect(throws: SchemataRuntimeLibraryLocator.LocatorError.missingOverride) {
-            _ = try SchemataRuntimeLibraryLocator.locate(for: .macOS, environment: [:], sourceDirectory: nil)
+    private static func emptyInstallLocation() -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("locator-install-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("mutantkit")
+    }
+
+    @Test("Missing override with no bundled runtime present falls through to bundledRuntimeUnavailable — unchanged for .macOS")
+    func missingOverrideFallsThroughToBundledRuntimeUnavailable() {
+        #expect(throws: SchemataRuntimeLibraryLocator.LocatorError.self) {
+            _ = try SchemataRuntimeLibraryLocator.locate(
+                for: .macOS, environment: [:], sourceDirectory: nil, executableURL: Self.emptyInstallLocation()
+            )
         }
     }
 
-    @Test("Empty override is treated the same as missing — unchanged for .macOS")
-    func emptyOverrideThrows() {
-        #expect(throws: SchemataRuntimeLibraryLocator.LocatorError.missingOverride) {
+    @Test("Empty override is treated the same as missing — falls through to the bundled path, unchanged for .macOS")
+    func emptyOverrideFallsThroughToBundled() {
+        #expect(throws: SchemataRuntimeLibraryLocator.LocatorError.self) {
             _ = try SchemataRuntimeLibraryLocator.locate(
                 for: .macOS,
                 environment: [SchemataRuntimeLibraryLocator.overrideEnvironmentVariable: ""],
-                sourceDirectory: nil
+                sourceDirectory: nil,
+                executableURL: Self.emptyInstallLocation()
             )
         }
     }
@@ -107,10 +121,12 @@ struct SchemataRuntimeLibraryLocatorTests {
         }
     }
 
-    @Test("An .iOSSimulator request with the env var unset throws missingOverride, same semantics as .macOS")
-    func iOSSimulatorMissingOverrideThrows() {
-        #expect(throws: SchemataRuntimeLibraryLocator.LocatorError.missingOverride) {
-            _ = try SchemataRuntimeLibraryLocator.locate(for: .iOSSimulator, environment: [:], sourceDirectory: nil)
+    @Test("An .iOSSimulator request with the env var unset also falls through to the bundled path, same semantics as .macOS")
+    func iOSSimulatorMissingOverrideFallsThroughToBundled() {
+        #expect(throws: SchemataRuntimeLibraryLocator.LocatorError.self) {
+            _ = try SchemataRuntimeLibraryLocator.locate(
+                for: .iOSSimulator, environment: [:], sourceDirectory: nil, executableURL: Self.emptyInstallLocation()
+            )
         }
     }
 

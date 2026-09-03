@@ -78,6 +78,14 @@ public struct LogicalConnectorReplacementSchemataLowerer: SchemataLowerer {
         guard !OperatorExclusions.isInsideResultBuilderBody(Syntax(resolved.infix)) else {
             return .isolatedOnly(reason: .resultBuilderBody)
         }
+        // `while true && true { }` compiles with no trailing return,
+        // the same reachability fact `while true` does — see
+        // `OperatorExclusions.isInsideLoopConditionExpressionTree`'s own
+        // doc comment for the confirmed-empirically-broader hazard this
+        // guards against.
+        guard !OperatorExclusions.isInsideLoopConditionExpressionTree(Syntax(resolved.infix)) else {
+            return .isolatedOnly(reason: .controlFlowConstant)
+        }
         if Self.isDirectlyWrappedInTryOrAwait(resolved.infix) {
             return .isolatedOnly(reason: .asyncOrThrowingExpression)
         }

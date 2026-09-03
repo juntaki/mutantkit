@@ -118,6 +118,28 @@ struct LogicalConnectorReplacementSchemataLowererTests {
         #expect(reason == .resultBuilderBody)
     }
 
+    /// `while true && true { }` compiles with no trailing return,
+    /// the same reachability fact `while true` does (confirmed
+    /// empirically, real `swiftc -typecheck`) — a lowering here would
+    /// rewrite it into a runtime selector call, the same whole-chunk-build
+    /// hazard `.controlFlowConstant` already exists for
+    /// `BoolLiteralSchemataLowerer`.
+    @Test("A connector used as a while loop's whole condition falls back to isolated — controlFlowConstant")
+    func whileLoopConditionNotEligible() throws {
+        let source = """
+        func f() -> Int {
+            while true && true {
+            }
+        }
+        """
+        let mutation = try point(source, replacement: "||")
+        guard case let .isolatedOnly(reason) = lowerer.analyze(mutation, source: Data(source.utf8)) else {
+            Issue.record("expected .isolatedOnly")
+            return
+        }
+        #expect(reason == .controlFlowConstant)
+    }
+
     @Test("A function-call operand falls back to isolated — the common `isValid() && hasPermission()` shape")
     func functionCallOperandFallsBack() throws {
         let source = "func lhs() -> Bool { true }\nfunc f(b: Bool) -> Bool { lhs() && b }"
@@ -291,5 +313,44 @@ struct LogicalConnectorReplacementSchemataLowererTests {
         _ = isActive() ? (lhs() && rhs()) : (lhs() || rhs())
 
         #expect(rhsEvaluations == 0, "&& must still short-circuit on a false lhs even inside the lowered ternary")
+    }
+
+    // MARK: - Neutral-path equivalence (competitive-proof corpus C3)
+
+    /// The property this test exists to pin: `lower(_:sources:)`'s own
+    /// real, produced source text — not a hand-written stand-in — must put
+    /// the bare, unmutated `&&` in the branch selected when
+    /// `__mutantkitIsActiveV3` returns `false` (the neutral path — the
+    /// case for every embedded mutation's own dispatch site during every
+    /// *other* mutation's own test run, not a rare corner case), and the
+    /// replacement `||` in the branch selected when it returns `true`.
+    /// Calls the real lowerer and regex-matches the real lowered source
+    /// text, the same technique
+    /// `BoolLiteralSchemataLowererTests.lowersTwoPointsInSameFile` uses —
+    /// so a regression that swaps `point.replacementText`/
+    /// `point.originalText` in the lowerer's own template
+    /// (`LogicalConnectorReplacementSchemataLowerer.swift`) flips which
+    /// operator lands in which branch and makes this regex fail to match.
+    /// (Verified locally: swapping those two identifiers in the production
+    /// template makes this test fail; reverting makes it pass again.)
+    @Test("The neutral (inactive-token) branch lowers to exactly the bare unmutated && expression, verbatim, in the false-branch position")
+    func neutralBranchMatchesBareUnmutatedExpression() throws {
+        let source = "func f(a: Bool, b: Bool) -> Bool { a && b }"
+        let mutation = try point(source, replacement: "||")
+        let chunk = SchemataChunk(
+            chunkID: "chunk-1", points: [mutation], projectIdentity: "P", target: "T", module: "M", product: "Prod"
+        )
+        let program = try lowerer.lower(chunk, sources: [SchemataSourceFile(relativePath: "Sample.swift", contents: source)])
+        let lowered = try #require(program.loweredSources.first)
+        // The real lowered shape: `isActive(...) ? (lhs replacementText rhs) : (lhs originalText rhs)`.
+        // Neutral (false) branch must be exactly the bare, unmutated
+        // `a && b`; active (true) branch must carry the replacement
+        // `a || b`.
+        #expect(
+            lowered.contents.contains(
+                #/__mutantkitIsActiveV3\(__mutantkitUnitDescriptor_[0-9a-f]{12}, \d+, \d+\) \? \(a \|\| b\) : \(a && b\)/#
+            ),
+            "neutral (false) branch must be the bare unmutated `a && b`; active (true) branch must be the replacement `a || b`"
+        )
     }
 }

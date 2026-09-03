@@ -185,48 +185,105 @@ public struct HTMLReporter: Reporter {
         """
     }
 
+    /// Grouped via the shared `SurvivorPresentation` model — the identical
+    /// rows `CISummaryReporter` and `ConsoleReporter` render from, so all
+    /// three agree on cluster identity, membership, and counts for the same
+    /// run. Unlike `CISummaryReporter`'s compact PR-comment scope, this is a
+    /// full local report: both actionable reasons are shown, in their own
+    /// sections, and every clustered mutant's own diff stays reachable —
+    /// grouping only avoids repeating the declaration header, it never hides
+    /// a member's own change behind a single representative.
     private func survivorsHTML(_ report: RunReport) -> String {
-        let survivors = report.survivors
-        guard !survivors.isEmpty else {
+        let rows = SurvivorPresentationBuilder.build(from: report).rows
+        guard !rows.isEmpty else {
             return """
             <section class="card">
-              <h2>Surviving mutants (0)</h2>
+              <h2>Actionable test gaps (0)</h2>
               <p>Every mutant that ran was killed.</p>
             </section>
             """
         }
 
+        let notCovered = rows.filter { $0.reason == .mutationSiteNotCovered }
+        let survived = rows.filter { $0.reason != .mutationSiteNotCovered }
+        let aggregate = rows.aggregate
+
         var html = """
         <section>
-          <h2>Surviving mutants (\(survivors.count))</h2>
+          <h2>Actionable test gaps (\(aggregate.totalMutants), \(aggregate.distinctIssues) distinct issue(s))</h2>
         """
 
-        for result in survivors {
-            let point = result.point
-            html += """
-
-            <article class="card survivor">
-              <h3><code>\(point.displayLocation.htmlEscaped)</code></h3>
-              <p class="meta-line">
-                <span class="tag">\(point.operatorID.htmlEscaped)</span>
-                <span class="tag">\(point.enclosingDeclaration.description.htmlEscaped)</span>
-                <span class="tag">\(point.id.rawValue.htmlEscaped)</span>
-              </p>
-              <p>\(result.diagnosis.htmlEscaped)</p>
-            \(diffHTML(result))
-            </article>
-            """
+        if !notCovered.isEmpty {
+            html += "\n  <h3>Not covered — \(notCovered.aggregate.totalMutants) mutant(s)</h3>"
+            for row in notCovered { html += rowHTML(row) }
+        }
+        if !survived.isEmpty {
+            html += "\n  <h3>Covered but survived — \(survived.aggregate.totalMutants) mutant(s)</h3>"
+            for row in survived { html += rowHTML(row) }
         }
 
         return html + "\n</section>"
+    }
+
+    private func rowHTML(_ row: SurvivorPresentation.Row) -> String {
+        let countTag = row.count > 1 ? "<span class=\"tag\">×\(row.count)</span>" : ""
+        var html = """
+
+        <article class="card survivor">
+          <h3><code>\(row.declaration.htmlEscaped)</code></h3>
+          <p class="meta-line">
+            \(row.operatorIDs.map { "<span class=\"tag\">\($0.htmlEscaped)</span>" }.joined())
+            \(countTag)
+          </p>
+        \(testScopeHTML(row))
+        """
+
+        // Every clustered mutant keeps its own sub-card — clustering means
+        // "these share one root-cause story," not "these are the same
+        // mutation," so no member's own location/diagnosis/diff is ever
+        // dropped to make room for another's.
+        for member in row.members {
+            html += """
+
+              <div class="survivor-member">
+                <p class="meta-line"><code>\(member.displayLocation.htmlEscaped)</code> \
+            <span class="tag">\(member.mutantID.htmlEscaped)</span></p>
+                <p>\(member.diagnosis.htmlEscaped)</p>
+            \(diffHTML(member))
+              </div>
+            """
+        }
+
+        return html + "\n</article>"
+    }
+
+    /// Distinguishes "no test executed this exact mutation site" from
+    /// "these specific tests are known to have run and passed anyway" (or,
+    /// honestly, "the run's own evidence does not say which tests ran")
+    /// whenever the reason is `.coveredButNotCaught`.
+    private func testScopeHTML(_ row: SurvivorPresentation.Row) -> String {
+        switch row.reason {
+        case .mutationSiteNotCovered:
+            return "  <p class=\"detail\">No test executed this mutation site.</p>"
+        case .coveredButNotCaught:
+            switch row.testScope {
+            case .none, .unknown:
+                return "  <p class=\"detail\">Tests run: unknown — the run's own evidence does not record which tests ran here.</p>"
+            case .fullSuite:
+                return "  <p class=\"detail\">Tests run: full configured suite.</p>"
+            case let .narrowed(tests):
+                let items = tests.map { "<code>\($0.htmlEscaped)</code>" }.joined(separator: ", ")
+                return "  <p class=\"detail\">Tests run: \(items)</p>"
+            }
+        }
     }
 
     /// Every byte here originates in the user's source, which may contain
     /// `</script>`, `<img onerror=…>`, or anything else. It is escaped
     /// unconditionally — there is no path through this reporter that emits
     /// unescaped source.
-    private func diffHTML(_ result: MutationResult) -> String {
-        guard let diff = result.evidence?.sourceDiff, !diff.isEmpty else {
+    private func diffHTML(_ member: SurvivorActionabilityReport.Member) -> String {
+        guard let diff = member.sourceDiff, !diff.isEmpty else {
             return "  <p class=\"detail\">(no diff recorded)</p>"
         }
 

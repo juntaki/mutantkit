@@ -6,6 +6,16 @@ name: CodeQL
 # every PR like ci.yml, plus a weekly schedule so newly-disclosed query-pack
 # findings surface even on a week with no code changes.
 #
+# Four languages, not one: GitHub's own code-scanning default-setup
+# auto-detection (repos/.../code-scanning/default-setup) reports this repo
+# as containing actions, c-cpp, python, and swift — scanning only swift, as
+# an earlier version of this workflow did, left the other three undetected,
+# which is what a "code scanning configuration error" surfaces as (the
+# advanced setup this workflow represents not covering everything GitHub's
+# own detection found). c-cpp is Sources/MutantKitSchemataRuntimeC (a real,
+# plain-C target the SwiftPM package builds); python is Scripts/
+# compare-wave-reports.py; actions is this directory's own workflow YAML.
+#
 # `build-mode: manual` rather than `autobuild`: this is a multi-target
 # SwiftPM package with a plain-C target (MutantKitSchemataRuntimeC) wrapped
 # in a product with an explicit `type: .static`, not a single generic
@@ -13,7 +23,11 @@ name: CodeQL
 # least reliable on. A manual `swift build` step (the same invocation
 # ci.yml's `unit` job already trusts to build the whole package, including
 # the C target) is both simpler to reason about and guaranteed to match how
-# this package actually builds.
+# this package actually builds. `build-mode` only governs the two compiled
+# languages (swift, c-cpp) — one `swift build` invocation traces both, since
+# the C target compiles as part of the same package build. python and
+# actions are interpreted/config languages CodeQL scans directly with no
+# build step, unaffected by build-mode.
 #
 # macos-15, matching ci.yml/release.yml: this needs the real Xcode/Swift
 # toolchain, not a Linux runner — CodeQL's Swift extractor only runs on
@@ -39,28 +53,10 @@ concurrency:
 
 jobs:
   analyze:
-    name: Analyze (swift)
+    name: Analyze
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-
-      # Same rationale as ci.yml's identical step: SwiftPM independently
-      # re-clones swift-argument-parser/swift-syntax/Yams and re-runs version
-      # resolution on every run today, with zero caching -- this is the same
-      # cost class, not a CodeQL-specific restriction (CodeQL's own build
-      # tracing has no documented issue with pre-populated dependency
-      # checkouts; it only observes the compiler invocations `swift build`
-      # below actually makes).
-      - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/checkouts
-            .build/repositories
-            ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-
 
       - name: Toolchain
         run: swift --version && xcodebuild -version
@@ -68,7 +64,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
-          languages: swift
+          languages: actions, c-cpp, python, swift
           build-mode: manual
 
       - name: Build
@@ -76,5 +72,3 @@ jobs:
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
-        with:
-          category: "/language:swift"

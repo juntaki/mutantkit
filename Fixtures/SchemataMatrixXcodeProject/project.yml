@@ -1,0 +1,31 @@
+name: SchemataMatrixXcodeProject
+options:
+  bundleIdPrefix: dev.mutantkit.matrix
+targets:
+  MatrixWidget:
+    type: framework
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [Sources]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  MatrixWidgetTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [Tests]
+    dependencies:
+      - target: MatrixWidget
+        embed: true
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  MatrixWidget:
+    build:
+      targets:
+        MatrixWidget: all
+        MatrixWidgetTests: [test]
+    test:
+      targets: [MatrixWidgetTests]
