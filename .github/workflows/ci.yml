@@ -105,6 +105,24 @@ jobs:
       - name: SwiftFormat (check only)
         run: swiftformat --lint --config .swiftformat .
 
+  # Cognitive + cyclomatic complexity gate: SwiftLint has no cognitive rule,
+  # so this is the only gate watching it. Threshold 25 matches SwiftLint's
+  # own cyclomatic error ceiling; the two functions above it carry inline
+  # `// swift-complexity:disable cognitive` suppressions with reasons —
+  # printed below via --report-suppressions so they stay visible instead of
+  # silently hiding. Syntax-only, no build needed, fast like `lint`.
+  complexity:
+    name: Complexity gate (swift-complexity)
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install swift-complexity
+        run: brew install fummicc1/tap/swift-complexity
+      - name: Complexity gate
+        shell: bash
+        run: swift-complexity Sources --recursive --threshold 25 --report-suppressions
+
   # Fast feedback: everything that does not build another project.
   unit:
     name: Unit tests

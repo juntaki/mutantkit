@@ -80,6 +80,7 @@ public struct QualityGateResult: Codable, Sendable, Hashable {
 }
 
 public enum QualityGate {
+    // swift-complexity:disable cognitive - known debt, also SwiftLint-baselined (complexity 16); split when touched
     /// Evaluates thresholds only against a trustworthy score. If integrity
     /// failed and no score exists, the gate fails closed rather than treating
     /// the missing number as zero or silently passing CI.

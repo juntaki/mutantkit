@@ -132,6 +132,7 @@ public enum BudgetSelectorV2 {
 
     // MARK: allocateCounts
 
+    // swift-complexity:disable cognitive - known debt, also SwiftLint-baselined (complexity 18); split when touched
     /// Decides *how many* slots each stratum gets, split by which phase
     /// granted them — never *which* mutants (that is `allocate`'s job).
     /// Implements ADR-0007 B.2 step 2 exactly: a one-slot-per-stratum-per-
