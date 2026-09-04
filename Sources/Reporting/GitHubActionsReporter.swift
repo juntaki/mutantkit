@@ -7,11 +7,11 @@ import MutationModel
 /// pull request and in the job's own Checks summary — GitHub's own
 /// equivalent of the issue-navigator experience `XcodeReporter` gives Xcode.
 ///
-/// Phase C7 (competitive-parity program): `CISummaryReporter` already gives
-/// a markdown job-summary/PR-comment view, but nothing in this codebase ever
-/// emitted the workflow-command syntax GitHub's own runner parses out of a
-/// step's stdout to create those inline annotations — a real, confirmed gap
-/// (C0), not an oversight this reporter merely rewords.
+/// `CISummaryReporter` already gives a markdown job-summary/PR-comment
+/// view, but nothing in this codebase ever emitted the workflow-command
+/// syntax GitHub's own runner parses out of a step's stdout to create those
+/// inline annotations — a real, confirmed functional gap, not an oversight
+/// this reporter merely rewords.
 ///
 /// ## Workflow-command format
 ///

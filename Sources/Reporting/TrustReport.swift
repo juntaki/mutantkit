@@ -26,9 +26,8 @@ import MutationModel
 ///   that gate is re-enforced here rather than trusted from the decoded
 ///   `RunReport`.
 ///
-/// See `Research/trust-corpus-2026-09/README.md` for the corpus of fixtures
-/// this command's definitions (phantom mutant, activation evidence, ...) are
-/// checked against.
+/// These definitions (phantom mutant, activation evidence, ...) are checked
+/// against a dedicated corpus of test fixtures in this project's test suite.
 public struct TrustReport: Codable, Sendable, Equatable {
     public let schemaVersion: Int
     public let planID: String

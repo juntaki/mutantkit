@@ -309,18 +309,17 @@ enum ReadinessCheck {
     /// site's own comment for why the two additions stay independent) —
     /// re-running this same pass over the combined list is what keeps a
     /// same-named item appended there from ever silently surviving
-    /// alongside one already produced in here, the exact way this lane's
-    /// own now-deleted `sharedModuleCacheSupport` diagnostic once would
-    /// have collided with S1's `sharedModuleCache` item, undetected,
-    /// had both existed at once (`DiagnosisNameUniquenessTests` pins
-    /// this).
-    /// Phase C13 (competitive-parity program): when project resolution
-    /// fails, this used to hand back one generic instruction regardless of
-    /// what was actually wrong or knowable. Real, `xcodebuild`/`simctl`-
-    /// backed detection (`XcodeConfigDetector`, the same one `init` uses)
-    /// often already knows the exact fix — a real scheme, real test
-    /// target(s), a real available simulator — and can say so directly
-    /// instead of leaving the user to rediscover it by hand.
+    /// alongside one already produced in here, the exact way a now-deleted
+    /// `sharedModuleCacheSupport` diagnostic here once would have collided
+    /// with another pass's `sharedModuleCache` item, undetected, had both
+    /// existed at once (`DiagnosisNameUniquenessTests` pins this).
+    /// When project resolution fails, this used to hand back one generic
+    /// instruction regardless of what was actually wrong or knowable. Real,
+    /// `xcodebuild`/`simctl`-backed detection (`XcodeConfigDetector`, the
+    /// same one `init` uses) often already knows the exact fix — a real
+    /// scheme, real test target(s), a real available simulator — and can
+    /// say so directly instead of leaving the user to rediscover it by
+    /// hand.
     ///
     /// Detects the project's *real* kind independently of whatever
     /// (possibly wrong, possibly absent) configuration just failed to
@@ -329,21 +328,19 @@ enum ReadinessCheck {
     /// detection step is best-effort (`try?`): a failure here must never
     /// make `doctor` itself throw or lose the original remedy text
     /// entirely, only fail to enrich it.
-    /// Phase C13 (competitive-parity program): a real 4-way local
-    /// benchmark against a real, large production iOS app found the untuned
-    /// defaults `init` used to generate for every project kind measured
-    /// as the *slowest* of the four profiles compared — slower even than
-    /// the most basic tuned profile, let alone the production-grade N=2
-    /// `simulatorPool` profile the same real corpus proved (2.17x
-    /// speedup vs. a tuned `workers: 1` reference (incrementalBuild +
-    /// selectCoveringTests, itself already faster than the fully untuned
-    /// defaults this warning is about), 100/100 outcome parity with that
-    /// reference, 0 integrity violations — see `PROGRESS.md`'s C4 and
-    /// "④" entries).
-    /// `init`'s own template now ships that profile by default (Phase
-    /// C13); this warns the (more common, in practice) case of a config
-    /// that predates that change, or one a user wrote by hand without
-    /// knowing this profile exists.
+    /// A real 4-way local benchmark against a real, large production iOS
+    /// app found the untuned defaults `init` used to generate for every
+    /// project kind measured as the *slowest* of the four profiles
+    /// compared — slower even than the most basic tuned profile, let alone
+    /// the production-grade N=2 `simulatorPool` profile the same real
+    /// corpus proved (2.17x speedup vs. a tuned `workers: 1` reference
+    /// (incrementalBuild + selectCoveringTests, itself already faster than
+    /// the fully untuned defaults this warning is about), 100/100 outcome
+    /// parity with that reference, 0 integrity violations).
+    /// `init`'s own template now ships that profile by default; this warns
+    /// the (more common, in practice) case of a config that predates that
+    /// change, or one a user wrote by hand without knowing this profile
+    /// exists.
     ///
     /// Only for kinds that actually lease a real Simulator —
     /// `simulatorPool` is a no-op for a host-only `swiftPackageMacOS` run.

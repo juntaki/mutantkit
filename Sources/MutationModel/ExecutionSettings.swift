@@ -233,11 +233,11 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// mutant; a project that wants the safety net back sets this to a small
     /// nonzero fraction (e.g. `0.05`) rather than paying it on every mutant.
     public var noOpCanarySampleRate: Double
-    /// Phase C4 (competitive-parity program): when `true`, `workers > 1`
-    /// against an Xcode/iOS-Simulator destination provisions one real
-    /// simulator slot per worker (the base device for worker 0, a fresh
-    /// `simctl clone` of it for each additional worker) instead of every
-    /// worker contending for the single run-wide destination.
+    /// When `true`, `workers > 1` against an Xcode/iOS-Simulator
+    /// destination provisions one real simulator slot per worker (the
+    /// base device for worker 0, a fresh `simctl clone` of it for each
+    /// additional worker) instead of every worker contending for the
+    /// single run-wide destination.
     ///
     /// **Off by default.** Scoped narrowly, on purpose, to exactly the
     /// configuration this has been benchmarked against:
@@ -245,7 +245,7 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// pipelined test execution (`testBatchSize` set) intentionally
     /// consolidates multiple workers' completed builds into one shared
     /// test lane — extending that to multiple lanes, one per simulator, is
-    /// a materially different, larger change this phase does not attempt;
+    /// a materially different, larger change not attempted here;
     /// `simulatorPool: true` together with a `testBatchSize` has no effect
     /// beyond today's single-device behavior, silently, until that follow-
     /// on work exists. Ignored entirely for `incrementalBuild: false`
@@ -257,18 +257,17 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// **Real, non-trivial local disk cost — budget for it.** Each
     /// additional worker beyond the first is a full `simctl clone` of the
     /// base simulator, not a lightweight reference. Observed directly
-    /// during this flag's own benchmarking (`Research/competitive-parity-
-    /// 2026-08/PROGRESS.md`'s C4 entry): a single clone reached 1.6-2.6GB
-    /// partway through one 100-mutant real-project run, so `workers: 4`
-    /// (3 clones) can add several GB on top of whatever the base device
-    /// and the run's own `.mutantkit` sandboxes already use — real
-    /// pressure a disk-exhaustion incident during that same benchmarking
-    /// actually hit. `releaseWorkerPool` deletes every clone it created
-    /// once a run ends (and `cleanupOrphanClones` sweeps any a killed
-    /// prior run left behind, on the next run that provisions a pool), so
-    /// this cost does not accumulate run-over-run on its own — but
-    /// `~/Library/Developer/CoreSimulator/Devices` (every simulator's own
-    /// data, not just this tool's clones) and a project's own
+    /// during this flag's own benchmarking: a single clone reached
+    /// 1.6-2.6GB partway through one 100-mutant real-project run, so
+    /// `workers: 4` (3 clones) can add several GB on top of whatever the
+    /// base device and the run's own `.mutantkit` sandboxes already use —
+    /// real pressure a disk-exhaustion incident during that same
+    /// benchmarking actually hit. `releaseWorkerPool` deletes every clone
+    /// it created once a run ends (and `cleanupOrphanClones` sweeps any a
+    /// killed prior run left behind, on the next run that provisions a
+    /// pool), so this cost does not accumulate run-over-run on its own —
+    /// but `~/Library/Developer/CoreSimulator/Devices` (every simulator's
+    /// own data, not just this tool's clones) and a project's own
     /// `.mutantkit/sandboxes` are both worth checking before a `workers >
     /// 1` run on a machine that has been running many simulator-heavy
     /// workloads without ever clearing either.
@@ -280,20 +279,19 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// outside any sandbox, instead of each sandbox's own private cache
     /// nested inside its own `.build`.
     ///
-    /// Off by default. `Research/isolated-build-reuse-2026-09` is the
-    /// measurement behind this: a fresh sandbox pointed at a pre-warmed
-    /// external cache built its `--build-tests` step in 7.5s real / 3.9s
-    /// user versus 24.4s real / 13.4s user cold (private cache) on that
-    /// probe's fixture -- system-framework compilation dominates a small
-    /// project's cold build, so most of that gap is Foundation/XCTest/
-    /// SwiftShims recompilation this flag lets every sandbox after the
-    /// first skip. What this does *not* buy: SwiftPM's own incremental
-    /// build state (`.build`'s build-state/incremental records, separate
-    /// from the module cache) is path-keyed the same way the module cache
-    /// is and does not survive relocation between sandboxes either -- the
-    /// same research ruled that out by reproduction (row 4 of its S1
-    /// table) -- so every sandbox still fully recompiles the project's own
-    /// sources; only system-framework recompilation is skipped.
+    /// Off by default. Measured behind this: a fresh sandbox pointed at a
+    /// pre-warmed external cache built its `--build-tests` step in 7.5s
+    /// real / 3.9s user versus 24.4s real / 13.4s user cold (private
+    /// cache) on a small fixture -- system-framework compilation
+    /// dominates a small project's cold build, so most of that gap is
+    /// Foundation/XCTest/SwiftShims recompilation this flag lets every
+    /// sandbox after the first skip. What this does *not* buy: SwiftPM's
+    /// own incremental build state (`.build`'s build-state/incremental
+    /// records, separate from the module cache) is path-keyed the same
+    /// way the module cache is and does not survive relocation between
+    /// sandboxes either -- confirmed by reproduction -- so every sandbox
+    /// still fully recompiles the project's own sources; only
+    /// system-framework recompilation is skipped.
     ///
     /// Safe by construction, not merely by observation: mutation testing
     /// only ever changes a line a plan already reaches (an operator, a
@@ -316,8 +314,8 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// possibly different toolchain -- is never reused stale; see that
     /// type's own doc comment.
     ///
-    /// Hardening pass (`next/s1-module-cache-hardening`): the directory
-    /// itself is now namespaced by a real toolchain fingerprint -- see
+    /// The directory itself is now namespaced by a real toolchain
+    /// fingerprint -- see
     /// `SharedModuleCacheFingerprint`/`SharedModuleCacheNamespace` -- as a
     /// second, independent layer on top of the wipe above. That wipe is
     /// `try?`-guarded best-effort (a permission-denied or file-busy removal
@@ -396,25 +394,24 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     ///
     /// Off by default, deliberately, though the case for it is stronger
     /// than `ExecutionSettings.sharedModuleCache`'s: this is *not* the
-    /// "clone everything, then delete the excluded parts" approach
-    /// `Research/isolated-build-reuse-2026-09`'s S2 follow-up measured and
-    /// rejected outright (that one loses 3-11x on any project with real
-    /// build output or an actively-committed `.git`, because deleting a
-    /// cloned exclusion costs one syscall per entry that this flag's
-    /// design never pays at all — it never clones excluded content in the
-    /// first place). `WorkspaceManagerCleanSubtreeCloningTests` proves the
-    /// output this flag produces has identical content and directory layout
-    /// to today's default across several real project shapes, including one
-    /// with a deeply nested excluded file and one with an internal symlink
-    /// inside an otherwise clean subtree — but *not* identical POSIX
-    /// permission bits on directories; see that suite's own doc comment for
-    /// why not, and `CleanSubtreeIndex`'s for the mechanism. The 16x/4.09x
-    /// speedup figures reported in `Research/isolated-build-reuse-2026-09/
-    /// S2-clean-subtree-index-implementation.md` come from
-    /// `probes/s2-clean-subtree-index-production.sh`'s Python
-    /// reimplementation of the classification algorithm, not a timing of
-    /// this Swift `CleanSubtreeIndex`/`WorkspaceManager` code — see that
-    /// script's and that doc's own notes for the distinction.
+    /// "clone everything, then delete the excluded parts" approach that
+    /// was measured and rejected outright (that one loses 3-11x on any
+    /// project with real build output or an actively-committed `.git`,
+    /// because deleting a cloned exclusion costs one syscall per entry
+    /// that this flag's design never pays at all — it never clones
+    /// excluded content in the first place). `WorkspaceManagerCleanSubtreeCloningTests`
+    /// proves the output this flag produces has identical content and
+    /// directory layout to today's default across several real project
+    /// shapes, including one with a deeply nested excluded file and one
+    /// with an internal symlink inside an otherwise clean subtree — but
+    /// *not* identical POSIX permission bits on directories; see that
+    /// suite's own doc comment for why not, and `CleanSubtreeIndex`'s for
+    /// the mechanism. Reported 16x/4.09x speedup figures come from a
+    /// separate reimplementation of the classification algorithm used to
+    /// validate the approach, not a timing of this Swift
+    /// `CleanSubtreeIndex`/`WorkspaceManager` code — treat them as
+    /// directional evidence for the design, not a benchmark of this exact
+    /// implementation.
     ///
     /// What keeps this an opt-in rather than the default anyway: the index
     /// is a *snapshot*, taken once, of directories that are clean as of

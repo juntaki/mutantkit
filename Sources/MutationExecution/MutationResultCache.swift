@@ -27,7 +27,6 @@ import MutationModel
 ///    some unrelated file) is deliberately not attempted: MutantKit has no
 ///    per-file dependency graph, so it cannot prove which other files a
 ///    mutant's verdict depends on, and a guess there would be a false hit.
-///    See `Research/cache-key-granularity/README.md`.
 public actor MutationResultCache {
     public struct Key: Codable, Sendable, Hashable {
         public let mutationID: MutationID

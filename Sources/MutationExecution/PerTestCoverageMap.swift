@@ -15,31 +15,31 @@ public struct TestIdentifier: Sendable, Hashable, Codable {
 
     /// The exact string `-only-testing:` accepts.
     ///
-    /// Phase C13 (competitive-parity program): the trailing `()` is
-    /// required, confirmed by direct reproduction against a real
-    /// Xcode/iOS-Simulator Swift Testing target — omitting it (this
-    /// property's prior form) makes `xcodebuild` match **zero** tests for
-    /// a Swift Testing `@Test` function, silently, with no error. XCTest
-    /// tolerates the `()` either way (confirmed the same way, against a
-    /// real XCTest target: `-only-testing:Target/Class/method()` and
+    /// The trailing `()` is required: confirmed by direct reproduction
+    /// against a real Xcode/iOS-Simulator Swift Testing target —
+    /// omitting it (this property's prior form) makes `xcodebuild` match
+    /// **zero** tests for a Swift Testing `@Test` function, silently,
+    /// with no error. XCTest tolerates the `()` either way (confirmed
+    /// the same way, against a real XCTest target:
+    /// `-only-testing:Target/Class/method()` and
     /// `-only-testing:Target/Class/method` both correctly select exactly
     /// one test), so appending it unconditionally is safe for both
     /// frameworks rather than needing to detect which one a given
     /// `TestIdentifier` came from.
     ///
-    /// This was the root cause of a real, previously-unexplained gap this
-    /// program's own competitive matrix had already recorded:
+    /// This was the root cause of a real, previously-unexplained gap:
     /// `selectCoveringTests: true` failed to narrow per-test coverage
-    /// attribution for Xcode + Swift Testing schemes specifically — every
-    /// one of `XcodeBuildAdapter.measurePerTestCoverage`'s per-test
-    /// `-only-testing:`-filtered runs was silently selecting zero tests,
-    /// so every single-test coverage measurement pass produced no
-    /// coverage at all, and the whole per-test map came back empty,
-    /// falling back to the safe-but-coarse "run every test" behavior.
-    /// `qualifiedName` itself is left exactly as documented above (no
-    /// trailing `()`) — `BatchXCTestRunBuilder`'s own `OnlyTestIdentifiers`
-    /// construction reads `.qualifiedName` directly, not this property,
-    /// and was not verified as part of this fix; see that type's own
+    /// attribution for Xcode + Swift Testing schemes specifically —
+    /// every one of `XcodeBuildAdapter.measurePerTestCoverage`'s
+    /// per-test `-only-testing:`-filtered runs was silently selecting
+    /// zero tests, so every single-test coverage measurement pass
+    /// produced no coverage at all, and the whole per-test map came
+    /// back empty, falling back to the safe-but-coarse "run every test"
+    /// behavior. `qualifiedName` itself is left exactly as documented
+    /// above (no trailing `()`) — `BatchXCTestRunBuilder`'s own
+    /// `OnlyTestIdentifiers` construction reads `.qualifiedName`
+    /// directly, not this property, and was not verified as part of
+    /// this fix; see that type's own
     /// `resolvingTestRootPlaceholders`/`narrowed` construction if the
     /// identical Swift-Testing-matching question is ever raised for the
     /// batched-test-execution path specifically.

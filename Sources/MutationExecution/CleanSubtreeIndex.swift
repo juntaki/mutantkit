@@ -18,13 +18,10 @@ import Foundation
 /// index only ever adds a faster path for content the walk would have
 /// copied in full anyway, it never changes what gets copied.
 ///
-/// See `Research/isolated-build-reuse-2026-09/README.md`'s S2 section and
-/// its follow-up (`git log`, "S2 follow-up: measure whole-directory
-/// clone-then-delete on real projects, don't ship it") for why the simpler
-/// "clone everything, then delete whatever the exclude list matches"
-/// alternative was measured and rejected instead of built: deleting a
-/// cloned `.build` or an ordinary, actively-committed `.git` costs more
-/// than the clone saves, because `clonefile` has no bulk-delete
+/// The simpler "clone everything, then delete whatever the exclude list
+/// matches" alternative was measured and rejected instead of built:
+/// deleting a cloned `.build` or an ordinary, actively-committed `.git`
+/// costs more than the clone saves, because `clonefile` has no bulk-delete
 /// counterpart. This index sidesteps that failure mode entirely by never
 /// cloning excluded content in the first place -- it only fast-paths
 /// subtrees *proven*, by a real walk, to contain none.

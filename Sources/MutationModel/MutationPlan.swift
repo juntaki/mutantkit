@@ -23,12 +23,11 @@ public struct ToolchainFingerprint: Codable, Sendable, Hashable {
     /// (matching `xcodeVersion`'s own "unreadable is worse than guessed"
     /// convention).
     ///
-    /// P4 cache-soundness gap fix (`Research/mutation-testing-hardening-
-    /// 2026-08/PROGRESS.md`): `xcodeVersion` alone cannot distinguish two
-    /// installed SDKs/simulator runtimes under one Xcode version —
-    /// confirmed independently variable on a single real machine (one
-    /// Xcode installation with iOS 26.3 and iOS 26.5 simulator runtimes,
-    /// and their own distinct SDK build numbers, coexisting).
+    /// `xcodeVersion` alone cannot distinguish two installed SDKs/
+    /// simulator runtimes under one Xcode version — confirmed
+    /// independently variable on a single real machine (one Xcode
+    /// installation with iOS 26.3 and iOS 26.5 simulator runtimes, and
+    /// their own distinct SDK build numbers, coexisting).
     public let buildSDKIdentity: String?
     /// The specific simulator runtime this run's *test* destination
     /// actually resolved to — `"simulator:<CoreSimulator runtime

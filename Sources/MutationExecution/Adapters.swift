@@ -241,8 +241,8 @@ public protocol TestAdapter: Sendable {
 /// directories) to find which pre-built `.xctest` bundle a test target maps
 /// to, even though it is never going to compile anything (`--skip-build`).
 /// A bare products clone has neither, and fails before it runs a single
-/// test: root-caused in `Research/product-completeness-2026-08
-/// /F7-A-E-FREEZE-RELEASE-GATE.md`.
+/// test.
+///
 ///
 /// Conformance is optional, mirroring `TestSelecting`/`BatchTestable`: an
 /// adapter that does not conform is never asked for anything extra, and
@@ -460,12 +460,12 @@ public protocol SchemataBatchTestable: SchemataTestable {
     /// batches an unnarrowed `BatchMutantItem` either.
     ///
     /// - Parameter nativeTimeoutAllowanceSeconds: same meaning as
-    ///   `BatchTestable.runBatch`'s parameter of the same name (Gate 3
-    ///   Phase H3) — when non-`nil`, enables XCTest's own per-test
-    ///   execution-time allowance for every configuration in the batch, so
-    ///   one hanging token cannot hold the whole batch's outer,
-    ///   aggregate `timeoutSeconds` hostage. `nil` (the default, via the
-    ///   protocol-extension overload below) is a complete no-op.
+    ///   `BatchTestable.runBatch`'s parameter of the same name — when
+    ///   non-`nil`, enables XCTest's own per-test execution-time allowance
+    ///   for every configuration in the batch, so one hanging token cannot
+    ///   hold the whole batch's outer, aggregate `timeoutSeconds` hostage.
+    ///   `nil` (the default, via the protocol-extension overload below) is a
+    ///   complete no-op.
     func runSchemataTokenBatch(
         _ artifact: BuildArtifact,
         in workspace: URL,
@@ -591,14 +591,13 @@ public protocol BatchTestable: TestAdapter {
     /// - Parameter nativeTimeoutAllowanceSeconds: When non-`nil`, enables
     ///   XCTest's own per-test execution-time allowance
     ///   (`-test-timeouts-enabled`) at this value for every configuration in
-    ///   the batch — confirmed (Gate 3 Phase H1/H2) to cut a single hanging
-    ///   configuration off without killing the shared `xcodebuild`
-    ///   invocation or losing its siblings' results. This is *containment*,
-    ///   layered underneath — never a replacement for — `timeoutSeconds`,
-    ///   which remains the outer, aggregate fail-safe for the whole
-    ///   invocation exactly as before. `nil` (the default) is a complete
-    ///   no-op: every caller that does not pass it gets today's behavior
-    ///   unchanged.
+    ///   the batch — confirmed to cut a single hanging configuration off
+    ///   without killing the shared `xcodebuild` invocation or losing its
+    ///   siblings' results. This is *containment*, layered underneath —
+    ///   never a replacement for — `timeoutSeconds`, which remains the
+    ///   outer, aggregate fail-safe for the whole invocation exactly as
+    ///   before. `nil` (the default) is a complete no-op: every caller that
+    ///   does not pass it gets today's behavior unchanged.
     func runBatch(
         _ items: [BatchMutantItem],
         in workspace: URL,

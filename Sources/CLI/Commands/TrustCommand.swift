@@ -15,16 +15,8 @@ import Reporting
 /// a test, or recomputes a score — that authority stays exactly where
 /// `MutationVerdictVerifier` already put it.
 ///
-/// Named `trust`, not `verify`: `VerifyCommand` (`mutantkit verify`) already
-/// exists and does a different, pre-run job — checking a `plan.json`'s IDs
-/// and source anchors before a run ever starts. This command is the post-run
-/// counterpart people actually mean by "can I trust this score" — reading a
-/// finished `report.json`, not a plan. Reusing the `verify` name for both
-/// would collide two real, different jobs onto one command; see this
-/// command's own commit message and `Research/trust-corpus-2026-09/README.md`
-/// for the full naming discussion, left as an explicit, named finding for
-/// the maintainer rather than a unilateral rename of an existing, tested
-/// command.
+/// would collide two real, different jobs onto one command, so they remain
+/// separate, purpose-named commands rather than one overloaded name.
 struct TrustCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "trust",

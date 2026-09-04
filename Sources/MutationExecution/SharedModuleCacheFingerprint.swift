@@ -1,11 +1,10 @@
 import Foundation
 import MutationModel
 
-/// Hardening pass (`next/s1-module-cache-hardening`) for
-/// `Configuration.execution.sharedModuleCache`: a real, actually-queried
-/// snapshot of the toolchain identity the shared module cache directory is
-/// namespaced under -- see `WorkspaceManager.moduleCachePath(forSandbox:
-/// fingerprint:)`.
+/// Hardening pass for `Configuration.execution.sharedModuleCache`: a real,
+/// actually-queried snapshot of the toolchain identity the shared module
+/// cache directory is namespaced under -- see `WorkspaceManager
+/// .moduleCachePath(forSandbox:fingerprint:)`.
 ///
 /// `WorkspaceManager.init`'s own unconditional wipe-at-construction (see its
 /// doc comment) already makes the shared cache run-scoped in the common
@@ -14,10 +13,9 @@ import MutationModel
 /// surfaced -- and it only ever runs once, at construction. Namespacing the
 /// directory itself by a real toolchain fingerprint is a second, independent
 /// layer on top of that: even when a wipe silently fails, or a toolchain
-/// changes between two invocations that reuse a path (`Research/isolated-
-/// build-reuse-2026-09`'s own scenario this flag rests on, where a
-/// possibly-different-toolchain cache is the exact risk `init`'s doc comment
-/// names), a different toolchain always resolves to a different directory --
+/// changes between two invocations that reuse a path -- exactly the
+/// possibly-different-toolchain-cache risk `init`'s own doc comment names
+/// -- a different toolchain always resolves to a different directory:
 /// there is no shared name left for a stale entry to survive under.
 ///
 /// Every field is read from the toolchain itself, never assumed or

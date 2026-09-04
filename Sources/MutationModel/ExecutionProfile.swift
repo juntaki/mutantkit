@@ -96,12 +96,12 @@ import Foundation
 /// honestly empty right now, not padded to look complete: the one real
 /// candidate for it — mixing "safe" mutants into shared builds — has a
 /// real, found soundness counterexample (mutation-induced control-flow
-/// divergence; see `Research/safe-mutant-mixing-2026-09/DESIGN.md`) and is
-/// deliberately not wired in here, under any profile, until that is
-/// resolved. `experimental` still exists as its own case, resolving
-/// identically to `optimized` today (`ExecutionProfileResolver.resolve`),
-/// so a project can opt into "give me everything not-yet-proven" the
-/// moment such a feature is real, without another config-format change.
+/// divergence) and is deliberately not wired in here, under any profile,
+/// until that is resolved. `experimental` still exists as its own case,
+/// resolving identically to `optimized` today
+/// (`ExecutionProfileResolver.resolve`), so a project can opt into "give
+/// me everything not-yet-proven" the moment such a feature is real,
+/// without another config-format change.
 public enum ExecutionProfile: String, Codable, Sendable, CaseIterable {
     case reference
     case optimized

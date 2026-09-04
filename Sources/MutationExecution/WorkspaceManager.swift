@@ -126,9 +126,8 @@ public actor WorkspaceManager {
         // denied, a file busy from something else touching the same path)
         // is silently ignored, not merely unlikely. The directory is left
         // absent afterwards -- `-Xswiftc -module-cache-path` creates it
-        // lazily on first use (confirmed empirically,
-        // `Research/isolated-build-reuse-2026-09`), so there is nothing
-        // useful to recreate here.
+        // lazily on first use (confirmed empirically), so there is
+        // nothing useful to recreate here.
         //
         // This wipe is also unconditional in a second sense worth flagging
         // here, not just at `sharedModuleCache`'s own doc comment: it is
@@ -401,14 +400,13 @@ public actor WorkspaceManager {
     /// (`MutationConfirmationCoordinator.confirmKill`, for an adapter that
     /// conforms to `PackageManifestConfirmationRetesting`) pays for it.
     ///
-    /// Root-caused via `Research/product-completeness-2026-08
-    /// /F7-A-E-FREEZE-RELEASE-GATE.md`'s own investigation and confirmed
-    /// empirically against a real toolchain: `swift test --scratch-path X`
-    /// does not accept a flat products directory at all — it computes its
-    /// own triple/configuration path internally and looks for pre-built
-    /// products at exactly `X/<triple>/<configuration>/`, failing with a
-    /// `dlopen` "no such file" if that nesting is not there, regardless of
-    /// what `X` itself otherwise contains.
+    /// Confirmed empirically against a real toolchain: `swift test
+    /// --scratch-path X` does not accept a flat products directory at
+    /// all — it computes its own triple/configuration path internally
+    /// and looks for pre-built products at exactly
+    /// `X/<triple>/<configuration>/`, failing with a `dlopen` "no such
+    /// file" if that nesting is not there, regardless of what `X`
+    /// itself otherwise contains.
     ///
     /// `<triple>` and `<configuration>` are read off `productsDirectory`'s
     /// own resolved path — the same value SwiftPM itself already computed

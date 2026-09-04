@@ -223,20 +223,19 @@ enum ConfigurationLoader {
             "  strategy: isolated"
         ]
 
-        // Phase C13 (competitive-parity program): a real 4-way local
-        // benchmark against a real, large production iOS app (32-100 real
-        // mutants depending on the leg) compared this template's own
-        // untuned defaults against three tuned profiles. The untuned
-        // defaults measured here (no incrementalBuild/selectCoveringTests/
-        // simulatorPool at all) took ~80.6s/mutant (32-mutant leg) —
-        // slower than even the most basic tuned profile (N=1,
-        // incrementalBuild + selectCoveringTests only, ~56.2s/mutant at
-        // 100-mutant scale), let alone the production-grade N=2
+        // A 4-way local benchmark against a real, large production iOS app
+        // (32-100 real mutants depending on the leg) compared this
+        // template's own untuned defaults against three tuned profiles. The
+        // untuned defaults measured here (no incrementalBuild/
+        // selectCoveringTests/simulatorPool at all) took ~80.6s/mutant
+        // (32-mutant leg) — slower than even the most basic tuned profile
+        // (N=1, incrementalBuild + selectCoveringTests only, ~56.2s/mutant
+        // at 100-mutant scale), let alone the production-grade N=2
         // simulatorPool profile the same 100-mutant benchmark proved
-        // (~26s/mutant, 2.17x speedup vs. that N=1 *tuned* reference —
-        // not the untuned defaults, a separate, smaller measurement —
-        // 100/100 outcome parity with it, 0 integrity violations). A new
-        // user landing on this generated file with zero manual tuning was
+        // (~26s/mutant, 2.17x speedup vs. that N=1 *tuned* reference — not
+        // the untuned defaults, a separate, smaller measurement — 100/100
+        // outcome parity with it, 0 integrity violations). A new user
+        // landing on this generated file with zero manual tuning was
         // getting the worst realistic outcome, not a reasonable default.
         //
         // `workers: 2` (not `auto`) and `simulatorPool: true` are only
@@ -246,12 +245,11 @@ enum ConfigurationLoader {
         // already-proven default there.
         //
         // `workers: 2`, not a higher number: a targeted replay
-        // investigation (Phase C13, item ③) found N=4's own one real
-        // outcome disagreement against N=1/N=2 could not be cleared to
-        // N=2's confidence level (see PROGRESS.md's "③ N=4 targeted
-        // replay" entry) — N=2 is the production-grade recommendation
-        // here specifically because N=4 remains an experimental setting,
-        // not because N=2 is assumed safer without evidence.
+        // investigation found N=4's own one real outcome disagreement
+        // against N=1/N=2 could not be cleared to N=2's confidence level —
+        // N=2 is the production-grade recommendation here specifically
+        // because N=4 remains an experimental setting, not because N=2 is
+        // assumed safer without evidence.
         if kind == .xcodeProject || kind == .xcodeWorkspace || kind == .swiftPackageApple {
             lines.append(contentsOf: [
                 "  workers: 2",

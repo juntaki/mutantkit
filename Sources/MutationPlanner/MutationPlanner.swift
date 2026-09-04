@@ -458,15 +458,14 @@ public struct MutationPlanner: Sendable {
 ///
 /// Both strategies are deterministic; the seed only decides *which* kind of
 /// determinism. Neither ever consults the system RNG.
-/// `selectByOperatorSubtype` is `public` (closing a Budget Selection v2
-/// evaluation tooling gap): `Research/budget-selection-v2/evaluation-protocol.md`
-/// §6 step 5 requires computing v1's *real* production selection outside this
-/// module (in `Sources/BudgetV2Eval`) so the same already-collected outcome
-/// data can be reused rather than re-executing mutation testing — this needs
-/// genuine external call access to the real function, not a reimplementation.
-/// `select(_:limit:seed:stratifyBy:)` and the two phase helpers stay
-/// unexported; only the one entry point the evaluation tooling actually calls
-/// is widened.
+/// `selectByOperatorSubtype` is `public` (closing an evaluation-tooling
+/// gap): computing v1's *real* production selection outside this
+/// module (in `Sources/BudgetV2Eval`) lets the same already-collected
+/// outcome data be reused rather than re-executing mutation testing —
+/// this needs genuine external call access to the real function, not a
+/// reimplementation. `select(_:limit:seed:stratifyBy:)` and the two
+/// phase helpers stay unexported; only the one entry point the
+/// evaluation tooling actually calls is widened.
 public enum BudgetSelector {
     static func select(
         _ points: [MutationPoint],

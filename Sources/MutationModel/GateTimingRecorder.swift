@@ -1,15 +1,14 @@
 import Foundation
 
-/// Records phase-level timing spans during a run — Gate 3 diagnostic
-/// instrumentation (`Research/benchmarks/gate3-ios-schemata-2026-08-23`),
-/// added to fully account for a schemata-vs-isolated wall-clock gap that
-/// two prior hypotheses (chunk-build cost, missing token test-batching)
-/// were checked against and found not to dominate. Not a permanent
-/// feature: every call site recording a span is a cheap actor-isolated
-/// array append, never worth removing on its own, but nothing reads
-/// `shared`'s snapshot unless a caller explicitly asks for it (see
-/// `RunCommand`'s `MUTANTKIT_GATE3_TIMING_OUTPUT` env var) — every other
-/// run pays a negligible, unobserved cost.
+/// Records phase-level timing spans during a run — diagnostic
+/// instrumentation added to fully account for a schemata-vs-isolated
+/// wall-clock gap that two prior hypotheses (chunk-build cost, missing
+/// token test-batching) were checked against and found not to dominate.
+/// Not a permanent feature: every call site recording a span is a cheap
+/// actor-isolated array append, never worth removing on its own, but
+/// nothing reads `shared`'s snapshot unless a caller explicitly asks for
+/// it (see `RunCommand`'s `MUTANTKIT_GATE3_TIMING_OUTPUT` env var) —
+/// every other run pays a negligible, unobserved cost.
 ///
 /// A monotonic `ContinuousClock`, not `Date`: wall-clock time can jump
 /// (NTP adjustment, sleep/wake) in ways a diagnostic meant to reconstruct

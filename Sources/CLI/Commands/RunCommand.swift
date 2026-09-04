@@ -190,13 +190,13 @@ struct RunCommand: AsyncParsableCommand {
             throw ExitCode(MutantKitExit.operationalError)
         }
 
-        // Phase C4 (competitive-parity program): one real simulator per
-        // worker instead of every worker contending for the single
-        // destination `simulatorPreparation` just verified. Provisioning
-        // failure is never fail-closed here — this is a performance opt-in,
-        // not a correctness requirement, so a failure prints a clear
-        // message and the run proceeds with today's single-shared-device
-        // behavior rather than aborting a run the user otherwise asked for.
+        // Simulator worker pool: one real simulator per worker instead of
+        // every worker contending for the single destination
+        // `simulatorPreparation` just verified. Provisioning failure is
+        // never fail-closed here — this is a performance opt-in, not a
+        // correctness requirement, so a failure prints a clear message and
+        // the run proceeds with today's single-shared-device behavior
+        // rather than aborting a run the user otherwise asked for.
         let poolProvision = await Self.provisionSimulatorWorkerPoolIfNeeded(
             resolution: resolution, configuration: settings, projectRoot: root
         )
@@ -771,8 +771,8 @@ private extension RunCommand {
 extension RunCommand {
     /// The isolated-mode-only pieces `execute` threads into `MutationRunner`
     /// — none of these participate in schemata mode v1 (no checkpoint,
-    /// coverage cache, or cross-run result cache; see the schemata
-    /// production-integration plan's explicitly-out-of-scope list) —
+    /// coverage cache, or cross-run result cache; schemata mode does not
+    /// yet support them) —
     /// bundled so `execute` itself stays within SwiftLint's parameter-count
     /// threshold. Declared in this extension rather than in the primary
     /// struct body, on the same terms as `RunExecutionContext`/
