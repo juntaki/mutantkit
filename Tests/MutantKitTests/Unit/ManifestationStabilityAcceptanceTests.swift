@@ -145,11 +145,9 @@ struct ManifestationStabilityAcceptanceTests {
     /// `.timedOut` classification is not necessarily a real observation of
     /// this mutant at all — a batch-wide timeout attributes `.timedOut` to
     /// every mutant sharing that batch, whether or not each one
-    /// individually hung (see
-    /// `Research/corpus-validation/yomu-2026-07-24/README.md`'s Run E and
-    /// `investigation/arithmetic-batch-timeout-cluster`: 7 of 9
-    /// batch-attributed timeouts turned out to be fast, deterministic
-    /// kills/survivors on independent rebuild). So a confirming rebuild
+    /// individually hung (confirmed against a real internal validation
+    /// run: 7 of 9 batch-attributed timeouts turned out to be fast,
+    /// deterministic kills/survivors on independent rebuild). So a confirming rebuild
     /// that passes cleanly is trusted as `.survived`, the mutant's real,
     /// first observation — not folded into `.flaky` the way a genuine
     /// crash disagreement is.
