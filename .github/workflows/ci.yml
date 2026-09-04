@@ -21,9 +21,10 @@ jobs:
   # codebase's actual style rather than stock defaults.
   #
   # `swiftlint lint` runs `--strict --baseline .swiftlint-baseline.json`:
-  # a handful of complexity/length rules (function_body_length,
-  # type_body_length, cyclomatic_complexity, file_length, large_tuple) fire
-  # against pre-existing debt — concentrated in, but not limited to, a few
+  # 145 pre-existing violations by identity (rule + file + line), dominated
+  # by `line_length` (82, mostly long test lines) with the complexity/length
+  # remainder (function_body_length, type_body_length, cyclomatic_complexity,
+  # file_length, large_tuple) concentrated in, but not limited to, a few
   # deliberately large orchestration files (see .swiftlint.yml's comments
   # for the full breakdown, including which CLI command handlers are
   # baselined too) — that aren't worth a risky structural refactor just to
@@ -54,6 +55,27 @@ jobs:
       SWIFTLINT_VERSION: "0.63.2"
     steps:
       - uses: actions/checkout@v4
+      # Enforces the documented toolchain floor (README "Install",
+      # docs/apple-support-matrix.md "Toolchain floor"): Xcode 16+ and
+      # Swift 6.0+. The macos-15 runner image drifts over time, so printing
+      # the versions (as every job's `Toolchain` step does) is not enough —
+      # this fails the build if the floor regresses. Placed first so a
+      # drift fails fast, before the installs below spend any time.
+      - name: Toolchain floor (Xcode 16+, Swift 6+)
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode_major="$(xcodebuild -version | head -n 1 | awk '{print $2}' | cut -d. -f1)"
+          swift_major="$(swift --version 2>&1 | grep -oE 'Apple Swift version [0-9]+' | grep -oE '[0-9]+')"
+          echo "Xcode major: $xcode_major, Swift major: $swift_major"
+          if [ -z "$xcode_major" ] || [ "$xcode_major" -lt 16 ]; then
+            echo "::error::Xcode 16+ required, found '${xcode_major:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
+          if [ -z "$swift_major" ] || [ "$swift_major" -lt 6 ]; then
+            echo "::error::Swift 6+ required, found '${swift_major:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - name: Install SwiftFormat
         run: brew install swiftformat
       - name: Install pinned SwiftLint
