@@ -45,36 +45,6 @@
     }
   },
   {
-    "text": "    func run() async throws {",
-    "violation": {
-      "reason": "Function should have complexity 12 or less; currently complexity is 13",
-      "ruleIdentifier": "cyclomatic_complexity",
-      "severity": "error",
-      "ruleDescription": "Complexity of function bodies should be limited.",
-      "location": {
-        "line": 38,
-        "character": 5,
-        "file": "Sources/CLI/Commands/ReproduceCommand.swift"
-      },
-      "ruleName": "Cyclomatic Complexity"
-    }
-  },
-  {
-    "text": "    func run() async throws {",
-    "violation": {
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 135 lines",
-      "ruleIdentifier": "function_body_length",
-      "severity": "error",
-      "ruleDescription": "Function bodies should not span too many lines",
-      "location": {
-        "line": 38,
-        "character": 5,
-        "file": "Sources/CLI/Commands/ReproduceCommand.swift"
-      },
-      "ruleName": "Function Body Length"
-    }
-  },
-  {
     "text": "enum SchemataRunOrchestration {",
     "violation": {
       "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 342 lines",
