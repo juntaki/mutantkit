@@ -37,14 +37,17 @@ version does MutantKit need" — this matrix answers them separately.
 | Swift | 6.0+ | **Supported**, hard-enforced | `Package.swift:1` — `// swift-tools-version:6.0`, unchanged since the project's first commit; SwiftPM refuses to resolve a `6.0`-tools package on an older toolchain, so this floor cannot silently regress |
 | Intel Mac | building from source only, no prebuilt binary | **Supported** for source builds, **unsupported** for `brew install`'s prebuilt path | `README.md`'s own `### Building from source`: "platforms the prebuilt binary does not cover yet (Intel Macs, ...)" |
 
-The "Xcode 16+" line is a documented intent, not a CI-enforced gate:
-`ci.yml`'s own `Toolchain` step (every job, e.g. `ci.yml:246`) only prints
-`swift --version && xcodebuild -version` — nothing in this repository
-asserts a minimum version anywhere, at build time or run time. The
-GitHub-hosted `macos-15` runner CI actually builds against ships whichever
-Xcode/Swift version that image currently carries; this repo does not pin
-or record what that is (no version-floor check exists to fail if it drifts
-below 16+/6.0+).
+The "Xcode 16+" line is CI-enforced, not just documented:
+`ci.yml`'s `lint` job runs a `Toolchain floor (Xcode 16+, Swift 6+)` step
+that fails the build if `xcodebuild -version` reports a major version below
+16 or `swift --version` reports an Apple Swift major version below 6.
+Every other job's own `Toolchain` step still only prints
+`swift --version && xcodebuild -version` for failure context — the `lint`
+job's floor check is the single gate, so a runner-image drift that drops
+below 16+/6.0+ fails fast instead of silently changing what CI proves.
+The GitHub-hosted `macos-15` runner image still ships whichever
+Xcode/Swift version it currently carries; this repo pins neither, it only
+refuses to run below the floor.
 
 ### What toolchain a target project (the project under test) can use
 
@@ -54,7 +57,7 @@ require?
 
 | Target toolchain | Status | Proof |
 |---|---|---|
-| Xcode 15.2 / Swift 5.9.2 / macOS 14.2 SDK | **Tested** once, not continuously | `Benchmarks/results/compatibility/xcode-15.2-swift-5.9-macos-14/gate-result.json` — a real GitHub Actions run (`github-actions macos-14`) with `mutantKitBuildSucceeded: true`, `mutantKitRunSucceeded: true` against a real, minimal SwiftPM fixture (1 file, `relational-operator-replacement`, one mutant killed). MutantKit itself was built with Xcode 16.2 in that same run — this proves the *target project's* toolchain floor, not a lower build floor for MutantKit itself. |
+| Xcode 15.2 / Swift 5.9.2 / macOS 14.2 SDK | **Tested** once, not continuously | A real GitHub Actions run (`github-actions macos-14`, internal and not part of this public repo — formerly `Benchmarks/results/compatibility/xcode-15.2-swift-5.9-macos-14/gate-result.json`) with `mutantKitBuildSucceeded: true`, `mutantKitRunSucceeded: true` against a real, minimal SwiftPM fixture (1 file, `relational-operator-replacement`, one mutant killed). MutantKit itself was built with Xcode 16.2 in that same run — this proves the *target project's* toolchain floor, not a lower build floor for MutantKit itself. |
 | Anything older than Xcode 15.2 / Swift 5.9.2 | **Unknown** | Never attempted; no claim either way. |
 
 That gate was built for a different purpose (a fair toolchain for comparing
@@ -193,7 +196,7 @@ exercised by it on every push.
 | Axis | Status |
 |---|---|
 | Swift 6.0+ (build MutantKit) | Supported, hard-enforced by `Package.swift` |
-| Xcode 16+ / macOS 14+ Apple Silicon (build/run MutantKit) | Supported, documented, not CI-asserted |
+| Xcode 16+ / macOS 14+ Apple Silicon (build/run MutantKit) | Supported, documented, CI-enforced (`ci.yml` toolchain-floor step) |
 | Target project on Xcode 15.2 / Swift 5.9.2 / macOS 14.2 | Tested once, not continuous |
 | SwiftPM (macOS) × XCTest / Swift Testing | Supported, both modes |
 | Xcode project/workspace × XCTest / Swift Testing | Supported, `isolated`; `xcodeProject`+XCTest also `schemata`-supported |

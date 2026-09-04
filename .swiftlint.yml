@@ -9,13 +9,18 @@
 # to stop erroring, left as a warning, documented here).
 #
 # CI runs `swiftlint lint --strict --baseline .swiftlint-baseline.json`:
-# the baseline freezes 32 pre-existing violations by identity (rule + file +
+# the baseline freezes 145 pre-existing violations by identity (rule + file +
 # line) so `--strict` still catches every new violation, including a new one
 # in an already-baselined file, without forcing a refactor of any of them
-# just to silence the linter. It is not only a handful of large orchestration
-# files: `function_body_length`/`type_body_length`/`file_length` concentrate
-# there (MutationRunner.swift, XcodeBuildAdapter.swift and similar), but
-# `cyclomatic_complexity` also covers CLI command handlers
+# just to silence the linter. By rule: `line_length` 82 (mostly long test
+# lines and interpolated diagnostics), `type_body_length` 16, `large_tuple`
+# 13, `function_body_length` 11, `function_parameter_count` 7, `file_length`
+# 6, `cyclomatic_complexity` 6, `force_try` 2, plus one `unused_enumerated`
+# and one `orphaned_doc_comment`. The length/complexity rules concentrate
+# in a few deliberately large orchestration files
+# (MutationRunner.swift, SchemataMutationRunner.swift,
+# XcodeBuildAdapter.swift and similar), but `cyclomatic_complexity` also
+# covers CLI command handlers
 # (InspectCommand.run() at complexity 23, RunCommand.run() at 19,
 # ConfigurationValidation's validate() at 14, DeclarationIdentityResolver's
 # resolve() at 15) and `large_tuple` is spread across several test files.
