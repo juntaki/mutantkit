@@ -1,9 +1,6 @@
-import AppleBuildAdapters
 import ArgumentParser
 import Foundation
-import MutationExecution
 import MutationModel
-import SwiftFrontend
 
 /// Rebuilds one mutant, alone, in a sandbox you can keep.
 ///
