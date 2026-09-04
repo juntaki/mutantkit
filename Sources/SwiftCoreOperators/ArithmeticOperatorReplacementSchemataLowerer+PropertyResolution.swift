@@ -1,6 +1,3 @@
-import Foundation
-import MutationModel
-import SwiftFrontend
 import SwiftSyntax
 
 // MARK: - Stored-property and extension-boundary resolution

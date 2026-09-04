@@ -1,5 +1,4 @@
 import Foundation
-import MutationModel
 
 /// One `-destination` specifier, resolved to a concrete device (or proven to
 /// need none), once, at run start.

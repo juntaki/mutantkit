@@ -1,7 +1,6 @@
 import Foundation
 import MutationModel
 import SwiftFrontend
-import SwiftSyntax
 
 /// Why `BoolLiteralSchemataLowerer.lower(_:sources:)` refused to embed a
 /// chunk, instead of silently producing a schema that does not match the

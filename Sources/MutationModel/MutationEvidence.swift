@@ -1,4 +1,3 @@
-import Foundation
 
 /// Proof that a mutation actually reached the running code.
 ///

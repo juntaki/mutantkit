@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// The canonical machine-readable report: `RunReport` itself, nothing added and

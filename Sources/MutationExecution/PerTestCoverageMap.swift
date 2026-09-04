@@ -1,5 +1,3 @@
-import Foundation
-import MutationModel
 
 /// One test XCTest can be told to run alone: `-only-testing:<target>/<Class>/<method>`.
 public struct TestIdentifier: Sendable, Hashable, Codable {

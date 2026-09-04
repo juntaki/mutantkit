@@ -1,7 +1,6 @@
 import Foundation
 import MutationModel
 import SwiftFrontend
-import SwiftSyntax
 
 /// Embeds `swift.core.return-value-replacement` points into a schema
 /// binary — behind a closed scoring gate (see `SchemataLowererRegistry

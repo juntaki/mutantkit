@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import MutationExecution
 
 /// The machine's state at one moment, captured for evidence rather than for
 /// any decision this tool makes from it.

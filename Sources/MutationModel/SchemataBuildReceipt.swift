@@ -1,4 +1,3 @@
-import Foundation
 
 /// A CPU type/subtype pair, persisted independently of
 /// `AppleBuildAdapters.ArchitectureIdentity` (a `MutationModel`-layer type

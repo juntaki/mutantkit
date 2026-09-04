@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// The one canonical, reporter-independent presentation model every

@@ -1,5 +1,4 @@
 import ArgumentParser
-import Foundation
 import MutationModel
 
 /// Validates `mutantkit.yml` or emits the JSON Schema used by editors/CI.

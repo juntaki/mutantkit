@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// For one surviving/uncovered mutant, the specific, concrete distinction a

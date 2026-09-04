@@ -1,6 +1,4 @@
-import Foundation
 import MutationModel
-import SwiftFrontend
 
 /// Which lines the baseline suite executed, keyed by repository-relative path.
 ///

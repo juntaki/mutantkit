@@ -1,4 +1,3 @@
-import Foundation
 
 /// Static metadata describing a mutation operator.
 ///

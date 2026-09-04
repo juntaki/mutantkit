@@ -1,6 +1,3 @@
-import Foundation
-import MutationExecution
-import MutationModel
 
 /// Every way the SwiftPM path refuses to map a compilation unit's target to
 /// a real built image — fail-closed: an ambiguous or unproven mapping must

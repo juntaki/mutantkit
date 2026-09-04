@@ -2,7 +2,6 @@ import AppleBuildAdapters
 import Foundation
 import MutationModel
 import MutationPlanner
-import SwiftCoreOperators
 import SwiftFrontend
 
 /// Research-only, outcome-blind classification core for

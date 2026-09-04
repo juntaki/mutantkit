@@ -1,4 +1,3 @@
-import SwiftFrontend
 import SwiftSyntax
 
 /// Sites every operator must leave alone.

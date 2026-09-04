@@ -1,4 +1,3 @@
-import Foundation
 
 /// One `mutantkit_register_unit_v3` registration, decoded from a v3 STARTUP
 /// record — fires unconditionally once a compilation unit's descriptor is

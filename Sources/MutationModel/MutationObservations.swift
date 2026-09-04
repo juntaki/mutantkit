@@ -1,4 +1,3 @@
-import Foundation
 
 /// Whether the mutation was written to source at all, and what it looked
 /// like if so.

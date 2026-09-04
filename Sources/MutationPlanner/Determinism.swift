@@ -1,4 +1,3 @@
-import Foundation
 
 /// A small, self-contained seeded PRNG (SplitMix64).
 ///

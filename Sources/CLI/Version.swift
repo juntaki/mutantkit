@@ -1,4 +1,3 @@
-import Foundation
 
 /// Build identity, embedded at release time.
 ///
