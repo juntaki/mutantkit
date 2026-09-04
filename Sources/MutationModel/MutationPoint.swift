@@ -1,4 +1,3 @@
-import Foundation
 
 /// One mutation, fully described, independent of any syntax tree.
 ///

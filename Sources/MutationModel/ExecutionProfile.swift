@@ -1,4 +1,3 @@
-import Foundation
 
 // New in this session (`execution.profile`). A new project gets almost none
 // of `ExecutionSettings`' real speed features by default — every one of them

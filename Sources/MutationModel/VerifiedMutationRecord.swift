@@ -1,4 +1,3 @@
-import Foundation
 
 /// A result that has passed verification — the only form a mutation's
 /// outcome may take once it is eligible for scoring, caching,

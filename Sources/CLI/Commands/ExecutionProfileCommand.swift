@@ -1,7 +1,6 @@
 import AppleBuildAdapters
 import ArgumentParser
 import Foundation
-import MutationExecution
 import MutationModel
 
 /// Shows what `execution.profile: optimized`/`experimental` would actually

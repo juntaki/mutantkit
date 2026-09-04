@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// The evidence-grounded trust summary `mutantkit trust` prints — a new

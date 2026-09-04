@@ -1,6 +1,5 @@
 import ArgumentParser
 import Foundation
-import MutationModel
 import Reporting
 
 struct HistoryCommand: ParsableCommand {

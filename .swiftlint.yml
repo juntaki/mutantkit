@@ -133,3 +133,12 @@ disabled_rules:
   # oversight — forcing the failable initializer here would just add an
   # unwrap for a case that can't happen.
   - optional_data_string_conversion
+
+# Compiler-aware rules: these run ONLY under `swiftlint analyze` with a
+# clean xcodebuild log (see the `analyze` CI job), never under `swiftlint
+# lint`. Scope is deliberately one rule: `unused_import` catches exactly
+# the failure class a pure file move introduces (a leftover import no
+# syntax-only rule sees), and it was verified clean (66 true positives
+# removed) before this gate was switched on.
+analyzer_rules:
+  - unused_import

@@ -1,5 +1,4 @@
 import Foundation
-import MutationExecution
 import MutationModel
 
 /// Every way `SchemataBuiltImageInspection.inspect` refuses to produce a

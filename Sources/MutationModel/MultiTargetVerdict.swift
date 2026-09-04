@@ -1,4 +1,3 @@
-import Foundation
 
 /// Which target a `TargetVerdict` belongs to — stable, sortable identity so
 /// `MultiTargetVerdict.perTarget` has one deterministic order regardless of

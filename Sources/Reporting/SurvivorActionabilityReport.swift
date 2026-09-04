@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// Survivor actionability — moves the product from "produces a mutation

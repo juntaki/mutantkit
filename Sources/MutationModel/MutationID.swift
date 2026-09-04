@@ -1,4 +1,3 @@
-import Foundation
 
 /// A content-derived identifier for a single mutation.
 ///

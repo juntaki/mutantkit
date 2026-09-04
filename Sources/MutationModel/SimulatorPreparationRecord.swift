@@ -1,4 +1,3 @@
-import Foundation
 
 /// A run's record of how the simulator it tests on was prepared — carried in
 /// the `RunManifest`, so `--replay` and post-hoc inspection can see not just
