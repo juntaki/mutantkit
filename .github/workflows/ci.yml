@@ -65,7 +65,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcode_major="$(xcodebuild -version | head -n 1 | awk '{print $2}' | cut -d. -f1)"
+          # `xcodebuild -version` piped directly into `head -n 1` crashes:
+          # `head` closes the read end after its first line, xcodebuild's
+          # own Foundation-based stdout write then hits a broken pipe,
+          # which xcodebuild turns into an uncaught NSFileHandleOperationException
+          # (SIGABRT, exit 134) instead of the plain SIGPIPE a non-Foundation
+          # tool would just die from quietly — reproduced for real on this
+          # exact runner image. Capturing full output to a variable first
+          # (command substitution reads to EOF, no early pipe closure) sidesteps it.
+          xcode_version_output="$(xcodebuild -version)"
+          xcode_major="$(head -n 1 <<<"$xcode_version_output" | awk '{print $2}' | cut -d. -f1)"
           swift_major="$(swift --version 2>&1 | grep -oE 'Apple Swift version [0-9]+' | grep -oE '[0-9]+')"
           echo "Xcode major: $xcode_major, Swift major: $swift_major"
           if [ -z "$xcode_major" ] || [ "$xcode_major" -lt 16 ]; then
