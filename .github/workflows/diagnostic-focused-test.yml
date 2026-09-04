@@ -7,11 +7,9 @@ name: Diagnostic - focused test rerun
 # push/PR gate. Remove once the investigation it exists for is done.
 
 on:
-  workflow_dispatch:
-    inputs:
-      filter:
-        description: "swift test --filter argument"
-        required: true
+  push:
+    branches:
+      - hygiene/public-projection-scope
 
 jobs:
   focused-test:
@@ -30,4 +28,4 @@ jobs:
         run: swift build --build-tests
       - name: Focused test
         shell: bash
-        run: swift test --filter "${{ inputs.filter }}"
+        run: swift test --filter "ProcessSupervisorResidueTests"
