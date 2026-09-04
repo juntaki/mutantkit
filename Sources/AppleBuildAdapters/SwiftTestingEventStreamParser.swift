@@ -474,6 +474,6 @@ enum SwiftTestingEventStreamParser {
               Int(parts[1]) != nil,
               Int(parts[2]) != nil
         else { return id }
-        return String(id[id.startIndex..<lastSlash])
+        return String(id[id.startIndex ..< lastSlash])
     }
 }

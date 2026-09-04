@@ -195,6 +195,7 @@ public struct SarifReporter: Reporter {
 }
 
 // MARK: - Schema types
+
 //
 // Field names below are exactly SARIF 2.1.0's own (Swift's default
 // camelCase encoding already matches every one of them except `$schema` and

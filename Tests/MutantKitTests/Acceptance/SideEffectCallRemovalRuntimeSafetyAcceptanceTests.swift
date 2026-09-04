@@ -83,7 +83,7 @@ struct SideEffectCallRemovalRuntimeSafetyAcceptanceTests {
 
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while process.isRunning, Date() < deadline {
-            usleep(10_000)
+            usleep(10000)
         }
         if process.isRunning {
             process.terminate()

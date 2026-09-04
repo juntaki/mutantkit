@@ -186,6 +186,7 @@ struct StrykerReporterTests {
     }
 
     // MARK: - Real schema conformance
+
     //
     // Everything above decodes the export back through `StrykerReport`
     // itself, which is Codable and therefore silently tolerant of a missing

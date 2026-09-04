@@ -140,9 +140,9 @@ enum SwiftPMDirectCoverageRunner {
         }
 
         switch SwiftTestingEventStreamParser.parse(contentsOf: eventStreamURL) {
-        case .unsupported(let reason):
+        case let .unsupported(reason):
             return .unavailable(reason: "event stream: \(reason)")
-        case .parsed(let evidence):
+        case let .parsed(evidence):
             if let reason = Self.disqualifyingReason(for: test, evidence: evidence) {
                 return .unavailable(reason: reason)
             }

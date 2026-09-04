@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 
 // MARK: - Deterministic ownership close-out (F3)
+
 //
 // Split from ProcessSupervisor.swift's own declaration purely to keep that
 // type's body under swiftlint's type_body_length ceiling — an `extension`

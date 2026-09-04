@@ -119,14 +119,14 @@ struct SwiftPMDirectCoverageRunnerAcceptanceTests {
         let test = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetAPasses()")
         let scratch = workspace.appendingPathComponent(".mutantkit-scratch", isDirectory: true)
 
-        guard case .succeeded(let outcome) = await SwiftPMDirectCoverageRunner.run(
+        guard case let .succeeded(outcome) = await SwiftPMDirectCoverageRunner.run(
             testBundleBinary: binary, test: test, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
         ) else {
             Issue.record("expected the isolated run of \(test) to succeed")
             return
         }
 
-        guard case .exported(let json) = await SwiftPMCoverageExporter.export(
+        guard case let .exported(json) = await SwiftPMCoverageExporter.export(
             profileURL: outcome.profileURL, testBundleBinary: binary, scratchDirectory: scratch
         ) else {
             Issue.record("expected coverage export to succeed")
@@ -151,18 +151,18 @@ struct SwiftPMDirectCoverageRunnerAcceptanceTests {
         let testA = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetAPasses()")
         let testB = TestIdentifier(target: "WidgetsTests", qualifiedName: "WidgetsTests/widgetBPasses()")
 
-        guard case .succeeded(let outcomeA) = await SwiftPMDirectCoverageRunner.run(
+        guard case let .succeeded(outcomeA) = await SwiftPMDirectCoverageRunner.run(
             testBundleBinary: binary, test: testA, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
-        ), case .succeeded(let outcomeB) = await SwiftPMDirectCoverageRunner.run(
+        ), case let .succeeded(outcomeB) = await SwiftPMDirectCoverageRunner.run(
             testBundleBinary: binary, test: testB, workingDirectory: workspace, scratchDirectory: scratch, timeoutSeconds: 60
         ) else {
             Issue.record("expected both isolated runs to succeed")
             return
         }
 
-        guard case .exported(let jsonA) = await SwiftPMCoverageExporter.export(
+        guard case let .exported(jsonA) = await SwiftPMCoverageExporter.export(
             profileURL: outcomeA.profileURL, testBundleBinary: binary, scratchDirectory: scratch
-        ), case .exported(let jsonB) = await SwiftPMCoverageExporter.export(
+        ), case let .exported(jsonB) = await SwiftPMCoverageExporter.export(
             profileURL: outcomeB.profileURL, testBundleBinary: binary, scratchDirectory: scratch
         ) else {
             Issue.record("expected both coverage exports to succeed")

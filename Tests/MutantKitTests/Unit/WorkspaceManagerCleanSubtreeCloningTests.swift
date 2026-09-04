@@ -29,7 +29,6 @@ import Testing
 /// plain `swift test`. See that file's own doc comment.
 @Suite("WorkspaceManager: clean-subtree-index fast path (cleanSubtreeCloning)")
 struct WorkspaceManagerCleanSubtreeCloningTests {
-
     // MARK: - A. Content-and-layout parity (the core correctness gate)
 
     @Test(

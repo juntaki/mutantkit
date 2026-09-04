@@ -1,5 +1,5 @@
-import Foundation
 @testable import AppleBuildAdapters
+import Foundation
 import MutationExecution
 import MutationModel
 import Testing

@@ -1,5 +1,5 @@
-@testable import MutationExecution
 import Foundation
+@testable import MutationExecution
 import Testing
 
 /// Real, subprocess-backed coverage for `ToolchainCacheFingerprintProbe` —

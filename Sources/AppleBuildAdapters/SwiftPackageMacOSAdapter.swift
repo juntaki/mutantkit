@@ -616,7 +616,7 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
             in: workspace,
             timeoutSeconds: timeoutSeconds
         ) {
-        case .complete(let map):
+        case let .complete(map):
             return map
         case .unavailable:
             return await measurePerTestCoverageSerial(

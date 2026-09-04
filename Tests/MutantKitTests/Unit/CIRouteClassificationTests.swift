@@ -98,7 +98,7 @@ func ciRoute(
     return try JSONDecoder().decode(CIRouteResult.self, from: outData)
 }
 
-@Suite("CI route classification (Scripts/ci-route.sh)")
+@Suite("CI route classification (Scripts/ci-route.sh)", .subprocessExclusive)
 struct CIRouteClassificationTests {
     private func route(
         event: String,
@@ -276,7 +276,7 @@ struct CIRouteClassificationTests {
 /// fixture-existence cross-check -- split into its own `@Suite` purely to
 /// stay under SwiftLint's `type_body_length` (see `ciRoute(...)`'s own doc
 /// comment); conceptually still one suite for `Scripts/ci-route.sh`.
-@Suite("CI route classification: acceptance_matrix and fixture existence")
+@Suite("CI route classification: acceptance_matrix and fixture existence", .subprocessExclusive)
 struct CIRouteAcceptanceMatrixTests {
     private func route(
         event: String,

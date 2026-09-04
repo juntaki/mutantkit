@@ -536,7 +536,7 @@ public enum TestObligationAnalyzer {
     /// branch in that file for the fixed, closed set this analyzer mirrors
     /// only for classification, below.
     private static func returnValueObligation(original: String, replacement: String) -> TestObligation {
-        let neutralDefaults: Set<String> = ["nil", "0", "\"\"", "[]", "[:]"]
+        let neutralDefaults: Set = ["nil", "0", "\"\"", "[]", "[:]"]
         guard neutralDefaults.contains(replacement) else {
             return unmodeledObligation(operatorID: "swift.core.return-value-replacement", original: original, replacement: replacement)
         }

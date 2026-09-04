@@ -1,5 +1,5 @@
-@testable import MutationExecution
 import Foundation
+@testable import MutationExecution
 import Testing
 
 /// Fast, no-subprocess coverage for `SharedModuleCacheFingerprint`'s own

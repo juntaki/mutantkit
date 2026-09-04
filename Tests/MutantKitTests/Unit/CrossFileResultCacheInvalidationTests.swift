@@ -108,7 +108,10 @@ struct CrossFileResultCacheInvalidationTests {
     }
 
     @Test(
-        "Changing only B.swift invalidates the cache for A.swift's own untouched mutant, and the run re-verifies instead of reusing the stale verdict"
+        """
+        Changing only B.swift invalidates the cache for A.swift's own untouched mutant, and the \
+        run re-verifies instead of reusing the stale verdict
+        """
     )
     func changingOnlyTheDependencyFileInvalidatesTheCache() async throws {
         let repo = try GitFixture.makeRepository(named: "MutantKit-CrossFileCache")
@@ -134,7 +137,10 @@ struct CrossFileResultCacheInvalidationTests {
         let aSwiftMutationCount = discoveredPlan1.mutations.filter { $0.file.hasSuffix("A.swift") }.count
         #expect(
             aSwiftMutationCount == 1,
-            "isReady()'s bare call to dependency() must not itself contribute a mutation candidate -- only A.swift's own `enabled = true` literal should"
+            """
+            isReady()'s bare call to dependency() must not itself contribute a mutation candidate -- \
+            only A.swift's own `enabled = true` literal should
+            """
         )
         let plan1 = narrowed(discoveredPlan1, to: point1)
 
@@ -166,7 +172,13 @@ struct CrossFileResultCacheInvalidationTests {
             MutationResultCache.Key(mutationID: point1.id, contextDigest: digest1),
             point: point1, planID: plan1.planID, workUnitID: plan1.workUnitID
         )
-        #expect(freshLookup != nil, "run 1 must have cached a verdict retrievable under its own digest1 -- the baseline the digest2 miss below is contrasted against")
+        #expect(
+            freshLookup != nil,
+            """
+            run 1 must have cached a verdict retrievable under its own digest1 -- the baseline the \
+            digest2 miss below is contrasted against
+            """
+        )
 
         // --- Run 2: ONLY B.swift changes. A.swift, including its own
         // mutation site, is byte-for-byte untouched. ---
@@ -222,7 +234,10 @@ struct CrossFileResultCacheInvalidationTests {
         let result2 = try #require(report2.results.first)
         #expect(await adapter2.mutantCallCount == 1, "run 2 must actually re-evaluate the mutant, not skip evaluation via a cache hit")
         #expect(result2.origin == .fresh, "a genuinely fresh evaluation, not a cross-run cache reuse of run 1's stale verdict")
-        #expect(result2.outcome == .survived, "the new, correct outcome for dependency() now returning true -- not run 1's killedByAssertion")
+        #expect(
+            result2.outcome == .survived,
+            "the new, correct outcome for dependency() now returning true -- not run 1's killedByAssertion"
+        )
     }
 
     /// `discovered`, reduced to `point` alone — every other field copied

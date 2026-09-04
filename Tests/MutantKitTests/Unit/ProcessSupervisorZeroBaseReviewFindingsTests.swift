@@ -119,6 +119,7 @@ struct ProcessSupervisorZeroBaseReviewFindingsTests {
                 events.append(event)
                 lock.unlock()
             }
+
             var snapshot: [ProcessSupervisor.LifecycleEvent] {
                 lock.lock()
                 defer { lock.unlock() }

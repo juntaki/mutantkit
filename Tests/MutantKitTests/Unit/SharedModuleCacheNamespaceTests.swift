@@ -1,5 +1,5 @@
-@testable import MutationExecution
 import Foundation
+@testable import MutationExecution
 import Testing
 
 /// Fast (one real, short toolchain probe; otherwise pure filesystem)
