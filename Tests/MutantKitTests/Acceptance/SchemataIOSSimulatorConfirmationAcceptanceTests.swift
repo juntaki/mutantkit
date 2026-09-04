@@ -181,7 +181,7 @@ struct SchemataIOSSimulatorConfirmationAcceptanceTests {
             "the diagnosis itself must name the confirmation, not just the primary crash: \(result.diagnosis)"
         )
 
-        guard case .schemata(let observation) = result.evidence?.applicationEvidence else {
+        guard case let .schemata(observation) = result.evidence?.applicationEvidence else {
             Issue.record("expected a schemata observation, got \(String(describing: result.evidence?.applicationEvidence))")
             return
         }
@@ -207,7 +207,7 @@ struct SchemataIOSSimulatorConfirmationAcceptanceTests {
     private func assertPrimaryProofChain(_ observation: SchemataExecutionObservation) throws {
         let expectation = observation.expectation
         let startupMatch = observation.transcript.records.contains {
-            if case .startup(let event) = $0 {
+            if case let .startup(event) = $0 {
                 return event.runID == expectation.runID && event.compilationUnitID == expectation.compilationUnitID
             }
             return false
@@ -215,12 +215,12 @@ struct SchemataIOSSimulatorConfirmationAcceptanceTests {
         #expect(startupMatch, "expected a STARTUP record matching the primary run's own expectation")
 
         let hitMatch = observation.transcript.records.first {
-            if case .hit(let event) = $0 {
+            if case let .hit(event) = $0 {
                 return event.runID == expectation.runID && event.compilationUnitID == expectation.compilationUnitID
             }
             return false
         }
-        guard case .hit(let hitEvent) = hitMatch else {
+        guard case let .hit(hitEvent) = hitMatch else {
             Issue.record("expected a HIT record matching the primary run's own expectation")
             return
         }
@@ -374,7 +374,7 @@ struct SchemataIOSSimulatorConfirmationAcceptanceTests {
         let result = try #require(outcome.results.first)
         #expect(result.outcome == .verifiedTimeout, "flipping while false to while true must hang the test runner, confirmed: \(result.diagnosis)")
 
-        guard case .schemata(let observation) = result.evidence?.applicationEvidence else {
+        guard case let .schemata(observation) = result.evidence?.applicationEvidence else {
             Issue.record("expected a schemata observation, got \(String(describing: result.evidence?.applicationEvidence))")
             return
         }

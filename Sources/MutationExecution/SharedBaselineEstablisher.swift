@@ -5,11 +5,10 @@ import MutationModel
 /// once, optionally measure per-test coverage), established once and
 /// shared between backends — the mechanism `SchemataRunOrchestration`
 /// uses to run this exactly once per `mutantkit run` invocation instead
-/// of once per backend pass. Previously an accepted v1 inefficiency (see
-/// `SchemataRunOrchestration.merge`'s own doc comment: "both passes build
-/// and run their own baseline"), measured at Gate 3
-/// (`Research/benchmarks/gate3-ios-schemata-2026-08-23`) to cost ~104s —
-/// about 9.5% of total wall — on a real iOS project.
+/// of once per backend pass. Both passes previously built and ran
+/// their own baseline independently; measured on a real iOS
+/// project, that redundant work cost ~104s — about 9.5% of total
+/// wall clock.
 ///
 /// Mirrors `MutationRunner`'s own private `establishBaseline(in:startedAt:)`
 /// exactly (build, test, coverage-cache-or-measure, in that order) —

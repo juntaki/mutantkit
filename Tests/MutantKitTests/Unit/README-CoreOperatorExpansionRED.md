@@ -20,10 +20,8 @@ referencing the concrete types directly — a deliberate choice from before any
 operator existed, so the test target stayed compilable and each family's
 suite failed with a precise `MissingOperator` rather than a build error.
 
-Scope decisions, as implemented at PR #6 time (see
-`Research/operator-catalog/README.md` and
-`Research/corpus-validation/yomu-2026-07-24/` for the current, corpus-revised
-policy — nil-coalescing-fallback has since been demoted to experimental):
+Scope decisions, revised since initial implementation based on later corpus
+validation (nil-coalescing-fallback has since been demoted to experimental):
 
 - Ternary swapping is high-confidence and conservative-profile eligible.
 - Unary-not and restricted return-value replacement are medium-confidence,

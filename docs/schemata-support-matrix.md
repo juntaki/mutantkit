@@ -22,6 +22,12 @@ here means all of:
   coverage already knows is unreached is expected to fall back — see
   "Fallback is not failure" below).
 
+`mutantkit doctor`'s own "Schemata execution" line reports exactly this
+table's Supported/Unsupported column for the project it is run against —
+`ExecutionCapabilitiesDiagnosis.schemataSupported(for:)` is the one place
+that answers it, kept next to this doc specifically so the two cannot
+drift apart; update both together.
+
 | Project kind | Test framework | Destination | Status | Proof |
 | --- | --- | --- | --- | --- |
 | `swiftPackageMacOS` | XCTest | host (macOS) | **Supported** | `SchemataSupportedMatrixSwiftPMMacOSAcceptanceTests.xcTestFullyActivates` |

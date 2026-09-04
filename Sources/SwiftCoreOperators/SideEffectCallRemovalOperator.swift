@@ -8,14 +8,11 @@ import SwiftSyntax
 /// arbitrary call. A call made purely for its effect (logging, caching, a UI
 /// update, an analytics ping, cleanup) whose absence no test notices is
 /// exactly the gap this operator exists to surface.
-///
-/// Full design, including three rounds of adversarial (codex) review and the
-/// mistakes each round caught: `Research/operator-catalog/
-/// side-effect-call-removal-design.md`. This implementation follows that
-/// design's candidacy contract, extended after its own real-corpus/codex
-/// review found the design under-scoped point 2 (see point 2's own note
-/// below) and missed initializer delegation and subscripts entirely (see
-/// points 8-9); see the design doc for the reasoning this doc comment only
+/// This implementation's candidacy contract was extended after further
+/// review found the original scope under-specified point 2 (see point 2's
+/// own note below) and missed initializer delegation and subscripts
+/// entirely (see points 8-9); this file's own inline comments explain what
+/// changed and why.
 /// summarizes, and this file's own inline comments for what changed since.
 ///
 /// **Candidate when all of the following hold:**
@@ -59,9 +56,10 @@ import SwiftSyntax
 ///    last statement is a trailing `fatalError()` compiles *without* an
 ///    explicit `return`, precisely because the compiler treats a call to a
 ///    `Never`-returning function as an unconditional "unreachable after
+///    `Never`-returning function as an unconditional "unreachable after
 ///    this" fact) — so these four are excluded everywhere, matching both
-///    Muter's own precedent and the master plan's explicit "never remove by
-///    default" list. `assertionFailure` is deliberately **not** in this
+///    Muter's own precedent and this codebase's own policy of never
+///    removing a call whose sole purpose is aborting execution.
 ///    list: its actual stdlib signature returns `Void`, not `Never` (it is
 ///    stripped to a no-op in a release build), so the compiler never
 ///    relies on it for reachability anywhere, and it is a normal,
@@ -80,19 +78,19 @@ import SwiftSyntax
 ///    call already belongs to `LifecycleSuperCallRemovalOperator`'s own,
 ///    separate (not yet promoted) fault model, and duplicating it here
 ///    under a different operator ID would double-count the same site.
-/// 9. Not a `self.init(...)` call — a codex review of this implementation
-///    (not the design doc) found the same initializer-delegation hazard
-///    as point 8 applies here too: a convenience initializer must
+/// 9. Not a `self.init(...)` call — a later review of this implementation
+///    found the same initializer-delegation hazard as point 8 applies here
+///    too: a convenience initializer must
 ///    delegate via `self.init` before it completes, unconditionally.
 ///    Narrowed to `init` specifically, unlike point 8's broader `super.*()`
 ///    exclusion: an ordinary `self.foo()` call carries no such
 ///    requirement and remains a normal candidate.
 ///
 /// **`defaultEnabled: false`, `confidence: .experimental`.** Two open
-/// questions block promotion, per the design doc: the exclusion
-/// heuristics' real compile-viability rate, and result-builder detection's
-/// real false-negative rate on a SwiftUI-heavy project. A real-corpus
-/// discovery sample against a real production app confirmed the second question is a real,
+/// questions block promotion: the exclusion heuristics' real
+/// compile-viability rate, and result-builder detection's real
+/// false-negative rate on a SwiftUI-heavy project. A discovery sample
+/// against a real production app confirmed the second question is a real,
 /// live risk, not just a theoretical one: `Spacer()`/`ForEach` calls
 /// nested inside an `HStack`'s own trailing closure (inside an
 /// arbitrarily-named `some View` helper property, not literally `body`)
@@ -102,12 +100,12 @@ import SwiftSyntax
 /// "custom `@resultBuilder` type used as a closure's parameter type" gap
 /// `OperatorExclusions.isInsideResultBuilderBody`'s own doc comment
 /// already named as accepted, not something this pass attempted to close.
-/// The same sample, plus an independent codex review of this
-/// implementation, found and closed three real compile-viability gaps
-/// (points 2's "last, not just sole" extension, and points 8-9) before
-/// this operator's own compile-viability question could be considered
-/// even provisionally answered — still not a full corpus measurement,
-/// which remains the open blocker.
+/// The same sample, plus a later review of this implementation, found and
+/// closed three real compile-viability gaps (points 2's "last, not just
+/// sole" extension, and points 8-9) before this operator's own
+/// compile-viability question could be considered even provisionally
+/// answered — still not a full corpus measurement, which remains the open
+/// blocker.
 public struct SideEffectCallRemovalOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.side-effect-call-removal",
@@ -157,8 +155,8 @@ public struct SideEffectCallRemovalOperator: MutationOperator {
             guard let context = Self.statementContext(for: node) else { return .visitChildren }
             guard !OperatorExclusions.isInsideResultBuilderBody(Syntax(node)) else { return .visitChildren }
 
-            // Real-corpus finding (Phase C3 corpus sample, a real production app):
-            // `super.init(...)` was discovered as a candidate and would
+            // Found in a real production app: `super.init(...)` was
+            // discovered as a candidate and would
             // have been an almost-certain `unviable` mutant — a designated
             // initializer must call a superclass initializer (or delegate
             // via `self.init`) before it completes; Swift enforces this at
@@ -173,13 +171,13 @@ public struct SideEffectCallRemovalOperator: MutationOperator {
             // would double-count the same site.
             guard !Self.isSuperCall(node) else { return .visitChildren }
 
-            // Real-corpus/codex finding: `self.init(...)` is exactly as
-            // compile-load-bearing as `super.init(...)` — a convenience
-            // initializer must delegate via `self.init` before it
-            // completes, unconditionally. Narrowed to `init` specifically
-            // (unlike the broader `super.*()` exclusion above): an
-            // ordinary `self.foo()` call carries no such requirement and
-            // is a normal candidate.
+            // Found during implementation review: `self.init(...)` is
+            // exactly as compile-load-bearing as `super.init(...)` — a
+            // convenience initializer must delegate via `self.init` before
+            // it completes, unconditionally. Narrowed to `init`
+            // specifically (unlike the broader `super.*()` exclusion
+            // above): an ordinary `self.foo()` call carries no such
+            // requirement and is a normal candidate.
             guard !Self.isSelfInitDelegation(node) else { return .visitChildren }
 
             if let calledName = Self.calledName(of: node) {
@@ -295,20 +293,20 @@ public struct SideEffectCallRemovalOperator: MutationOperator {
         /// (`T` not `Void`) function, method, computed property, or
         /// subscript body — not only when it is the body's *sole*
         /// statement (this design's original scope for point 2), extended
-        /// after a real-corpus/codex finding: a custom, non-stdlib
-        /// function whose own return type happens to be `Never` can be
-        /// exactly as load-bearing for the enclosing declaration's
-        /// reachability as `fatalError()` is (a non-`Void` function whose
-        /// trailing statement is a call to *any* `Never`-returning
-        /// function compiles without an explicit `return`, and discovery
-        /// has no symbol resolution to rule an arbitrary callee name out).
-        /// The unconditional four-name denylist above only ever protects
-        /// against the four stdlib names; this protects every other name
-        /// too, at the cost of conservatively excluding some genuinely
-        /// safe trailing statements this design cannot tell apart from
-        /// that hazard — the same trade-off
-        /// `ElseClauseDeletionOperator.isSafePosition` already makes for
-        /// the analogous "missing return" hazard on a dropped `else`.
+        /// after finding that a custom, non-stdlib function whose own
+        /// return type happens to be `Never` can be exactly as load-bearing
+        /// for the enclosing declaration's reachability as `fatalError()`
+        /// is (a non-`Void` function whose trailing statement is a call to
+        /// *any* `Never`-returning function compiles without an explicit
+        /// `return`, and discovery has no symbol resolution to rule an
+        /// arbitrary callee name out). The unconditional four-name
+        /// denylist above only ever protects against the four stdlib
+        /// names; this protects every other name too, at the cost of
+        /// conservatively excluding some genuinely safe trailing
+        /// statements this design cannot tell apart from that hazard — the
+        /// same trade-off `ElseClauseDeletionOperator.isSafePosition`
+        /// already makes for the analogous "missing return" hazard on a
+        /// dropped `else`.
         ///
         /// Closures are deliberately **not** covered here — see
         /// `isSoleStatementOfImplicitReturnClosure`'s own doc comment for

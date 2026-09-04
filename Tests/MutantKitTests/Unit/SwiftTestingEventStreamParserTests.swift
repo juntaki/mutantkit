@@ -25,6 +25,7 @@ enum StreamFixtures {
         {"kind":"event","payload":{"kind":"testStarted","testID":"\(id)","messages":[{"symbol":"default","text":"Suite started."}]},"version":0}
         """
     }
+
     static func suiteEnded(id: String = "WidgetsTests.WidgetsTests") -> String {
         """
         {"kind":"event","payload":{"kind":"testEnded","testID":"\(id)","messages":[{"symbol":"pass","text":"Suite passed."}]},"version":0}
@@ -87,7 +88,6 @@ enum StreamFixtures {
 
 @Suite("Swift Testing event stream parser")
 struct SwiftTestingEventStreamParserTests {
-
     @Test("A clean single-test run parses to exactly the expected TestIdentifier, started and ended")
     func cleanSingleTestRunParses() throws {
         let functionID = "WidgetsTests.WidgetsTests/widgetA()"
@@ -103,7 +103,7 @@ struct SwiftTestingEventStreamParserTests {
             StreamFixtures.runEndedPass
         ].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
@@ -130,7 +130,7 @@ struct SwiftTestingEventStreamParserTests {
             StreamFixtures.runEndedPass
         ].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
@@ -184,7 +184,7 @@ struct SwiftTestingEventStreamParserTests {
             StreamFixtures.runEndedPass
         ].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
@@ -229,7 +229,7 @@ struct SwiftTestingEventStreamParserTests {
             StreamFixtures.runEndedPass
         ].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
@@ -308,7 +308,7 @@ struct SwiftTestingEventStreamParserTests {
         """
         let stream = [StreamFixtures.runStarted, unknownEvent, StreamFixtures.runEndedPass].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result -- an unrecognized event kind must not fail the stream")
             return
         }
@@ -349,7 +349,7 @@ struct SwiftTestingEventStreamParserTests {
         """
         let stream = [StreamFixtures.runStarted, futureRecord, StreamFixtures.runEndedPass].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result -- a well-typed but unrecognized top-level record kind must not fail the stream")
             return
         }
@@ -476,7 +476,7 @@ struct SwiftTestingEventStreamParserOutcomeTests {
             knownIssueEnded
         ].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
@@ -539,7 +539,7 @@ struct SwiftTestingEventStreamParserOutcomeTests {
             StreamFixtures.testCancelled(id: eventID)
         ].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }
@@ -559,7 +559,7 @@ struct SwiftTestingEventStreamParserOutcomeTests {
             StreamFixtures.testCaseCancelled(id: eventID)
         ].joined(separator: "\n")
 
-        guard case .parsed(let evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
+        guard case let .parsed(evidence) = SwiftTestingEventStreamParser.parse(Data(stream.utf8)) else {
             Issue.record("expected a parsed result")
             return
         }

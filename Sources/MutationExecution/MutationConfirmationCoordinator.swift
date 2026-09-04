@@ -40,6 +40,12 @@ struct MutationConfirmationCoordinator: Sendable {
     let build: any BuildAdapter
     let test: any TestAdapter
     let configuration: Configuration
+    /// The tool's own stable, read-only original project copy —
+    /// `MutationRunner`'s own `projectRoot`, threaded through unchanged.
+    /// Used only by `confirmKill`, and only when `test` conforms to
+    /// `PackageManifestConfirmationRetesting` — see that protocol's own doc
+    /// comment for why a confirmation retest needs it at all.
+    let projectRoot: URL
 
     /// Runs a mutant's tests, narrowed to `selectedTests` when the adapter
     /// can honour that (`TestSelecting`) and a set was supplied, and
@@ -148,11 +154,26 @@ struct MutationConfirmationCoordinator: Sendable {
             // Same per-mutant timeout the primary run this is confirming
             // used — derived the same way, from the same `selectedTests`,
             // never recomputed independently or widened to the whole suite.
-            confirmingRun = try await runMutantTests(
-                point, artifact: artifact, in: sandbox,
-                timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests),
-                selectedTests: selectedTests
-            )
+            let timeoutSeconds = baseline.timeouts.mutantLimitSeconds(selectedTests: selectedTests)
+            // `sandbox` here is always a products-only clone (either
+            // `WorkspaceManager.cloneProducts`'s flat shape, the default, or
+            // `cloneProductsForConfirmation`'s nested one — see
+            // `MutationRunner.establishConfirmationSandbox`/`confirmTimeout`
+            // below for which one actually produced it), never a full
+            // sandbox with its own package manifest. An adapter that needs
+            // more than that (`PackageManifestConfirmationRetesting`) gets
+            // routed to its own dedicated method instead of the ordinary
+            // `runMutant` path every other adapter still uses unchanged.
+            if let manifestDependent = packageManifestConfirmationRetesting(for: test) {
+                confirmingRun = try await manifestDependent.runConfirmationRetest(
+                    point, packageRoot: projectRoot, productsScratchRoot: sandbox,
+                    timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
+                )
+            } else {
+                confirmingRun = try await runMutantTests(
+                    point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
+                )
+            }
         } catch {
             confirmingRun = infrastructureFailureRun("a confirmation run could not be started: \(error)")
         }
@@ -341,8 +362,15 @@ struct MutationConfirmationCoordinator: Sendable {
         // own `confirmationSandbox` — see that method's doc comment.
         let innerConfirmationSandbox: URL?
         if configuration.execution.retestKilledMutants, wasBatchAttributed {
-            innerConfirmationSandbox = try? await workspaces.cloneProducts(
-                from: artifact.productsDirectory, id: "\(point.id.rawValue)-timeout-confirm-of-confirm"
+            // Same `cloneProductsForConfirmationRetest` dispatch
+            // `establishConfirmationSandbox` uses, for the identical
+            // reason: this clone ultimately feeds `confirmKill` (via
+            // `timeoutInnerConfirmKillIfNeeded`), which needs the nested
+            // shape for an adapter that conforms to
+            // `PackageManifestConfirmationRetesting`, and the flat shape
+            // for every other one.
+            innerConfirmationSandbox = try? await workspaces.cloneProductsForConfirmationRetest(
+                from: artifact.productsDirectory, id: "\(point.id.rawValue)-timeout-confirm-of-confirm", for: test
             )
         } else {
             innerConfirmationSandbox = nil

@@ -25,15 +25,15 @@ public struct SimulatorDevice: Codable, Sendable, Hashable {
     /// name to whichever it finds first, which is how two workers end up on one
     /// simulator.
     ///
-    /// The `platform=` value is derived from `runtimeIdentifier`, not hardcoded
-    /// to iOS Simulator. Phase C10 (competitive-parity program) found this had
-    /// been wrong unconditionally: `SimulatorPool.parse` groups devices by
-    /// whatever runtime `simctl list devices` itself reports, with no iOS
-    /// filter at all, so a machine with tvOS/watchOS/visionOS runtimes
-    /// installed already has those devices flowing through this same type —
-    /// and every one of them was getting labeled `platform=iOS Simulator`
-    /// regardless. A UDID is unambiguous on its own, so `xcodebuild` may well
-    /// have tolerated the mismatched label in practice, but shipping a
+    /// The `platform=` value is derived from `runtimeIdentifier`, not
+    /// hardcoded to iOS Simulator — this was previously wrong
+    /// unconditionally: `SimulatorPool.parse` groups devices by whatever
+    /// runtime `simctl list devices` itself reports, with no iOS filter at
+    /// all, so a machine with tvOS/watchOS/visionOS runtimes installed
+    /// already has those devices flowing through this same type — and
+    /// every one of them was getting labeled `platform=iOS Simulator`
+    /// regardless. A UDID is unambiguous on its own, so `xcodebuild` may
+    /// well have tolerated the mismatched label in practice, but shipping a
     /// destination string that misdescribes the device's own platform is
     /// wrong independently of whether `xcodebuild` happens to forgive it —
     /// and `DestinationResolver`'s own doc comment already treats "which
@@ -518,7 +518,7 @@ public actor SimulatorPool {
             .sorted { ($0.runtimeIdentifier, $0.name) < ($1.runtimeIdentifier, $1.name) }
     }
 
-    // MARK: - Worker-pool cloning (Phase C4)
+    // MARK: - Worker-pool cloning
 
     /// Every MutantKit-created clone's name carries this prefix, so a later
     /// run can find exactly the clones this tool created and nothing else,

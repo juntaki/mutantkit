@@ -31,8 +31,20 @@ public enum WorkspaceError: Error, CustomStringConvertible {
 /// A mutation is a destructive edit to a source file, and the user's working tree
 /// is never where one gets made: a run that is killed halfway through must not be
 /// able to leave mutated code behind. Every mutant therefore gets its own copy of
-/// the project under the tool's scratch root, and the original tree is only ever
-/// read.
+/// the project under the tool's scratch root, and `WorkspaceManager` itself —
+/// every method in this file — only ever reads `projectRoot`, never writes to it.
+///
+/// That is a narrower claim than "the original tree is only ever read by
+/// this tool," which does not hold without qualification: with
+/// `Configuration.execution.retestKilledMutants` on for a SwiftPM project,
+/// `RunCommand`'s own dependency-resolution preflight
+/// (`PackageManifestConfirmationRetesting
+/// .resolveDependenciesForConfirmationRetest`) deliberately runs `swift
+/// package resolve` against `projectRoot` once, up front, and logs doing
+/// so — a real, intentional, narrowly-scoped exception to keep a later
+/// confirmation retest from performing that same first-ever resolution
+/// unexpectedly, mid-run, instead (see that method's own doc comment for
+/// why). `WorkspaceManager` has no part in that and remains read-only.
 ///
 /// Copies are made with `clonefile(2)` where the filesystem allows it. On APFS
 /// that is copy-on-write, so a sandbox costs directory entries rather than a
@@ -49,6 +61,13 @@ public actor WorkspaceManager {
     private let excludes: [String]
     private let fileManager = FileManager.default
     private var cloneSupport: Bool?
+    /// See `ExecutionSettings.cleanSubtreeCloning`'s doc comment for what
+    /// this turns on and why it defaults off.
+    private let cleanSubtreeCloning: Bool
+    /// Built lazily, on the first `createSandbox` that needs it, and cached
+    /// for the rest of this instance's lifetime -- see
+    /// `cachedCleanSubtreeIndex()`.
+    private var cleanSubtreeIndex: CleanSubtreeIndex?
 
     /// Directories that hold build output, VCS state or previous runs. Copying
     /// them is pure cost: the build regenerates them, and DerivedData alone can
@@ -76,10 +95,12 @@ public actor WorkspaceManager {
     public init(
         projectRoot: URL,
         scratchRoot: URL,
-        excludes: [String] = WorkspaceManager.defaultExcludes
+        excludes: [String] = WorkspaceManager.defaultExcludes,
+        cleanSubtreeCloning: Bool = false
     ) throws {
         self.projectRoot = projectRoot.standardizedFileURL
         self.excludes = excludes
+        self.cleanSubtreeCloning = cleanSubtreeCloning
 
         // The scratch root must exist before it can be canonicalized: symlink
         // resolution only resolves the parts of a path that are really there,
@@ -105,9 +126,8 @@ public actor WorkspaceManager {
         // denied, a file busy from something else touching the same path)
         // is silently ignored, not merely unlikely. The directory is left
         // absent afterwards -- `-Xswiftc -module-cache-path` creates it
-        // lazily on first use (confirmed empirically,
-        // `Research/isolated-build-reuse-2026-09`), so there is nothing
-        // useful to recreate here.
+        // lazily on first use (confirmed empirically), so there is
+        // nothing useful to recreate here.
         //
         // This wipe is also unconditional in a second sense worth flagging
         // here, not just at `sharedModuleCache`'s own doc comment: it is
@@ -164,9 +184,34 @@ public actor WorkspaceManager {
     /// for a mutant sandbox (`sbx_...`) or a products clone (`prd_...`).
     public static let moduleCacheDirectoryName = ".module-cache"
 
-    /// Where the shared module cache lives for a sandbox this manager
-    /// created -- one path component up from the sandbox itself, i.e.
-    /// directly under this manager's own `scratchRoot`.
+    /// `moduleCacheDirectoryName` above, namespaced by a real toolchain
+    /// fingerprint (see `SharedModuleCacheFingerprint`) -- the real,
+    /// on-disk directory name `moduleCachePath(forSandbox:fingerprint:)`
+    /// resolves to. A second, independent layer of protection on top of
+    /// `init`'s own wipe-at-construction of the plain, unnamespaced
+    /// directory above: that wipe is `try?`-guarded best-effort and only
+    /// ever runs once, so it cannot by itself guarantee a toolchain change
+    /// (mid-session, or between two invocations that reuse a path) can
+    /// never collide with an old cache's own contents -- namespacing by
+    /// fingerprint makes that guarantee structural instead. The plain
+    /// directory name is still wiped, unchanged, purely for backward-
+    /// compatible cleanup of a cache directory an older, pre-fingerprint
+    /// version of this tool may have left behind; nothing writes there
+    /// going forward.
+    ///
+    /// `fingerprint` is a short digest a caller already computed (see
+    /// `SharedModuleCacheFingerprint.digest`), never re-derived here: this
+    /// function does no probing of its own and stays exactly as easy to
+    /// call from a pure, synchronous, sandbox-path-only context as
+    /// `directoryName(for:)`/`productsCloneDirectoryName(for:)` above.
+    public static func moduleCacheDirectoryName(forFingerprint fingerprint: String) -> String {
+        ".module-cache-" + fingerprint
+    }
+
+    /// Where the fingerprint-namespaced shared module cache lives for a
+    /// sandbox this manager created -- one path component up from the
+    /// sandbox itself, i.e. directly under this manager's own
+    /// `scratchRoot`.
     ///
     /// A `BuildAdapter` never sees `scratchRoot` directly, only the sandbox
     /// URL it is asked to build in -- this lets it recover the shared
@@ -176,8 +221,17 @@ public actor WorkspaceManager {
     /// type ever hands out is exactly one path component below its scratch
     /// root, always -- so `sandbox`'s parent directory *is* that scratch
     /// root, whichever `WorkspaceManager` produced it.
-    public nonisolated static func moduleCachePath(forSandbox sandbox: URL) -> URL {
-        sandbox.deletingLastPathComponent().appendingPathComponent(moduleCacheDirectoryName, isDirectory: true)
+    public nonisolated static func moduleCachePath(forSandbox sandbox: URL, fingerprint: String) -> URL {
+        moduleCachePath(underScratchRoot: sandbox.deletingLastPathComponent(), fingerprint: fingerprint)
+    }
+
+    /// The same path `moduleCachePath(forSandbox:fingerprint:)` resolves,
+    /// expressed directly from a scratch root rather than from a sandbox
+    /// inside it -- for a caller that has not created (and may never
+    /// create) any sandbox, such as `mutantkit doctor`'s module-cache
+    /// diagnostic previewing what a real `mutantkit run` would resolve to.
+    public nonisolated static func moduleCachePath(underScratchRoot scratchRoot: URL, fingerprint: String) -> URL {
+        scratchRoot.appendingPathComponent(moduleCacheDirectoryName(forFingerprint: fingerprint), isDirectory: true)
     }
 
     /// Builds a fresh sandbox for `id` and returns its canonical location.
@@ -316,7 +370,7 @@ public actor WorkspaceManager {
         // prior clone has already been destroyed) overwrites cleanly.
         try? fileManager.removeItem(at: destination)
 
-        if supportsAPFSClone(), clone(resolvedProductsDirectory, to: destination) {
+        if supportsAPFSClone(), Self.clone(resolvedProductsDirectory, to: destination) {
             return destination
         }
 
@@ -326,6 +380,128 @@ public actor WorkspaceManager {
             throw WorkspaceError.unwritable(path: destination.path, underlying: error.localizedDescription)
         }
         return destination
+    }
+
+    /// Clones a just-built products directory the same way `cloneProducts`
+    /// does, but nested under `<destination>/<triple>/<configuration>/`
+    /// instead of flattened directly into `destination` — the shape
+    /// `SwiftPackageMacOSAdapter`'s confirmation retest needs `swift test
+    /// --scratch-path` to find pre-built products under.
+    ///
+    /// A sibling function, not a parameter on `cloneProducts`: that
+    /// function's flat shape is load-bearing for its other caller
+    /// (`Configuration.execution.testBatchSize`'s batching path, both the
+    /// plain and the pipelined-incremental variants — see `MutationRunner
+    /// .relocating`) and for `XcodeBuildAdapter`'s own confirmation retest,
+    /// whose `.xctestrun`'s `__TESTROOT__`-relative paths need the flat
+    /// directory unchanged (see `cloneProducts`'s own doc comment). Nesting
+    /// it for every caller would break both; this function exists so only
+    /// the one caller that actually needs the nested shape
+    /// (`MutationConfirmationCoordinator.confirmKill`, for an adapter that
+    /// conforms to `PackageManifestConfirmationRetesting`) pays for it.
+    ///
+    /// Confirmed empirically against a real toolchain: `swift test
+    /// --scratch-path X` does not accept a flat products directory at
+    /// all — it computes its own triple/configuration path internally
+    /// and looks for pre-built products at exactly
+    /// `X/<triple>/<configuration>/`, failing with a `dlopen` "no such
+    /// file" if that nesting is not there, regardless of what `X`
+    /// itself otherwise contains.
+    ///
+    /// `<triple>` and `<configuration>` are read off `productsDirectory`'s
+    /// own resolved path — the same value SwiftPM itself already computed
+    /// when it built these products (its `.build/debug` symlink resolves to
+    /// exactly `.build/<triple>/<configuration>`) — never hardcoded, so this
+    /// stays correct across architectures, cross-compilation destinations,
+    /// and a non-`debug` configuration alike, with no toolchain-version- or
+    /// host-specific guessing.
+    public func cloneProductsForConfirmation(from productsDirectory: URL, id: String) async throws -> URL {
+        guard !id.isEmpty, !id.contains("/"), id != ".", id != ".." else {
+            throw WorkspaceError.invalidSandboxID(id)
+        }
+
+        let destination = scratchRoot
+            .appendingPathComponent(Self.productsCloneDirectoryName(for: id))
+            .standardizedFileURL
+        guard destination.path.hasPrefix(scratchRoot.path + "/") else {
+            throw WorkspaceError.sandboxOutsideScratchRoot(path: destination.path, scratchRoot: scratchRoot.path)
+        }
+
+        // Resolved for the same reason `cloneProducts` resolves it — see
+        // that function's own doc comment: `productsDirectory` itself is
+        // routinely a relative symlink (SwiftPM's own `.build/debug`), and
+        // this is also where `<triple>`/`<configuration>` are read from, so
+        // resolution has to happen before anything else uses this path.
+        let resolvedProductsDirectory = productsDirectory.resolvingSymlinksInPath()
+
+        guard fileManager.fileExists(atPath: resolvedProductsDirectory.path) else {
+            throw WorkspaceError.unreadable(
+                path: resolvedProductsDirectory.path,
+                underlying: "no such directory"
+            )
+        }
+
+        let triple = resolvedProductsDirectory.deletingLastPathComponent().lastPathComponent
+        let configuration = resolvedProductsDirectory.lastPathComponent
+        let nestedDestination = destination
+            .appendingPathComponent(triple, isDirectory: true)
+            .appendingPathComponent(configuration, isDirectory: true)
+
+        // Same reasoning as `cloneProducts`: refuses an existing
+        // destination, so a stale prior clone under a reused `id` is
+        // discarded wholesale rather than reconciled file-by-file.
+        try? fileManager.removeItem(at: destination)
+
+        do {
+            // Only the `<triple>` level, not `nestedDestination` itself:
+            // `clonefile`/`copyItem` both refuse an existing destination,
+            // matching `cloneProducts`'s own contract.
+            try fileManager.createDirectory(
+                at: nestedDestination.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+        } catch {
+            throw WorkspaceError.unwritable(path: nestedDestination.path, underlying: error.localizedDescription)
+        }
+
+        if supportsAPFSClone(), Self.clone(resolvedProductsDirectory, to: nestedDestination) {
+            return destination
+        }
+
+        do {
+            try fileManager.copyItem(at: resolvedProductsDirectory, to: nestedDestination)
+        } catch {
+            throw WorkspaceError.unwritable(path: nestedDestination.path, underlying: error.localizedDescription)
+        }
+        return destination
+    }
+
+    /// Clones a just-built products directory for a confirmation retest,
+    /// choosing `cloneProducts`'s flat shape or `cloneProductsForConfirmation`'s
+    /// nested `<triple>/<configuration>` shape depending on whether `adapter`
+    /// conforms to `PackageManifestConfirmationRetesting` — the one decision
+    /// `MutationRunner.establishConfirmationSandbox` and
+    /// `MutationConfirmationCoordinator.confirmTimeout`'s own inner retest
+    /// both need to make identically, factored out here so it cannot drift
+    /// between the two call sites.
+    ///
+    /// Resolved via `packageManifestConfirmationRetesting(for:)`, never a
+    /// bare `adapter is any PackageManifestConfirmationRetesting` — the
+    /// latter only ever sees `adapter`'s own outermost declared
+    /// conformances, so it fails silently for a `TestAdapterWrapping`
+    /// wrapper (`PrioritizingTestAdapter`) around a genuinely-conforming
+    /// SwiftPM adapter and this method would then produce the flat shape —
+    /// wrong for `MutationConfirmationCoordinator.confirmKill`'s own
+    /// identically-resolved dispatch, which would still correctly pick the
+    /// manifest-aware retest path and hand it a flat clone `swift test
+    /// --scratch-path` cannot use. Sharing the one resolution function is
+    /// what keeps the sandbox's shape and the retest's dispatch from ever
+    /// disagreeing.
+    public func cloneProductsForConfirmationRetest(
+        from productsDirectory: URL, id: String, for adapter: any TestAdapter
+    ) async throws -> URL {
+        try await packageManifestConfirmationRetesting(for: adapter) != nil
+            ? cloneProductsForConfirmation(from: productsDirectory, id: id)
+            : cloneProducts(from: productsDirectory, id: id)
     }
 
     /// Locates a plan-relative source file inside a sandbox.
@@ -356,9 +532,24 @@ public actor WorkspaceManager {
     /// overlay). The only reliable probe is the syscall itself.
     public func supportsAPFSClone() -> Bool {
         if let known = cloneSupport { return known }
+        let supported = Self.probeAPFSCloneSupport(at: scratchRoot, fileManager: fileManager)
+        cloneSupport = supported
+        return supported
+    }
 
-        let source = scratchRoot.appendingPathComponent(".mutantkit-clone-probe")
-        let destination = scratchRoot.appendingPathComponent(".mutantkit-clone-probe-clone")
+    /// The real `clonefile(2)` probe `supportsAPFSClone()` runs against
+    /// this manager's own `scratchRoot`, pulled out as a reusable,
+    /// side-effect-scoped-to-`directory` function so a caller with no
+    /// `WorkspaceManager` instance -- `mutantkit doctor`'s module-cache
+    /// diagnostic, in particular -- can ask the identical, real question
+    /// about an arbitrary directory. Deliberately not routed through a
+    /// throwaway `WorkspaceManager` instead: construction has its own side
+    /// effects (creating the scratch root, wiping any pre-existing shared
+    /// module cache there -- see `init`'s own doc comment) that a
+    /// read-only diagnostic has no business triggering.
+    public nonisolated static func probeAPFSCloneSupport(at directory: URL, fileManager: FileManager = .default) -> Bool {
+        let source = directory.appendingPathComponent(".mutantkit-clone-probe")
+        let destination = directory.appendingPathComponent(".mutantkit-clone-probe-clone")
         try? fileManager.removeItem(at: source)
         try? fileManager.removeItem(at: destination)
         defer {
@@ -366,14 +557,8 @@ public actor WorkspaceManager {
             try? fileManager.removeItem(at: destination)
         }
 
-        guard fileManager.createFile(atPath: source.path, contents: Data("probe".utf8)) else {
-            cloneSupport = false
-            return false
-        }
-
-        let supported = clone(source, to: destination)
-        cloneSupport = supported
-        return supported
+        guard fileManager.createFile(atPath: source.path, contents: Data("probe".utf8)) else { return false }
+        return clone(source, to: destination)
     }
 
     /// Copies one directory level, recursing rather than cloning the tree whole.
@@ -383,6 +568,13 @@ public actor WorkspaceManager {
     /// afterwards — unlinking a cloned DerivedData costs more than never cloning
     /// it. Recursing keeps the exclusions exact; each file is still a clone, so
     /// no file data is duplicated either way.
+    ///
+    /// When `cleanSubtreeCloning` is on, a directory entry the clean-subtree
+    /// index has *proven* contains no excluded content anywhere inside it
+    /// skips this recursion entirely in favour of one whole-directory clone
+    /// (`materializeWholeSubtree`) — see `CleanSubtreeIndex`'s own doc
+    /// comment. Every other entry — dirty directories, files, symlinks —
+    /// takes exactly the path it always has.
     private func populate(from source: URL, to destination: URL, relativePath: String) throws {
         let entries: [URL]
         do {
@@ -409,10 +601,16 @@ public actor WorkspaceManager {
 
             // Symlinks are recreated, never followed: following one turns a link
             // into a copy of whatever it points at, which is both wrong and
-            // unbounded when it points at a parent.
+            // unbounded when it points at a parent. Checked strictly before the
+            // directory branch below, so a symlinked directory is never mistaken
+            // for a whole-subtree-clone candidate, whatever the index says.
             if values?.isSymbolicLink == true {
                 try recreateSymbolicLink(at: entry, to: target)
             } else if values?.isDirectory == true {
+                if cleanSubtreeCloning, cachedCleanSubtreeIndex().isClean(relativePath: relative) {
+                    try materializeWholeSubtree(entry, at: target)
+                    continue
+                }
                 do {
                     try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
                 } catch {
@@ -425,12 +623,79 @@ public actor WorkspaceManager {
         }
     }
 
+    /// Builds (on first use) or returns the cached clean-subtree index for
+    /// this manager's `projectRoot`.
+    ///
+    /// One `WorkspaceManager` instance backs an entire run's worth of
+    /// `createSandbox` calls — often hundreds, all against the same,
+    /// unchanging `projectRoot` — and building this index costs roughly one
+    /// extra metadata-only walk of the tree (`contentsOfDirectory` plus a
+    /// `resourceValues` call per entry, no file data touched). Paying that
+    /// once and reusing the result is the entire point: recomputing it per
+    /// sandbox would make every sandbox pay a full extra walk on top of
+    /// whatever the walk or the whole-subtree clones themselves cost,
+    /// defeating the optimization before it starts.
+    ///
+    /// Actor-isolated, so "build once" needs no lock of its own: this type
+    /// has no `await` inside it, so two concurrent `createSandbox` calls on
+    /// the same instance simply run this method one after the other on the
+    /// actor's executor, and whichever runs second finds `cleanSubtreeIndex`
+    /// already set.
+    private func cachedCleanSubtreeIndex() -> CleanSubtreeIndex {
+        if let existing = cleanSubtreeIndex { return existing }
+        let index = CleanSubtreeIndex.build(
+            projectRoot: projectRoot,
+            excludes: excludes,
+            scratchRootPath: scratchRoot.path,
+            fileManager: fileManager
+        )
+        cleanSubtreeIndex = index
+        return index
+    }
+
+    /// Materializes a whole subtree the clean-subtree index has proven safe
+    /// to clone in one call, instead of walking it entry-by-entry.
+    ///
+    /// Mirrors `materialize`'s clone-first, copy-as-fallback strategy
+    /// exactly, just for a directory instead of one file — the same shape
+    /// `cloneProducts` already uses for its own whole-directory case, reusing
+    /// the same `clone(_:to:)` helper (`CLONE_NOFOLLOW`, so an internal
+    /// symlink is reproduced as a symlink, never dereferenced — confirmed
+    /// empirically by `WorkspaceManagerCleanSubtreeCloningTests`'s own
+    /// symlink tests, for both this clone path and the `copyItem` fallback
+    /// below).
+    ///
+    /// `destination` is removed first, unconditionally: `clonefile` refuses
+    /// an existing destination, and a stale leftover here — a `--resume`
+    /// against an already-partially-populated sandbox path, matching
+    /// `ReproduceCommand`'s own comment about `createSandbox` being
+    /// "intentionally incremental" — is safe to discard and re-clone whole
+    /// rather than reconciled file-by-file: the end state has the same
+    /// file-content bytes and relative-path layout either way (permission
+    /// metadata is not guaranteed — see this type's own doc comment on
+    /// `cleanSubtreeCloning`), this path just does not attempt
+    /// `materialize`'s unchanged-file reuse for content the index has
+    /// already proven can be cloned in one call regardless.
+    private func materializeWholeSubtree(_ source: URL, at destination: URL) throws {
+        if supportsAPFSClone() {
+            try? fileManager.removeItem(at: destination)
+            if Self.clone(source, to: destination) { return }
+        }
+
+        try? fileManager.removeItem(at: destination)
+        do {
+            try fileManager.copyItem(at: source, to: destination)
+        } catch {
+            throw WorkspaceError.unwritable(path: destination.path, underlying: error.localizedDescription)
+        }
+    }
+
     /// Puts `source`'s contents at `destination` by the cheapest means available.
     private func materialize(_ source: URL, at destination: URL) throws {
         if supportsAPFSClone() {
             // clonefile refuses a destination that already exists.
             try? fileManager.removeItem(at: destination)
-            if clone(source, to: destination) { return }
+            if Self.clone(source, to: destination) { return }
         }
 
         // Without cloning, the next best thing is not copying: an identical file
@@ -445,7 +710,18 @@ public actor WorkspaceManager {
         }
     }
 
-    private func clone(_ source: URL, to destination: URL) -> Bool {
+    /// `nonisolated static`, not an instance method: it touches no actor
+    /// state at all (a pure `clonefile(2)` wrapper), which is what lets
+    /// `probeAPFSCloneSupport(at:fileManager:)` above call it without a
+    /// `WorkspaceManager` instance to be isolated to. Every existing
+    /// instance-method call site (`materialize`, `cloneProducts`) now
+    /// spells it `Self.clone(...)` -- an actor's instance methods cannot
+    /// resolve a `static` member of the same type by bare, unqualified
+    /// name the way a struct's or class's can (confirmed by the compiler,
+    /// not assumed), so both call sites needed that one-token change
+    /// alongside this method's own `private func` -> `private nonisolated
+    /// static func` widening.
+    private nonisolated static func clone(_ source: URL, to destination: URL) -> Bool {
         // CLONE_NOFOLLOW keeps a symlink a symlink rather than cloning its target.
         clonefile(source.path, destination.path, UInt32(CLONE_NOFOLLOW)) == 0
     }
@@ -479,6 +755,16 @@ public actor WorkspaceManager {
     }
 
     private func isExcluded(name: String, relativePath: String) -> Bool {
+        Self.isExcluded(name: name, relativePath: relativePath, excludes: excludes)
+    }
+
+    /// The test `isExcluded(name:relativePath:)` applies against this
+    /// instance's own `excludes`, factored out as `static` — and therefore
+    /// `nonisolated`, callable without `await` — so `CleanSubtreeIndex.build`
+    /// can classify a subtree using the *exact* same rule `populate` itself
+    /// checks entries against, rather than a second implementation that
+    /// could quietly drift from this one.
+    static func isExcluded(name: String, relativePath: String, excludes: [String]) -> Bool {
         excludes.contains { pattern in
             fnmatch(pattern, name, 0) == 0 || fnmatch(pattern, relativePath, 0) == 0
         }

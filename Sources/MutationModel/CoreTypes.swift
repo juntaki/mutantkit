@@ -160,6 +160,10 @@ public enum SchemaVersion {
     public static let buildDiagnosis = 1
     public static let configurationValidationResult = 1
     public static let trustReport = 1
+    /// `mutantkit fix-plan --json` — `TestObligationFixPlan`.
+    public static let testObligationFixPlan = 1
+    /// `mutantkit next --json` — `NextFixRecommendation`.
+    public static let nextFixRecommendation = 1
     /// Shared by every command's `--json` error path (`JSONErrorEnvelope`),
     /// unlike every constant above, which is one per command's *success*
     /// shape. An agent recognizes "this command failed" the same way

@@ -52,7 +52,7 @@ enum ProjectDetectionPlan {
         let detection = try? await ProjectDetector.detect(in: root)
         let swiftPMTestTargets = await detectedSwiftPMTestTargets(kind: detection?.kind, projectRoot: root)
 
-        // Phase C13: real Xcode/workspace scheme + destination detection —
+        // Real Xcode/workspace scheme + destination detection —
         // `xcodeDetection` is `nil`-scheme/empty-testTargets/nil-destination
         // for every other kind, so this call is a no-op cost there.
         let xcodeDetection = await XcodeConfigDetector.detect(
@@ -143,11 +143,11 @@ enum ProjectDetectionPlan {
 
     /// A default destination is only offered for kinds that require one, and
     /// only as a last resort: `XcodeConfigDetector.detect`'s own real,
-    /// currently-available-simulator detection (Phase C13) is tried first;
-    /// this hardcoded name is reached only when that detection could not
-    /// find any simulator at all (no Xcode Platforms installed, `simctl`
-    /// unavailable) — a placeholder the user has to know to fix, same as
-    /// before C13, but now the exception rather than the common case.
+    /// currently-available-simulator detection is tried first; this
+    /// hardcoded name is reached only when that detection could not find
+    /// any simulator at all (no Xcode Platforms installed, `simctl`
+    /// unavailable) — a placeholder the user has to know to fix, now the
+    /// exception rather than the common case.
     private static func defaultDestination(for kind: ProjectKind) -> String? {
         switch kind {
         case .swiftPackageApple, .xcodeProject, .xcodeWorkspace:
@@ -157,18 +157,17 @@ enum ProjectDetectionPlan {
         }
     }
 
-    /// Phase C11 (competitive-parity program): SwiftPM's own manifest
-    /// already says which of its targets are test targets
-    /// (`SwiftPMDependencyGraph.isTestTarget`, backed by `swift package
-    /// describe`'s own `"type": "test"` classification) — this used to be
-    /// thrown away, leaving `tests.targets: []` in every generated
+    /// SwiftPM's own manifest already says which of its targets are test
+    /// targets (`SwiftPMDependencyGraph.isTestTarget`, backed by `swift
+    /// package describe`'s own `"type": "test"` classification) — this used
+    /// to be thrown away, leaving `tests.targets: []` in every generated
     /// `mutantkit.yml` regardless of project kind, with only a comment
     /// telling the user to fill it in by hand.
     ///
     /// Xcode project/workspace kinds are handled separately, by
-    /// `XcodeConfigDetector` (Phase C13) — this function itself still only
-    /// ever returns non-empty for SwiftPM kinds; `build(...)` merges the two
-    /// results together.
+    /// `XcodeConfigDetector` — this function itself still only ever returns
+    /// non-empty for SwiftPM kinds; `build(...)` merges the two results
+    /// together.
     ///
     /// `try?`, matching this command's own established "detection can
     /// legitimately fail; write a template the user finishes by hand rather

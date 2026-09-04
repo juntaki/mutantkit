@@ -175,4 +175,58 @@ struct SourceFileWalkerTests {
         #expect(!walker.admits(relativePath: "Sources/Generated/Foo.swift"))
         #expect(!walker.admits(relativePath: "Tests/Foo.swift"))
     }
+
+    /// `PackageManifestConfirmationRetesting` (the isolated SwiftPM
+    /// confirmation-retest fix) depends on `projectRoot`'s `Package.swift`
+    /// being invariant across every mutant of a run. Today that holds only
+    /// because the *default* `sources.include: ["Sources/**"]` never
+    /// reaches the project root — this test proves the walker itself
+    /// refuses to plan the manifest even when a user's `sources.include`
+    /// is broadened wide enough to otherwise match it, so the invariant
+    /// does not depend on that default.
+    @Test("Package.swift is never a candidate, even when sources.include would otherwise match it")
+    func packageManifestIsNeverACandidate() throws {
+        try write("Package.swift", contents: "// swift-tools-version:6.0\n")
+        try write("Sources/Real.swift")
+
+        // A broad include covering the whole project root — exactly the
+        // kind of config change the review flagged as able to accidentally
+        // turn the manifest into a "legitimate" mutation candidate.
+        let found = try walk(include: ["**/*.swift"], exclude: [])
+
+        #expect(found == ["Sources/Real.swift"])
+        #expect(!found.contains("Package.swift"))
+    }
+
+    /// Version-specific manifests (SwiftPM's own "version-specific manifest
+    /// selection" naming: `Package@swift-<major>[.<minor>[.<patch>]].swift`,
+    /// e.g. `Package@swift-5.9.swift`) get the identical unconditional
+    /// exclusion as the base `Package.swift` — mutating either would break
+    /// the same invariant.
+    @Test("Package@swift-* version-specific manifests are never candidates either")
+    func versionSpecificManifestsAreNeverCandidates() throws {
+        try write("Package.swift", contents: "// swift-tools-version:6.0\n")
+        try write("Package@swift-5.9.swift", contents: "// swift-tools-version:5.9\n")
+        try write("Package@swift-5.swift", contents: "// swift-tools-version:5\n")
+        try write("Sources/Real.swift")
+        // Not a real SwiftPM manifest name (no numeric version component) —
+        // must NOT be excluded by this check; only genuine manifest names are.
+        try write("Sources/Package@swift-lookalike.swift")
+
+        let found = try walk(include: ["**/*.swift"], exclude: [])
+
+        #expect(found == ["Sources/Package@swift-lookalike.swift", "Sources/Real.swift"])
+    }
+
+    @Test("admits refuses Package.swift and version-specific manifests by name")
+    func admitsRefusesPackageManifests() {
+        let walker = SourceFileWalker(
+            root: root,
+            settings: SourceSettings(include: ["**/*.swift"], exclude: [])
+        )
+
+        #expect(!walker.admits(relativePath: "Package.swift"))
+        #expect(!walker.admits(relativePath: "Package@swift-5.9.swift"))
+        #expect(walker.admits(relativePath: "Sources/Foo.swift"))
+    }
 }

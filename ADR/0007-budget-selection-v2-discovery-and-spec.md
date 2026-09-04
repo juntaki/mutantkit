@@ -199,9 +199,9 @@ per-item-keyed sampling's population-independence, round-robin correctness
 across files/operators/strata, exact-limit respecting, "limit larger than
 population keeps all," partition (`selected ∪ dropped == input`,
 disjoint), sorted output, PRNG reproducibility/differentiation, and — for
-`.operatorSubtype` specifically, citing a real production incident
-(`Research/corpus-validation/yomu-2026-07-24/`: 1242 candidates, 0 drawn
-for two entire operators at budget 100) — every-operator-represented,
+`.operatorSubtype` specifically, citing a real production incident from an
+internal validation corpus (1242 candidates, 0 drawn for two entire
+operators at budget 100) — every-operator-represented,
 minimum-honored, reversed-input-order-identical, remainder-proportionality,
 seed-sensitivity, and scarce-budget determinism.
 `OperatorBudgetSummaryTests.swift` (4 tests) pins `OperatorBudgetSummary`

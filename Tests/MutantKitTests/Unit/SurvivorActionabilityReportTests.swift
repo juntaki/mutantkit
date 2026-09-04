@@ -184,6 +184,7 @@ struct SurvivorActionabilityReportTests {
     }
 
     // MARK: - RED scenarios from code review (see this file's own git history
+
     // for the exact critique): each of the following reproduces one specific
     // overclaim or data-loss bug found in an earlier version of this model.
 

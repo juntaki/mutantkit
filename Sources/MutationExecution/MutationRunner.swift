@@ -167,7 +167,7 @@ public struct MutationRunner: Sendable {
         self.preEstablishedBaseline = preEstablishedBaseline
         self.monotonicNow = monotonicNow
         self.confirmationCoordinator = MutationConfirmationCoordinator(
-            workspaces: workspaces, build: build, test: test, configuration: configuration
+            workspaces: workspaces, build: build, test: test, configuration: configuration, projectRoot: projectRoot
         )
         self.evidenceAssembler = MutationEvidenceAssembler(
             plan: plan,
@@ -2379,8 +2379,10 @@ public struct MutationRunner: Sendable {
     ) async -> (sandbox: URL?, failure: PrepareOutcome?) {
         guard configuration.execution.retestKilledMutants else { return (nil, nil) }
         do {
-            let sandbox = try await workspaces.cloneProducts(
-                from: request.artifact.productsDirectory, id: "\(request.point.id.rawValue)-confirm"
+            // Chooses the flat or nested clone shape per `test`'s own
+            // conformance -- see `PackageManifestConfirmationRetesting`.
+            let sandbox = try await workspaces.cloneProductsForConfirmationRetest(
+                from: request.artifact.productsDirectory, id: "\(request.point.id.rawValue)-confirm", for: test
             )
             return (sandbox, nil)
         } catch {

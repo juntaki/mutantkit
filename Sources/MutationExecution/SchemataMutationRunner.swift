@@ -149,11 +149,10 @@ public struct SchemataMutationRunner: Sendable {
         /// this line was never executed (`CoverageMap.isKnownUncovered`) —
         /// routed to isolated mode *before* any token was ever attempted,
         /// never after. Isolated mode's own `MutationRunner.prepare(...)`
-        /// takes the identical fast path for the identical reason (Gate 3:
-        /// `Research/benchmarks/gate3-ios-schemata-2026-08-23`, one of three
-        /// `activation.noStartup` cases found spending a full token attempt
-        /// on a mutation this same shared coverage data already knew was
-        /// unreachable).
+        /// takes the identical fast path for the identical reason —
+        /// confirmed empirically: without it, a full token attempt would be
+        /// spent on a mutation this same shared coverage data already knew
+        /// was unreachable.
         case knownUncovered
         /// The chunk's own shared build succeeded, but the compilation-
         /// unit-to-built-image receipt required to prove which built image
@@ -289,12 +288,12 @@ public struct SchemataMutationRunner: Sendable {
     /// run with no isolated-fallback portion), which is unaffected by this
     /// parameter's existence.
     private let preEstablishedBaseline: SharedBaselineEstablisher.Outcome?
-    /// Gate 3 Phase H5: the most primary token attempts `runEntries` will
-    /// fold into one shared `runSchemataTokenBatch` call, mirroring
-    /// isolated mode's own `execution.testBatchSize` (Phase H3's identical
-    /// setting for `testOneBatch`/`testWaveChunk`) rather than inventing a
-    /// separate schemata-specific knob. Defaults to `1`: every pre-existing
-    /// call site that constructs a `SchemataMutationRunner` without this
+    /// The most primary token attempts `runEntries` will fold into one
+    /// shared `runSchemataTokenBatch` call, mirroring isolated mode's own
+    /// `execution.testBatchSize` (the identical setting `testOneBatch`/
+    /// `testWaveChunk` already use) rather than inventing a separate
+    /// schemata-specific knob. Defaults to `1`: every pre-existing call
+    /// site that constructs a `SchemataMutationRunner` without this
     /// parameter keeps today's fully-unbatched, one-fresh-process-per-token
     /// behaviour, unchanged — the same opt-in-by-default-value convention
     /// `workers` already uses above. `<= 1` disables batching outright
@@ -1207,19 +1206,19 @@ public struct SchemataMutationRunner: Sendable {
         // count against this budget (see items 1/6's own tests).
         var hangBudgetCount = 0
 
-        // Gate 3 Phase H5: resolve as many entries' primary observations as
-        // possible via one shared batched invocation, before the sequential
-        // scheduler below ever starts. Every entry with a value here has
-        // *already* run — the loop substitutes it directly instead of
-        // calling `runPrimary`. Every entry *without* one (batching
-        // unsupported, ineligible, or disabled) falls through to the
-        // existing per-entry call, completely unchanged. Fetched once,
-        // against `initialState`: entries covered here already have their
-        // final primary result before ADR-0008's Trigger 1/2 rebuild logic
-        // ever runs for this chunk, so a later rebuild (triggered by some
-        // *other* entry's own timeout) never needs to touch, invalidate, or
-        // re-fetch them — see `prepareBatchedPrimaries`'s own doc comment
-        // for why their results remain valid regardless.
+        // Resolve as many entries' primary observations as possible via one
+        // shared batched invocation, before the sequential scheduler below
+        // ever starts. Every entry with a value here has *already* run —
+        // the loop substitutes it directly instead of calling `runPrimary`.
+        // Every entry *without* one (batching unsupported, ineligible, or
+        // disabled) falls through to the existing per-entry call,
+        // completely unchanged. Fetched once, against `initialState`:
+        // entries covered here already have their final primary result
+        // before ADR-0008's Trigger 1/2 rebuild logic ever runs for this
+        // chunk, so a later rebuild (triggered by some *other* entry's own
+        // timeout) never needs to touch, invalidate, or re-fetch them —
+        // see `prepareBatchedPrimaries`'s own doc comment for why their
+        // results remain valid regardless.
         let batchedPrimaries = await prepareBatchedPrimaries(
             embeddedEntries, state: initialState, timeoutController: timeoutController,
             perTestCoverage: perTestCoverage, coverage: coverage
@@ -1430,9 +1429,12 @@ public struct SchemataMutationRunner: Sendable {
     /// Everything about one entry that is known *before* its primary test
     /// process ever runs — resolved once, whether that run turns out to be
     /// an individual `runSchemataToken` call (today's only path) or a
-    /// looked-up member of a shared batch call (Gate 3 Phase H5): the two
-    /// origins share this exact same shape, so `processPrimaryObservation`
-    /// never needs to know or care which one produced its `TestRunResult`.
+    /// Everything about one entry that is known *before* its primary test
+    /// process ever runs — resolved once, whether that run turns out to be
+    /// an individual `runSchemataToken` call (today's only path) or a
+    /// looked-up member of a shared batch call: the two origins share this
+    /// exact same shape, so `processPrimaryObservation` never needs to know
+    /// or care which one produced its `TestRunResult`.
     private struct PrimaryDispatch {
         let token: SchemataSelectorToken
         let sourceEmbeddingID: SHA256Digest
@@ -1456,13 +1458,12 @@ public struct SchemataMutationRunner: Sendable {
         case dispatched(PrimaryDispatch)
     }
 
-    /// The pre-run half of what used to be `runPrimary` end to end (Gate 3
-    /// Phase H4 split): every guard, precondition, and pure-logic
-    /// resolution that must happen *before* a token is ever dispatched —
-    /// unchanged in content or order from the original function, only
-    /// extracted so a batched caller (Phase H5) can resolve every entry's
-    /// own dispatch up front, before deciding how to group them, without
-    /// duplicating any of this reasoning.
+    /// The pre-run half of what used to be `runPrimary` end to end: every
+    /// guard, precondition, and pure-logic resolution that must happen
+    /// *before* a token is ever dispatched — unchanged in content or order
+    /// from the original function, only extracted so a batched caller can
+    /// resolve every entry's own dispatch up front, before deciding how to
+    /// group them, without duplicating any of this reasoning.
     private func prepareDispatch(
         _ entry: SchemataPlanEntry, state: ChunkExecutionState, timeoutController: TimeoutController,
         perTestCoverage: PerTestCoverageMap?, coverage: CoverageMap?
@@ -1542,7 +1543,7 @@ public struct SchemataMutationRunner: Sendable {
     ///
     /// Orchestrates `prepareDispatch` + an individual `runSchemataToken`
     /// call + `processPrimaryObservation` — the unbatched path every entry
-    /// still takes today. A batched caller (Phase H5) calls
+    /// still takes today. A batched caller calls
     /// `prepareDispatch`/`processPrimaryObservation` directly instead,
     /// substituting a shared `runSchemataTokenBatch` call for the
     /// individual one in between; nothing in either helper changes to
@@ -1578,15 +1579,15 @@ public struct SchemataMutationRunner: Sendable {
         return await processPrimaryObservation(entry, dispatch: dispatch, run: run, state: state)
     }
 
-    /// The post-run half of what used to be `runPrimary` end to end (Gate 3
-    /// Phase H4 split) — unchanged in content, order, or meaning from the
-    /// original function's tail, only reading `run`/`dispatch`'s fields
-    /// where it used to read locals of the same name. Deletes
-    /// `dispatch.evidenceDirectory` itself, after reading the transcript
-    /// from it (`schemataObservation`) — the same lifetime the original
-    /// function's `defer` gave it, just no longer expressible as a `defer`
-    /// once `run` can arrive from a batch lookup made by a *different*
-    /// function than the one that created this directory.
+    /// The post-run half of what used to be `runPrimary` end to end —
+    /// unchanged in content, order, or meaning from the original function's
+    /// tail, only reading `run`/`dispatch`'s fields where it used to read
+    /// locals of the same name. Deletes `dispatch.evidenceDirectory`
+    /// itself, after reading the transcript from it (`schemataObservation`)
+    /// — the same lifetime the original function's `defer` gave it, just no
+    /// longer expressible as a `defer` once `run` can arrive from a batch
+    /// lookup made by a *different* function than the one that created
+    /// this directory.
     private func processPrimaryObservation(
         _ entry: SchemataPlanEntry, dispatch: PrimaryDispatch, run: TestRunResult, state: ChunkExecutionState
     ) async -> PrimaryOutcome {
@@ -1631,14 +1632,14 @@ public struct SchemataMutationRunner: Sendable {
         // as a real check rather than a hardcoded `false` so this stays
         // correct even if that scoping ever changes.
         if let reason = MutationVerdictVerifier.schemataIsolatedFallbackReason(for: preliminary) {
-            // Gate 3 diagnostic only (see `GateTimingRecorder`'s own doc
-            // comment) — for each transcript record present but not
-            // matching what this token expected, which field(s) actually
-            // differ: a different `compilationUnitID`/token (another
-            // mutation in the same chunk registered/hit instead) versus a
-            // different `runID` (evidence from a stale or unrelated
-            // invocation). One span per record, not one summary string, so
-            // each is independently readable.
+            // Diagnostic only (see `GateTimingRecorder`'s own doc comment)
+            // — for each transcript record present but not matching what
+            // this token expected, which field(s) actually differ: a
+            // different `compilationUnitID`/token (another mutation in the
+            // same chunk registered/hit instead) versus a different `runID`
+            // (evidence from a stale or unrelated invocation). One span per
+            // record, not one summary string, so each is independently
+            // readable.
             for (index, record) in observation.transcript.records.enumerated() {
                 let (kind, runID, unitID, tok): (String, RunID, CompilationUnitID, SchemataSelectorToken) = switch record {
                 case let .startup(event): ("startup", event.runID, event.compilationUnitID, event.token)
@@ -1673,9 +1674,9 @@ public struct SchemataMutationRunner: Sendable {
         // `confirmCrashKills` calls: that cascade only fires for a
         // *batch-attributed* timeout (`TestRunResult.isBatchAttributedTimeout`,
         // set only by isolated mode's own `runBatch`). Schemata batching
-        // (Phase H5) never sets it either — `runSchemataTokenBatch`'s own
-        // results, like `runSchemataToken`'s, are individually attributed
-        // per `MutationID` from the start, never an ambiguous batch-wide
+        // never sets it either — `runSchemataTokenBatch`'s own results,
+        // like `runSchemataToken`'s, are individually attributed per
+        // `MutationID` from the start, never an ambiguous batch-wide
         // placeholder — so a schemata timeout's own `isBatchAttributedTimeout`
         // is always `false` whether or not this entry's primary came from a
         // batch call, and `MutationVerdictVerifier.confirmTimeout`'s cascade
@@ -1713,15 +1714,14 @@ public struct SchemataMutationRunner: Sendable {
         ))
     }
 
-    /// Gate 3 Phase H5: resolves as many `embeddedEntries` as possible into
-    /// already-run `PrimaryOutcome`s via one or more shared
-    /// `runSchemataTokenBatch` calls, before `runEntries`' sequential
-    /// per-entry scheduler ever starts. Every `MutationID` this returns a
-    /// value for has already been dispatched — the caller substitutes it
-    /// directly; every entry absent from the result (batching unsupported,
-    /// ineligible, or disabled) is untouched and falls through to
-    /// `runEntries`' existing individual `runPrimary` call, exactly as
-    /// before this phase.
+    /// Resolves as many `embeddedEntries` as possible into already-run
+    /// `PrimaryOutcome`s via one or more shared `runSchemataTokenBatch`
+    /// calls, before `runEntries`' sequential per-entry scheduler ever
+    /// starts. Every `MutationID` this returns a value for has already been
+    /// dispatched — the caller substitutes it directly; every entry absent
+    /// from the result (batching unsupported, ineligible, or disabled) is
+    /// untouched and falls through to `runEntries`' existing individual
+    /// `runPrimary` call, exactly as before batching existed.
     ///
     /// Never revisited once returned: entries covered here have their
     /// *final* primary result before ADR-0008's Trigger 1/2 rebuild logic
@@ -1729,20 +1729,19 @@ public struct SchemataMutationRunner: Sendable {
     /// *other* entry's own timeout, individual or (once containment fires)
     /// native — never needs to touch these: each one's own evidence chain
     /// (`compilationUnitID`/`runID`/`sourceEmbeddingID`/token matching,
-    /// enforced identically for a batched or unbatched primary — Phase H5's
-    /// correctness constraint, unchanged from before this phase) already
+    /// enforced identically for a batched or unbatched primary) already
     /// proves its own result independently of whatever a sibling
     /// configuration in the same batch did. Confirmed directly, not
-    /// assumed: Phase H1's own acceptance evidence is a batch where a
-    /// sibling configuration's hang did not affect another configuration's
+    /// assumed: real acceptance evidence is a batch where a sibling
+    /// configuration's hang did not affect another configuration's
     /// already-passing result, an unrelated `xcodebuild` invocation from
     /// this runner's perspective in every way that matters here. Trigger
     /// 1/2's actual purpose — protecting a *future, not-yet-run* individual
     /// spawn from a shared sandbox a forced kill may have left unverified —
     /// is simply moot for an entry whose primary already ran as part of
     /// this same batch; it still fires, unweakened, for that entry's own
-    /// *confirmation* (always an individual, never-batched run — Phase H5
-    /// does not touch confirmation dispatch at all) and for any entry in a
+    /// *confirmation* (always an individual, never-batched run — batching
+    /// never touches confirmation dispatch at all) and for any entry in a
     /// later, not-yet-dispatched batch group.
     private func prepareBatchedPrimaries(
         _ embeddedEntries: [SchemataPlanEntry], state: ChunkExecutionState, timeoutController: TimeoutController,
@@ -1761,34 +1760,32 @@ public struct SchemataMutationRunner: Sendable {
                 case let .dispatched(dispatch) = prepareDispatch(
                     entry, state: state, timeoutController: timeoutController, perTestCoverage: perTestCoverage, coverage: coverage
                 ),
-                // Gate 3 Phase H12.1/H12.3: a token with more than one
-                // selected test can independently hang on *any* of them —
-                // native per-test timeout catches each one correctly, but a
-                // batch containing such a token still pays up to
-                // `coveringTests × mutantLimitSeconds` for it (the exact
-                // real-production-app finding this phase's own
-                // investigation traced down; see `GATE3-RESULT.md`, Phase
-                // H12.1). Isolated mode's
-                // fix for the equivalent case was wave-based early-abort
-                // (Phase H12.2), which schemata batching has no analogue of
-                // — rather than build one for a lever token batching already
-                // measured (Phase H6) at only ~3% overall, only a token
-                // whose own selection is exactly one test is eligible to
-                // share a batch: native timeout can then only ever fire once
-                // for that mutant's own configuration, so no batch member
-                // can cost more than its own `mutantLimitSeconds`. A
-                // multi-test token still runs — through the existing,
-                // unaffected unbatched `runPrimary`/`runSchemataToken` path,
-                // whose own per-mutant outer timeout already bounds it
-                // without any cascade risk, exactly as before this phase.
+                // A token with more than one selected test can
+                // independently hang on *any* of them — native per-test
+                // timeout catches each one correctly, but a batch
+                // containing such a token still pays up to
+                // `coveringTests × mutantLimitSeconds` for it, confirmed
+                // against a real production app. Isolated mode's fix for
+                // the equivalent case was wave-based early-abort, which
+                // schemata batching has no analogue of — rather than build
+                // one for a lever token batching already measured at only
+                // ~3% overall, only a token whose own selection is exactly
+                // one test is eligible to share a batch: native timeout can
+                // then only ever fire once for that mutant's own
+                // configuration, so no batch member can cost more than its
+                // own `mutantLimitSeconds`. A multi-test token still runs —
+                // through the existing, unaffected unbatched
+                // `runPrimary`/`runSchemataToken` path, whose own
+                // per-mutant outer timeout already bounds it without any
+                // cascade risk.
                 let selectedTests = dispatch.selectedTests, selectedTests.count == 1
             else { continue }
             dispatchesByMutationID[entry.mutationID] = dispatch
         }
 
         // A "batch" of one has no containment benefit over the unbatched
-        // path (the same single-member skip Phase H3 already applies to
-        // isolated mode's `testOneBatch`/`testWaveChunk`) — and every other
+        // path (the same single-member skip isolated mode's own
+        // `testOneBatch`/`testWaveChunk` already applies) — and every other
         // entry (ineligible, or the sole eligible one here) still needs to
         // run through `runPrimary`'s own, unaffected `prepareDispatch` call,
         // so any evidence directory already created above must be cleaned
@@ -1814,8 +1811,8 @@ public struct SchemataMutationRunner: Sendable {
             }
             return [:]
         }
-        // Phase H1's own empirically-validated floor — the only value ever
-        // actually exercised against a real hang — mirroring
+        // An empirically-validated floor — the only value ever actually
+        // exercised against a real hang — mirroring
         // `MutationRunner.testOneBatch`/`testWaveChunk`'s identical guard.
         let nativeTimeoutAllowanceSeconds = sharedAllowance >= 60 ? sharedAllowance : nil
 
@@ -1839,11 +1836,10 @@ public struct SchemataMutationRunner: Sendable {
             // The outer, aggregate fail-safe — summed across the group,
             // never replaced by `nativeTimeoutAllowanceSeconds` — mirrors
             // isolated mode's own `testOneBatch`/`testWaveChunk` batch
-            // timeout exactly (Phase H3): if native containment somehow
-            // fails to fire for some reason outside this runner's control,
-            // the outer supervisor still has a generous-enough budget for
-            // every member to finish normally before it would ever
-            // intervene.
+            // timeout exactly: if native containment somehow fails to fire
+            // for some reason outside this runner's control, the outer
+            // supervisor still has a generous-enough budget for every
+            // member to finish normally before it would ever intervene.
             let outerTimeoutSeconds = Double(group.count) * sharedAllowance
             let tokenSpanStart = GateTimingRecorder.shared.now()
             let runs = await batchable.runSchemataTokenBatch(
@@ -1860,9 +1856,9 @@ public struct SchemataMutationRunner: Sendable {
                     status: .infrastructureFailure, summary: nil, command: state.artifact.command, resultArtifactPath: nil,
                     diagnosis: "This token's outcome went unreported by the batch classifier."
                 )
-                // Gate 3 Phase H15C: `.infrastructureFailure` from a shared
-                // batch call — whether `classifyBatch` itself produced it
-                // (no per-configuration evidence in the result bundle) or it
+                // `.infrastructureFailure` from a shared batch call —
+                // whether `classifyBatch` itself produced it (no
+                // per-configuration evidence in the result bundle) or it
                 // was synthesized just above (missing from `runs` entirely)
                 // — means the *shared invocation's* attribution failed for
                 // this one mutant, not that the mutant is unprovable. Every
@@ -1878,15 +1874,15 @@ public struct SchemataMutationRunner: Sendable {
         return outcomes
     }
 
-    /// Gate 3 Phase H15C: recovers one batched primary whose shared
-    /// invocation produced `.infrastructureFailure` — real evidence was
-    /// simply never attributable to this configuration, not proof the
-    /// mutant itself is unprovable (`XCResultAdapter.classify`'s own doc
-    /// comment: fail-closed on missing per-configuration evidence, never
-    /// guessed from aggregate counts). Isolated mode's wave path
-    /// (`MutationRunner.testWaveChunk`) already does the equivalent thing
-    /// for the identical failure shape; this is schemata's own version of
-    /// that same discipline, not a new retry policy.
+    /// Recovers one batched primary whose shared invocation produced
+    /// `.infrastructureFailure` — real evidence was simply never
+    /// attributable to this configuration, not proof the mutant itself is
+    /// unprovable (`XCResultAdapter.classify`'s own doc comment: fail-closed
+    /// on missing per-configuration evidence, never guessed from aggregate
+    /// counts). Isolated mode's wave path (`MutationRunner.testWaveChunk`)
+    /// already does the equivalent thing for the identical failure shape;
+    /// this is schemata's own version of that same discipline, not a new
+    /// retry policy.
     ///
     /// A fresh, individual, unbatched `runSchemataToken` call — this
     /// mutant's own token, point, compilation unit, selected tests, and

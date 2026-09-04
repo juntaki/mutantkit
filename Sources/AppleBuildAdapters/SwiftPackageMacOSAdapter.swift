@@ -28,34 +28,153 @@ public struct SwiftPackageMacOSAdapter: Sendable {
 
 extension SwiftPackageMacOSAdapter: BuildAdapter {
     public func buildBaseline(in workspace: URL) async throws -> BuildArtifact {
-        try await build(in: workspace, extraArguments: moduleCacheArguments(for: workspace))
+        try await buildWithSharedCacheRecovery(in: workspace)
     }
 
     /// The mutated source is already on disk in this workspace, so a mutant build
     /// is the same command as the baseline's.
     public func buildMutant(_ mutation: AppliedMutation, in workspace: URL) async throws -> BuildArtifact {
-        try await build(in: workspace, extraArguments: moduleCacheArguments(for: workspace))
+        try await buildWithSharedCacheRecovery(in: workspace)
     }
 
-    /// `-Xswiftc -module-cache-path` arguments routing this build's Clang/
-    /// Swift module cache to the external, run-scoped, shared directory
-    /// every sandbox under this run's own scratch root may point at -- see
-    /// `Configuration.execution.sharedModuleCache`'s own doc comment for
-    /// what this changes and why it is safe, and
-    /// `WorkspaceManager.moduleCachePath(forSandbox:)` for where the
-    /// directory actually lives.
+    /// Real build, plus -- only when `sharedModuleCache` is on and the
+    /// failure's own captured output gives *specific, positive evidence*
+    /// that this build's own shared cache directory is implicated -- one
+    /// automatic retry against a freshly emptied cache before giving up.
     ///
-    /// Empty -- meaning "today's default: a private cache nested inside
-    /// this sandbox's own `.build`" -- unless the flag is on. Called from
-    /// `buildBaseline`/`buildMutant` only, deliberately never from
-    /// `buildSchemataChunk`: the flag's safety case (every mutant needs
-    /// only the module set the baseline build already warmed, because a
-    /// mutation never changes an import) was checked against the isolated
-    /// backend's build shape, not schemata's.
-    private func moduleCacheArguments(for workspace: URL) -> [String] {
-        guard configuration.execution.sharedModuleCache else { return [] }
-        let path = WorkspaceManager.moduleCachePath(forSandbox: workspace)
-        return ["-Xswiftc", "-module-cache-path", "-Xswiftc", path.path]
+    /// This is a level up from `SharedModuleCacheTests
+    /// .corruptedCacheEntryStillBuildsCorrectly`: that test already proves
+    /// Clang detects and recompiles an individual corrupted cache entry
+    /// in-place, without ever failing the build at all. This exists for the
+    /// build that fails anyway -- confirmed reproducible, not hypothetical:
+    /// making the resolved cache directory itself unwritable before a cold
+    /// build (this session's own real reproduction, since Clang's per-file
+    /// corruption recovery already covers a damaged-but-writable `.pcm`)
+    /// makes `swift build` fail with `<unknown>:0: error: error opening
+    /// '<cache-path>/Swift-<hash>.swiftmodule' for output: ...: Permission
+    /// denied` -- the cache path itself, verbatim, inside the diagnostic.
+    ///
+    /// The heuristic below (`isLikelySharedModuleCacheCorruption`) is built
+    /// from that same real reproduction, cross-checked against the equally
+    /// real negative: a genuine mutation-caused compile error
+    /// (`Sources/Calc/Calc.swift:3:59: error: cannot find operator '+++' in
+    /// scope`, reproduced the same session) never once mentions the module
+    /// cache path anywhere in its output -- compiler diagnostics for a
+    /// *source* problem name the source file, never the cache directory.
+    /// That gives a genuinely specific, evidence-based signal instead of a
+    /// guess, and is exactly why this must never degrade into "retry every
+    /// failure once": doing that would silently retry a real, mutation-
+    /// caused build failure and either mask it behind a coincidentally-
+    /// successful retry (a false, hidden non-failure) or double the wall
+    /// clock every unviable mutant already costs, for zero benefit. See
+    /// `isLikelySharedModuleCacheCorruption`'s own doc comment for the
+    /// exact guard this rests on.
+    ///
+    /// Retries at most once: a second cache-implicated failure after an
+    /// already-fresh, already-emptied cache is not cache staleness by this
+    /// heuristic's own definition (a fresh cache cannot be *stale*), so the
+    /// retry's own failure -- whatever it is -- propagates as the real,
+    /// final answer rather than looping.
+    private func buildWithSharedCacheRecovery(in workspace: URL) async throws -> BuildArtifact {
+        guard let cachePath = await resolvedModuleCachePath(for: workspace) else {
+            return try await build(in: workspace, extraArguments: [])
+        }
+        let extraArguments = Self.moduleCacheArguments(for: cachePath)
+
+        do {
+            return try await build(in: workspace, extraArguments: extraArguments)
+        } catch let failure as BuildFailure {
+            guard Self.isLikelySharedModuleCacheCorruption(failure, cachePath: cachePath) else { throw failure }
+            await SharedModuleCacheNamespace.shared.forceRemove(cachePath)
+            return try await build(in: workspace, extraArguments: extraArguments)
+        }
+    }
+
+    /// Whether `failure` gives specific, positive evidence that the shared
+    /// module cache directory at `cachePath` -- this build's own, already
+    /// resolved -- is what actually broke the build, as opposed to an
+    /// unrelated infrastructure problem, a generic compiler crash, or
+    /// (never eligible at all) a real compile error in the mutated source.
+    /// See `buildWithSharedCacheRecovery`'s own doc comment for the real
+    /// reproduction behind both halves of this guard.
+    ///
+    /// - `failure.kind == .compilationError` is excluded unconditionally,
+    ///   first, before anything else is even considered. `BuildClassifier`
+    ///   only reaches that kind by finding a real `file.swift:LINE:COL:
+    ///   error:` diagnostic in the output (`BuildClassifier.firstDiagnostic`)
+    ///   -- i.e. it has already proven the mutated *source* is what's wrong.
+    ///   The shared cache holds only precompiled system modules, never
+    ///   project code (`ExecutionSettings.sharedModuleCache`'s own safety
+    ///   case), so it has nothing to do with a compile error and must never
+    ///   be blamed for one -- this is the guard that makes "a real mutant
+    ///   build failure retried into a silent pass" structurally impossible
+    ///   here, not merely unlikely.
+    /// - `failure.kind == .timedOut` is excluded too, deliberately: a hang
+    ///   prints no diagnostic at all while it is stuck, so there is no
+    ///   positive evidence available to check either way, and retrying an
+    ///   already-timed-out build doubles the wall-clock cost of a build
+    ///   that may simply need real investigation. Absence of evidence is
+    ///   treated as absence of grounds to retry, per this task's own
+    ///   "default to NOT treating an ambiguous failure as corruption".
+    /// - Only `.infrastructure` failures are even considered, and only when
+    ///   `failure.output` contains the compiler's own `error opening
+    ///   '<path>` diagnostic (Clang/Swift's shared "could not open this
+    ///   file" template -- confirmed against this machine's real
+    ///   `swift-frontend` strings table, which prints it as `error opening
+    ///   '%0' for output: %1` and `error opening '%0': %1`) naming a path
+    ///   *inside* this build's own resolved `cachePath`. That is real,
+    ///   positive evidence the cache directory itself is what the compiler
+    ///   failed to read or write, not merely that the cache path was
+    ///   mentioned somewhere in the output.
+    ///
+    ///   Bare-substring matching on `cachePath.path` alone -- this
+    ///   heuristic's original shape -- is NOT sufficient and must never come
+    ///   back: `-module-cache-path <cachePath>` is one of the arguments on
+    ///   every single build's own command line once `sharedModuleCache` is
+    ///   on, and a crashing `swift-frontend` unconditionally echoes its full
+    ///   argument list (`Stack dump: 0. Program arguments: ...`) as part of
+    ///   its crash report, regardless of what actually crashed it. Verified
+    ///   live, the same way the false positive was originally found: forcing
+    ///   a generic, cache-unrelated crash (`-Xfrontend
+    ///   -debug-crash-after-parse`) with the shared cache flag on still
+    ///   prints `-module-cache-path <path>` verbatim inside that crash's own
+    ///   `Program arguments:` line -- so requiring only "the path appears in
+    ///   the output" made *every* frontend crash look like cache corruption,
+    ///   not just ones actually caused by it. That same captured crash
+    ///   output contains no `error opening '` anywhere, which is exactly the
+    ///   distinction this guard now keys on: a crash's own echoed invocation
+    ///   is not evidence the cache broke anything, but the compiler's own
+    ///   "I tried to open a file under this path and could not" diagnostic
+    ///   is.
+    static func isLikelySharedModuleCacheCorruption(_ failure: BuildFailure, cachePath: URL) -> Bool {
+        guard failure.kind == .infrastructure else { return false }
+        return failure.output.contains("error opening '\(cachePath.path)")
+    }
+
+    /// `-Xswiftc -module-cache-path` arguments pointing this build at
+    /// `cachePath` -- pure string formatting, split out from
+    /// `resolvedModuleCachePath(for:)` so `buildWithSharedCacheRecovery`
+    /// can build the identical argument list twice (the original attempt
+    /// and, when warranted, the retry) from one already-resolved path
+    /// without re-resolving or re-probing anything.
+    private static func moduleCacheArguments(for cachePath: URL) -> [String] {
+        ["-Xswiftc", "-module-cache-path", "-Xswiftc", cachePath.path]
+    }
+
+    /// This build's shared module cache directory -- see
+    /// `SharedModuleCacheNamespace` for the real toolchain fingerprinting
+    /// and once-per-run reset behind it -- or `nil` when the flag is off,
+    /// meaning "today's default: a private cache nested inside this
+    /// sandbox's own `.build`".
+    ///
+    /// Deliberately never called from `buildSchemataChunk`: the flag's
+    /// safety case (every mutant needs only the module set the baseline
+    /// build already warmed, because a mutation never changes an import)
+    /// was checked against the isolated backend's build shape, not
+    /// schemata's.
+    private func resolvedModuleCachePath(for workspace: URL) async -> URL? {
+        guard configuration.execution.sharedModuleCache else { return nil }
+        return await SharedModuleCacheNamespace.shared.moduleCachePath(forSandbox: workspace, workingDirectory: workspace)
     }
 
     private func build(in workspace: URL, extraArguments: [String] = []) async throws -> BuildArtifact {
@@ -252,11 +371,12 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         skipBuild: Bool? = nil,
         extraEnvironment: [String: String] = [:],
         testFilters: [String]? = nil,
-        reliableExpectedTestCount: Int? = nil
+        reliableExpectedTestCount: Int? = nil,
+        scratchPath: URL? = nil
     ) async throws -> TestRunResult {
-        // Written inside the sandbox, so concurrent mutants cannot overwrite one
-        // another's report — and so it disappears with the sandbox rather than
-        // being left behind in the user's tree.
+        // Written inside `scratchPath` when one is given (a disposable
+        // confirmation clone), `workspace` otherwise -- `workspace` can now
+        // be the read-only `projectRoot` (see `scratchPath` below).
         //
         // Unique per invocation, not a fixed name: `measurePerTestCoverage`'s
         // loop calls this method many times against the *same* workspace, so
@@ -269,7 +389,7 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         // contract broken by exactly the failure mode meant to protect it).
         // A UUID in the filename makes that collision structurally
         // impossible instead of merely attempted — no cleanup to fail.
-        let xunitOutput = workspace.appendingPathComponent("mutantkit-xunit-\(UUID().uuidString).xml")
+        let xunitOutput = (scratchPath ?? workspace).appendingPathComponent("mutantkit-xunit-\(UUID().uuidString).xml")
 
         // `--skip-build` because the build already happened and was already
         // classified. Letting the test step build would turn a compilation error
@@ -288,6 +408,16 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         var arguments = ["swift", "test"]
         arguments.append(contentsOf: Self.swiftTestBuildFlags(enableCoverage: enableCoverage, skipBuild: skipBuild))
         arguments.append(contentsOf: ["--xunit-output", xunitOutput.path])
+
+        // `scratchPath`, when given, means `workspace` is the tool's
+        // read-only `projectRoot`, standing in only for the package
+        // manifest (`--package-path`); pre-built products live under
+        // `scratchPath` instead, nested `<triple>/<configuration>` (`swift
+        // test --scratch-path` computes that path itself, confirmed
+        // empirically) — see `PackageManifestConfirmationRetesting`.
+        if let scratchPath {
+            arguments.append(contentsOf: ["--package-path", workspace.path, "--scratch-path", scratchPath.path])
+        }
 
         // Opt-in only. SwiftPM writes the XCTest half of the xunit report only in
         // parallel mode, so this is the difference between having per-test counts
@@ -353,129 +483,32 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         )
     }
 
-    /// Classifies a `swift test` run from its exit status and its xunit report.
-    ///
-    /// `swift test` writes no `.xcresult`, but `--xunit-output` gives it a
-    /// structured record all the same, so the console text is still never parsed.
-    /// The exit status decides the verdict — it is a contract of the tool — while
-    /// the xunit report supplies the counts and the names of the tests that
-    /// caught the mutant. When no report was written the counts are reported as
-    /// unknown rather than invented: a fabricated "1 test failed" would be
-    /// indistinguishable downstream from a measured one.
-    ///
-    /// - Parameter reliableExpectedTestCount: how many tests a narrowed,
-    ///   all-Swift-Testing selection named (`TestIdentifier.isSwiftTestingShaped`),
-    ///   or `nil` for an unnarrowed run, or a selection that includes an
-    ///   XCTest identifier. `swift test --filter` exits 0 even when it
-    ///   selects zero tests (P12-B Finding C, confirmed live: SwiftPM emits
-    ///   `warning: No matching test cases were run` on stderr and still
-    ///   exits 0) — a run that tested nothing must never be indistinguishable
-    ///   from one that passed. Restricted to all-Swift-Testing selections
-    ///   because Swift Testing's own `--xunit-output` sibling report
-    ///   (`XUnitParser`) reflects real executed counts unconditionally,
-    ///   while XCTest's report is written only when `tests.parallel` is on
-    ///   — under the (safe) default, an XCTest identifier's absence from it
-    ///   proves nothing, so mixing frameworks or trusting an XCTest-only
-    ///   selection here would misclassify a real, passing default-config
-    ///   run as a shortfall.
-    static func classify(
-        result: ProcessResult,
-        command: CommandRecord,
-        xunitOutput: URL? = nil,
-        reliableExpectedTestCount: Int? = nil
-    ) -> TestRunResult {
-        let summary = xunitOutput.flatMap { XUnitParser.summary(forRequestedOutput: $0) }
-        if result.timedOut {
-            return TestRunResult(
-                status: .timedOut,
-                summary: nil,
-                command: command,
-                resultArtifactPath: nil,
-                diagnosis: """
-                The test run exceeded its time limit and was terminated after \
-                \(String(format: "%.1f", result.durationSeconds))s.
-                """
-            )
-        }
-
-        if let signal = result.terminatingSignal {
-            return TestRunResult(
-                status: .crashed,
-                summary: nil,
-                command: command,
-                resultArtifactPath: nil,
-                diagnosis: "The test process was killed by signal \(signal)."
-            )
-        }
-
-        if result.exitCode == 0 {
-            if let reliableExpectedTestCount {
-                // `nil` (no xunit report parsed at all -- missing, unreadable,
-                // or `xunitOutput` itself absent) is treated as zero executed,
-                // not as "unknown, so don't check" (codex review, P12-B Phase
-                // B3): for a narrowed selection, no evidence that anything ran
-                // is exactly as unsafe to call a pass as evidence that zero
-                // things ran.
-                let executedCount = xunitOutput.flatMap { XUnitParser.swiftTestingExecutedCount(forRequestedOutput: $0) }
-                if (executedCount ?? 0) < reliableExpectedTestCount {
-                    return TestRunResult(
-                        status: .infrastructureFailure,
-                        summary: summary,
-                        command: command,
-                        resultArtifactPath: xunitOutput,
-                        diagnosis: """
-                        This run was narrowed to \(reliableExpectedTestCount) Swift Testing test(s), but the \
-                        xunit report records only \(executedCount.map(String.init) ?? "no") executed. Something \
-                        in the selection did not run and left no failure record explaining why, so the \
-                        shortfall is not scored as a pass.
-                        """
-                    )
-                }
-            }
-            return TestRunResult(
-                status: .passed,
-                summary: summary,
-                command: command,
-                resultArtifactPath: xunitOutput,
-                diagnosis: summary.map { "swift test exited successfully; all \($0.total) tests passed." }
-                    ?? "swift test exited successfully; every test passed."
-            )
-        }
-
-        // A failing suite exits 1. Anything else means the runner could not do its
-        // job — a missing bundle, a dyld failure — which is not the mutant's doing.
-        guard result.exitCode == 1 else {
-            return TestRunResult(
-                status: .infrastructureFailure,
-                summary: nil,
-                command: command,
-                resultArtifactPath: nil,
-                diagnosis: """
-                swift test exited with \(result.exitCode), which indicates it could \
-                not run the suite rather than that a test failed: \
-                \(OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 300)
-                    .trimmingCharacters(in: .whitespacesAndNewlines))
-                """
-            )
-        }
-
-        return TestRunResult(
-            status: .failed,
-            summary: summary,
-            command: command,
-            resultArtifactPath: xunitOutput,
-            diagnosis: summary.map { report in
-                let caught = report.failingTests.prefix(3).joined(separator: ", ")
-                return caught.isEmpty
-                    ? "swift test exited with 1: \(report.failed) of \(report.total) tests failed."
-                    : "swift test exited with 1: \(report.failed) of \(report.total) tests failed, caught by \(caught)."
-            } ?? "swift test exited with 1: at least one test failed."
-        )
-    }
-
     static let emptySummary = TestOutcomeSummary(
         total: 0, passed: 0, failed: 0, failingTests: [], durationSeconds: nil
     )
+}
+
+// MARK: - Confirmation retest
+
+extension SwiftPackageMacOSAdapter: PackageManifestConfirmationRetesting {
+    /// `PackageManifestConfirmationRetesting.runConfirmationRetest` — see
+    /// its doc comment for the full "why".
+    public func runConfirmationRetest(
+        _ point: MutationPoint,
+        packageRoot: URL,
+        productsScratchRoot: URL,
+        timeoutSeconds: Double,
+        selectedTests: Set<TestIdentifier>?
+    ) async throws -> TestRunResult {
+        try await runTests(
+            in: packageRoot,
+            timeoutSeconds: timeoutSeconds,
+            enableCoverage: false,
+            testFilters: Self.testFilterArguments(for: selectedTests),
+            reliableExpectedTestCount: Self.reliableExpectedCount(for: selectedTests),
+            scratchPath: productsScratchRoot
+        )
+    }
 }
 
 // MARK: - Schemata test
@@ -583,7 +616,7 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
             in: workspace,
             timeoutSeconds: timeoutSeconds
         ) {
-        case .complete(let map):
+        case let .complete(map):
             return map
         case .unavailable:
             return await measurePerTestCoverageSerial(

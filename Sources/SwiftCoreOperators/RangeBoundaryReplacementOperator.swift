@@ -50,9 +50,8 @@ import SwiftSyntax
 ///
 /// **`defaultEnabled: false`, `confidence: .experimental`.** No real-project
 /// corpus measurement yet — held to the same bar every other unvalidated
-/// operator in this catalog is (see `Research/operator-catalog/README.md`'s
-/// quality gate, which calls for exactly this operator to have "a syntax
-/// fixture corpus first" before promotion).
+/// operator in this catalog is: a syntax fixture corpus first, before
+/// promotion.
 public struct RangeBoundaryReplacementOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.range-boundary-replacement",

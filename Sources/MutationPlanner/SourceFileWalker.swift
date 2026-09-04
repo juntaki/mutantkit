@@ -168,6 +168,7 @@ public struct SourceFileWalker: Sendable {
                 }
 
                 guard name.hasSuffix(".swift") else { continue }
+                guard !Self.isPackageManifestName(name) else { continue }
                 guard isIncluded(relativePath), !isExcluded(relativePath) else { continue }
                 found.append(relativePath)
             }
@@ -178,7 +179,8 @@ public struct SourceFileWalker: Sendable {
 
     /// Whether a relative path would be planned, without touching the disk.
     public func admits(relativePath: String) -> Bool {
-        isIncluded(relativePath) && !isExcluded(relativePath)
+        guard !Self.isPackageManifestName(Self.lastPathComponent(of: relativePath)) else { return false }
+        return isIncluded(relativePath) && !isExcluded(relativePath)
     }
 
     private func isIncluded(_ path: String) -> Bool {
@@ -187,5 +189,38 @@ public struct SourceFileWalker: Sendable {
 
     private func isExcluded(_ path: String) -> Bool {
         Glob.matchesAny(patterns: settings.exclude, path: path)
+    }
+
+    private static func lastPathComponent(of relativePath: String) -> String {
+        relativePath.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? relativePath
+    }
+
+    /// Whether `name` (a bare file name, not a path) is a SwiftPM package
+    /// manifest — `Package.swift` itself, or one of its version-specific
+    /// variants (`Package@swift-<major>[.<minor>[.<patch>]].swift`, SwiftPM's
+    /// own documented "version-specific manifest selection" naming — e.g.
+    /// `Package@swift-5.9.swift`, confirmed against swift.org's own SwiftPM
+    /// documentation rather than assumed).
+    ///
+    /// Checked unconditionally, before `sources.include`/`exclude` are even
+    /// consulted, and regardless of what those patterns say — never merely
+    /// relying on the default `sources.include: ["Sources/**"]` happening
+    /// not to reach the project root. `PackageManifestConfirmationRetesting`
+    /// (`Sources/MutationExecution/Adapters.swift`) depends on `projectRoot`'s
+    /// `Package.swift` being invariant across every mutant of one run; a
+    /// user who broadens `sources.include` to cover the project root must
+    /// never be able to turn the manifest itself into a mutation candidate
+    /// and quietly break that invariant.
+    static func isPackageManifestName(_ name: String) -> Bool {
+        if name == "Package.swift" { return true }
+        let prefix = "Package@swift-"
+        let suffix = ".swift"
+        guard name.hasPrefix(prefix), name.hasSuffix(suffix), name.count > prefix.count + suffix.count else {
+            return false
+        }
+        let versionPart = name.dropFirst(prefix.count).dropLast(suffix.count)
+        let components = versionPart.split(separator: ".", omittingEmptySubsequences: false)
+        guard !components.isEmpty, components.count <= 3 else { return false }
+        return components.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
     }
 }

@@ -412,8 +412,8 @@ struct BudgetSelectorSubtypeStratificationTests {
 
 /// `.operatorSubtype` exists so a run against a real project's mutant pool
 /// gives every enabled operator *some* signal, not just the operators whose
-/// candidates happen to be a large share of the pool — see
-/// `Research/corpus-validation/yomu-2026-07-24/`, where a 100-mutant
+/// candidates happen to be a large share of the pool — confirmed against a
+/// real internal validation corpus, where a 100-mutant
 /// `stratifyBy: subtype` sample drew zero `ternary-branch-swap` and zero
 /// `unary-not-removal` candidates out of 1242 discovered, forcing a separate
 /// single-operator run just to measure either one.

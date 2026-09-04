@@ -73,6 +73,16 @@ public struct DiagnosisItem: Codable, Sendable {
         case availableMemory
         case systemLoad
         case bootedSimulators
+        /// `Configuration.execution.sharedModuleCache`'s own status --
+        /// added by `DoctorCommand`'s module-cache diagnostic, kept a
+        /// narrow, self-contained addition deliberately outside
+        /// `ReadinessCheck.diagnose`'s shared item list (see that
+        /// command's own doc comment for why).
+        case sharedModuleCache
+        case macOSVersionFloor
+        case schemataExecutionSupport
+        case perTestCoverageSupport
+        case testBatchingSupport
     }
 
     public let name: String
@@ -215,6 +225,160 @@ public protocol TestAdapter: Sendable {
     ) async throws -> TestRunResult
 }
 
+/// An adapter whose confirmation retest (`Configuration.execution
+/// .retestKilledMutants` — see `MutationConfirmationCoordinator.confirmKill`,
+/// the one function every same-artifact confirmation retest, including the
+/// inner retest inside `confirmTimeout`, ultimately runs through) cannot run
+/// against a bare, products-only clone the way `runMutant` ordinarily does,
+/// and needs its own project's stable, read-only root alongside it.
+///
+/// SwiftPM's `swift test --skip-build` is the reason this exists: unlike
+/// Xcode's `.xctestrun`-based lookup — fully self-contained inside the flat
+/// products clone `WorkspaceManager.cloneProducts` already produces, nothing
+/// downstream of it ever looks outside that directory (see
+/// `XcodeBuildAdapter.productsDirectory(in:)`) — SwiftPM needs to resolve a
+/// real package graph (`Package.swift`, plus the real target source
+/// directories) to find which pre-built `.xctest` bundle a test target maps
+/// to, even though it is never going to compile anything (`--skip-build`).
+/// A bare products clone has neither, and fails before it runs a single
+/// test.
+///
+///
+/// Conformance is optional, mirroring `TestSelecting`/`BatchTestable`: an
+/// adapter that does not conform is never asked for anything extra, and
+/// `MutationConfirmationCoordinator.confirmKill` runs exactly as it always
+/// has, retesting directly against the plain products clone
+/// `WorkspaceManager.cloneProducts` produces.
+public protocol PackageManifestConfirmationRetesting: TestAdapter {
+    /// Retests `point`'s already-built products — found nested under
+    /// `productsScratchRoot` in the exact `<triple>/<configuration>` shape
+    /// SwiftPM's own `.build` uses (`WorkspaceManager
+    /// .cloneProductsForConfirmation`'s own contract, the function every
+    /// conforming caller is expected to have produced `productsScratchRoot`
+    /// with) — as `packageRoot`'s own package.
+    ///
+    /// `packageRoot` is the tool's own stable, read-only original project
+    /// copy (`MutationRunner`'s own `projectRoot`), never a per-mutant
+    /// sandbox: mutations only ever rewrite specific source files' own
+    /// *contents*, never `Package.swift` or a target's source directory
+    /// layout, so the one project root is exactly as correct for confirming
+    /// any mutant's retest as the sandbox that actually built it would be —
+    /// and, unlike that sandbox, is guaranteed to still be exactly what it
+    /// was when this mutant's own build happened, whenever this retest
+    /// actually runs. A persistent, reused incremental-build sandbox is not
+    /// that stable (see `Configuration.execution.incrementalBuild`): it can
+    /// already be building a *different* mutant by the time a deferred
+    /// confirmation retest for this one runs.
+    func runConfirmationRetest(
+        _ point: MutationPoint,
+        packageRoot: URL,
+        productsScratchRoot: URL,
+        timeoutSeconds: Double,
+        selectedTests: Set<TestIdentifier>?
+    ) async throws -> TestRunResult
+
+    /// Ensures `packageRoot`'s own package dependencies are already
+    /// resolved — called once, by `RunCommand`, as an explicit, logged
+    /// preflight step before any mutation testing begins, gated on
+    /// `Configuration.execution.retestKilledMutants` (the only thing that
+    /// can ever cause `runConfirmationRetest` to run at all).
+    ///
+    /// This exists because `runConfirmationRetest`'s own `swift test
+    /// --skip-build --package-path <packageRoot> --scratch-path <clone>`
+    /// is, for a project whose dependencies were never previously resolved
+    /// anywhere (no committed `Package.resolved`, never built by the user
+    /// before), SwiftPM's *first-ever* dependency resolution for that
+    /// package — and first-ever resolution happens against
+    /// `--package-path`, not `--scratch-path`. Nothing else in a normal
+    /// MutantKit run resolves against `packageRoot` first: every baseline
+    /// and mutant build runs inside its own `WorkspaceManager`-cloned
+    /// sandbox (`swift build`'s working directory is the sandbox, never
+    /// `packageRoot`), and `ProjectDetector`'s own `swift package
+    /// dump-package` call during detection is manifest-only and never
+    /// resolves dependencies. Left unresolved, `runConfirmationRetest`
+    /// would be the run's only command ever targeting `packageRoot`
+    /// itself — meaning a confirmation retest, potentially hours into a
+    /// run, would be the first thing to ever write a fresh
+    /// `Package.resolved` into the tool's own stable, read-only original
+    /// project copy: a real, unexpected side effect on the user's live
+    /// tree, and a deviation from `WorkspaceManager.populate`'s own stated
+    /// contract that the original tree is only ever read. Resolving once,
+    /// explicitly, up front — logged, so it is never a surprise — means
+    /// that write (if the project needs it at all; a project with no
+    /// dependencies, or one that already committed `Package.resolved`, is
+    /// an immediate no-op) happens visibly, before any mutant's own
+    /// timing/verdict is on the line, rather than silently inside a
+    /// deferred confirmation retest.
+    func resolveDependenciesForConfirmationRetest(packageRoot: URL, timeoutSeconds: Double) async throws
+}
+
+/// A `TestAdapter` that wraps another `TestAdapter` opaquely — stored as
+/// `any TestAdapter` (an existential), not as a generic parameter — and
+/// wants a caller doing optional-protocol dispatch (`value as? any
+/// SomeProtocol`) on *it* to be able to see through to what it wraps.
+///
+/// This exists because Swift's `as?` on a value already boxed behind `any
+/// TestAdapter` only ever consults that value's own concrete type's
+/// declared conformances — never the conformances of whatever a wrapper
+/// happens to store inside itself. `PrioritizingTestAdapter`, for example,
+/// wraps `base: any TestAdapter` and is itself declared only `TestSelecting
+/// & Sendable`; even when `base` genuinely conforms to
+/// `PackageManifestConfirmationRetesting`, `prioritizingAdapter as? any
+/// PackageManifestConfirmationRetesting` fails, because the cast never
+/// looks inside `base`. Swift's conditional-conformance machinery cannot
+/// fix this either — it forwards a conformance through a *generic*
+/// parameter (`Wrapper<Base>: P where Base: P`), which requires the
+/// wrapper to be generic over a concrete `Base` type; a wrapper that
+/// stores its wrapped value as an existential (`any TestAdapter`), as
+/// `PrioritizingTestAdapter` does, has no generic parameter for a
+/// `where`-clause to constrain.
+///
+/// A wrapper that wants a protocol like `PackageManifestConfirmationRetesting`
+/// to keep working through it should instead conform to this protocol and
+/// expose the value it wraps, so a caller performing the optional-protocol
+/// dispatch (`MutationConfirmationCoordinator.confirmKill`, in particular)
+/// can unwrap and retry the cast against what is actually inside, rather
+/// than silently and safely falling back to a degraded path. Recursive by
+/// construction: a chain of wrappers unwraps one layer at a time until a
+/// conforming adapter is found or the chain runs out.
+public protocol TestAdapterWrapping: TestAdapter {
+    var wrappedTestAdapter: any TestAdapter { get }
+}
+
+/// Resolves `adapter`'s `PackageManifestConfirmationRetesting` conformance,
+/// unwrapping through any `TestAdapterWrapping` layers first
+/// (`PrioritizingTestAdapter`, today's only wrapper — see that type's and
+/// `TestAdapterWrapping`'s own doc comments for why a plain `adapter as?
+/// any PackageManifestConfirmationRetesting` cannot do this by itself).
+///
+/// Shared by every call site that needs to know whether a confirmation
+/// retest can use the manifest-aware path: `MutationConfirmationCoordinator
+/// .confirmKill`, which dispatches to whatever this returns, and
+/// `WorkspaceManager.cloneProductsForConfirmationRetest`, which decides the
+/// confirmation sandbox's own shape (flat vs. nested) from the identical
+/// question. Factored out here rather than duplicated or hung off either
+/// type, so the two can never disagree about which test adapter a real
+/// confirmation retest ends up using — disagreement either way is a real
+/// bug, not just a style issue: a coordinator that unwraps against a
+/// sandbox-shape decision that doesn't would point a manifest-aware retest
+/// at a flat clone (fails outright, `swift test --scratch-path` cannot find
+/// pre-built products there); the reverse would nest a clone that then
+/// never actually gets used through the manifest-aware path, for no
+/// benefit and a wasted clone.
+///
+/// `public`, not `internal`: `RunCommand` (a different module, `CLI`) needs
+/// the identical answer too, to decide whether an early, explicit
+/// dependency-resolution preflight applies before any mutation testing
+/// begins — see `PackageManifestConfirmationRetesting
+/// .resolveDependenciesForConfirmationRetest`'s own doc comment for why.
+public func packageManifestConfirmationRetesting(for adapter: any TestAdapter) -> (any PackageManifestConfirmationRetesting)? {
+    if let direct = adapter as? any PackageManifestConfirmationRetesting { return direct }
+    if let wrapping = adapter as? any TestAdapterWrapping {
+        return packageManifestConfirmationRetesting(for: wrapping.wrappedTestAdapter)
+    }
+    return nil
+}
+
 /// A test adapter that can run an already-built schemata chunk once per
 /// requested selector token, without rebuilding.
 ///
@@ -296,12 +460,12 @@ public protocol SchemataBatchTestable: SchemataTestable {
     /// batches an unnarrowed `BatchMutantItem` either.
     ///
     /// - Parameter nativeTimeoutAllowanceSeconds: same meaning as
-    ///   `BatchTestable.runBatch`'s parameter of the same name (Gate 3
-    ///   Phase H3) — when non-`nil`, enables XCTest's own per-test
-    ///   execution-time allowance for every configuration in the batch, so
-    ///   one hanging token cannot hold the whole batch's outer,
-    ///   aggregate `timeoutSeconds` hostage. `nil` (the default, via the
-    ///   protocol-extension overload below) is a complete no-op.
+    ///   `BatchTestable.runBatch`'s parameter of the same name — when
+    ///   non-`nil`, enables XCTest's own per-test execution-time allowance
+    ///   for every configuration in the batch, so one hanging token cannot
+    ///   hold the whole batch's outer, aggregate `timeoutSeconds` hostage.
+    ///   `nil` (the default, via the protocol-extension overload below) is a
+    ///   complete no-op.
     func runSchemataTokenBatch(
         _ artifact: BuildArtifact,
         in workspace: URL,
@@ -427,14 +591,13 @@ public protocol BatchTestable: TestAdapter {
     /// - Parameter nativeTimeoutAllowanceSeconds: When non-`nil`, enables
     ///   XCTest's own per-test execution-time allowance
     ///   (`-test-timeouts-enabled`) at this value for every configuration in
-    ///   the batch — confirmed (Gate 3 Phase H1/H2) to cut a single hanging
-    ///   configuration off without killing the shared `xcodebuild`
-    ///   invocation or losing its siblings' results. This is *containment*,
-    ///   layered underneath — never a replacement for — `timeoutSeconds`,
-    ///   which remains the outer, aggregate fail-safe for the whole
-    ///   invocation exactly as before. `nil` (the default) is a complete
-    ///   no-op: every caller that does not pass it gets today's behavior
-    ///   unchanged.
+    ///   the batch — confirmed to cut a single hanging configuration off
+    ///   without killing the shared `xcodebuild` invocation or losing its
+    ///   siblings' results. This is *containment*, layered underneath —
+    ///   never a replacement for — `timeoutSeconds`, which remains the
+    ///   outer, aggregate fail-safe for the whole invocation exactly as
+    ///   before. `nil` (the default) is a complete no-op: every caller that
+    ///   does not pass it gets today's behavior unchanged.
     func runBatch(
         _ items: [BatchMutantItem],
         in workspace: URL,

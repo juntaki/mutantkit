@@ -26,6 +26,7 @@ struct MutantKit: AsyncParsableCommand {
             DryRunCommand.self,
             PlanCommand.self,
             RunCommand.self,
+            ExecutionProfileCommand.self,
             GateCommand.self,
             PerfCommand.self,
             HistoryCommand.self,
@@ -33,6 +34,8 @@ struct MutantKit: AsyncParsableCommand {
             TrustCommand.self,
             InspectCommand.self,
             SurvivorsCommand.self,
+            FixPlanCommand.self,
+            NextCommand.self,
             ReproduceCommand.self,
             ShardCommand.self,
             MergeCommand.self,
@@ -119,6 +122,15 @@ struct OverrideOptions: ParsableArguments {
     @Option(name: .long, help: "Operator profile: conservative, default, or experimental.")
     var profile: String?
 
+    /// Deliberately a separate flag from `--profile` above, not a shared
+    /// name: that one already means `operators.profile` (a different
+    /// setting entirely — which mutation operators run at all, not how
+    /// they execute), and reusing it here would make one flag silently
+    /// mean two unrelated things depending on which config key happened to
+    /// read it.
+    @Option(name: .long, help: "Execution profile: reference, optimized, or experimental. See `mutantkit execution-profile`.")
+    var executionProfile: String?
+
     @Option(name: .long, help: "Stop after this many mutants.")
     var maxMutants: Int?
 
@@ -127,6 +139,13 @@ struct OverrideOptions: ParsableArguments {
         if let destination { configuration.project.destination = destination }
         if let workers { configuration.execution.workers = workers }
         if let maxMutants { configuration.execution.budget.maxMutants = maxMutants }
+        if let executionProfile {
+            guard let parsed = ExecutionProfile(rawValue: executionProfile) else {
+                print("Unknown execution profile '\(executionProfile)'. Expected: reference, optimized, experimental.")
+                throw ExitCode(MutantKitExit.operationalError)
+            }
+            configuration.execution.profile = parsed
+        }
         if let profile {
             guard let parsed = OperatorProfile(rawValue: profile) else {
                 // Bad input, not a usage-syntax error `ArgumentParser`'s own

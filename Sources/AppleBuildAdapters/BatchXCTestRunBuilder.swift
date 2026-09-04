@@ -137,7 +137,7 @@ public enum BatchXCTestRunBuilder {
                 // batched `.xctestrun` `OnlyTestIdentifiers` key, a
                 // different mechanism from the `-only-testing:` CLI
                 // argument `onlyTestingArgument` builds for the
-                // non-batched path. Phase C13 found and fixed a real bug
+                // non-batched path. A previous fix addressed a real bug
                 // in `onlyTestingArgument` (it was missing the trailing
                 // `()` a Swift Testing `@Test` function needs to match at
                 // all via `-only-testing:`) but deliberately left this

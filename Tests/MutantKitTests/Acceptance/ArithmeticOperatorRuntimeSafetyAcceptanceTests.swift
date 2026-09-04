@@ -53,7 +53,7 @@ struct ArithmeticOperatorRuntimeSafetyAcceptanceTests {
 
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while run.isRunning, Date() < deadline {
-            usleep(10_000)
+            usleep(10000)
         }
         if run.isRunning {
             run.terminate()

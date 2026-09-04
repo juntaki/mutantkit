@@ -170,13 +170,30 @@ public struct StrykerReporter: Reporter {
     /// Stryker wants an exclusive end position; we store only a start. The
     /// mutated text is the span, so the end is derivable from it exactly — no
     /// guessing, and no need to re-read the file.
+    ///
+    /// - Note on units: `column` (the start — always `MutationPoint.column`
+    ///   in practice) is a 1-based **UTF-8 byte offset** from the start of
+    ///   its line, exactly `SwiftSyntax.SourceLocation.column`'s own
+    ///   contract ("the number of bytes ... occupy when encoded as UTF-8" —
+    ///   see `SourceLocation.swift` in the vendored `swift-syntax` package),
+    ///   which is where `MutationDiscovery.swift` reads it from. Neither the
+    ///   Stryker schema nor SARIF constrains that unit further for a
+    ///   byte-offset-sourced tool like this one, but the start and end of
+    ///   *one* span must still agree with each other — so the length added
+    ///   below is counted in UTF-8 bytes (`.utf8.count`) too, never Swift's
+    ///   `Character` count (`.count`, extended grapheme clusters). The two
+    ///   diverge for any span containing a multi-byte UTF-8 character
+    ///   (accented letters, CJK, emoji, …): counting characters there would
+    ///   land `end` short of where the mutated text actually stops, even
+    ///   though `start` itself is correct.
     static func endLocation(line: Int, column: Int, originalText: String) -> (line: Int, column: Int) {
         let segments = originalText.split(separator: "\n", omittingEmptySubsequences: false)
         guard segments.count > 1 else {
-            return (line, column + originalText.count)
+            return (line, column + originalText.utf8.count)
         }
-        // A multi-line span ends at the start of the column after its last line.
-        return (line + segments.count - 1, (segments.last?.count ?? 0) + 1)
+        // A multi-line span ends at the start of the column after its last
+        // line — again counted in UTF-8 bytes, matching `column` above.
+        return (line + segments.count - 1, (segments.last?.utf8.count ?? 0) + 1)
     }
 }
 
@@ -195,7 +212,11 @@ public extension StrykerReporter {
     }
 
     /// Stryker's complete status vocabulary.
-    enum MutantStatus: String, Codable, Sendable {
+    ///
+    /// `CaseIterable` exists so a schema-conformance test can derive "every
+    /// status we can possibly emit" from this declaration itself rather than
+    /// a hand-copied string list that could silently drift from it.
+    enum MutantStatus: String, Codable, Sendable, CaseIterable {
         case killed = "Killed"
         case survived = "Survived"
         case noCoverage = "NoCoverage"

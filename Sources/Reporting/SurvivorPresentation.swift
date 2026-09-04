@@ -106,11 +106,11 @@ public enum SurvivorPresentationBuilder {
     }
 }
 
-extension [SurvivorPresentation.Row] {
+public extension [SurvivorPresentation.Row] {
     /// The aggregate counts for whichever subset of rows a reporter actually
     /// renders — computed the same way everywhere, so no reporter's own
     /// header line can drift from what its own rows actually contain.
-    public var aggregate: SurvivorPresentation.Aggregate {
+    var aggregate: SurvivorPresentation.Aggregate {
         .init(totalMutants: reduce(0) { $0 + $1.count }, distinctIssues: count)
     }
 }

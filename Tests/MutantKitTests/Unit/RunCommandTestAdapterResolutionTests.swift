@@ -72,6 +72,60 @@ struct RunCommandTestAdapterResolutionTests {
         #expect(adapter is PrioritizingTestAdapter)
         #expect(store == nil)
     }
+
+    // MARK: - PrioritizingTestAdapter.wouldWrap
+
+    /// One case for `wouldWrapAgreesWithResolveTestAdapter` below. A small
+    /// struct rather than a wider tuple: `large_tuple` caps tuples at 2
+    /// members, and this case naturally needs four fields.
+    private struct WrappingCase {
+        let selectCoveringTests: Bool
+        let earlyAbort: Bool
+        let testBatchSize: Int?
+        let base: any TestAdapter
+    }
+
+    /// `PrioritizingTestAdapter.wouldWrap` is the exact predicate
+    /// `resolveTestAdapter` above now delegates to (rather than repeating
+    /// the same three-way condition inline) — `ExecutionCapabilitiesDiagnosis`'s
+    /// schemata-availability check calls it directly to answer "would a
+    /// real run wrap the base test adapter", without needing a
+    /// `TestPriorityStore`/priority-store file url. These four cases mirror
+    /// the four `resolveTestAdapter` cases above exactly, confirming the
+    /// two can never disagree.
+    @Test("PrioritizingTestAdapter.wouldWrap agrees with resolveTestAdapter's own wrapping decision in all four cases")
+    func wouldWrapAgreesWithResolveTestAdapter() {
+        let cases: [WrappingCase] = [
+            WrappingCase(selectCoveringTests: true, earlyAbort: false, testBatchSize: 10, base: FakeBatchableTestAdapter()),
+            WrappingCase(selectCoveringTests: true, earlyAbort: true, testBatchSize: 10, base: FakeBatchableTestAdapter()),
+            WrappingCase(selectCoveringTests: true, earlyAbort: true, testBatchSize: 10, base: FakeNonBatchableTestAdapter()),
+            WrappingCase(selectCoveringTests: true, earlyAbort: true, testBatchSize: nil, base: FakeBatchableTestAdapter())
+        ]
+
+        for testCase in cases {
+            let settings = configuration(
+                selectCoveringTests: testCase.selectCoveringTests,
+                earlyAbort: testCase.earlyAbort,
+                testBatchSize: testCase.testBatchSize
+            )
+            let wouldWrap = PrioritizingTestAdapter.wouldWrap(settings, base: testCase.base)
+            let (resolvedAdapter, _) = RunCommand.resolveTestAdapter(settings, base: testCase.base, priorityStoreURL: priorityStoreURL)
+            #expect(
+                wouldWrap == (resolvedAdapter is PrioritizingTestAdapter),
+                "selectCoveringTests=\(testCase.selectCoveringTests) earlyAbort=\(testCase.earlyAbort) testBatchSize=\(String(describing: testCase.testBatchSize))"
+            )
+        }
+    }
+
+    @Test("PrioritizingTestAdapter.wouldWrap is false when selectCoveringTests/earlyAbortSelectedTests aren't both on")
+    func wouldWrapFalseWithoutBothFlags() {
+        #expect(!PrioritizingTestAdapter.wouldWrap(
+            configuration(selectCoveringTests: true, earlyAbort: false, testBatchSize: nil), base: FakeNonBatchableTestAdapter()
+        ))
+        #expect(!PrioritizingTestAdapter.wouldWrap(
+            configuration(selectCoveringTests: false, earlyAbort: true, testBatchSize: nil), base: FakeNonBatchableTestAdapter()
+        ))
+    }
 }
 
 private struct FakeNonBatchableTestAdapter: TestAdapter {

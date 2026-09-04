@@ -9,8 +9,9 @@ import SwiftSyntax
 /// `SchemataLowererRegistry.builtIn`'s own doc comment: this type is never
 /// listed there in this build, so it is never reached by
 /// `SchemataChunkPlanner` in production, only exercised directly by this
-/// file's own tests and by a dedicated validation-only registration commit —
-/// see `Research/adr-0008-validation/protocol.md`'s "Protocol v2" addendum).
+/// file's own tests and by a separate, validation-only registration path
+/// used to gather promotion evidence before a lowerer is added to the
+/// built-in list).
 ///
 /// `ArithmeticOperatorReplacementOperator`'s own doc comment names the exact
 /// risk this lowerer exists to route around, not merely note:
@@ -626,11 +627,10 @@ extension ArithmeticOperatorReplacementSchemataLowerer {
     /// `count` property (`struct S { var count: String }`), and nothing
     /// about the member-access syntax alone rules that out. This narrows
     /// `.count` back to the one case it is actually guaranteed for, at the
-    /// cost of real coverage this validation's own Corpus B site
-    /// (`YOMSearchQuery.swift`'s `terms.count`, where `terms` is declared as
-    /// a project-specific `FlatbufferVector<...>`, not a standard-library
-    /// collection) can no longer reach — falling back to isolated mode
-    /// there, not a silently-accepted risk.
+    /// cost of real coverage on a project-specific collection type (e.g. a
+    /// custom `FlatbufferVector<...>` wrapping `.count`, not a
+    /// standard-library collection) that this check can no longer reach —
+    /// falling back to isolated mode there, not a silently-accepted risk.
     private static let collectionLikeTypeNames: Set<String> = ["String", "Substring", "ContiguousArray", "ArraySlice"]
 
     private static func isProvablyCollectionType(_ expr: ExprSyntax, depth: Int) -> Bool {

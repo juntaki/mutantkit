@@ -91,13 +91,13 @@ public enum DestinationResolver {
     /// token its `SimRuntime` identifier uses for the same platform (e.g. a
     /// `platform=visionOS Simulator` destination's devices report a runtime
     /// identifier containing `SimRuntime.xrOS-...`, not `visionOS` — real
-    /// Apple naming, not a typo). Phase C10 (competitive-parity program):
-    /// this list used to be `"iOS Simulator"` alone, which meant a
-    /// `platform=tvOS Simulator,name=X`/`watchOS Simulator`/`visionOS
-    /// Simulator` destination silently skipped this whole type's name/UDID
-    /// pinning entirely — reintroducing, for those three platforms only, the
-    /// exact "OS:latest resolves differently per invocation" bug this type
-    /// exists to fix for iOS (see this type's own doc comment).
+    /// Apple naming, not a typo). This list used to be `"iOS Simulator"`
+    /// alone, which meant a `platform=tvOS Simulator,name=X`/`watchOS
+    /// Simulator`/`visionOS Simulator` destination silently skipped this
+    /// whole type's name/UDID pinning entirely — reintroducing, for those
+    /// three platforms only, the exact "OS:latest resolves differently per
+    /// invocation" bug this type exists to fix for iOS (see this type's own
+    /// doc comment).
     static let simulatorPlatforms: [(name: String, runtimeToken: String)] = [
         ("iOS Simulator", "iOS"),
         ("tvOS Simulator", "tvOS"),
@@ -107,11 +107,11 @@ public enum DestinationResolver {
 
     /// Module-internal, not `private`: `XcodeBuildAdapter
     /// .destinationNeedsSimulatorLease` reuses this exact check rather than
-    /// keeping its own separate `"iOS Simulator"`-only test — Phase C10
-    /// found that duplicate had the identical bug this one did, and fixing
-    /// one without the other would have left tvOS/watchOS/visionOS
-    /// destinations resolved correctly but leased not at all, letting two
-    /// concurrent workers collide on one real device.
+    /// keeping its own separate `"iOS Simulator"`-only test — that
+    /// duplicate had the identical bug this one did, and fixing one without
+    /// the other would have left tvOS/watchOS/visionOS destinations
+    /// resolved correctly but leased not at all, letting two concurrent
+    /// workers collide on one real device.
     static func isSimulatorDestination(_ requested: String) -> Bool {
         simulatorPlatforms.contains { requested.localizedCaseInsensitiveContains($0.name) }
     }
@@ -257,16 +257,15 @@ public enum DestinationResolver {
     /// (`'1' < '9'`), which is simply wrong once any component reaches two
     /// digits.
     ///
-    /// Phase C10 (competitive-parity program): generalized from a
-    /// hardcoded `"iOS-"` search to every known platform token. Before
-    /// this, a tvOS/watchOS/visionOS runtime identifier always produced an
-    /// empty `[]` here regardless of its real version — harmless while
-    /// `resolve` only ever reached this function for iOS destinations (an
-    /// empty array always sorts as "oldest", so a real iOS runtime always
-    /// won `max(by:)` against any non-iOS one), but would have made
-    /// `runtimeIsOlder` unable to tell two different *tvOS* runtime
-    /// versions apart from each other at all once tvOS/watchOS/visionOS
-    /// destinations started reaching this same "OS:latest" logic.
+    /// Generalized from a hardcoded `"iOS-"` search to every known platform
+    /// token. Before this, a tvOS/watchOS/visionOS runtime identifier
+    /// always produced an empty `[]` here regardless of its real version —
+    /// harmless while `resolve` only ever reached this function for iOS
+    /// destinations (an empty array always sorts as "oldest", so a real iOS
+    /// runtime always won `max(by:)` against any non-iOS one), but would
+    /// have made `runtimeIsOlder` unable to tell two different *tvOS*
+    /// runtime versions apart from each other at all once tvOS/watchOS/
+    /// visionOS destinations started reaching this same "OS:latest" logic.
     private static func versionComponents(of runtimeIdentifier: String) -> [Int] {
         for (_, token) in simulatorPlatforms {
             guard let range = runtimeIdentifier.range(of: "\(token)-") else { continue }

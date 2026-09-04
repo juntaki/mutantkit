@@ -5,9 +5,9 @@ import MutationExecution
 /// Turns a `ResourceSnapshot` (and a best-effort simulator-contention count)
 /// into warn-only diagnosis items — never `.failure` on its own.
 ///
-/// This exists because of a standing, repeatedly-hit failure mode on the
-/// local corpus-validation host (see `Research/corpus-validation/*/README.md`):
-/// starting a multi-hour corpus run while memory is already under pressure,
+/// This exists because of a standing, repeatedly-hit failure mode on
+/// long-running local validation hosts: starting a multi-hour corpus run
+/// while memory is already under pressure, ...
 /// load is already high from something else running, or a stray booted
 /// simulator is competing for CoreSimulator resources, degrades run quality
 /// in ways that surface hours later as `.infrastructureFailure`/`.flaky`
@@ -31,7 +31,7 @@ import MutationExecution
 enum HostResourcePreflight {
     /// Below this, a `swift build`/`xcodebuild` invocation competing with
     /// whatever else is resident risks paging under load — exactly the
-    /// condition `Research/corpus-validation` runs have hit before.
+    /// condition long, multi-hour corpus runs have hit before.
     /// Heuristic, not a proven cliff: chosen as "uncomfortably low for a
     /// multi-hour build+test loop on a laptop-class Mac," not measured from
     /// a specific OOM threshold.

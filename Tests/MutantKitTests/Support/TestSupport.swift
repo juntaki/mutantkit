@@ -15,6 +15,9 @@ enum Operators {
     static var relational: [any MutationOperator] { [RelationalOperatorReplacementOperator()] }
     static var logicalConnector: [any MutationOperator] { [LogicalConnectorReplacementOperator()] }
     static var arithmetic: [any MutationOperator] { [ArithmeticOperatorReplacementOperator()] }
+    static var ternaryBranchSwap: [any MutationOperator] { [TernaryBranchSwapOperator()] }
+    static var unaryNotRemoval: [any MutationOperator] { [UnaryNotRemovalOperator()] }
+    static var returnValueReplacement: [any MutationOperator] { [ReturnValueReplacementOperator()] }
 }
 
 // MARK: - Discovery

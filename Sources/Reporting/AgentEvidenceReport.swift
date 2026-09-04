@@ -4,9 +4,9 @@ import MutationModel
 /// A single mutant's full record, curated for a coding agent to consume
 /// directly — `mutantkit inspect <id> --json`'s output shape.
 ///
-/// P5 (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`):
-/// deliberately favors richer primary evidence over `kill_hint`-style
-/// inference. Every field here is read straight off data this tool already
+/// This report deliberately favors richer primary evidence over
+/// `kill_hint`-style inference. Every field here is read straight off data
+/// this tool already
 /// computed and verified elsewhere (`MutationPoint`, `MutationResult`,
 /// `MutationEvidence`) — nothing is reconstructed or guessed from a raw
 /// command line or a heuristic. Where the real data does not exist yet (a
@@ -90,11 +90,9 @@ public struct AgentEvidenceReport: Codable, Sendable {
         /// kind of inference this report is designed to avoid.
         public let buildCommand: [String]?
         public let testCommand: [String]?
-        /// From this run's own `ToolchainFingerprint` (P4's
-        /// `buildSDKIdentity`/`destinationRuntimeIdentity` — see
-        /// `Research/mutation-testing-hardening-2026-08/PROGRESS.md`'s P4
-        /// entry) — `nil` when no report has been loaded yet, or the run
-        /// predates those fields.
+        /// From this run's own `ToolchainFingerprint`
+        /// (`buildSDKIdentity`/`destinationRuntimeIdentity`) — `nil` when no report
+        /// has been loaded yet, or the run predates those fields.
         public let buildSDKIdentity: String?
         public let destinationRuntimeIdentity: String?
 
@@ -141,8 +139,8 @@ public struct AgentEvidenceReport: Codable, Sendable {
 
     /// A static, always-true piece of advice, not a per-mutant inference —
     /// included as a structured hint rather than prose specifically so an
-    /// agent does not have to parse English to find it (P5's own explicit
-    /// ask). MutantKit's own operator catalog already documents this
+    /// agent does not have to parse English to find it. MutantKit's own
+    /// operator catalog already documents this
     /// principle (`OperatorDescriptor.faultEvidence`'s framing throughout):
     /// a suite that only asserts the mutated line's own literal behavior,
     /// rather than an observable effect a caller can see, will not

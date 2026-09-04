@@ -88,18 +88,3 @@ remains under its own licence.
   Yams                  MIT
                         https://github.com/jpsim/Yams
                         (Yams bundles libfyaml/LibYAML — MIT)
-
-
--------------------------------------------------------------------------------
-4. Reference clones
--------------------------------------------------------------------------------
-
-The `reference/` directory contains clones of third-party repositories kept for
-investigation. They are NOT part of the MutantKit build, are NOT distributed with
-it, and each remains under its own licence:
-
-  reference/muter                    MIT      (c) 2020 Muter
-  reference/swift-mutation-testing   MIT      (c) 2026 Érico Perez Neto
-
-`reference/` is excluded from the package via `.gitignore` and is not referenced
-by `Package.swift`.

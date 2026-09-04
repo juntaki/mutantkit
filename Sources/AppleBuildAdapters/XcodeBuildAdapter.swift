@@ -32,7 +32,7 @@ public struct XcodeBuildAdapter: Sendable {
     /// and test call falls back to the previous, per-call resolution in that
     /// case, so this is purely additive.
     let resolvedDestination: ResolvedDestination?
-    /// Phase C4 worker-affinity: when set, `leaseAndRunTests` looks up the
+    /// Per-worker device affinity: when set, `leaseAndRunTests` looks up the
     /// mutant's sandbox by `workspace.lastPathComponent` here *before*
     /// falling back to the single, run-wide `resolvedDestination.device`
     /// every worker otherwise shares. Keyed by
@@ -46,12 +46,12 @@ public struct XcodeBuildAdapter: Sendable {
     /// caller passes) reproduces today's single-shared-device behavior
     /// exactly.
     ///
-    /// **Known limitation, documented rather than silently accepted**
-    /// (found in adversarial review of Phase C4's design): crash/timeout
-    /// *confirmation* runs (`MutationRunner`'s `-crash-confirm`/
-    /// `-timeout-confirm` sandboxes) are created and named per-mutation-ID,
-    /// never per-worker, so their `workspace.lastPathComponent` never
-    /// matches a key in this dictionary — they always fall through to the
+    /// **Known limitation, documented rather than silently accepted:**
+    /// crash/timeout *confirmation* runs (`MutationRunner`'s
+    /// `-crash-confirm`/`-timeout-confirm` sandboxes) are created and named
+    /// per-mutation-ID, never per-worker, so their
+    /// `workspace.lastPathComponent` never matches a key in this
+    /// dictionary — they always fall through to the
     /// `resolvedDestination?.device` branch below, i.e. the single shared
     /// base device, reintroducing exactly the contention `simulatorPool`
     /// exists to remove, but only for the confirmation re-run of a mutant
@@ -61,10 +61,10 @@ public struct XcodeBuildAdapter: Sendable {
     /// confirmation run could reuse it — not knowable from this dictionary
     /// alone, since worker-to-mutant assignment is dynamic (`MutationQueue`
     /// hands mutants to whichever worker asks next, not a static mapping
-    /// precomputed at provisioning time). Deferred rather than solved in
-    /// this phase: confirmation runs are rare (only suspected
-    /// crashes/timeouts trigger one) relative to the primary pass this
-    /// feature already parallelizes correctly.
+    /// precomputed at provisioning time). Deferred rather than solved here:
+    /// confirmation runs are rare (only suspected crashes/timeouts trigger
+    /// one) relative to the primary pass this feature already parallelizes
+    /// correctly.
     let workerDevicesByWorkspace: [String: SimulatorDevice]?
 
     public init(
@@ -130,15 +130,14 @@ public struct XcodeBuildAdapter: Sendable {
     /// still collide on it.
     var destinationNeedsSimulatorLease: Bool {
         let target = destination()
-        // Phase C10 (competitive-parity program): this used to check only
-        // `"iOS Simulator"`. A tvOS/watchOS/visionOS destination is exactly
-        // as shared and exactly as unsafe for two concurrent workers to
-        // install/run tests on at once as an iOS one is — reusing
-        // `DestinationResolver.isSimulatorDestination` (the same check that
-        // now also resolves those destinations to a pinned device in the
-        // first place) rather than keeping a second, narrower copy of this
-        // logic that would silently under-lease the three platforms the
-        // other copy was just fixed for.
+        // This used to check only `"iOS Simulator"`. A tvOS/watchOS/visionOS
+        // destination is exactly as shared and exactly as unsafe for two
+        // concurrent workers to install/run tests on at once as an iOS one
+        // is — reusing `DestinationResolver.isSimulatorDestination` (the
+        // same check that now also resolves those destinations to a pinned
+        // device in the first place) rather than keeping a second, narrower
+        // copy of this logic that would silently under-lease the three
+        // platforms the other copy was just fixed for.
         return DestinationResolver.isSimulatorDestination(target)
             && !target.localizedCaseInsensitiveContains("generic/")
     }
@@ -383,10 +382,10 @@ public struct XcodeBuildAdapter: Sendable {
     /// none" the same way: both mean no scheme can be resolved, and both are
     /// reported with the same remedy.
     ///
-    /// `public`, not just used internally by `resolveScheme`: Phase C13's
-    /// `XcodeConfigDetector` (`init`/`doctor` auto-detection) needs this
-    /// exact same real `xcodebuild -list -json` discovery, before any
-    /// `Configuration` exists to construct a full adapter for a real run.
+    /// `public`, not just used internally by `resolveScheme`: `XcodeConfigDetector`
+    /// (`init`/`doctor` auto-detection) needs this exact same real
+    /// `xcodebuild -list -json` discovery, before any `Configuration` exists
+    /// to construct a full adapter for a real run.
     public func discoverSchemes(in workspace: URL) async -> [String] {
         let arguments = projectArguments(in: workspace) + ["-list", "-json"]
         let result = try? await ProcessSupervisor.run(
@@ -587,7 +586,7 @@ extension XcodeBuildAdapter: TestAdapter {
     ///   the destination asked for, addressed by whichever UDID
     ///   `SimulatorPool` matches it to.
     ///
-    /// Checked *before* any of the three cases above: Phase C4's per-worker
+    /// Checked *before* any of the three cases above: the per-worker
     /// device (`workerDevicesByWorkspace`), when this mutant's persistent
     /// incremental-build sandbox (`workspace`) has one assigned. Still
     /// routed through `simulators.withLease(udid:)`, not used directly —
@@ -697,22 +696,20 @@ extension XcodeBuildAdapter: TestAdapter {
     /// device, a transient CoreSimulator fault, the same class of flake
     /// `SimulatorPool.prepare`'s own retry logic exists to absorb
     /// elsewhere).
-    ///
     /// This method previously only logged a genuine failure (stderr) and let
     /// the caller proceed regardless — an earlier version of its own doc
-    /// comment reasoned that surfacing the fact was enough. It was not:
-    /// named in
-    /// `Research/known-issues/schemata-confirm-timeout-image-uuid-mismatch.md`
-    /// as a plausible contributor to that issue, a stale install surviving
-    /// an uninstall failure immediately before the next test run can make a
-    /// runtime image UUID disagree with the build receipt, or a leftover
-    /// process shadow a fresh mutant's own result, without needing a rebuild
-    /// at all — exactly the class of infrastructure hazard this codebase
-    /// otherwise never launches a real test run on top of (see the
-    /// `boot`/`bootstatus` failure class, retried and diagnosed, never
-    /// silently proceeded past). `report` still fires on every failure
-    /// (mirroring `MutationRunner`'s own convention for an infrastructure
-    /// hiccup that must not vanish silently from a human's view), but the
+    /// comment reasoned that surfacing the fact was enough. It was not: a
+    /// stale install surviving an uninstall failure immediately before the
+    /// next test run can make a runtime image UUID disagree with the build
+    /// receipt, or a leftover process shadow a fresh mutant's own result,
+    /// without needing a rebuild at all — exactly the class of
+    /// infrastructure hazard this codebase otherwise never launches a real
+    /// test run on top of (see the `boot`/`bootstatus` failure class,
+    /// retried and diagnosed, never silently proceeded past). `report`
+    /// still fires on every failure (mirroring `MutationRunner`'s own
+    /// convention for an infrastructure hiccup that must not vanish
+    /// silently from a human's view), but the return value is now what a
+    /// caller must actually act on.
     /// return value is now what a caller must actually act on.
     ///
     /// `report` is a seam, not a production knob: every real caller uses the
@@ -1067,18 +1064,17 @@ extension XcodeBuildAdapter: SchemataTestable {
         return try await simulators.withLease(matching: hint, run)
     }
 
-    /// A codex-review-caliber finding `SchemataXcodeRuntimeAcceptanceTests`
-    /// already proved by hand: setting `Process.environment` on the
-    /// `xcodebuild test-without-building` invocation itself does not
-    /// reliably reach the actual `xctest` process Xcode's own tooling
-    /// launches — env vars must be injected into the `.xctestrun` plist's
-    /// `EnvironmentVariables` dictionary instead, the same mechanism a
-    /// scheme's own "Environment Variables" editor pane ultimately writes
-    /// to. This writes a fresh variant of `artifact`'s own `.xctestrun`
-    /// with `environment` merged in, per mutant, rather than mutating the
-    /// one shared file every mutant's build produced (which concurrent
-    /// mutants running against the same chunk build would otherwise race
-    /// on).
+    /// `SchemataXcodeRuntimeAcceptanceTests` already proved by hand: setting
+    /// `Process.environment` on the `xcodebuild test-without-building`
+    /// invocation itself does not reliably reach the actual `xctest`
+    /// process Xcode's own tooling launches — env vars must be injected
+    /// into the `.xctestrun` plist's `EnvironmentVariables` dictionary
+    /// instead, the same mechanism a scheme's own "Environment Variables"
+    /// editor pane ultimately writes to. This writes a fresh variant of
+    /// `artifact`'s own `.xctestrun` with `environment` merged in, per
+    /// mutant, rather than mutating the one shared file every mutant's
+    /// build produced (which concurrent mutants running against the same
+    /// chunk build would otherwise race on).
     private func runSchemataTokenOnDestination(
         _ destination: String, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String],
         testFilters: [String]? = nil
@@ -1296,7 +1292,7 @@ extension XcodeBuildAdapter: TestSelecting {
             in: workspace,
             timeoutSeconds: timeoutSeconds
         ) {
-        case .complete(let map):
+        case let .complete(map):
             return map
         case .unavailable:
             return await measurePerTestCoverageSerial(
@@ -1328,8 +1324,8 @@ extension XcodeBuildAdapter: TestSelecting {
     /// leased devices concurrently is a further optimisation, not attempted
     /// here.
     ///
-    /// All-or-nothing (parity with `SwiftPackageMacOSAdapter.measurePerTestCoverage`,
-    /// P12-B Finding D): a test whose isolated run cannot be proven —
+    /// All-or-nothing (parity with `SwiftPackageMacOSAdapter.measurePerTestCoverage`):
+    /// a test whose isolated run cannot be proven —
     /// order-dependent and failing alone, crashed, timed out, or its
     /// coverage export could not be read — invalidates the whole map, not
     /// just that one test's own entry. A version of this method that
@@ -1767,9 +1763,9 @@ extension XcodeBuildAdapter: BatchTestable {
             "-collect-test-diagnostics", "never"
         ]
         // Containment, layered underneath `timeoutSeconds` (the outer,
-        // aggregate fail-safe below, unchanged): confirmed (Gate 3 Phase
-        // H1/H2) that XCTest's own per-test allowance cuts a single
-        // hanging configuration off — reported `.timedOut` by
+        // aggregate fail-safe below, unchanged): confirmed empirically that
+        // XCTest's own per-test allowance cuts a single hanging
+        // configuration off — reported `.timedOut` by
         // `XCResultAdapter.classifyBatch`'s native-timeout branch — without
         // killing this `xcodebuild` invocation or losing its siblings'
         // results, so a batch no longer has to burn its *entire* combined
@@ -1778,24 +1774,23 @@ extension XcodeBuildAdapter: BatchTestable {
         // for now) leaves `xcodebuild`'s own default (timeouts disabled)
         // untouched.
         //
-        // Gate 3 Phase H10 once added a second, `ProcessSupervisor`-level
-        // containment layer underneath this one — an external, file-growth-
-        // based stall watchdog on `-resultStreamPath` — for exactly the case
-        // Phase H7 found native timeout does not reliably catch (a
-        // CPU-bound, non-cooperative hang). Phase H12.1 found, via direct
-        // content inspection of that same stream on a real, long-running
-        // hang batch, that the hypothesis behind it was wrong: the ~331s-
-        // periodic writes it depended on distinguishing from "stall" turned
-        // out to be genuine `testStarted`/timeout events for *additional*
-        // tests in the same mutant's own covering-test list, not noise — so
-        // no finite margin could ever have made file-growth a reliable
-        // "this configuration is truly stuck" signal. Retired here; see
-        // `GATE3-RESULT.md`, Phases H10 through H12.2, for the full account.
+        // An earlier version of this code layered a second,
+        // `ProcessSupervisor`-level containment mechanism underneath this
+        // one — an external, file-growth-based stall watchdog on
+        // `-resultStreamPath` — for the case native per-test timeout does
+        // not reliably catch (a CPU-bound, non-cooperative hang). Direct
+        // content inspection of that stream on a real, long-running hang
+        // batch found the hypothesis behind it was wrong: the periodic
+        // writes it depended on distinguishing from "stall" turned out to
+        // be genuine `testStarted`/timeout events for *additional* tests in
+        // the same mutant's own covering-test list, not noise — so no
+        // finite margin could ever have made file-growth a reliable "this
+        // configuration is truly stuck" signal. Retired for that reason.
         // The real fix for the underlying problem (one mutant's own
         // multiple covering tests each independently hanging) turned out to
-        // be Phase H12.2's wave-based early-abort for isolated mode and
-        // Phase H12.3's single-test-only batching eligibility for schemata
-        // — neither of which touches this function or `ProcessSupervisor`.
+        // be a wave-based early-abort for isolated mode and a
+        // single-test-only batching eligibility rule for schemata — neither
+        // of which touches this function or `ProcessSupervisor`.
         if let nativeTimeoutAllowanceSeconds {
             let allowance = String(format: "%.0f", nativeTimeoutAllowanceSeconds)
             arguments.append(contentsOf: [

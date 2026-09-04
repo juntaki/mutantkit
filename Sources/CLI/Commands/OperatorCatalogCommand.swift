@@ -27,8 +27,8 @@ import MutationPlanner
 /// `mutantkit.yml` settings key (`profile`/`enable`/`disable`, see
 /// `OperatorSettings`), so a command named `operators` would misread as "show
 /// or change my operator settings" rather than "show me what operators
-/// exist". `operator-catalog` reuses this project's own name for the concept
-/// (`Research/operator-catalog/README.md`) and cannot be misread either way.
+/// exist". `operator-catalog` reuses this project's own name for the
+/// concept and cannot be misread either way.
 struct OperatorCatalogCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "operator-catalog",

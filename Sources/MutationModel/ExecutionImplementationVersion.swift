@@ -6,15 +6,14 @@ import Foundation
 /// (`MutationApplication.apply`), test selection (`selectCoveringTests`'s
 /// own algorithm), and build/workspace orchestration.
 ///
-/// This exists to close a real gap found during the P4 (cache soundness)
-/// investigation (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`):
-/// `ToolVersion.version`/`.commitSHA` — the fields `RunContextProbe`'s
-/// context digest already carries specifically to catch "the tool's own
-/// implementation changed" — are hardcoded development-build placeholders
-/// (`"0.1.0-dev"`/`nil`) until an actual release's own substitution step
-/// runs, so they provide *zero* protection during any local `swift
-/// build`/`swift run mutantkit` — exactly this whole session's own
-/// development mode, every time.
+/// This exists to close a real gap: `ToolVersion.version`/`.commitSHA` —
+/// the fields `RunContextProbe`'s context digest already carries
+/// specifically to catch "the tool's own implementation changed" — are
+/// hardcoded development-build placeholders (`"0.1.0-dev"`/`nil`) until
+/// an actual release's own substitution step runs, so they provide
+/// *zero* protection during any local `swift build`/`swift run
+/// mutantkit` — exactly this whole session's own development mode,
+/// every time.
 ///
 /// **What this deliberately does *not* need to cover**, because it is
 /// already covered elsewhere, more precisely, by mechanisms this
@@ -114,7 +113,7 @@ import Foundation
 /// question `MutationVerdictVerifier.currentVersion` already lives with;
 /// no corpus/lint enforcement exists for it either).
 public enum ExecutionImplementationVersion {
-    /// Introduced by the P4 cache-soundness gap fix — no prior value to
-    /// have bumped from.
+    /// Introduced to close the cache-soundness gap described above — no
+    /// prior value to have bumped from.
     public static let current = 1
 }
