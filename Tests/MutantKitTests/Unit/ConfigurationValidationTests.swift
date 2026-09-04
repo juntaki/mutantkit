@@ -99,6 +99,23 @@ struct ConfigurationValidationTests {
         #expect(issues.contains { $0.path == "execution.earlyAbortSelectedTests" && $0.severity == .warning })
     }
 
+    @Test("profileCoverageSkip under execution.profile: reference is flagged as having no effect")
+    func profileCoverageSkipUnderReferenceIsFlagged() {
+        var configuration = Configuration()
+        configuration.execution.profileCoverageSkip = true
+        let issues = ConfigurationValidator.validate(configuration)
+        #expect(issues.contains { $0.path == "execution.profileCoverageSkip" && $0.severity == .warning })
+    }
+
+    @Test("profileCoverageSkip under execution.profile: optimized is not flagged")
+    func profileCoverageSkipUnderOptimizedIsNotFlagged() {
+        var configuration = Configuration()
+        configuration.execution.profileCoverageSkip = true
+        configuration.execution.profile = .optimized
+        let issues = ConfigurationValidator.validate(configuration)
+        #expect(!issues.contains { $0.path == "execution.profileCoverageSkip" })
+    }
+
     // MARK: - execution.strategy
 
     @Test("execution.strategy: schemata is accepted — RunCommand dispatches to SchemataRunOrchestration")

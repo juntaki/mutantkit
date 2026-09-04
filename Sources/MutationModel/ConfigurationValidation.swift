@@ -185,9 +185,32 @@ public enum ConfigurationValidator {
         // cannot yet know whether `.schemata` is viable for this project.
 
         issues += validateDerivedDataPath(configuration.project.derivedDataPath, projectRoot: projectRoot)
-        issues += validateXcodeTestTargets(configuration)
+        // `validateProfileCoverageSkip` folded onto this same line (rather
+        // than its own `issues += ...` statement, the shape every sibling
+        // check above uses) specifically so adding it does not grow
+        // `validate`'s own already-baselined `cyclomatic_complexity`/
+        // `function_body_length` debt by even one line — see that
+        // function's own doc comment for the check itself.
+        issues += validateXcodeTestTargets(configuration) + validateProfileCoverageSkip(configuration.execution)
 
         return issues
+    }
+
+    /// `profileCoverageSkip` only matters to `ExecutionProfileResolver` —
+    /// it gates whether `optimized`/`experimental` are permitted to bundle
+    /// `measureCoverage` + `selectCoveringTests` in (see that field's own
+    /// doc comment for why this is opt-in at all). `.reference` never
+    /// resolves a profile (`ExecutionProfileResolver.resolve` returns
+    /// `current` unchanged for it), so setting this without also choosing
+    /// `optimized`/`experimental` does nothing.
+    private static func validateProfileCoverageSkip(_ execution: ExecutionSettings) -> [ConfigurationIssue] {
+        guard execution.profileCoverageSkip, execution.profile == .reference else { return [] }
+        return [ConfigurationIssue(
+            severity: .warning,
+            path: "execution.profileCoverageSkip",
+            message: "Only takes effect under execution.profile: optimized or experimental; "
+                + "with profile: reference (the default), it has no effect."
+        )]
     }
 
     private static func validateXcodeTestTargets(_ configuration: Configuration) -> [ConfigurationIssue] {
@@ -501,6 +524,7 @@ public enum ConfigurationJSONSchema {
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "profile": { "enum": ["reference", "optimized", "experimental"] },
             "strategy": { "enum": ["isolated", "schemata"] },
             "workers": { "type": ["integer", "null"], "minimum": 1 },
             "budget": {
@@ -531,7 +555,9 @@ public enum ConfigurationJSONSchema {
             "testBatchSize": { "type": ["integer", "null"], "minimum": 1 },
             "noOpCanarySampleRate": { "type": "number", "minimum": 0, "maximum": 1 },
             "simulatorPool": { "type": "boolean" },
-            "sharedModuleCache": { "type": "boolean" }
+            "sharedModuleCache": { "type": "boolean" },
+            "cleanSubtreeCloning": { "type": "boolean" },
+            "profileCoverageSkip": { "type": "boolean" }
           }
         },
         "timeouts": {
@@ -555,7 +581,7 @@ public enum ConfigurationJSONSchema {
         },
         "reports": {
           "type": "array",
-          "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary", "sonar", "github-actions"] },
+          "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary", "sonar", "github-actions", "sarif"] },
           "uniqueItems": true
         },
         "qualityGate": {

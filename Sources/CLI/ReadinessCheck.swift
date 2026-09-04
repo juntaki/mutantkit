@@ -61,6 +61,7 @@ enum ReadinessCheck {
                 code: .mutantkitVersion,
                 detail: "\(ToolVersion.version) (plan schema \(ToolVersion.planSchemaVersion))"
             ),
+            macOSVersionItem(),
             DiagnosisItem(
                 name: "Swift",
                 status: toolchain.swiftVersion == "unknown" ? .failure : .ok,
@@ -70,15 +71,7 @@ enum ReadinessCheck {
                     ? "Could not run `swift --version`. Install the Swift toolchain or Xcode command line tools."
                     : nil
             ),
-            DiagnosisItem(
-                name: "Xcode",
-                status: toolchain.xcodeVersion == nil ? .warning : .ok,
-                code: .xcodeToolchain,
-                detail: toolchain.xcodeVersion ?? "not found",
-                remedy: toolchain.xcodeVersion == nil
-                    ? "Needed for Xcode projects, workspaces and non-macOS Swift packages. Install Xcode and run `xcode-select --switch`."
-                    : nil
-            )
+            xcodeItem(toolchain: toolchain)
         ])
 
         do {
@@ -100,6 +93,7 @@ enum ReadinessCheck {
             }
 
             items.append(contentsOf: productionProfileItem(kind: resolution.detection.kind, configuration: configuration))
+            items.append(contentsOf: ExecutionCapabilitiesDiagnosis.items(for: resolution, configuration: configuration))
 
             if !skipBuild {
                 items.append(contentsOf: try await resolution.adapter.build.diagnose().items)
@@ -201,6 +195,89 @@ enum ReadinessCheck {
         return nil
     }
 
+    /// README.md's own "Install" section: "Requires macOS 14+ on Apple
+    /// Silicon, Xcode 16+." — stated, but never actually checked at
+    /// runtime before this. Both floors live here, next to each other, so
+    /// updating one when the README changes is a one-line reminder to
+    /// check the other.
+    private static let documentedMacOSFloorMajorVersion = 14
+    private static let documentedXcodeFloorMajorVersion = 16
+
+    /// The first run of digits found anywhere in `text` — e.g. `16` from
+    /// `"Xcode 16.4"`. `nil` when nothing numeric is present at all, which
+    /// this treats as "cannot confirm the floor" rather than "below it":
+    /// an unparseable version string is evidence this parsing is wrong,
+    /// not evidence of an old Xcode.
+    ///
+    /// Not `private`: a pure, directly-testable function, so the below-
+    /// floor/at-floor/above-floor/unparseable cases each get their own
+    /// unit test instead of relying on whatever Xcode happens to be
+    /// installed on the machine running the suite.
+    static func leadingMajorVersion(in text: String) -> Int? {
+        guard let range = text.range(of: #"\d+"#, options: .regularExpression) else { return nil }
+        return Int(text[range])
+    }
+
+    /// `ProcessInfo.operatingSystemVersion` needs no subprocess — it is
+    /// this process's own kernel-reported host version, always available,
+    /// never subject to the `.notPresent`/`.probeFailed` ambiguity a
+    /// shelled-out probe (`ToolchainProbe.firstLine`) has to account for.
+    /// A `.warning`, not `.failure`, matching every other floor/absence
+    /// check in this file: `doctor` informs, it does not block a run that
+    /// might still work on an undocumented-but-functional older host.
+    private static func macOSVersionItem() -> DiagnosisItem {
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        let version = "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+        let belowFloor = os.majorVersion < documentedMacOSFloorMajorVersion
+        return DiagnosisItem(
+            name: "macOS",
+            status: belowFloor ? .warning : .ok,
+            code: .macOSVersionFloor,
+            detail: belowFloor ? "\(version) (below the documented floor, macOS \(documentedMacOSFloorMajorVersion)+)" : version,
+            remedy: belowFloor
+                ? "This project is developed and tested against macOS \(documentedMacOSFloorMajorVersion)+ (README.md)."
+                + " Behavior on an older host is unvalidated — upgrade macOS."
+                : nil
+        )
+    }
+
+    /// The presence check this item already made (`toolchain.xcodeVersion
+    /// == nil` → `.warning`) is unchanged; this adds the version-floor
+    /// check on top of it, for the case where Xcode *is* found but is
+    /// older than this project's own documented floor. Kept as one item,
+    /// not two: `deduplicated()` below keeps only the *first* item with a
+    /// given name, so a second "Xcode" item appended later would be
+    /// silently dropped rather than shown — the floor check has to live
+    /// inside this same item to actually reach the user.
+    ///
+    /// Not `private`: driven directly, with a hand-built `ToolchainFingerprint`,
+    /// by a unit test that pins the below-floor warning path — this
+    /// machine's own real, above-floor Xcode can never exercise that
+    /// branch, so the test needs to hand this a fingerprint it built
+    /// itself rather than the toolchain probe's real result.
+    static func xcodeItem(toolchain: ToolchainFingerprint) -> DiagnosisItem {
+        guard let version = toolchain.xcodeVersion else {
+            return DiagnosisItem(
+                name: "Xcode",
+                status: .warning,
+                code: .xcodeToolchain,
+                detail: "not found",
+                remedy: "Needed for Xcode projects, workspaces and non-macOS Swift packages. Install Xcode and run `xcode-select --switch`."
+            )
+        }
+        let belowFloor = leadingMajorVersion(in: version).map { $0 < documentedXcodeFloorMajorVersion } ?? false
+        return DiagnosisItem(
+            name: "Xcode",
+            status: belowFloor ? .warning : .ok,
+            code: .xcodeToolchain,
+            detail: belowFloor ? "\(version) (below the documented floor, Xcode \(documentedXcodeFloorMajorVersion)+)" : version,
+            remedy: belowFloor
+                ? "This project is developed and tested against Xcode \(documentedXcodeFloorMajorVersion)+ (README.md)."
+                + " An older Xcode may behave differently or not at all — upgrade via the App Store or developer.apple.com."
+                : nil
+        )
+    }
+
     /// Isolated mode makes a full source copy per concurrent mutant, so running
     /// out of disk mid-run is a realistic failure rather than a theoretical one.
     private static func diskSpaceItem(for root: URL) -> DiagnosisItem {
@@ -225,6 +302,18 @@ enum ReadinessCheck {
     /// have to stand alone. Showing the user "Swift" and "Swift toolchain" as two
     /// findings makes the report look confused about what it knows, so
     /// near-duplicates collapse to the first, more severe report of each fact.
+    ///
+    /// Not `private`: `DoctorCommand.run()` appends its own `Self
+    /// .sharedModuleCacheDiagnosis(...)` item to `outcome.diagnosis.items`
+    /// *after* this function's own dedup pass already ran (see that call
+    /// site's own comment for why the two additions stay independent) —
+    /// re-running this same pass over the combined list is what keeps a
+    /// same-named item appended there from ever silently surviving
+    /// alongside one already produced in here, the exact way this lane's
+    /// own now-deleted `sharedModuleCacheSupport` diagnostic once would
+    /// have collided with S1's `sharedModuleCache` item, undetected,
+    /// had both existed at once (`DiagnosisNameUniquenessTests` pins
+    /// this).
     /// Phase C13 (competitive-parity program): when project resolution
     /// fails, this used to hand back one generic instruction regardless of
     /// what was actually wrong or knowable. Real, `xcodebuild`/`simctl`-
@@ -328,7 +417,7 @@ enum ReadinessCheck {
         return lines.joined(separator: " ")
     }
 
-    private static func deduplicated(_ items: [DiagnosisItem]) -> [DiagnosisItem] {
+    static func deduplicated(_ items: [DiagnosisItem]) -> [DiagnosisItem] {
         var seen = Set<String>()
         return items.filter { item in
             let key = item.name.lowercased()

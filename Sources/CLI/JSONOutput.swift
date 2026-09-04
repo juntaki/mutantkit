@@ -26,6 +26,25 @@ enum JSONOutput {
         print(try string(for: value))
     }
 
+    /// One value, encoded as a single line of JSON — sorted keys and
+    /// ISO-8601 dates like `string(for:)`/`encoder()` above, but with
+    /// `.prettyPrinted` deliberately left out, which is what guarantees the
+    /// result never contains a literal newline. This is the building block
+    /// for NDJSON (one JSON object per line) output: a command that prints
+    /// one `compactLine(for:)` result per record, one `print` call each,
+    /// produces a stream any consumer can split on `\n` and feed straight to
+    /// a JSON parser, line by line — including when a field's own value (a
+    /// multi-line code snippet, a path with a space in it) would have made a
+    /// hand-rolled delimited format ambiguous or unparseable. Any embedded
+    /// newline in a field comes back JSON-escaped as `\n` inside the line,
+    /// never as a raw line break.
+    static func compactLine(for value: some Encodable) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+
     /// Emits a `JSONErrorEnvelope` — the `--json` counterpart to this file's
     /// own doc comment: a command that cannot proceed (a report file
     /// missing or failing to decode, say) must still emit exactly one JSON

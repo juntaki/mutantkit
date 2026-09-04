@@ -6,9 +6,10 @@ import Testing
 
 /// Real, end-to-end coverage for `Configuration.execution.sharedModuleCache`
 /// — see that property's own doc comment, `WorkspaceManager
-/// .moduleCachePath(forSandbox:)`, and `Research/isolated-build-reuse-
-/// 2026-09/README.md` for the measurements and reasoning this flag rests
-/// on. Every test here spawns real `swift build`/`swift test` processes
+/// .moduleCachePath(forSandbox:fingerprint:)`, `SharedModuleCacheNamespace`,
+/// and `Research/isolated-build-reuse-2026-09/README.md` for the
+/// measurements and reasoning this flag rests on. Every test here spawns
+/// real `swift build`/`swift test` processes
 /// against a throwaway two-function SwiftPM fixture (`Fixture.write`,
 /// deliberately close to the research's own `probes/make-fixture.sh` —
 /// same package, same tests, one extra independent function/test pair so
@@ -149,6 +150,20 @@ struct SharedModuleCacheTests {
         )
         #expect(sharedBuild.artifact.command.arguments.contains("-module-cache-path"))
 
+        // Toolchain-fingerprint namespacing (this task's own hardening):
+        // the argument the real adapter actually passed must be exactly
+        // the fingerprint-namespaced path a live probe resolves for this
+        // sandbox, and its own directory name must carry the namespacing
+        // prefix — not merely "some path", and not the old, unnamespaced
+        // `.module-cache` name.
+        let fingerprint = await ToolchainCacheFingerprintProbe.shared.fingerprint(workingDirectory: sharedBuild.sandbox)
+        let expectedCachePath = WorkspaceManager.moduleCachePath(forSandbox: sharedBuild.sandbox, fingerprint: fingerprint.digest)
+        #expect(
+            sharedBuild.artifact.command.arguments.contains(expectedCachePath.path),
+            "the build must point -module-cache-path at the real, toolchain-fingerprint-namespaced directory"
+        )
+        #expect(expectedCachePath.lastPathComponent == ".module-cache-\(fingerprint.digest)")
+
         let privateHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: privateBuild.binary))
         let sharedHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: sharedBuild.binary))
         #expect(privateHash == sharedHash, "externalizing the module cache must never change activation-hashed bytes")
@@ -282,7 +297,15 @@ struct SharedModuleCacheTests {
         // modules it just produced — not a made-up file, an actual `.pcm`
         // this run's own build wrote.
         let warm = try await build(id: "warm", sourceDir: projectRoot, workspaces: workspaces, sharedModuleCache: true)
-        let cachePath = WorkspaceManager.moduleCachePath(forSandbox: warm.sandbox)
+        // Resolved through the identical `SharedModuleCacheNamespace`
+        // singleton the real adapter build above just used — never a
+        // hand-rederived path — so this test corrupts the exact directory
+        // production code actually pointed `-module-cache-path` at,
+        // fingerprint namespacing included. A second call for the same
+        // scratch root is safe: `SharedModuleCacheNamespace` only resets
+        // (deletes) on the *first* resolution per scratch root, and that
+        // first resolution already happened inside `warm`'s own build.
+        let cachePath = await SharedModuleCacheNamespace.shared.moduleCachePath(forSandbox: warm.sandbox, workingDirectory: warm.sandbox)
         // The cache root holds a mix of per-invocation bucket directories
         // and loose top-level files (e.g. a `.swiftmodule` sitting right
         // beside the bucket directories) — walk it generically instead of
@@ -313,6 +336,80 @@ struct SharedModuleCacheTests {
         let afterDeletion = try await build(id: "afterDeletion", sourceDir: projectRoot, workspaces: workspaces, sharedModuleCache: true)
         let afterDeletionHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: afterDeletion.binary))
         #expect(afterDeletionHash == referenceHash, "a wholly-deleted shared cache directory must still rebuild correctly, not wrongly")
+    }
+
+    // MARK: - Corruption recovery (delete-and-retry)
+
+    /// A level up from `corruptedCacheEntryStillBuildsCorrectly` above:
+    /// that test proves Clang recovers an individually corrupted `.pcm`
+    /// in-place, without the build ever failing at all. This proves the
+    /// build that *does* fail for a real, cache-implicated reason still
+    /// recovers, through `SwiftPackageMacOSAdapter`'s own one-shot
+    /// delete-and-retry (see its `buildWithSharedCacheRecovery`/
+    /// `isLikelySharedModuleCacheCorruption` doc comments for the exact,
+    /// real-reproduction-backed heuristic).
+    ///
+    /// The failure staged here is real, not simulated: an empty, `0o555`
+    /// (read+execute, no write) cache directory before a cold build is
+    /// exactly what this task's own investigation reproduced live as a
+    /// genuine `swift build` failure — `<unknown>:0: error: error opening
+    /// '<cache-path>/Swift-<hash>.swiftmodule' for output: ...: Permission
+    /// denied` — distinct from `corruptedCacheEntryStillBuildsCorrectly`'s
+    /// own corrupted-`.pcm` shape, which Clang already absorbs silently.
+    @Test("A build whose shared cache is unwritable before a cold build recovers via one delete-and-retry, producing the correct binary")
+    func unwritableCacheDirectoryRecoversViaDeleteAndRetry() async throws {
+        let projectRoot = Self.makeTempDir(prefix: "smc-recovery-project")
+        let scratchRoot = Self.makeTempDir(prefix: "smc-recovery-scratch")
+        try Fixture.write(to: projectRoot)
+        let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratchRoot)
+
+        // Reference: a known-good private-cache build of the identical,
+        // unmutated source — what the recovered build below must still
+        // match, proving recovery never quietly produces a *wrong* binary
+        // that merely happens to link.
+        let reference = try await build(
+            id: "recovery-reference", sourceDir: projectRoot, workspaces: workspaces, sharedModuleCache: false
+        )
+        let referenceHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: reference.binary))
+
+        let sandbox = try await workspaces.createSandbox(id: "recovery-afflicted")
+        try FileManager.default.removeItem(at: sandbox)
+        try FileManager.default.copyItem(at: projectRoot, to: sandbox)
+
+        // Resolve this sandbox's real shared-cache path first, through the
+        // identical `SharedModuleCacheNamespace` singleton the real build
+        // below uses — this consumes its once-per-scratch-root reset now,
+        // against nothing (the directory does not exist yet), so the
+        // read-only trap staged next is never silently swept away by that
+        // same reset before the build gets a chance to hit it. Mirrors
+        // `corruptedCacheEntryStillBuildsCorrectly`'s own "warm first, then
+        // sabotage" ordering above.
+        let cachePath = await SharedModuleCacheNamespace.shared.moduleCachePath(forSandbox: sandbox, workingDirectory: sandbox)
+        try FileManager.default.createDirectory(at: cachePath, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: cachePath.path)
+        defer {
+            // Best-effort: leaving a read-only directory behind is at worst
+            // unclaimed disk space, but restoring it costs nothing and
+            // keeps this test's own sabotage from outliving it.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cachePath.path)
+        }
+
+        let configuration = Configuration(execution: ExecutionSettings(sharedModuleCache: true))
+        let adapter = SwiftPackageMacOSAdapter(configuration: configuration)
+        let artifact = try await adapter.buildBaseline(in: sandbox)
+
+        let binary = try #require(
+            SwiftPMTestProductResolver.resolve(productsDirectory: artifact.productsDirectory),
+            "the recovered build did not produce a locatable .xctest bundle"
+        )
+        let recoveredHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: binary))
+        #expect(
+            recoveredHash == referenceHash,
+            "recovering from a broken shared cache must still produce the correct binary, never a silently wrong one"
+        )
+        // The retry must have actually run against a real, fresh cache —
+        // not merely fallen back to a private one some other way.
+        #expect(artifact.command.arguments.contains("-module-cache-path"))
     }
 
     // MARK: - Reset-on-construction

@@ -782,6 +782,86 @@ showing the untuned defaults are the worst starting point, not a speedup
 baseline comparable to the N=1/N=2/N=4 table above) and is not combined with
 it.
 
+### `execution.profile`: known-safe defaults, chosen for you
+
+Every setting above is off/nil by default and opted into one at a time —
+deliberately, since each carries its own real trade-off (see each one's own
+comment above). `execution.profile` is a single switch for the common case
+of "I have not read all of that yet, just turn on whatever is safe for my
+project":
+
+```yaml
+execution:
+  profile: optimized   # reference (default) | optimized | experimental
+```
+
+- **`reference`** (the default) is today's real defaults, completely
+  unchanged — the correctness oracle every other profile is measured
+  against.
+- **`optimized`** turns on only the features this codebase already ships
+  and already treats as safe, and only the ones *this specific project's*
+  own real characteristics actually support: schemata execution when the
+  plan has at least one candidate this build's schemata backend can embed
+  (everything else still gets a real isolated-mode verdict via the
+  existing per-mutant fallback — schemata is never all-or-nothing). By
+  itself, `optimized` is genuinely correctness-neutral — proven, on a real
+  fixture with both a covered and a genuinely-uncovered mutable line, to
+  report identical per-mutant verdicts and identical `MutationScore.tested`
+  against `reference` on the same plan (`ExecutionProfileCoverageParityAcceptanceTests`).
+- **`experimental`** is `optimized` plus features implemented but not yet
+  proven safe for general use. That bucket is honestly empty right now —
+  see `ExecutionProfile`'s own doc comment for the one real candidate that
+  was looked at and deliberately left out.
+
+**Two things `optimized`/`experimental` deliberately never bundle in, and one thing they used to that was wrong to:**
+
+- **`incrementalBuild` is never touched by any profile.** It stays exactly
+  whatever you set it to. It carries a named, unresolved persistent-sandbox
+  contamination risk relative to `reference`'s fresh-sandbox-per-mutant
+  behaviour that has not been proven safe the way everything `optimized`
+  *does* enable by default has, so it stays a manual, explicit opt-in on
+  top of any profile, not a bundled default.
+- **`sharedModuleCache` is never touched by any profile either**, on the
+  identical basis: its own doc comment names a real, unresolved risk for a
+  CI setup that runs multiple concurrent `mutantkit run` destinations
+  against one project (the second run's constructor can wipe the first's
+  in-flight module cache). `mutantkit execution-profile` still reports
+  whether your project's build shape could use it, purely informationally
+  — the opt-in itself stays manual: `execution.sharedModuleCache: true`.
+- **`measureCoverage` + `selectCoveringTests` are never bundled into
+  `optimized`/`experimental` by default, and this one has a history worth
+  knowing.** An earlier revision *did* bundle this pair in, on the
+  (incomplete) theory that it degrades safely like everything else — it
+  missed that coverage data, once present at all, also feeds
+  `MutationRunner`'s `.noCoverage` fast path, which can reclassify a real
+  surviving mutant on a genuinely-uncovered line as `.noCoverage` —
+  excluded from `MutationScore.tested`'s denominator — without ever
+  building or testing it. That is a real, silent verdict and score change
+  from choosing a profile alone, found by an adversarial review before it
+  shipped. The fix: this pair now requires its own explicit,
+  separately-named opt-in, off by default —
+  `execution.profileCoverageSkip: true`, set deliberately alongside
+  `execution.profile: optimized` — with its own doc comment naming the
+  trade-off in full. `optimized` alone never reaches that fast path.
+
+This also means `execution.profile: optimized` is a *different, narrower*
+bundle than "Recommended production profile" above — that profile is a
+hand-picked, Xcode/simulator-specific tuning (and does include
+`incrementalBuild`) from a real large-app benchmark; `execution.profile` is
+a general, cross-project mechanism with a stricter, more conservative
+safety bar.
+
+Before turning it on, see what it would actually do for your project:
+
+```bash
+mutantkit execution-profile --plan plan.json
+```
+
+This reads your already-written `plan.json` and prints, for `optimized`:
+which of the features above are eligible here (and why, or why not), and
+exactly which `execution.*` fields would change from your current config —
+never a guess, always the same decision `mutantkit run` itself would make.
+
 ### Coming from Muter
 
 ```bash
@@ -809,11 +889,13 @@ Also available: console, Xcode warnings (they appear in the issue navigator),
 self-contained HTML, a markdown CI summary, `github-actions` — `::warning::`/
 `::error::` workflow-command annotations that show up inline on a pull
 request's "Files changed" tab and in the job's Checks summary when `mutantkit
-run` executes inside a GitHub Actions job — and `sonar` — SonarQube/SonarCloud's
+run` executes inside a GitHub Actions job — `sonar` — SonarQube/SonarCloud's
 [generic issue import format](https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/importing-external-issues/generic-issue-import-format/),
 one issue per surviving mutant at its source location (`sonar.externalIssuesReportPaths`
-picks it up). Killed mutants are not issues — a quality gate needs to know what
-to fix, not what already passed.
+picks it up) — and `sarif` — [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/sarif-v2.1.0-os.html),
+the format GitHub code scanning, Azure DevOps and most SAST dashboards consume.
+Killed mutants are not issues in either format — a quality gate needs to know
+what to fix, not what already passed.
 
 ## Architecture
 

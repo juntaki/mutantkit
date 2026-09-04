@@ -28,6 +28,7 @@ public enum ReporterRegistry {
         case .ciSummary: CISummaryReporter()
         case .sonar: SonarReporter()
         case .githubActions: GitHubActionsReporter()
+        case .sarif: SarifReporter()
         }
     }
 

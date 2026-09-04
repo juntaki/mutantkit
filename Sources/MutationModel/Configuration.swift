@@ -602,6 +602,11 @@ public enum ReportKind: String, Codable, Sendable, CaseIterable {
     /// run, like `console`/`xcode`, never written to a file; see that
     /// reporter's own doc comment for the exact format and escaping rules.
     case githubActions = "github-actions"
+    /// SARIF 2.1.0 (`SarifReporter`) — the format GitHub code scanning,
+    /// Azure DevOps, and most SAST dashboards consume. Bare `sarif`, not
+    /// `sarif-json`, matching `sonar`'s reasoning above: no existing case
+    /// makes it ambiguous.
+    case sarif
 }
 
 // MARK: - Quality gate

@@ -7,9 +7,10 @@
 // declares, so it has to be kept in sync BY HAND whenever a *production*
 // target's name, dependencies, or products change there.
 //
-// It differs from the private manifest in exactly one way: five
-// executable targets that exist only as research/investigation tooling
-// (never referenced by CLI, by any library target, or by any other
+// It differs from the private manifest in two ways.
+//
+// First, five executable targets that exist only as research/investigation
+// tooling (never referenced by CLI, by any library target, or by any other
 // target's `dependencies:`) are omitted, along with their `Sources/`
 // directories (excluded via .public-tree.toml's `exclude_paths`, not
 // here -- an overlay can only ADD/REPLACE files at the paths it contains,
@@ -20,6 +21,20 @@
 //   - PlanStats                (TEMP muter-comparison diagnostic, not a frozen protocol)
 //   - SchemataChunkBuildProbe  (TEMP muter-comparison diagnostic, not a frozen protocol)
 //   - DirectXCTestInvokeProbe  (standalone prototype, not wired into any production path)
+//
+// Second, `BenchmarkRunner` and its test target `BenchmarkRunnerTests` are
+// also omitted here (with `Sources/BenchmarkRunner` and
+// `Tests/BenchmarkRunnerTests` excluded the same way via
+// `.public-tree.toml`) -- unlike the five above, this is a competitive-
+// hygiene decision, not a "still unfinished" one. It's a real, working
+// standalone tool that runs MutantKit against Muter and
+// swift-mutation-testing as external processes for a fair competitive
+// comparison; publishing its adapters and validity guards would hand a
+// competitor a free map of their own product's failure modes, discovered
+// here at real investigation cost, for close to zero benefit to a public
+// user (it targets a fixed internal corpus, not an arbitrary package). A
+// release that wants to publish frozen benchmark numbers should do so via
+// a separate, deliberately-written public doc, not by shipping this tool.
 //
 // `SchemataEligibilityClassifier` is also research-labeled in the private
 // manifest's own comment (Research/adr-0008-validation), but is
@@ -120,20 +135,6 @@ let package = Package(
                 .product(name: "Yams", package: "Yams")
             ]
         ),
-
-        // MARK: MutantBench-Swift
-
-        // Deliberately depends on nothing else in this package —
-        // `MutationModel`/`MutationExecution` included. Both MutantKit and
-        // Muter are external processes to this target, never in-process
-        // engines; coupling to MutantKit's own execution engine would give
-        // it an unfair, Muter-can-never-have shortcut in the very benchmark
-        // meant to compare them fairly. See `Benchmarks/README.md`.
-        .executableTarget(
-            name: "BenchmarkRunner",
-            dependencies: [.product(name: "ArgumentParser", package: "swift-argument-parser")]
-        ),
-        .testTarget(name: "BenchmarkRunnerTests", dependencies: ["BenchmarkRunner"]),
 
         // Research-only, outcome-blind classification tool for
         // Research/adr-0008-validation/protocol.md's Protocol v3 addendum

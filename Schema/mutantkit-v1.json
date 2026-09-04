@@ -47,6 +47,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "profile": { "enum": ["reference", "optimized", "experimental"] },
         "strategy": { "enum": ["isolated", "schemata"] },
         "workers": { "type": ["integer", "null"], "minimum": 1 },
         "budget": {
@@ -77,7 +78,9 @@
         "testBatchSize": { "type": ["integer", "null"], "minimum": 1 },
         "noOpCanarySampleRate": { "type": "number", "minimum": 0, "maximum": 1 },
         "simulatorPool": { "type": "boolean" },
-        "sharedModuleCache": { "type": "boolean" }
+        "sharedModuleCache": { "type": "boolean" },
+        "cleanSubtreeCloning": { "type": "boolean" },
+        "profileCoverageSkip": { "type": "boolean" }
       }
     },
     "timeouts": {
@@ -101,7 +104,7 @@
     },
     "reports": {
       "type": "array",
-      "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary", "sonar", "github-actions"] },
+      "items": { "enum": ["console", "xcode", "json", "stryker-json", "html", "ci-summary", "sonar", "github-actions", "sarif"] },
       "uniqueItems": true
     },
     "qualityGate": {

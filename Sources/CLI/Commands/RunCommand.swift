@@ -74,47 +74,48 @@ struct RunCommand: AsyncParsableCommand {
 
         let runDirectory = root.appendingPathComponent(".mutantkit")
 
+        // The configuration exactly as loaded/overridden, before
+        // `ExecutionProfileSupport.resolveProfile` (below) may turn
+        // `execution.profile: optimized`/`experimental` into concrete
+        // field values. `plan.json` was written from *this* shape (`plan`
+        // never resolves a profile — see `ExecutionProfileResolver`'s own
+        // doc comment), so `PlanCompatibilityValidator.check` compares
+        // against this, not the resolved settings the run actually
+        // executes with: comparing against the resolved settings would
+        // report a spurious `plan.configurationHash` mismatch purely
+        // because a profile was chosen, with the user's actual
+        // `mutantkit.yml` completely unchanged between planning and
+        // running.
+        let settingsAsConfigured = settings
+
         // Independent MutantKit processes are not allowed to compete for the same
-        // project/destination. Real-project validation demonstrated that severe
-        // resource contention and shared simulator pressure can change a mutant's
-        // observable failure mode (crash vs timeout), which changes scoring if the
-        // two processes are allowed to interfere. Internal workers remain allowed:
-        // they share this one owning process and therefore this one lock.
-        //
-        // Acquired before simulator preparation, not after: a codex review
-        // found the original ordering booted/prepared the simulator *before*
-        // this lock, so two independent processes racing for the same
-        // destination could both boot/prepare it concurrently — CoreSimulator
-        // contention, one process's environment changes bleeding into the
-        // other's — before either noticed the collision. Lock first means a
-        // losing process fails here, before it has touched the simulator at
-        // all.
-        //
-        // Keyed on the *resolved* destination, not the raw config string:
-        // two `mutantkit.yml`s that spell the same physical simulator
-        // differently — destination unset (implicit "auto") in one, an
-        // explicit `platform=iOS Simulator,name=iPhone 17 Pro` in the other,
-        // both resolving to the same booted device — would otherwise take
-        // different lock keys and race that one simulator concurrently,
-        // exactly what this lock exists to prevent. `resolvedDestination`
-        // already pins that answer once, before this line runs (see
-        // `AppleAdapterFactory.resolve` above); reusing it here means "same
-        // device" and "same lock key" are the same fact, not two facts that
-        // can drift apart.
-        let destinationIdentity = Self.lockIdentity(for: resolution.adapter, configuredDestination: settings.project.destination)
-        let lockRoot = runDirectory.appendingPathComponent("run-locks")
-        let runLock = try RunIsolationLock.acquire(
-            projectRoot: root,
-            lockRoot: lockRoot,
-            destination: destinationIdentity
+        // project/destination — see `Self.acquireRunLock`'s own doc comment for
+        // why, and for the exact locking rule (pulled out of this already-large
+        // function so it stays testable and under this project's own line-count
+        // limits, not because the reasoning belongs anywhere else).
+        let lockAcquisition = try Self.acquireRunLock(
+            root: root, resolution: resolution, configuredDestination: settings.project.destination, runDirectory: runDirectory
         )
+        let runLock = lockAcquisition.lock
         defer { runLock.release() }
+
+        // See `ExecutionProfileSupport.resolveProfile`'s own doc comment
+        // for why this now runs *after* lock acquisition, not before: a
+        // run that is about to lose this lock race should fail here,
+        // before doing any other work — including whatever a future
+        // `ProjectExecutionCharacteristics` might need to probe — not only
+        // before simulator preparation. Still runs before simulator
+        // preparation and worker-pool provisioning, which its own doc
+        // comment requires.
+        if let statusLine = await ExecutionProfileSupport.resolveProfile(
+            settings: &settings, plan: loadedPlan, resolution: resolution
+        ) { print(statusLine) }
 
         // After the lock, not before: this run's own lock file is on disk by
         // now, so `runLockFilesPresent` counting one is "as expected, solo,"
         // not a false "nothing is locked" taken before this run committed to
         // anything.
-        let resourceSnapshot = ResourceSnapshot.capture(lockRoot: lockRoot)
+        let resourceSnapshot = ResourceSnapshot.capture(lockRoot: lockAcquisition.lockRoot)
 
         // Memory/load only, and before simulator preparation: the same codex
         // review that moved the lock up front found this preflight ran only
@@ -211,7 +212,8 @@ struct RunCommand: AsyncParsableCommand {
         // block's point of view).
         do {
             try await runAfterSimulatorPoolProvisioned(
-                root: root, settings: settings, loadedPlan: loadedPlan, resolution: resolution,
+                root: root, settings: RunConfiguration(resolved: settings, asConfigured: settingsAsConfigured),
+                loadedPlan: loadedPlan, resolution: resolution,
                 runDirectory: runDirectory, resourceSnapshot: resourceSnapshot, simulatorPreparation: simulatorPreparation
             )
             await poolProvision.cleanup()
@@ -231,7 +233,7 @@ struct RunCommand: AsyncParsableCommand {
     /// exactly as it did before the extraction.
     private func runAfterSimulatorPoolProvisioned(
         root: URL,
-        settings: Configuration,
+        settings: RunConfiguration,
         loadedPlan: MutationPlan,
         resolution: AppleAdapterFactory.Resolution,
         runDirectory: URL,
@@ -244,7 +246,11 @@ struct RunCommand: AsyncParsableCommand {
 
         let priorityStoreURL = runDirectory.appendingPathComponent("test-priority.json")
         let (testAdapter, runnerPriorityStore) = Self.resolveTestAdapter(
-            settings, base: resolution.adapter.test, priorityStoreURL: priorityStoreURL
+            settings.resolved, base: resolution.adapter.test, priorityStoreURL: priorityStoreURL
+        )
+
+        try await Self.resolveDependenciesForConfirmationRetestIfNeeded(
+            settings.resolved, testAdapter: testAdapter, root: root
         )
 
         let executionContext = await prepareRunExecutionContext(
@@ -261,14 +267,16 @@ struct RunCommand: AsyncParsableCommand {
         // *mutated*, not which files a sandbox needs to build. Copying build
         // state is actively harmful — SwiftPM records absolute paths in `.build`,
         // so a copy of it at a new path fails before it compiles anything.
-        let workspaces = try WorkspaceManager(projectRoot: root, scratchRoot: scratch)
+        let workspaces = try WorkspaceManager(
+            projectRoot: root, scratchRoot: scratch, cleanSubtreeCloning: settings.resolved.execution.cleanSubtreeCloning
+        )
         if await workspaces.supportsAPFSClone() {
             print("Sandboxes: APFS clone (copy-on-write)")
         } else {
             print("Sandboxes: plain copy — this volume does not support cloning, so runs will be slower")
         }
 
-        print("Running \(loadedPlan.mutations.count) mutant(s) with \(settings.execution.resolvedWorkerCount()) worker(s)…\n")
+        print("Running \(loadedPlan.mutations.count) mutant(s) with \(settings.resolved.execution.resolvedWorkerCount()) worker(s)…\n")
 
         // Written before the run starts, not after: a manifest is a record of
         // what this run is *about* to do, and a run that dies partway
@@ -279,15 +287,15 @@ struct RunCommand: AsyncParsableCommand {
         // failure is not a reason to fail the run itself.
         let manifestURL = RunManifest.url(runDirectory: runDirectory, workUnitID: loadedPlan.workUnitID)
         let manifestContext = ManifestWriteContext(
-            resolution: resolution, settings: settings, toolchain: toolchain,
+            resolution: resolution, settings: settings.resolved, toolchain: toolchain,
             resourceSnapshot: resourceSnapshot, simulatorPreparation: simulatorPreparation
         )
         writeManifest(plan: loadedPlan, context: manifestContext, baselineDuration: 0, to: manifestURL)
 
         let report = try await Self.execute(
-            strategy: settings.execution.strategy,
+            strategy: settings.resolved.execution.strategy,
             context: SchemataRunOrchestration.Context(
-                plan: loadedPlan, configuration: settings, projectRoot: root,
+                plan: loadedPlan, configuration: settings.resolved, projectRoot: root,
                 adapter: resolution.adapter, testAdapter: testAdapter, toolchain: toolchain,
                 // Deliberately the same two values passed to
                 // `IsolatedRunOptions` below, not a second cache instance or
@@ -312,7 +320,7 @@ struct RunCommand: AsyncParsableCommand {
             writeManifest(plan: loadedPlan, context: manifestContext, baselineDuration: report.baseline.durationSeconds, to: manifestURL)
         }
 
-        try emit(report, settings: settings, runDirectory: runDirectory)
+        try emit(report, settings: settings.resolved, runDirectory: runDirectory)
         // Gate 3 diagnostic instrumentation only (see
         // `GateTimingRecorder`'s own doc comment) — every other run leaves
         // this env var unset and pays nothing beyond the spans' already-
@@ -334,23 +342,6 @@ struct RunCommand: AsyncParsableCommand {
         if failOnSurvivors, (report.score?.survived ?? 0) > 0 {
             throw ExitCode(MutantKitExit.survivorsFound)
         }
-    }
-
-    /// The isolated-mode-only pieces `execute` threads into `MutationRunner`
-    /// — none of these participate in schemata mode v1 (no checkpoint,
-    /// coverage cache, or cross-run result cache; see the schemata
-    /// production-integration plan's explicitly-out-of-scope list) —
-    /// bundled so `execute` itself stays within SwiftLint's parameter-count
-    /// threshold.
-    private struct IsolatedRunOptions {
-        let checkpoints: CheckpointStore
-        let artifactsRoot: URL
-        let coverageCache: CoverageProfileCache
-        let coverageCacheKey: CoverageProfileCache.Key?
-        let resultCache: MutationResultCache?
-        let resultCacheDigest: String?
-        let priorityStore: TestPriorityStore?
-        let progress: ProgressReporter?
     }
 
     /// Dispatches to the existing, unmodified `MutationRunner` for
@@ -386,7 +377,11 @@ struct RunCommand: AsyncParsableCommand {
             // pass's `workspaces` so the two passes' sandboxes never
             // collide mid-run.
             let schemataScratch = runDirectory.appendingPathComponent("schemata-sandboxes")
-            let schemataWorkspaces = try WorkspaceManager(projectRoot: context.projectRoot, scratchRoot: schemataScratch)
+            let schemataWorkspaces = try WorkspaceManager(
+                projectRoot: context.projectRoot,
+                scratchRoot: schemataScratch,
+                cleanSubtreeCloning: context.configuration.execution.cleanSubtreeCloning
+            )
             // No timeout argument: this call site used to pass
             // `timeouts.baselineSeconds` as the *only* limit, which
             // `SchemataMutationRunner` then applied to every per-mutant token
@@ -453,6 +448,7 @@ struct RunCommand: AsyncParsableCommand {
         case .html: "report.html"
         case .ciSummary: "summary.md"
         case .sonar: "sonar-issues.json"
+        case .sarif: "mutantkit.sarif.json"
         }
     }
 
@@ -533,7 +529,7 @@ struct RunCommand: AsyncParsableCommand {
         guard settings.execution.selectCoveringTests, settings.execution.earlyAbortSelectedTests else {
             return (base, nil)
         }
-        if settings.execution.testBatchSize != nil, base is any BatchTestable {
+        guard PrioritizingTestAdapter.wouldWrap(settings, base: base) else {
             return (base, TestPriorityStore(url: priorityStoreURL))
         }
         return (PrioritizingTestAdapter(base: base, priorityStore: TestPriorityStore(url: priorityStoreURL)), nil)
@@ -606,6 +602,73 @@ extension RunCommand {
 /// fingerprint/checkpoint/cache setup every run needs before it can start
 /// executing mutants, and the simulator-worker-pool provisioning step.
 private extension RunCommand {
+    /// `settings.execution` alongside the configuration exactly as
+    /// loaded/overridden before `ExecutionProfileSupport.resolveProfile`
+    /// may have resolved `execution.profile` into concrete field values —
+    /// bundled into one parameter (rather than adding a second bare
+    /// `Configuration` parameter to `runAfterSimulatorPoolProvisioned`/
+    /// `prepareRunExecutionContext`, which would push both past this
+    /// project's `function_parameter_count` lint threshold) so
+    /// `PlanCompatibilityValidator.check` — the one caller that needs the
+    /// pre-resolution shape — can reach it without every other caller
+    /// having to thread through a value it never uses. See
+    /// `settingsAsConfigured`'s own comment in `run()` for why the
+    /// distinction matters. Declared in this extension, not `run()`'s own
+    /// enclosing struct body, purely to leave that body's own line count
+    /// alone — `private` on a type still reaches every extension of the
+    /// same enclosing type in this file, so `run()` and
+    /// `prepareRunExecutionContext` (in their own, different scopes) see
+    /// this exactly as if it were declared alongside them.
+    struct RunConfiguration {
+        let resolved: Configuration
+        let asConfigured: Configuration
+    }
+
+    /// Acquires `RunIsolationLock` for this run and returns the lock root
+    /// `run()` also needs for `ResourceSnapshot.capture(lockRoot:)` right
+    /// afterward — pulled out of `run()` itself purely to keep that
+    /// already-large function's own body under this project's
+    /// `function_body_length` limit, in this extension rather than
+    /// `run()`'s enclosing struct body for the identical reason
+    /// `RunConfiguration` above is.
+    ///
+    /// Independent MutantKit processes are not allowed to compete for the
+    /// same project/destination. Real-project validation demonstrated that
+    /// severe resource contention and shared simulator pressure can change
+    /// a mutant's observable failure mode (crash vs timeout), which
+    /// changes scoring if the two processes are allowed to interfere.
+    /// Internal workers remain allowed: they share this one owning process
+    /// and therefore this one lock.
+    ///
+    /// Acquired before simulator preparation, not after: a codex review
+    /// found the original ordering booted/prepared the simulator *before*
+    /// this lock, so two independent processes racing for the same
+    /// destination could both boot/prepare it concurrently — CoreSimulator
+    /// contention, one process's environment changes bleeding into the
+    /// other's — before either noticed the collision. Lock first means a
+    /// losing process fails here, before it has touched the simulator at
+    /// all.
+    ///
+    /// Keyed on the *resolved* destination, not the raw config string: two
+    /// `mutantkit.yml`s that spell the same physical simulator differently
+    /// — destination unset (implicit "auto") in one, an explicit
+    /// `platform=iOS Simulator,name=iPhone 17 Pro` in the other, both
+    /// resolving to the same booted device — would otherwise take
+    /// different lock keys and race that one simulator concurrently,
+    /// exactly what this lock exists to prevent. `resolvedDestination`
+    /// already pins that answer once, before `run()` calls this (see
+    /// `AppleAdapterFactory.resolve`); reusing it here means "same device"
+    /// and "same lock key" are the same fact, not two facts that can drift
+    /// apart.
+    static func acquireRunLock(
+        root: URL, resolution: AppleAdapterFactory.Resolution, configuredDestination: String?, runDirectory: URL
+    ) throws -> (lock: RunIsolationLock, lockRoot: URL) {
+        let destinationIdentity = Self.lockIdentity(for: resolution.adapter, configuredDestination: configuredDestination)
+        let lockRoot = runDirectory.appendingPathComponent("run-locks")
+        let lock = try RunIsolationLock.acquire(projectRoot: root, lockRoot: lockRoot, destination: destinationIdentity)
+        return (lock, lockRoot)
+    }
+
     /// The outcome of `provisionSimulatorWorkerPoolIfNeeded`: a
     /// (possibly-unchanged) `Resolution` to use for the rest of the run,
     /// and the cleanup to run when it ends, whichever way it ends.
@@ -706,6 +769,29 @@ private extension RunCommand {
 }
 
 extension RunCommand {
+    /// The isolated-mode-only pieces `execute` threads into `MutationRunner`
+    /// — none of these participate in schemata mode v1 (no checkpoint,
+    /// coverage cache, or cross-run result cache; see the schemata
+    /// production-integration plan's explicitly-out-of-scope list) —
+    /// bundled so `execute` itself stays within SwiftLint's parameter-count
+    /// threshold. Declared in this extension rather than in the primary
+    /// struct body, on the same terms as `RunExecutionContext`/
+    /// `ManifestWriteContext` below: a `private` nested type declared in an
+    /// extension of `RunCommand` in this same file is exactly as visible to
+    /// `execute`/`run()` as one declared inline would be, and moving it out
+    /// keeps the primary struct body under SwiftLint's `type_body_length`
+    /// limit.
+    private struct IsolatedRunOptions {
+        let checkpoints: CheckpointStore
+        let artifactsRoot: URL
+        let coverageCache: CoverageProfileCache
+        let coverageCacheKey: CoverageProfileCache.Key?
+        let resultCache: MutationResultCache?
+        let resultCacheDigest: String?
+        let priorityStore: TestPriorityStore?
+        let progress: ProgressReporter?
+    }
+
     /// Everything `runAfterSimulatorPoolProvisioned` needs from the
     /// toolchain/checkpoint/cache setup below, bundled so the caller reads
     /// one destructuring assignment instead of the setup's own six local
@@ -724,7 +810,7 @@ extension RunCommand {
     /// had already built would date the run by whichever mutant happened to
     /// be in flight when it ran.
     private func prepareRunExecutionContext(
-        root: URL, settings: Configuration, loadedPlan: MutationPlan,
+        root: URL, settings: RunConfiguration, loadedPlan: MutationPlan,
         resolution: AppleAdapterFactory.Resolution, runDirectory: URL, noResume: Bool
     ) async -> RunExecutionContext {
         let toolchainProbe = await ToolchainProbe.fingerprint(
@@ -732,9 +818,18 @@ extension RunCommand {
         )
         let toolchain = toolchainProbe.fingerprint
 
-        for issue in PlanCompatibilityValidator.check(loadedPlan, against: settings, toolchain: toolchain) {
+        // Against `settings.asConfigured`, not `.resolved`: `plan.json`'s
+        // own `configurationHash` was written from the configuration
+        // exactly as `mutantkit plan` loaded it, which never resolves
+        // `execution.profile` (see `ExecutionProfileResolver`'s own doc
+        // comment) — comparing against the resolved settings here would
+        // report a spurious mismatch purely because a profile was chosen,
+        // with the user's actual `mutantkit.yml` unchanged between
+        // planning and running.
+        for issue in PlanCompatibilityValidator.check(loadedPlan, against: settings.asConfigured, toolchain: toolchain) {
             print(issue.description)
         }
+        let settings = settings.resolved
 
         // Keyed by work unit and by everything the checkpoint's cached
         // results depend on, not by work unit alone: a checkpoint exists to

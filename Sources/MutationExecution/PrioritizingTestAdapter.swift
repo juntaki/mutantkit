@@ -9,13 +9,51 @@ import MutationModel
 /// It only changes calls that already carry a non-empty per-test selection,
 /// so a coverage-blind or attribution-failed run keeps the original safe
 /// behaviour of running the complete configured suite.
-public struct PrioritizingTestAdapter: TestSelecting, Sendable {
+///
+/// Conforms to `TestAdapterWrapping` (in addition to `TestSelecting`) so
+/// `MutationConfirmationCoordinator.confirmKill` can see through this
+/// wrapper to `base`'s own `PackageManifestConfirmationRetesting`
+/// conformance when `base` has one — a plain `as?` on a
+/// `PrioritizingTestAdapter` value cannot: see `TestAdapterWrapping`'s own
+/// doc comment for exactly why not, and why conditional conformance cannot
+/// fix this instead. Without this, wrapping a manifest-dependent SwiftPM
+/// adapter (`execution.selectCoveringTests` and `execution
+/// .earlyAbortSelectedTests` both on) would silently and completely defeat
+/// `retestKilledMutants`'s confirmation retest for the whole run — safely
+/// (falling to `.flaky`, never over-claiming a kill) but silently,
+/// reproducing the exact bug `PackageManifestConfirmationRetesting` exists
+/// to fix.
+public struct PrioritizingTestAdapter: TestSelecting, TestAdapterWrapping, Sendable {
     private let base: any TestAdapter
     private let priorityStore: TestPriorityStore
 
     public init(base: any TestAdapter, priorityStore: TestPriorityStore) {
         self.base = base
         self.priorityStore = priorityStore
+    }
+
+    /// `TestAdapterWrapping.wrappedTestAdapter` — exposes `base` so a caller
+    /// doing optional-protocol dispatch can unwrap this wrapper and retry
+    /// the cast against what it actually wraps.
+    public var wrappedTestAdapter: any TestAdapter { base }
+
+    /// Would `RunCommand.resolveTestAdapter` wrap `base` in a
+    /// `PrioritizingTestAdapter` for `settings`? The exact predicate that
+    /// method itself evaluates (wave-based batching vs. per-invocation
+    /// wrapping — see its own doc comment), pulled out here rather than
+    /// left inline there, so a caller that only needs to know *which kind*
+    /// of test adapter a real run ends up with — `ExecutionCapabilitiesDiagnosis`'s
+    /// schemata-availability check, in particular: this type is
+    /// `TestSelecting`-only, never `SchemataTestable`, so wrapping can
+    /// silently break schemata even for an otherwise-supported project —
+    /// can ask without a real `TestPriorityStore`/priority-store file url,
+    /// and without re-deriving this condition by hand and risking it
+    /// drifting from what `resolveTestAdapter` actually does. That method
+    /// now calls this instead of repeating the condition itself, so the
+    /// two can never disagree.
+    public static func wouldWrap(_ settings: Configuration, base: any TestAdapter) -> Bool {
+        guard settings.execution.selectCoveringTests, settings.execution.earlyAbortSelectedTests else { return false }
+        return !(settings.execution.testBatchSize != nil && base is any BatchTestable)
     }
 
     public func runBaseline(
