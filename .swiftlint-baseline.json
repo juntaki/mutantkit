@@ -45,51 +45,6 @@
     }
   },
   {
-    "text": "    private static func notApplicableMarker(corpusName: String, metric: Metric, dimension: StratumTestResult.Dimension, parent: String?) -> StratumTestResult {",
-    "violation": {
-      "reason": "Line should be 140 characters or less; currently it has 159 characters",
-      "ruleIdentifier": "line_length",
-      "severity": "error",
-      "ruleDescription": "Lines should not span too many characters.",
-      "location": {
-        "line": 174,
-        "character": 1,
-        "file": "Sources/BudgetV2Eval/Screen.swift"
-      },
-      "ruleName": "Line Length"
-    }
-  },
-  {
-    "text": "    private static func decide(",
-    "violation": {
-      "reason": "Function should have 6 parameters or less: it currently has 7",
-      "ruleIdentifier": "function_parameter_count",
-      "severity": "error",
-      "ruleDescription": "Number of function parameters should be low.",
-      "location": {
-        "line": 188,
-        "character": 20,
-        "file": "Sources/BudgetV2Eval/Screen.swift"
-      },
-      "ruleName": "Function Parameter Count"
-    }
-  },
-  {
-    "text": "        let sorted = pooled.enumerated().sorted { $0.element.value < $1.element.value }",
-    "violation": {
-      "reason": "When the index is not used, `.enumerated()` can be removed",
-      "ruleIdentifier": "unused_enumerated",
-      "severity": "error",
-      "ruleDescription": "When the index or the item is not used, `.enumerated()` can be removed.",
-      "location": {
-        "line": 30,
-        "character": 29,
-        "file": "Sources/BudgetV2Eval/Statistics.swift"
-      },
-      "ruleName": "Unused Enumerated"
-    }
-  },
-  {
     "text": "    func run() async throws {",
     "violation": {
       "reason": "Function should have complexity 12 or less; currently complexity is 13",
@@ -117,51 +72,6 @@
         "file": "Sources/CLI/Commands/ReproduceCommand.swift"
       },
       "ruleName": "Function Body Length"
-    }
-  },
-  {
-    "text": "    @Flag(name: .long, help: \"Skip recording this run to `.mutantkit/history`. Use for each shard of a sharded plan \u2014 the shard's score is partial; `mutantkit merge`'s combined result is the one that reflects the whole project.\")",
-    "violation": {
-      "reason": "Line should be 220 characters or less; currently it has 229 characters",
-      "ruleIdentifier": "line_length",
-      "severity": "error",
-      "ruleDescription": "Lines should not span too many characters.",
-      "location": {
-        "line": 53,
-        "character": 1,
-        "file": "Sources/CLI/Commands/RunCommand.swift"
-      },
-      "ruleName": "Line Length"
-    }
-  },
-  {
-    "text": "    private func runAfterSimulatorPoolProvisioned(",
-    "violation": {
-      "reason": "Function should have 6 parameters or less: it currently has 7",
-      "ruleIdentifier": "function_parameter_count",
-      "severity": "error",
-      "ruleDescription": "Number of function parameters should be low.",
-      "location": {
-        "line": 234,
-        "character": 13,
-        "file": "Sources/CLI/Commands/RunCommand.swift"
-      },
-      "ruleName": "Function Parameter Count"
-    }
-  },
-  {
-    "text": "}",
-    "violation": {
-      "reason": "File should contain 1000 lines or less: currently contains 1005",
-      "ruleIdentifier": "file_length",
-      "severity": "error",
-      "ruleDescription": "Files should not span too many lines.",
-      "location": {
-        "line": 1005,
-        "character": 1,
-        "file": "Sources/CLI/Commands/RunCommand.swift"
-      },
-      "ruleName": "File Length"
     }
   },
   {
@@ -762,21 +672,6 @@
         "file": "Sources/MutationPlanner/MutationPlanner.swift"
       },
       "ruleName": "Large Tuple"
-    }
-  },
-  {
-    "text": "    func run() throws {",
-    "violation": {
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 101 lines",
-      "ruleIdentifier": "function_body_length",
-      "severity": "error",
-      "ruleDescription": "Function bodies should not span too many lines",
-      "location": {
-        "line": 59,
-        "character": 5,
-        "file": "Sources/PlanSubsetDerivation/main.swift"
-      },
-      "ruleName": "Function Body Length"
     }
   },
   {
