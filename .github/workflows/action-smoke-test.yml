@@ -45,6 +45,14 @@ on:
       - "Scripts/action/**"
       - ".github/workflows/action-smoke-test.yml"
 
+# No job here writes to the repo, comments on a PR, or creates a release --
+# every job only checks out the repo, runs the composite action locally, and
+# passes artifacts between jobs in the same run. Flagged by CodeQL as
+# missing an explicit token scope; contents: read is the correct minimal
+# grant, not a default left unset.
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------
   # mode: install, against a real published release.
