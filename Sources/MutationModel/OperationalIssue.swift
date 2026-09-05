@@ -1,5 +1,3 @@
-import Foundation
-
 /// An infrastructure-level problem observed during a run that never affects
 /// score or integrity — those stay decided purely by verified proof — but
 /// would otherwise vanish once the run ends, since today it only ever reaches

@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// A single mutant's full record, curated for a coding agent to consume

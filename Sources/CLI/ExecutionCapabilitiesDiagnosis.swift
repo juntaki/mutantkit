@@ -1,5 +1,4 @@
 import AppleBuildAdapters
-import Foundation
 import MutationExecution
 import MutationModel
 

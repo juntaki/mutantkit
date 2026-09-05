@@ -1,5 +1,3 @@
-import Foundation
-
 /// One mutation, fully described, independent of any syntax tree.
 ///
 /// A `MutationPoint` is self-contained on purpose: given the plan file and the

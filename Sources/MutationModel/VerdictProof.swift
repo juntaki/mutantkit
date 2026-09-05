@@ -1,5 +1,3 @@
-import Foundation
-
 /// Proof that a build/test run actually reached and exercised the mutated
 /// code, backing `.killedByAssertion`/`.killedByCrash`/`.verifiedTimeout`/
 /// `.survived`.

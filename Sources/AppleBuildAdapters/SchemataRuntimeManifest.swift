@@ -1,5 +1,3 @@
-import Foundation
-
 /// The shape of `lib/mutantkit/schemata/manifest.json` — the file a
 /// released `mutantkit` tarball bundles alongside its per-platform
 /// `MutantKitSchemataRuntime` archives (`scripts/release-build.sh` produces

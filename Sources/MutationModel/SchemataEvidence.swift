@@ -1,5 +1,3 @@
-import Foundation
-
 /// Which backend produced a mutant's evidence, and what that evidence
 /// actually proves.
 ///

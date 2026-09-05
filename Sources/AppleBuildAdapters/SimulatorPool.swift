@@ -1,7 +1,5 @@
-import Darwin
 import Foundation
 import MutationExecution
-import MutationModel
 
 /// One simulator, as `simctl` describes it.
 public struct SimulatorDevice: Codable, Sendable, Hashable {

@@ -6,7 +6,7 @@
       "ruleName": "Type Body Length",
       "location": {
         "file": "Sources/AppleBuildAdapters/SimulatorPool.swift",
-        "line": 152,
+        "line": 150,
         "character": 8
       },
       "reason": "Actor body should span 300 lines or less excluding comments and whitespace: currently spans 341 lines",
@@ -21,11 +21,11 @@
       "ruleName": "Function Body Length",
       "location": {
         "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift",
-        "line": 1560,
+        "line": 1606,
         "character": 12
       },
       "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 87 lines",
-      "severity": "error"
+      "severity": "warning"
     },
     "text": "    public func runBatch("
   },
@@ -81,43 +81,13 @@
       "ruleName": "Unused Enumerated",
       "location": {
         "file": "Sources/BudgetV2Eval/Statistics.swift",
-        "line": 30,
+        "line": 34,
         "character": 29
       },
       "reason": "When the index is not used, `.enumerated()` can be removed",
       "severity": "error"
     },
     "text": "        let sorted = pooled.enumerated().sorted { $0.element.value < $1.element.value }"
-  },
-  {
-    "violation": {
-      "ruleIdentifier": "cyclomatic_complexity",
-      "ruleDescription": "Complexity of function bodies should be limited.",
-      "ruleName": "Cyclomatic Complexity",
-      "location": {
-        "file": "Sources/CLI/Commands/ReproduceCommand.swift",
-        "line": 38,
-        "character": 5
-      },
-      "reason": "Function should have complexity 12 or less; currently complexity is 13",
-      "severity": "error"
-    },
-    "text": "    func run() async throws {"
-  },
-  {
-    "violation": {
-      "ruleIdentifier": "function_body_length",
-      "ruleDescription": "Function bodies should not span too many lines",
-      "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/CLI/Commands/ReproduceCommand.swift",
-        "line": 38,
-        "character": 5
-      },
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 135 lines",
-      "severity": "error"
-    },
-    "text": "    func run() async throws {"
   },
   {
     "violation": {
@@ -621,7 +591,7 @@
       "ruleName": "Line Length",
       "location": {
         "file": "Sources/MutationModel/VerdictProof.swift",
-        "line": 31,
+        "line": 29,
         "character": 1
       },
       "reason": "Line should be 140 characters or less; currently it has 157 characters",
@@ -2038,35 +2008,5 @@
       "severity": "error"
     },
     "text": "struct XCResultAdapterBatchTests {"
-  },
-  {
-    "violation": {
-      "ruleIdentifier": "line_length",
-      "ruleDescription": "Lines should not span too many characters.",
-      "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/XcodeBuildAdapterUninstallFailureTests.swift",
-        "line": 66,
-        "character": 1
-      },
-      "reason": "Line should be 140 characters or less; currently it has 159 characters",
-      "severity": "error"
-    },
-    "text": "        SimulatorLease(device: SimulatorDevice(udid: udid, name: \"Bogus\", runtimeIdentifier: \"com.apple.CoreSimulator.SimRuntime.iOS-18-0\", state: \"Shutdown\"))"
-  },
-  {
-    "violation": {
-      "ruleIdentifier": "line_length",
-      "ruleDescription": "Lines should not span too many characters.",
-      "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/XcodeBuildAdapterUninstallFailureTests.swift",
-        "line": 73,
-        "character": 1
-      },
-      "reason": "Line should be 140 characters or less; currently it has 148 characters",
-      "severity": "error"
-    },
-    "text": "        let message = XcodeBuildAdapter.uninstallFailureWarning(bundleID: \"com.example.App\", udid: \"ABCD-1234\", detail: \"Invalid device: ABCD-1234\")"
   }
 ]

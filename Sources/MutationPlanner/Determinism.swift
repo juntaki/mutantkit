@@ -1,5 +1,3 @@
-import Foundation
-
 /// A small, self-contained seeded PRNG (SplitMix64).
 ///
 /// `SystemRandomNumberGenerator` is seeded from the OS and cannot reproduce a

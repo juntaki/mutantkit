@@ -1,5 +1,3 @@
-import Foundation
-
 /// A manually-bumped identity for MutantKit's own execution-affecting
 /// implementation — mutation discovery *routing* (which operator claims
 /// which site), mutation application mechanics

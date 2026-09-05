@@ -1,5 +1,3 @@
-import Foundation
-
 /// Static metadata describing a mutation operator.
 ///
 /// Embedded into every plan and result so that a report stays interpretable

@@ -1,5 +1,4 @@
 import Foundation
-import MutationExecution
 import MutationModel
 
 /// Real auto-detection of an Xcode project/workspace's scheme, test

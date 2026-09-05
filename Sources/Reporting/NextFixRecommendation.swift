@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// Picks exactly one surviving/uncovered mutant to fix next, out of every

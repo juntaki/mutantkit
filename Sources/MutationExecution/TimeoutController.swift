@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// Hands out the wall-clock limits a run is allowed to spend.

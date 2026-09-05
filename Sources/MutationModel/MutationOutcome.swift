@@ -1,5 +1,3 @@
-import Foundation
-
 /// What happened to one mutant.
 ///
 /// Deliberately not collapsed into pass/fail. Most of the damage a mutation

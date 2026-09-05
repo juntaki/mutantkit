@@ -1,5 +1,3 @@
-import Foundation
-
 /// A hash of everything a checkpoint's cached result depends on: the plan
 /// being executed, the mutantkit configuration, the toolchain, and the state of
 /// every file git can see in the project — tracked or untracked.

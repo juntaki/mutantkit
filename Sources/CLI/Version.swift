@@ -1,5 +1,3 @@
-import Foundation
-
 /// Build identity, embedded at release time.
 ///
 /// Every plan and report records these. A result that cannot be traced back to

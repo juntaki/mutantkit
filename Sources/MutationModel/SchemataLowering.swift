@@ -1,5 +1,3 @@
-import Foundation
-
 /// One mutation's runtime selector identity — the `(namespace, localIndex)`
 /// pair every generated call site and every STARTUP/HIT record in the real
 /// transcript must agree on bit-for-bit before a hit can be credited to a

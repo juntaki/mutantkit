@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 
 /// Checks a loaded plan's recorded toolchain and configuration identity

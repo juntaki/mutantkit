@@ -163,6 +163,45 @@ jobs:
         shell: bash
         run: swift-complexity Sources Tests --recursive --threshold 25 --report-suppressions
 
+  # Compiler-aware lint: `unused_import` only (see .swiftlint.yml's own
+  # `analyzer_rules` comment). Needs a clean xcodebuild log, so it pays for
+  # a full `MutantKit-Package` build where `lint` needs none — a separate
+  # job rather than a step there, so the fast static checks and this gate
+  # never block each other. The pre-existing set (74 true positives on this
+  # tree, not the 66 a syntax-only per-file scan over a *different* file set
+  # would suggest -- private targets excluded from the public snapshot
+  # change the count) was removed outright before this gate was switched on,
+  # so any finding here is new debt.
+  analyze:
+    name: Unused imports (swiftlint analyze)
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      SWIFTLINT_VERSION: "0.63.2"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned SwiftLint
+        run: |
+          curl -fsSL -o portable_swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/portable_swiftlint.zip"
+          unzip -o portable_swiftlint.zip swiftlint
+          chmod +x swiftlint
+          sudo mv swiftlint /usr/local/bin/swiftlint
+          rm portable_swiftlint.zip
+          installed_version="$(swiftlint version)"
+          if [ "$installed_version" != "$SWIFTLINT_VERSION" ]; then
+            echo "::error::Installed SwiftLint $installed_version does not match pinned SWIFTLINT_VERSION $SWIFTLINT_VERSION"
+            exit 1
+          fi
+      - name: Clean build for analyzer
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild -scheme MutantKit-Package -destination 'generic/platform=macOS' clean build 2>&1 | tee xcodebuild.log
+      - name: swiftlint analyze
+        shell: bash
+        run: swiftlint analyze --strict --config .swiftlint.yml --compiler-log-path xcodebuild.log Sources
+
   # Fast feedback: everything that does not build another project.
   unit:
     name: Unit tests
@@ -740,6 +779,7 @@ jobs:
     needs:
       - lint
       - complexity
+      - analyze
       - unit
       - acceptance
       - ror-schemata-differential
@@ -763,6 +803,7 @@ jobs:
 
           check "lint" "${{ needs.lint.result }}"
           check "complexity" "${{ needs.complexity.result }}"
+          check "analyze" "${{ needs.analyze.result }}"
           check "unit" "${{ needs.unit.result }}"
           check "acceptance" "${{ needs.acceptance.result }}"
           check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}"

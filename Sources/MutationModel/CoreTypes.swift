@@ -1,5 +1,3 @@
-import Foundation
-
 // MARK: - Confidence
 
 /// How much we trust an operator's judgement that a candidate is a real,

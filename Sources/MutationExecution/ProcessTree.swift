@@ -1,5 +1,4 @@
 import Darwin
-import Foundation
 
 /// Finds and kills a process's descendants.
 ///

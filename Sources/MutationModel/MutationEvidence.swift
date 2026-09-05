@@ -1,5 +1,3 @@
-import Foundation
-
 /// Proof that a mutation actually reached the running code.
 ///
 /// In isolated mode the mutation is compiled into the binary, so a mutant build

@@ -1,5 +1,3 @@
-import Foundation
-
 /// Anything a `ResultLedger` can hold — its own `mutationRef` *is* its
 /// ledger key. No conforming type lets a caller supply a key independent
 /// of the value being inserted, which is exactly what a plain

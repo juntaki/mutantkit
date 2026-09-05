@@ -9,26 +9,26 @@
 # to stop erroring, left as a warning, documented here).
 #
 # CI runs `swiftlint lint --strict --baseline .swiftlint-baseline.json`:
-# the baseline freezes 138 pre-existing violations by identity (rule + file +
+# the baseline freezes 134 pre-existing violations by identity (rule + file +
 # line) so `--strict` still catches every new violation, including a new one
 # in an already-baselined file, without forcing a refactor of any of them
-# just to silence the linter. By rule: `line_length` 80 (mostly long test
+# just to silence the linter. By rule: `line_length` 78 (mostly long test
 # lines and interpolated diagnostics), `type_body_length` 16, `large_tuple`
-# 13, `function_body_length` 10, `function_parameter_count` 6,
-# `cyclomatic_complexity` 4, `file_length` 5, `force_try` 2, plus one
+# 13, `function_body_length` 9, `function_parameter_count` 6,
+# `file_length` 5, `cyclomatic_complexity` 3, `force_try` 2, plus one
 # `unused_enumerated` and one `orphaned_doc_comment`. The length/complexity
 # rules concentrate in a few deliberately large orchestration files
 # (MutationRunner.swift, SchemataMutationRunner.swift, XcodeBuildAdapter.swift
-# and similar), but `cyclomatic_complexity` also covers a ReproduceCommand
-# handler (13), ConfigurationValidation (13), DeclarationIdentityResolver
-# (15) and one simulator-pool test — and `large_tuple` is spread across
-# several test files. This count includes a handful of entries private-tree-
-# only targets (research/probe executables, benchmark harness) contribute
-# that the public projection's own baseline doesn't carry, since those
-# targets are excluded from the public snapshot. (Earlier versions of this
-# comment also named InspectCommand.run()/RunCommand.run(), and then
-# QualityGate.evaluate (16)/BudgetSelectorV2.allocateCounts (18); all four
-# have since been split far enough that none is baselined anymore.)
+# and similar), but `cyclomatic_complexity` also covers ConfigurationValidation
+# (13), DeclarationIdentityResolver (15) and one simulator-pool test — and
+# `large_tuple` is spread across several test files. This count includes a
+# handful of entries private-tree-only targets (research/probe executables,
+# benchmark harness) contribute that the public projection's own baseline
+# doesn't carry, since those targets are excluded from the public snapshot.
+# (Earlier versions of this comment also named InspectCommand.run()/
+# RunCommand.run(), then QualityGate.evaluate (16)/
+# BudgetSelectorV2.allocateCounts (18), then a ReproduceCommand handler (13);
+# all five have since been split far enough that none is baselined anymore.)
 #
 # Baseline entries key on line number, so an unrelated edit earlier in a
 # baselined file shifts every violation below it and makes CI fail on an
@@ -137,3 +137,10 @@ disabled_rules:
   # oversight — forcing the failable initializer here would just add an
   # unwrap for a case that can't happen.
   - optional_data_string_conversion
+
+# Compiler-aware rules: these run ONLY under `swiftlint analyze` with a
+# clean xcodebuild log, never under `swiftlint lint`. Scope is deliberately
+# one rule: `unused_import` catches exactly the failure class a pure file
+# move introduces (a leftover import no syntax-only rule sees).
+analyzer_rules:
+  - unused_import

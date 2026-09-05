@@ -1,5 +1,3 @@
-import Foundation
-
 /// A broken invariant. Any of these means the run's numbers are not trustworthy.
 public struct IntegrityViolation: Codable, Sendable, Hashable {
     public enum Kind: String, Codable, Sendable {

@@ -1,5 +1,3 @@
-import Foundation
-
 /// A content-derived identifier for a single mutation.
 ///
 /// The ID is a hash of *what the mutation is*, never of *when we found it*. It
