@@ -25,7 +25,7 @@
 #                                     simulator. This is the phase that would
 #                                     have caught both bugs above.
 #
-# Usage: scripts/release-gate.sh
+# Usage: Scripts/release-gate.sh
 # Exits non-zero on the first failing phase (set -e below); nothing after a
 # failure runs.
 
@@ -40,6 +40,52 @@ section() {
     echo "== $1"
     echo "=================================================================="
 }
+
+# ── Pre-flight: the documented release version must be a tag that exists ─────
+#
+# `DocumentedVersionPinConsistencyTests` already proves that every version
+# named across README.md/action.yml/docs/skills agrees with the one README
+# declares as the latest release. It deliberately stops there: a projected
+# public snapshot is checked out without tags, so a tag assertion living in
+# the test suite would be unrunnable in exactly the tree where it matters
+# most. This is the other half of that gate, and it belongs here because
+# this script only ever runs in a real clone, immediately before a publish.
+#
+# The failure it exists to prevent already shipped once: README pinned
+# `uses: juntaki/mutantkit@v0.3.0` in three places, and action.yml gave the
+# same version as its `version:` example, while the newest tag that had ever
+# existed was v0.2.0 — so every user who copied the README's CI snippet got
+# an unresolvable action.
+#
+# Runs first, ahead of the simulator boot and the ~hour of tests below: a
+# stale pin should cost a second to find, not an hour. Same reasoning as the
+# toolchain-floor check being the first step of ci.yml's lint job.
+section "Pre-flight: documented release version exists as a git tag"
+
+declared_version="$(grep -m 1 '(latest release)' README.md \
+    | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' \
+    | head -n 1 || true)"
+
+if [[ -z "$declared_version" ]]; then
+    echo "error: could not read a declared latest release from README.md." >&2
+    echo "Expected a line containing '(latest release)' alongside a vX.Y.Z version." >&2
+    exit 1
+fi
+
+echo "README declares latest release: $declared_version"
+
+if ! git rev-parse -q --verify "refs/tags/$declared_version" >/dev/null; then
+    echo "error: README declares $declared_version as the latest release, but no such git tag exists." >&2
+    echo "Tags present:" >&2
+    git tag --sort=-v:refname | head -n 5 | sed 's/^/  /' >&2
+    echo >&2
+    echo "Either cut $declared_version before publishing, or correct README.md's status line" >&2
+    echo "and every version it pins — DocumentedVersionPinConsistencyTests enforces that they" >&2
+    echo "all agree with each other, and this check enforces that the agreed version is real." >&2
+    exit 1
+fi
+
+echo "Tag $declared_version exists."
 
 # ── Phase 0: make sure the acceptance suites have a simulator to run on ──────
 #

@@ -83,6 +83,14 @@ public enum QualityGate {
     /// Evaluates thresholds only against a trustworthy score. If integrity
     /// failed and no score exists, the gate fails closed rather than treating
     /// the missing number as zero or silently passing CI.
+    ///
+    /// Split into one collector per threshold *family* rather than one long
+    /// sequence of `if let`s: every collector below returns the violations it
+    /// found and never a `Bool`, so "this check could not be performed" has
+    /// somewhere to go other than an implicit pass. The order violations are
+    /// appended in is the order the thresholds are documented in
+    /// `QualityGateThresholds`, and is preserved deliberately — `mutantkit
+    /// gate` prints them in list order.
     public static func evaluate(
         report: RunReport,
         thresholds: QualityGateThresholds,
@@ -100,46 +108,42 @@ public enum QualityGate {
             )
         }
 
+        var violations = absoluteViolations(score: score, thresholds: thresholds)
+
+        // The baseline is consulted only when a configured threshold actually
+        // needs one, so a run using absolute thresholds alone never has to
+        // supply a baseline — and never fails for not having supplied one.
+        if thresholds.regressionMaximumDrop != nil || thresholds.newSurvivorsMaximum != nil {
+            violations += baselineViolations(
+                report: report,
+                score: score,
+                baseline: baseline,
+                thresholds: thresholds
+            )
+        }
+
+        return QualityGateResult(passed: violations.isEmpty, violations: violations)
+    }
+
+    // MARK: Absolute thresholds
+
+    /// The thresholds answerable from this run alone.
+    private static func absoluteViolations(
+        score: MutationScore,
+        thresholds: QualityGateThresholds
+    ) -> [QualityGateViolation] {
         var violations: [QualityGateViolation] = []
 
         if let minimum = thresholds.minimumTested {
-            if let actual = score.tested {
-                if actual < minimum {
-                    violations.append(QualityGateViolation(
-                        kind: .testedScore,
-                        detail: String(
-                            format: "Tested Mutation Score %.2f%% is below the required %.2f%%.",
-                            actual * 100,
-                            minimum * 100
-                        )
-                    ))
-                }
-            } else {
-                violations.append(QualityGateViolation(
-                    kind: .scoreUnavailable,
-                    detail: "Tested Mutation Score has no denominator and cannot satisfy a configured threshold."
-                ))
-            }
+            violations += minimumScoreViolations(
+                label: "Tested", kind: .testedScore, actual: score.tested, minimum: minimum
+            )
         }
 
         if let minimum = thresholds.minimumEffective {
-            if let actual = score.effective {
-                if actual < minimum {
-                    violations.append(QualityGateViolation(
-                        kind: .effectiveScore,
-                        detail: String(
-                            format: "Effective Mutation Score %.2f%% is below the required %.2f%%.",
-                            actual * 100,
-                            minimum * 100
-                        )
-                    ))
-                }
-            } else {
-                violations.append(QualityGateViolation(
-                    kind: .scoreUnavailable,
-                    detail: "Effective Mutation Score has no denominator and cannot satisfy a configured threshold."
-                ))
-            }
+            violations += minimumScoreViolations(
+                label: "Effective", kind: .effectiveScore, actual: score.effective, minimum: minimum
+            )
         }
 
         if let maximum = thresholds.maximumSurvivors, score.survived > maximum {
@@ -149,53 +153,120 @@ public enum QualityGate {
             ))
         }
 
-        let needsBaseline = thresholds.regressionMaximumDrop != nil || thresholds.newSurvivorsMaximum != nil
-        guard needsBaseline else {
-            return QualityGateResult(passed: violations.isEmpty, violations: violations)
-        }
+        return violations
+    }
 
+    /// One configured minimum against one score. A `nil` `actual` is a missing
+    /// denominator, not a zero: reported as `.scoreUnavailable` so a threshold
+    /// is never satisfied — or failed — against a number that does not exist.
+    private static func minimumScoreViolations(
+        label: String,
+        kind: QualityGateViolation.Kind,
+        actual: Double?,
+        minimum: Double
+    ) -> [QualityGateViolation] {
+        guard let actual else {
+            return [QualityGateViolation(
+                kind: .scoreUnavailable,
+                detail: "\(label) Mutation Score has no denominator and cannot satisfy a configured threshold."
+            )]
+        }
+        guard actual < minimum else { return [] }
+        return [QualityGateViolation(
+            kind: kind,
+            detail: String(
+                format: "%@ Mutation Score %.2f%% is below the required %.2f%%.",
+                label, actual * 100, minimum * 100
+            )
+        )]
+    }
+
+    // MARK: Baseline-relative thresholds
+
+    /// The thresholds that can only be answered against a prior run. A
+    /// configured-but-unanswerable threshold is itself a violation: an absent
+    /// or untrustworthy baseline fails the gate rather than quietly skipping
+    /// the checks that depend on it.
+    private static func baselineViolations(
+        report: RunReport,
+        score: MutationScore,
+        baseline: RunReport?,
+        thresholds: QualityGateThresholds
+    ) -> [QualityGateViolation] {
         guard let baseline, baseline.integrity.passed, let baselineScore = baseline.score else {
-            violations.append(QualityGateViolation(
+            return [QualityGateViolation(
                 kind: .baselineUnavailable,
                 detail: "regression/newSurvivors thresholds are configured but no trustworthy baseline report was provided."
-            ))
-            return QualityGateResult(passed: violations.isEmpty, violations: violations)
+            )]
         }
 
+        var violations: [QualityGateViolation] = []
+
         if let maximumDrop = thresholds.regressionMaximumDrop {
-            for (label, kindDetail) in [
-                ("Tested", (current: score.tested, prior: baselineScore.tested)),
-                ("Effective", (current: score.effective, prior: baselineScore.effective))
-            ] {
-                if let current = kindDetail.current, let prior = kindDetail.prior {
-                    let drop = prior - current
-                    if drop > maximumDrop {
-                        violations.append(QualityGateViolation(
-                            kind: .scoreRegression,
-                            detail: String(
-                                format: "%@ Mutation Score dropped %.2f%% versus baseline (%.2f%% -> %.2f%%); configured maximum drop is %.2f%%.",
-                                label, drop * 100, prior * 100, current * 100, maximumDrop * 100
-                            )
-                        ))
-                    }
-                }
-            }
+            violations += regressionViolations(
+                score: score, baselineScore: baselineScore, maximumDrop: maximumDrop
+            )
         }
 
         if let maximum = thresholds.newSurvivorsMaximum {
-            let baselineSurvivors = Set(baseline.results.filter { $0.outcome == .survived }.map(\.id))
-            let currentSurvivors = report.results.filter { $0.outcome == .survived }
-            let newSurvivors = currentSurvivors.filter { !baselineSurvivors.contains($0.id) }
-            if newSurvivors.count > maximum {
-                violations.append(QualityGateViolation(
-                    kind: .newSurvivors,
-                    detail: "\(newSurvivors.count) new surviving mutant(s) not present in the baseline "
-                        + "(configured maximum is \(maximum)): "
-                        + newSurvivors.map(\.id.rawValue).sorted().joined(separator: ", ")
-                ))
-            }
+            violations += newSurvivorViolations(report: report, baseline: baseline, maximum: maximum)
         }
 
-        return QualityGateResult(passed: violations.isEmpty, violations: violations)
+        return violations
+    }
+
+    /// Both scores compared against their own counterpart in the baseline.
+    /// Keyed by `KeyPath` rather than by pre-read pairs so the current and
+    /// prior value being compared are the same axis by construction, not by a
+    /// caller remembering to line them up.
+    private static func regressionViolations(
+        score: MutationScore,
+        baselineScore: MutationScore,
+        maximumDrop: Double
+    ) -> [QualityGateViolation] {
+        let axes: [(label: String, value: KeyPath<MutationScore, Double?>)] = [
+            ("Tested", \.tested),
+            ("Effective", \.effective)
+        ]
+
+        return axes.compactMap { axis in
+            // A missing denominator on either side is "cannot compare", not a
+            // drop of zero — the absolute-threshold checks above already
+            // report an unusable current score, and inventing a regression
+            // verdict here from a number that does not exist is exactly the
+            // false-failure this gate must not manufacture.
+            guard let current = score[keyPath: axis.value],
+                  let prior = baselineScore[keyPath: axis.value] else { return nil }
+            let drop = prior - current
+            guard drop > maximumDrop else { return nil }
+            return QualityGateViolation(
+                kind: .scoreRegression,
+                detail: String(
+                    format: "%@ Mutation Score dropped %.2f%% versus baseline (%.2f%% -> %.2f%%); configured maximum drop is %.2f%%.",
+                    axis.label, drop * 100, prior * 100, current * 100, maximumDrop * 100
+                )
+            )
+        }
+    }
+
+    /// Survivors present now and absent from the baseline. Compared by
+    /// `MutationID`, so a survivor that merely moved line does not read as new.
+    private static func newSurvivorViolations(
+        report: RunReport,
+        baseline: RunReport,
+        maximum: Int
+    ) -> [QualityGateViolation] {
+        let baselineSurvivors = Set(baseline.results.filter { $0.outcome == .survived }.map(\.id))
+        let newSurvivors = report.results
+            .filter { $0.outcome == .survived }
+            .filter { !baselineSurvivors.contains($0.id) }
+
+        guard newSurvivors.count > maximum else { return [] }
+        return [QualityGateViolation(
+            kind: .newSurvivors,
+            detail: "\(newSurvivors.count) new surviving mutant(s) not present in the baseline "
+                + "(configured maximum is \(maximum)): "
+                + newSurvivors.map(\.id.rawValue).sorted().joined(separator: ", ")
+        )]
     }
 }

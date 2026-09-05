@@ -407,6 +407,40 @@ public enum ConfigurationValidator {
     private static func validateBudgetSelectionV2(_ budget: BudgetSettings) -> [ConfigurationIssue] {
         var issues: [ConfigurationIssue] = []
 
+        // Withdrawn 2026-09-05, unconditionally and before any other check.
+        //
+        // v2's own evaluation closed inconclusive and concluded that it
+        // should ship neither as the default nor as an opt-in production
+        // feature on the strength of that evaluation — it lost to v1 on both
+        // of the larger corpora measured. It shipped anyway, reachable from a
+        // plain `execution.budget.selection: v2`, in v0.1.0 and v0.2.0. See
+        // ADR-0007 for the specification and the current status.
+        //
+        // Rejected here rather than deleted from `BudgetSettings`: this
+        // project's YAML decoding does not reject unknown keys
+        // (`ConfigurationLoader` decodes straight through, and the schema's
+        // `additionalProperties: false` is only ever advertised, never
+        // enforced at load), so removing the key would make an existing
+        // `selection: v2` config *silently* fall back to v1 sampling. A named
+        // error is the honest failure; a silent change of allocator is the
+        // exact class of surprise this codebase refuses everywhere else.
+        //
+        // Nothing else is removed. The `.v2` planner dispatch,
+        // `BudgetSelectorV2` itself, its test suite and `BudgetV2Eval` all
+        // remain, because the evaluation names a re-run that would clear
+        // them; lifting the withdrawal is deleting this one `issues.append`.
+        // The checks below stay for the same reason — unreachable for a user
+        // today, correct again the moment it is lifted.
+        issues.append(ConfigurationIssue(
+            severity: .error,
+            path: "execution.budget.selection",
+            message: """
+            Budget Selection v2 is withdrawn pending evaluation and cannot be used. \
+            Remove execution.budget.selection (and any minimumPerStratum/weight), or set \
+            selection: v1. See ADR-0007 for status.
+            """
+        ))
+
         // v2 has to know how many mutants it is dividing among strata; without
         // maxMutants there is no budget to allocate, same requirement as
         // stratifyBy: operatorSubtype above.
@@ -536,7 +570,7 @@ public enum ConfigurationJSONSchema {
                 "seed": { "type": ["integer", "null"] },
                 "stratifyBy": { "enum": ["subtype", "operatorSubtype", null] },
                 "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 },
-                "selection": { "enum": ["v1", "v2", null] },
+                "selection": { "enum": ["v1", "v2", null], "description": "v1 only. 'v2' is withdrawn pending evaluation and is rejected at configuration validation; see ADR-0007." },
                 "minimumPerStratum": { "type": ["integer", "null"], "minimum": 1 },
                 "weight": {
                   "type": ["object", "null"],

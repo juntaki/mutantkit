@@ -1,6 +1,29 @@
 # ADR-0007: Budget Selection v2 — discovery audit and draft spec
 
-- **Status:** Draft, revision 8 — discovery + spec only, no implementation.
+- **Status:** Implemented, then **withdrawn from the configuration surface
+  on 2026-09-05.** `BudgetSelectorV2` exists (allocator plus its test
+  suite), `MutationPlanner.makePlan` dispatches to it on
+  `budget.selection == .v2`, and `execution.budget.selection` shipped as a
+  public configuration key in v0.1.0 and v0.2.0 — all of which this Status
+  line previously denied, saying "discovery + spec only, no implementation"
+  while the implementation shipped.
+  **Correction 2026-09-05:** that denial was wrong from the moment the
+  integration landed, and it was the only description of v2 a reader of the
+  public repository had. The evaluation that was supposed to decide v2's
+  fate closed inconclusive and concluded it should ship neither as the
+  default nor as an opt-in production feature on that evidence (v2 lost to
+  v1 on both larger corpora measured), so `ConfigurationValidator` now
+  rejects `selection: v2` with an error and `ConfigurationPreflight` fails
+  closed on it: no `run`/`plan`/`dry-run`/`reproduce`/`execution-profile`
+  invocation can reach the allocator. The key still *decodes*, deliberately
+  — removing it would silently fall back to v1 sampling instead of failing
+  loudly. The code is retained for the re-run the evaluation names; lifting
+  the withdrawal is deleting one `issues.append` in
+  `validateBudgetSelectionV2`.
+  The revision history below is unchanged and still accurate as a record of
+  the spec work:
+  Draft, revision 8 — discovery + spec only, no implementation *at the time
+  of writing*.
   B.2's allocator algorithm (the core selector spec) reached
   **Critical=0/High=0 as of revision 5**, reconfirmed clean through
   revisions 6, 7, and 8 — untouched since. B.9's evaluation-metric

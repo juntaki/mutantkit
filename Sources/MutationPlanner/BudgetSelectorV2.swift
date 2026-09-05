@@ -106,9 +106,39 @@ public struct PhaseSplit: Sendable, Equatable {
 /// own candidates (B.1 invariant 11 bounds recursion at exactly two
 /// levels).
 ///
-/// This type is standalone and not yet wired into `MutationPlanner
-/// .makePlan`, the CLI, or configuration decoding — that integration is a
-/// separate, later task (see the ADR's Choice 1: v2 ships opt-in only).
+/// **Withdrawn from the configuration surface, 2026-09-05.**
+/// `ConfigurationValidator` now rejects `execution.budget.selection: v2`
+/// with an error, and `ConfigurationPreflight` fails closed on it, so no
+/// `run`/`plan`/`dry-run`/`reproduce`/`execution-profile` invocation can
+/// reach this allocator. v2's own evaluation closed inconclusive and
+/// concluded it should ship neither as the default nor as an opt-in
+/// production feature on that evidence — it lost to v1 on both of the
+/// larger corpora measured — so shipping it as a documented configuration
+/// key was a contradiction, not a decision. See ADR-0007.
+///
+/// The code is retained deliberately: the evaluation names a re-run that
+/// would settle it, and lifting the withdrawal is deleting one
+/// `issues.append` in `validateBudgetSelectionV2`. Its tests construct
+/// `BudgetSettings(selection: .v2)` in Swift directly and never pass
+/// through configuration validation, so they keep exercising this code.
+///
+/// **Correction 2026-09-05.** This comment previously said the type was
+/// "standalone and not yet wired into `MutationPlanner.makePlan`, the CLI,
+/// or configuration decoding — that integration is a separate, later task".
+/// That stopped being true when the integration landed, and is corrected
+/// rather than quietly deleted because this file is projected to the public
+/// repository while the evaluation that decided against v2 is not: for a
+/// public reader this doc comment was the only description of v2 there was,
+/// and it denied the feature existed while the feature shipped. What was
+/// actually true from then until the withdrawal above: `MutationPlanner
+/// .makePlan` dispatched here on `budget.selection == .v2`, `BudgetSettings`
+/// decoded `selection`, and `Schema/mutantkit-v1.json` advertised
+/// `"selection": {"enum": ["v1", "v2", null]}` as a public key.
+///
+/// No score was ever at risk: v2 changes which mutants are planned, never
+/// how any mutant is judged, and every mutant it drops still records
+/// `reason == .budgetExceeded`.
+///
 /// Every function here is a pure, deterministic computation over its
 /// arguments: no system RNG, no wall-clock, no historical/outcome-derived
 /// data of any kind (B.5/invariant 12 close that off entirely for this
@@ -183,16 +213,43 @@ public enum BudgetSelectorV2 {
             return Dictionary(uniqueKeysWithValues: strata.map { ($0.id, PhaseSplit()) })
         }
 
-        // B.2's overflow-safety note bounds `limit`/`remaining` and
-        // `sum(candidateCount.values())` to `<= 2^31` — the numbers the
-        // Int64 overflow proof for `numerator = R * effectiveWeight` (up to
-        // `2^31 * 10^6`) is actually derived against. Enforced here, not
-        // merely assumed by a caller, closing a real gap a Codex code
-        // review found: an unchecked `Int(remaining) * Int64(weight)` can
-        // trap on a value like `Int.max` before this guard existed.
-        // Accumulated with an early-exit cap, not a plain `reduce`, so the
-        // sum itself cannot overflow `Int` before the bound below is even
-        // checked (Codex re-review Low finding).
+        try requireBudgetMagnitude(strata: strata, limit: limit)
+
+        var state = AllocationState(strata: strata, limit: limit)
+
+        // ---- Phase 1: one-slot-per-stratum-per-round minimum reservation ----
+        reserveMinimums(
+            &state,
+            order: seededOrder(strata.map(\.id), seed: seed),
+            minimumPerStratum: minimumPerStratum
+        )
+
+        // `weight` only matters from here on — validated once, now, per the
+        // doc comment above.
+        try requireValidWeight(weight, strataIDs: strata.map(\.id))
+
+        // ---- Phase 2: iterative capacitated largest-remainder, exact integers only ----
+        var eligible = Set(strata.map(\.id).filter { state.residualCapacity($0) > 0 })
+        let remainderVal = distributeByWeight(&state, eligible: &eligible, weight: weight)
+
+        // ---- Leftover single-slot distribution ----
+        distributeLeftovers(&state, eligible: eligible, remainderVal: remainderVal)
+
+        // Postcondition (proved in the ADR): sum(total(split[s])) ==
+        // min(limit, sum(candidateCount.values())).
+        return state.split
+    }
+
+    /// B.2's overflow-safety note bounds `limit`/`remaining` and
+    /// `sum(candidateCount.values())` to `<= 2^31` — the numbers the Int64
+    /// overflow proof for `numerator = R * effectiveWeight` (up to `2^31 *
+    /// 10^6`) is actually derived against. Enforced here, not merely assumed
+    /// by a caller, closing a real gap a Codex code review found: an
+    /// unchecked `Int(remaining) * Int64(weight)` can trap on a value like
+    /// `Int.max` before this guard existed. Accumulated with an early-exit
+    /// cap, not a plain `reduce`, so the sum itself cannot overflow `Int`
+    /// before the bound below is even checked (Codex re-review Low finding).
+    private static func requireBudgetMagnitude(strata: [BudgetStratumV2], limit: Int) throws {
         var totalCandidates = 0
         for stratum in strata {
             totalCandidates += stratum.candidates.count
@@ -203,42 +260,95 @@ public enum BudgetSelectorV2 {
                 limit: limit, totalCandidates: totalCandidates, maximum: maximumBudgetMagnitude
             )
         }
+    }
 
-        var split: [String: PhaseSplit] = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, PhaseSplit()) })
-        let candidateCount: [String: Int] = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, $0.candidates.count) })
-        var remaining = limit
+    /// The mutable state `allocateCounts` carries across its phases.
+    ///
+    /// Extracted as a type rather than left as a bag of local `var`s so each
+    /// phase below reads as a named step over the same state, and so
+    /// `residualCapacity` — the quantity every phase's capacity clamp
+    /// depends on — has exactly one definition instead of a closure captured
+    /// from the middle of a 130-line function. It holds no policy: all of
+    /// B.2's arithmetic stays in the phase functions.
+    private struct AllocationState {
+        let candidateCount: [String: Int]
+        private(set) var split: [String: PhaseSplit]
+        private(set) var remaining: Int
 
-        // ---- Phase 1: one-slot-per-stratum-per-round minimum reservation ----
-        let order = seededOrder(strata.map(\.id), seed: seed)
-        phase1: while remaining > 0 {
+        init(strata: [BudgetStratumV2], limit: Int) {
+            candidateCount = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, $0.candidates.count) })
+            split = Dictionary(uniqueKeysWithValues: strata.map { ($0.id, PhaseSplit()) })
+            remaining = limit
+        }
+
+        /// Slots this stratum could still take: its own candidate count
+        /// minus everything either phase has already granted it.
+        func residualCapacity(_ id: String) -> Int {
+            let current = granted(id)
+            return (candidateCount[id] ?? 0) - current.phase1 - current.phase2
+        }
+
+        /// `split` is built from `strata` via `uniqueKeysWithValues` (which
+        /// traps on a duplicate stratum ID), and every ID the phases below
+        /// look up comes from that same `strata` list — so the default is
+        /// structurally unreachable rather than a silent zero.
+        func granted(_ id: String) -> PhaseSplit { split[id] ?? PhaseSplit() }
+
+        mutating func grantPhase1(_ id: String) {
+            let current = granted(id)
+            split[id] = PhaseSplit(phase1: current.phase1 + 1, phase2: current.phase2)
+            remaining -= 1
+        }
+
+        /// `count == 0` is legal and a no-op on both `split` and
+        /// `remaining` — a round that clamps every stratum to zero must not
+        /// consume budget.
+        mutating func grantPhase2(_ id: String, _ count: Int) {
+            guard count > 0 else { return }
+            let current = granted(id)
+            split[id] = PhaseSplit(phase1: current.phase1, phase2: current.phase2 + count)
+            remaining -= count
+        }
+    }
+
+    /// Phase 1 (B.2 step 2): grants one slot per stratum per round, in
+    /// `seededOrder`, until every stratum has reached `minimumPerStratum`,
+    /// exhausted its own candidates, or the budget runs out.
+    private static func reserveMinimums(
+        _ state: inout AllocationState,
+        order: [String],
+        minimumPerStratum: Int
+    ) {
+        rounds: while state.remaining > 0 {
             var grantedThisRound = false
             for stratumID in order {
-                if remaining == 0 { break phase1 }
-                guard let current = split[stratumID] else { continue }
+                if state.remaining == 0 { break rounds }
+                let current = state.granted(stratumID)
                 if current.phase1 >= minimumPerStratum { continue }
-                if current.phase1 >= (candidateCount[stratumID] ?? 0) { continue }
-                split[stratumID] = PhaseSplit(phase1: current.phase1 + 1, phase2: current.phase2)
-                remaining -= 1
+                if current.phase1 >= (state.candidateCount[stratumID] ?? 0) { continue }
+                state.grantPhase1(stratumID)
                 grantedThisRound = true
             }
             if !grantedThisRound { break }
         }
+    }
 
-        // `weight` only matters from here on — validated once, now, per the
-        // doc comment above.
-        try requireValidWeight(weight, strataIDs: strata.map(\.id))
-
-        // ---- Phase 2: iterative capacitated largest-remainder, exact integers only ----
+    /// Phase 2 (B.2 step 2): iterative capacitated largest-remainder, exact
+    /// integers only — no `Float`/`Double` anywhere, per the ADR's explicit
+    /// requirement.
+    ///
+    /// Returns the per-stratum remainders the leftover pass breaks ties on,
+    /// and leaves `eligible` at exactly the set the ADR's Hamilton bound was
+    /// proved against.
+    private static func distributeByWeight(
+        _ state: inout AllocationState,
+        eligible: inout Set<String>,
+        weight: [String: Int]
+    ) -> [String: Int64] {
         let useEqualWeight = weight.isEmpty
-        func residualCapacity(_ id: String) -> Int {
-            let current = split[id] ?? PhaseSplit()
-            return (candidateCount[id] ?? 0) - current.phase1 - current.phase2
-        }
-
-        var eligible = Set(strata.map(\.id).filter { residualCapacity($0) > 0 })
         var remainderVal: [String: Int64] = [:]
 
-        while remaining > 0, !eligible.isEmpty {
+        while state.remaining > 0, !eligible.isEmpty {
             let effectiveWeight: [String: Int64] = Dictionary(uniqueKeysWithValues: eligible.map { id in
                 (id, useEqualWeight ? Int64(1) : Int64(weight[id] ?? 1))
             })
@@ -247,23 +357,23 @@ public enum BudgetSelectorV2 {
             // validated positive configured value) — structurally
             // unreachable to divide by zero, not a runtime check (B.2).
             let totalWeight: Int64 = effectiveWeight.values.reduce(0, +)
-            let remainingAsInt64 = Int64(remaining)
+            let remainingAsInt64 = Int64(state.remaining)
 
+            // Computed against this round's opening state for every stratum
+            // first, then applied — a grant must never be sized against a
+            // capacity another stratum's grant already consumed.
             var grantThisRound: [String: Int] = [:]
             for id in eligible {
                 let numerator = remainingAsInt64 * (effectiveWeight[id] ?? 1) // Int64 — see overflow-safety note
                 let floorShare = numerator / totalWeight // exact integer division
                 remainderVal[id] = numerator % totalWeight // exact integer remainder
-                grantThisRound[id] = min(Int(floorShare), residualCapacity(id))
+                grantThisRound[id] = min(Int(floorShare), state.residualCapacity(id))
             }
-
             for (id, grant) in grantThisRound {
-                let current = split[id] ?? PhaseSplit()
-                split[id] = PhaseSplit(phase1: current.phase1, phase2: current.phase2 + grant)
+                state.grantPhase2(id, grant)
             }
-            remaining -= grantThisRound.values.reduce(0, +)
 
-            let newlySaturated = eligible.filter { residualCapacity($0) == 0 }
+            let newlySaturated = eligible.filter { state.residualCapacity($0) == 0 }
             eligible.subtract(newlySaturated)
 
             // REVISED (ADR-0007 B.2, closing Codex re-review High #1): break
@@ -282,32 +392,35 @@ public enum BudgetSelectorV2 {
             // terminates.
         }
 
-        // ---- Leftover single-slot distribution: exact integer comparison
-        // only, descending remainder, ties broken by ascending stratum ID.
-        // Only reached when the round that produced `remainderVal` left
-        // `eligible` unchanged (the break above), so the Hamilton bound the
-        // ADR proves applies validly to this exact `eligible`. ----
-        if remaining > 0, !eligible.isEmpty {
-            let order2 = eligible.sorted { lhs, rhs in
-                let lhsRemainder = remainderVal[lhs] ?? 0
-                let rhsRemainder = remainderVal[rhs] ?? 0
-                return lhsRemainder == rhsRemainder ? lhs < rhs : lhsRemainder > rhsRemainder
-            }
-            var index = 0
-            while remaining > 0, index < order2.count {
-                let id = order2[index]
-                if residualCapacity(id) > 0 {
-                    let current = split[id] ?? PhaseSplit()
-                    split[id] = PhaseSplit(phase1: current.phase1, phase2: current.phase2 + 1)
-                    remaining -= 1
-                }
-                index += 1
-            }
+        return remainderVal
+    }
+
+    /// Leftover single-slot distribution: exact integer comparison only,
+    /// descending remainder, ties broken by ascending stratum ID. Only
+    /// meaningful when the round that produced `remainderVal` left
+    /// `eligible` unchanged (Phase 2's break), so the Hamilton bound the ADR
+    /// proves applies validly to this exact `eligible`.
+    private static func distributeLeftovers(
+        _ state: inout AllocationState,
+        eligible: Set<String>,
+        remainderVal: [String: Int64]
+    ) {
+        guard state.remaining > 0, !eligible.isEmpty else { return }
+
+        let order = eligible.sorted { lhs, rhs in
+            let lhsRemainder = remainderVal[lhs] ?? 0
+            let rhsRemainder = remainderVal[rhs] ?? 0
+            return lhsRemainder == rhsRemainder ? lhs < rhs : lhsRemainder > rhsRemainder
         }
 
-        // Postcondition (proved in the ADR): sum(total(split[s])) ==
-        // min(limit, sum(candidateCount.values())).
-        return split
+        var index = 0
+        while state.remaining > 0, index < order.count {
+            let id = order[index]
+            if state.residualCapacity(id) > 0 {
+                state.grantPhase2(id, 1)
+            }
+            index += 1
+        }
     }
 
     // MARK: allocate

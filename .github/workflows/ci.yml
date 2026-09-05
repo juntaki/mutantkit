@@ -105,6 +105,64 @@ jobs:
       - name: SwiftFormat (check only)
         run: swiftformat --lint --config .swiftformat .
 
+  # Cognitive-complexity gate. SwiftLint caps `cyclomatic_complexity`
+  # (error: 25, see .swiftlint.yml) but ships no cognitive-complexity rule
+  # at all, so this job is the only thing watching the metric that tracks
+  # how hard a function is to hold in your head — nesting depth and
+  # interleaved control flow, which cyclomatic counting is blind to (a flat
+  # 20-case `switch` and a five-deep nest of loops and `if let`s score the
+  # same cyclomatic and wildly different cognitive).
+  #
+  # `--threshold 25` gates on `max(cyclomatic, cognitive)` — verified
+  # against this exact pinned version, where a cyclomatic-16/cognitive-15
+  # function reports at `--threshold 16` and not at 17 — so the cyclomatic
+  # half deliberately lands on SwiftLint's own error ceiling and the
+  # cognitive half is the coverage that is genuinely new.
+  #
+  # Scans Tests/ as well as Sources/, the same scope the `lint` job above
+  # uses. Tests/ passes at this threshold today with zero violations, so
+  # including it costs nothing now and keeps test-side complexity from
+  # growing unwatched later.
+  #
+  # `--report-suppressions` prints every `// swift-complexity:disable`
+  # comment together with the suppressed function's current metrics, to
+  # stderr, so a suppression stays visible in the job log instead of
+  # silently outliving the reason it was added.
+  #
+  # Syntax-only — no build, no toolchain beyond the analyzer itself — so
+  # this belongs in the same fast, always-required tier as `lint`.
+  complexity:
+    name: Complexity gate (swift-complexity)
+    runs-on: macos-15
+    # Generous relative to observed reality (a few seconds of analysis over
+    # the whole tree) — bounds a stuck `brew install`, not the analysis.
+    timeout-minutes: 10
+    env:
+      # Pinned for the same reason this workflow pins SWIFTLINT_VERSION
+      # above: this tool decides what the gate *means*, and an unannounced
+      # upstream change to how cognitive complexity is counted would move
+      # the bar in either direction without a single line of this repo
+      # changing. `brew install` always fetches the tap's latest, so the
+      # version is asserted after installing rather than pinned at install
+      # time — an upstream release then surfaces as an explicit, reviewable
+      # CI failure instead of a quietly different verdict.
+      SWIFT_COMPLEXITY_VERSION: "1.4.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned swift-complexity
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install fummicc1/tap/swift-complexity
+          installed_version="$(swift-complexity --version)"
+          if [ "$installed_version" != "$SWIFT_COMPLEXITY_VERSION" ]; then
+            echo "::error::Installed swift-complexity $installed_version does not match pinned SWIFT_COMPLEXITY_VERSION $SWIFT_COMPLEXITY_VERSION. Re-run the gate locally against the new version, confirm the reported metrics did not move, then bump this pin."
+            exit 1
+          fi
+      - name: Complexity gate
+        shell: bash
+        run: swift-complexity Sources Tests --recursive --threshold 25 --report-suppressions
+
   # Fast feedback: everything that does not build another project.
   unit:
     name: Unit tests
@@ -273,6 +331,22 @@ jobs:
           exit_code=$?
           echo "=== swift test exited with code $exit_code ==="
           cat test.log
+          # A `swift test` that matched and ran nothing exits 0. Without this
+          # the whole public gate — every job below depends on this one
+          # passing — could report green having executed no test at all,
+          # which is the "zero work is never success" invariant this project
+          # applies to its own verdicts, unapplied to its own CI. The
+          # acceptance and schemata jobs below have had this since P8; the
+          # `unit` job never did.
+          #
+          # `|| exit_code=1`, never a bare call: the step sets `set -o
+          # pipefail` but NOT `set -e` (see the top of this run block), so a
+          # bare invocation's non-zero status is discarded and the trailing
+          # `exit $exit_code` would hand back the green it already had. Same
+          # idiom as the acceptance job's own call. A real test failure above
+          # must still win, which it does — this can only ever set the code
+          # to 1, never clear it.
+          Scripts/assert-tests-ran.sh test.log "unit (all suites)" || exit_code=1
           exit $exit_code
       # `always()`, not `failure()`: a job that hits its own
       # `timeout-minutes` is reported as *cancelled*, not failed, and
@@ -324,7 +398,6 @@ jobs:
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
     runs-on: macos-15
-    needs: unit
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit`'s own plain unit suite — but still bounded, per the same
     # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
@@ -342,6 +415,25 @@ jobs:
             simulator: "0"
           - fixture: shard-merge
             filter: ShardMergeAcceptanceTests
+            simulator: "0"
+          # Restored: `Scripts/ci-fixtures.json` defines 18 fixtures and this
+          # matrix listed 17. The missing one was the quick-start path — the
+          # first thing a new user runs, and the only fixture never exercised
+          # publicly since P13.
+          #
+          # Kept in `ci-fixtures.json`'s own order so the two lists can be
+          # compared by eye. That there are two lists at all is the real
+          # defect: `Scripts/ci-fixtures.json`'s own header states that both
+          # `Scripts/ci-route.sh` and this workflow's full-matrix fallback are
+          # supposed to read that one file "rather than two independently-
+          # maintained copies that can silently drift apart". This hardcoded
+          # copy exists only because the job that derived the matrix from the
+          # JSON is not currently wired up here. Re-deriving it is deliberately
+          # deferred — enabling a new CI control plane immediately before a
+          # release is the wrong trade — and until that lands, the two lists
+          # are held in step by a pre-publish check rather than by hope.
+          - fixture: golden-path-onboarding
+            filter: GoldenPathOnboardingAcceptanceTests
             simulator: "0"
           - fixture: swift-package-ios
             filter: SwiftPackageIOSAcceptanceTests
@@ -454,6 +546,39 @@ jobs:
           set -o pipefail
           swift build --build-tests 2>&1 | tee build.log
 
+      # Fixture-scoped environment for the `xcode-project` entry only: its
+      # filter (`XcodeProjectAcceptanceTests`) also matches
+      # `SchemataSupportedMatrixXcodeProjectAcceptanceTests`, whose two
+      # provenance/evidence tests need more than a plain build+test —
+      # without both steps below they fail deterministically (not flakily):
+      #
+      # - `brew install xcodegen`: `startupHitAndReceiptUUIDMatchOnIOSSimulator`
+      #   stages a throwaway .xcodeproj via `xcodegen generate`, which fails
+      #   with `env: xcodegen: No such file or directory` (exit 127) when the
+      #   tool is absent. Only this suite shells out to xcodegen, so only
+      #   this entry installs it.
+      # - Schemata runtime archives + override: `runtimeProvenanceIsOverride`
+      #   asserts `SchemataRuntimeLibraryLocator.locate(for: .iOSSimulator)`
+      #   resolves with `.override` provenance, and the evidence test links
+      #   the runtime into a real iOS-Simulator chunk — both fail closed with
+      #   "no bundled schemata runtime manifest ..." when neither a release
+      #   install nor `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` provides one.
+      #   Same proven recipe as the `ios-simulator-schemata-runtime` job
+      #   (release macOS archive + `build-schemata-runtime.sh` iPhoneSimulator
+      #   slice), exported via $GITHUB_ENV so the `Acceptance` step below —
+      #   and only the runs on this entry — see it.
+      - name: Install xcodegen (xcode-project only)
+        if: matrix.fixture == 'xcode-project'
+        run: brew install xcodegen
+      - name: Schemata runtime archives (xcode-project only)
+        if: matrix.fixture == 'xcode-project'
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build -c release --product MutantKitSchemataRuntime
+          scripts/build-schemata-runtime.sh "$GITHUB_WORKSPACE/.build/release"
+          echo "MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE=$GITHUB_WORKSPACE/.build/release" >> "$GITHUB_ENV"
+
       - name: Acceptance
         shell: bash
         env:
@@ -494,7 +619,6 @@ jobs:
   ror-schemata-differential:
     name: ROR schemata isolated-vs-schemata differential
     runs-on: macos-15
-    needs: unit
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
@@ -547,7 +671,6 @@ jobs:
   ios-simulator-schemata-runtime:
     name: iOS-Simulator schemata runtime (build + link viability)
     runs-on: macos-15
-    needs: unit
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
@@ -585,3 +708,68 @@ jobs:
           path: |
             build.log
             acceptance.log
+
+  # The one required status. Every other job in this workflow is
+  # unconditional — this workflow has no `route`, so nothing here is ever
+  # deliberately skipped — which makes the expected result table static:
+  # all five must genuinely report `success`.
+  #
+  # `if: always()`, not the default `success()`: this job's entire purpose is
+  # to report on the others, including when one of them fails or GitHub
+  # cancels it. Under the default condition it would be skipped in exactly
+  # that case, leaving the one check meant to be authoritative silently
+  # absent rather than red — the CI-layer form of "zero work is never
+  # success", and the shape this repository's own trust invariants exist to
+  # rule out.
+  #
+  # Deliberately simpler than the private repo's own merge-gate, which
+  # derives each job's expected result from a `route` job's declared
+  # execution plan. With no `route` here there is no plan to compare
+  # against, so mirroring that machinery would add a permissive failure mode
+  # (a mis-derived expectation reading as an intentional skip) in exchange
+  # for nothing. If `route` is ever restored, this must be replaced by the
+  # route-aware form rather than left alongside it.
+  #
+  # A skipped or cancelled dependency fails this gate. That is intended: on
+  # this workflow a skip is never intentional, so it is a signal that
+  # something did not run, which is precisely what must not pass unnoticed.
+  merge-gate:
+    name: Merge gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - lint
+      - complexity
+      - unit
+      - acceptance
+      - ror-schemata-differential
+      - ios-simulator-schemata-runtime
+    if: always()
+    steps:
+      - name: Confirm every required job succeeded
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed="false"
+
+          check() {
+            local name="$1" actual="$2"
+            echo "$name -> $actual (expected: success)"
+            if [ "$actual" != "success" ]; then
+              echo "::error::$name reported '$actual'; every job in this workflow is unconditional, so anything other than success — including a skip or a cancellation — means it did not run to completion"
+              failed="true"
+            fi
+          }
+
+          check "lint" "${{ needs.lint.result }}"
+          check "complexity" "${{ needs.complexity.result }}"
+          check "unit" "${{ needs.unit.result }}"
+          check "acceptance" "${{ needs.acceptance.result }}"
+          check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}"
+          check "ios-simulator-schemata-runtime" "${{ needs.ios-simulator-schemata-runtime.result }}"
+
+          if [ "$failed" = "true" ]; then
+            echo "::error::merge-gate: at least one required job did not succeed"
+            exit 1
+          fi
+          echo "merge-gate: every required job succeeded"

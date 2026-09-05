@@ -174,11 +174,20 @@ instead of restarting from zero.
 `project.kind`/`scheme`/`destination` (Xcode projects only),
 `sources.include`/`exclude`, `tests.targets`, `operators.profile`
 (`conservative`/`default`/`experimental`), `execution.budget.maxMutants`,
-`execution.strategy` (`isolated` default; `schemata` is faster and supported
-for `swiftPackageMacOS` and `xcodeProject` — see
-`docs/schemata-support-matrix.md` for the full, measured matrix, including
+`execution.strategy` (`isolated` default; `schemata` is supported for
+`swiftPackageMacOS` and `xcodeProject` only — see
+`docs/schemata-support-matrix.md` for the full support matrix, including
 `swiftPackageApple`/`xcodeWorkspace`, which still fall back to isolated for
-every mutation today). Every mutation's own result is fail-closed regardless
+every mutation today; that document is a support matrix, not a benchmark,
+and makes no speed claim). `schemata` is not uniformly faster, so never
+switch a project to it for speed alone: on SwiftPM/macOS it measured
+modestly faster than isolated (wall-clock ratio 1.034x–1.088x, ROR-only,
+n=5 — roughly break-even), but on Xcode/iOS-Simulator it measured **62.5%
+slower** on a real 100-mutant corpus (6383s vs 3928s, and the gap widened
+with scale), which is why `isolated` is the default there and `schemata`
+is an explicit opt-in for advanced or research use — see
+`ADR/0009-ios-execution-default.md`. Every mutation's own result is
+fail-closed regardless
 of strategy: a schemata verdict that cannot prove its own runtime evidence
 never gets guessed at, it re-runs isolated instead. CLI flags
 override the config file, which overrides environment, which overrides

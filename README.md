@@ -70,7 +70,7 @@ On GitHub Actions, the bundled composite action wraps the tarball recipe
 below (checksum-verified, attestation-verified) in one step:
 
 ```yaml
-- uses: juntaki/mutantkit@v0.3.0   # pin an exact release tag
+- uses: juntaki/mutantkit@v0.2.0   # pin an exact release tag
 ```
 
 That is the entire effect — install, verify, add to `PATH`, stop. It is
@@ -283,7 +283,7 @@ checks, a job summary, and a downloadable report artifact:
   with:
     fetch-depth: 0        # only needed if you pass `diff:` below
 
-- uses: juntaki/mutantkit@v0.3.0
+- uses: juntaki/mutantkit@v0.2.0
   with:
     mode: ci
     diff: origin/main      # optional — scope planning to lines changed against this ref
@@ -309,7 +309,7 @@ Inputs beyond `mode`/`version`/`diff`:
 
 **Version pinning.** An explicit `version:` always wins. Otherwise, pinning
 the action itself to a release tag also pins the binary — `uses:
-juntaki/mutantkit@v0.3.0` installs `v0.3.0`, no separate `version:` needed.
+juntaki/mutantkit@v0.2.0` installs `v0.2.0`, no separate `version:` needed.
 Only a ref that is not itself a release tag (`uses: juntaki/mutantkit@main`,
 or a local `uses: ./` checkout of this repo) falls back to the floating
 `latest` GitHub Release, and says so with a visible `::warning::` in the

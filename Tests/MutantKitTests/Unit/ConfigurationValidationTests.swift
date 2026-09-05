@@ -349,4 +349,64 @@ struct ConfigurationValidationTests {
         #expect(budget.stratifyBy == .operatorSubtype)
         #expect(budget.minimumPerOperator == 5)
     }
+
+    // MARK: - Budget Selection v2 is withdrawn from the configuration surface
+
+    private func configuration(budget: BudgetSettings) -> Configuration {
+        var configuration = Configuration()
+        configuration.execution = ExecutionSettings(budget: budget)
+        return configuration
+    }
+
+    /// `maxMutants` is set deliberately. Without it the pre-existing
+    /// "'v2' requires execution.budget.maxMutants" branch fires on the same
+    /// path, and this test would pass whether or not the withdrawal exists —
+    /// the whole point is that a config with nothing else wrong with it is
+    /// still rejected.
+    @Test("A fully well-formed v2 configuration is still rejected, because v2 is withdrawn")
+    func wellFormedBudgetSelectionV2IsRejected() {
+        let issues = ConfigurationValidator.validate(
+            configuration(budget: BudgetSettings(maxMutants: 100, selection: .v2))
+        )
+        let withdrawal = issues.first {
+            $0.severity == .error
+                && $0.path == "execution.budget.selection"
+                && $0.message.contains("withdrawn")
+        }
+        #expect(withdrawal != nil, "expected a withdrawal error, got: \(issues)")
+        #expect(withdrawal?.message.contains("selection: v1") == true, "the error must name the way out")
+    }
+
+    /// The CLI's own preflight (`ConfigurationPreflight.run`) fails closed on
+    /// any `.error`, and every command that acts on a Configuration calls it,
+    /// so this is what actually makes v2 unreachable rather than merely
+    /// discouraged.
+    @Test("hasErrors is true for a v2 configuration, so the CLI preflight fails closed on it")
+    func budgetSelectionV2ProducesAHardError() {
+        #expect(ConfigurationValidator.hasErrors(
+            configuration(budget: BudgetSettings(maxMutants: 100, selection: .v2))
+        ))
+    }
+
+    /// No collateral damage: withdrawing v2 must not reject the selector
+    /// every existing configuration actually uses.
+    @Test("v1 and an unset selection remain valid", arguments: [BudgetSelectionAlgorithm.v1, nil] as [BudgetSelectionAlgorithm?])
+    func nonV2SelectionsRemainValid(selection: BudgetSelectionAlgorithm?) {
+        let issues = ConfigurationValidator.validate(
+            configuration(budget: BudgetSettings(maxMutants: 100, selection: selection))
+        )
+        #expect(!issues.contains { $0.severity == .error }, "unexpected errors: \(issues)")
+    }
+
+    /// The withdrawal is a validation decision, not a decoding one: the key
+    /// still decodes, so an existing `selection: v2` config produces a named
+    /// error rather than silently falling back to v1 sampling.
+    @Test("selection: v2 still decodes, so the rejection is explicit rather than a silent fallback")
+    func budgetSelectionV2StillDecodes() throws {
+        let json = """
+        { "maxMutants": 100, "selection": "v2" }
+        """
+        let budget = try JSONDecoder().decode(BudgetSettings.self, from: Data(json.utf8))
+        #expect(budget.selection == .v2)
+    }
 }

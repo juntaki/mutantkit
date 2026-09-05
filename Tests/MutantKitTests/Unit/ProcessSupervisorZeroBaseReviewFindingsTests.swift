@@ -129,8 +129,16 @@ struct ProcessSupervisorZeroBaseReviewFindingsTests {
 
         let log = EventLog()
 
+        // `timeoutSeconds` was 1. It is the fixture child's entire budget for
+        // interpreter startup as well as announcing its pid (see
+        // `runIgnoringSIGTERM`'s own comment), and under a full-suite run
+        // python3 startup intermittently lost that race on unmodified `main`,
+        // failing this test with a setup error rather than a real finding.
+        // Nothing here measures the timeout's value — the assertions below
+        // are about signal *ordering* — so widening it costs one extra second
+        // of runtime and removes the race entirely.
         let outcome = try await ProcessSupervisorOwnershipFixture.runIgnoringSIGTERM(
-            timeoutSeconds: 1, terminationGracePeriodSeconds: 1,
+            timeoutSeconds: 5, terminationGracePeriodSeconds: 1,
             lifecycleEventHook: { log.record($0) }
         )
         defer { if ProcessTree.isAlive(outcome.descendantPID) { kill(outcome.descendantPID, SIGKILL) } }

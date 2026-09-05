@@ -66,6 +66,19 @@ public struct XcodeBuildAdapter: Sendable {
     /// one) relative to the primary pass this feature already parallelizes
     /// correctly.
     let workerDevicesByWorkspace: [String: SimulatorDevice]?
+    /// How `uninstallStaleApp` actually spawns `simctl` —
+    /// `AdapterSupport.swift`'s `ProcessRunner` seam. Every production path
+    /// gets `defaultProcessRunner`; only the test-only initializer below
+    /// substitutes anything else.
+    ///
+    /// Constructor-injected rather than passed per call because the callers
+    /// that must be proven fail-closed (`runTestsAfterUninstall`,
+    /// `runSchemataTokenAfterUninstall`) are already at this project's
+    /// `function_parameter_count` ceiling, and because a scripted runner is
+    /// the only way to pin the failure branches deterministically: a real
+    /// `simctl` against a bogus UDID was assumed to fail the same way every
+    /// time, and CI disproved that assumption.
+    let processRunner: ProcessRunner
 
     public init(
         configuration: Configuration,
@@ -82,12 +95,14 @@ public struct XcodeBuildAdapter: Sendable {
         simulators = SimulatorPool(workingDirectory: projectRoot)
         self.resolvedDestination = resolvedDestination
         self.workerDevicesByWorkspace = workerDevicesByWorkspace
+        processRunner = defaultProcessRunner
     }
 
-    /// Test-only initializer that injects the simulator pool, so
-    /// `prepareSimulatorForRun()`'s outcome mapping can be exercised against
-    /// a scripted pool without a real simulator. Internal to keep it out of
-    /// the public surface.
+    /// Test-only initializer that injects the simulator pool and the
+    /// `simctl` process seam, so `prepareSimulatorForRun()`'s outcome
+    /// mapping and `uninstallStaleApp`'s fail-closed contract can both be
+    /// exercised against scripted doubles without a real simulator.
+    /// Internal to keep it out of the public surface.
     init(
         configuration: Configuration,
         kind: ProjectKind,
@@ -95,7 +110,8 @@ public struct XcodeBuildAdapter: Sendable {
         projectRoot: URL,
         resolvedDestination: ResolvedDestination?,
         simulators: SimulatorPool,
-        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil,
+        processRunner: @escaping ProcessRunner = defaultProcessRunner
     ) {
         self.configuration = configuration
         self.kind = kind
@@ -104,6 +120,7 @@ public struct XcodeBuildAdapter: Sendable {
         self.simulators = simulators
         self.resolvedDestination = resolvedDestination
         self.workerDevicesByWorkspace = workerDevicesByWorkspace
+        self.processRunner = processRunner
     }
 
     /// The device name in a destination string, if it names one.
@@ -722,7 +739,11 @@ extension XcodeBuildAdapter: TestAdapter {
     /// to call this directly, bypassing the full `leaseAndRunTests` path
     /// that would otherwise require a real build and a real lease to reach
     /// it at all.
-    /// `processRunner`: `AdapterSupport.swift`'s `ProcessRunner` seam, letting a test force `outputComplete == false` deterministically.
+    /// The `simctl` invocation itself goes through this adapter's own
+    /// `processRunner` property, so a scripted failure reaches every caller
+    /// of this method — including `runTestsAfterUninstall` and
+    /// `runSchemataTokenAfterUninstall`, whose launch-suppression contract
+    /// can therefore be proven without a real simulator at all.
     enum StaleAppUninstallOutcome: Sendable, Equatable {
         case ready
         case failed(bundleID: String, detail: String)
@@ -730,8 +751,7 @@ extension XcodeBuildAdapter: TestAdapter {
 
     func uninstallStaleApp(
         artifact: BuildArtifact, from lease: SimulatorLease,
-        report: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) },
-        processRunner: ProcessRunner = defaultProcessRunner
+        report: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) }
     ) async -> StaleAppUninstallOutcome {
         guard let xctestrun = artifact.xctestrunPath else { return .ready }
         for bundleID in Self.bundleIdentifiers(inXCTestRun: xctestrun) {
@@ -749,10 +769,7 @@ extension XcodeBuildAdapter: TestAdapter {
                 return .failed(bundleID: bundleID, detail: detail)
             }
             if let result, !result.succeeded {
-                // See `ProcessResult.outputComplete`: truncated output on a real failure must say so, not report an empty detail.
-                let detail = result.outputComplete
-                    ? OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400).trimmingCharacters(in: .whitespacesAndNewlines)
-                    : "subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"
+                let detail = Self.uninstallFailureDetail(result)
                 report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: detail))
                 return .failed(bundleID: bundleID, detail: detail)
             }
@@ -771,6 +788,35 @@ extension XcodeBuildAdapter: TestAdapter {
             status: .infrastructureFailure, summary: nil, command: command, resultArtifactPath: nil,
             diagnosis: uninstallFailureWarning(bundleID: bundleID, udid: udid, detail: detail).trimmingCharacters(in: .newlines)
         )
+    }
+
+    /// The `.failed` detail for a non-zero `simctl uninstall`, in the three
+    /// shapes a real failure can arrive in — none of which may produce an
+    /// empty string. A fail-closed outcome whose diagnosis says nothing is
+    /// indistinguishable, to whoever later reads the report, from a check
+    /// that never ran; "zero work" must not be able to look like an answer.
+    ///
+    /// - Capture incomplete (`ProcessResult.outputComplete == false`): say
+    ///   so explicitly rather than pass a partial read off as the whole
+    ///   story. See `ProcessResult.outputComplete`'s own doc comment.
+    /// - Captured in full, with content: that content, redacted and
+    ///   truncated. This is the ordinary case (`Invalid device: ...`).
+    /// - Captured in full and genuinely empty: name the exit code, because
+    ///   "simctl failed and wrote nothing" is itself the diagnosis. Before
+    ///   this branch existed the detail was the empty string, and the
+    ///   warning a human saw ended in a bare colon.
+    ///
+    /// A pure function over an already-observed `ProcessResult`, so the
+    /// contract tests pin all three branches deterministically without a
+    /// real `simctl` invocation.
+    static func uninstallFailureDetail(_ result: ProcessResult) -> String {
+        guard result.outputComplete else {
+            return "subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"
+        }
+        let captured = OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard captured.isEmpty else { return captured }
+        return "simctl exited \(result.exitCode) without writing any diagnostic output"
     }
 
     /// The exact text `uninstallStaleApp` reports for a genuine failure —

@@ -59,7 +59,7 @@
             "seed": { "type": ["integer", "null"] },
             "stratifyBy": { "enum": ["subtype", "operatorSubtype", null] },
             "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 },
-            "selection": { "enum": ["v1", "v2", null] },
+            "selection": { "enum": ["v1", "v2", null], "description": "v1 only. 'v2' is withdrawn pending evaluation and is rejected at configuration validation; see ADR-0007." },
             "minimumPerStratum": { "type": ["integer", "null"], "minimum": 1 },
             "weight": {
               "type": ["object", "null"],

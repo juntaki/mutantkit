@@ -14,17 +14,21 @@
 # in an already-baselined file, without forcing a refactor of any of them
 # just to silence the linter. By rule: `line_length` 80 (mostly long test
 # lines and interpolated diagnostics), `type_body_length` 16, `large_tuple`
-# 13, `function_body_length` 10, `cyclomatic_complexity` 6, `file_length` 5,
-# `function_parameter_count` 5, `force_try` 2, plus one
-# `orphaned_doc_comment`. The length/complexity rules concentrate in a few
-# deliberately large orchestration files (MutationRunner.swift,
-# SchemataMutationRunner.swift, XcodeBuildAdapter.swift and similar), but
-# `cyclomatic_complexity` also covers a ReproduceCommand handler (13),
-# ConfigurationValidation (13), QualityGate (16), BudgetSelectorV2 (18),
-# DeclarationIdentityResolver (15) and one simulator-pool test — and
-# `large_tuple` is spread across several test files. (An older version of
-# this comment named InspectCommand.run()/RunCommand.run() here; both have
-# since been split far enough that neither is baselined anymore.)
+# 13, `function_body_length` 10, `function_parameter_count` 6,
+# `cyclomatic_complexity` 4, `file_length` 5, `force_try` 2, plus one
+# `unused_enumerated` and one `orphaned_doc_comment`. The length/complexity
+# rules concentrate in a few deliberately large orchestration files
+# (MutationRunner.swift, SchemataMutationRunner.swift, XcodeBuildAdapter.swift
+# and similar), but `cyclomatic_complexity` also covers a ReproduceCommand
+# handler (13), ConfigurationValidation (13), DeclarationIdentityResolver
+# (15) and one simulator-pool test — and `large_tuple` is spread across
+# several test files. This count includes a handful of entries private-tree-
+# only targets (research/probe executables, benchmark harness) contribute
+# that the public projection's own baseline doesn't carry, since those
+# targets are excluded from the public snapshot. (Earlier versions of this
+# comment also named InspectCommand.run()/RunCommand.run(), and then
+# QualityGate.evaluate (16)/BudgetSelectorV2.allocateCounts (18); all four
+# have since been split far enough that none is baselined anymore.)
 #
 # Baseline entries key on line number, so an unrelated edit earlier in a
 # baselined file shifts every violation below it and makes CI fail on an

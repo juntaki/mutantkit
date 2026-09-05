@@ -34,13 +34,29 @@ struct ProcessSupervisorStallDetectionTests {
         FileManager.default.createFile(atPath: path.path, contents: nil)
         defer { try? FileManager.default.removeItem(at: path) }
 
-        // Appends every 0.1s for 10 iterations (~1s total) — each append is
-        // real progress. stallTimeoutSeconds (0.3s) is well under the total
+        // Appends every 0.1s for 30 iterations (~3s total) — each append is
+        // real progress. stallTimeoutSeconds (1.5s) is half the total
         // runtime, so this only stays alive if progress genuinely keeps
         // resetting the stall clock, not merely because the absolute
-        // timeout (5s) hasn't been reached yet.
+        // timeout (20s) hasn't been reached yet.
+        //
+        // The gap between one append and the next (0.1s) is deliberately
+        // 15x under the stall timeout. It was 0.3s against the same 0.1s
+        // interval — a 3x margin — and that flaked for real on a public CI
+        // runner: `sleep 0.1` in a shell only bounds how long the process
+        // sleeps, not how long until it is scheduled again, and on a
+        // 3-vCPU runner saturated by this target's ~2400 other, fully
+        // concurrent tests, a single gap stretching past 0.3s is ordinary.
+        // The watchdog then fired correctly, the process came back
+        // SIGTERM'd (exit 143, stalled), and the test read that as a
+        // product failure. `.subprocessExclusive` does not help here: it
+        // serialises this suite against the other real-subprocess suites,
+        // not against the rest of the target, which is where the load
+        // actually comes from. Widening the margin is the fix that keeps
+        // what the test proves intact — the alternative, relaxing the
+        // assertion to accept a stall, would delete the proof entirely.
         let script = """
-        for i in $(seq 1 10); do
+        for i in $(seq 1 30); do
             echo "progress $i" >> '\(path.path)'
             sleep 0.1
         done
@@ -48,8 +64,8 @@ struct ProcessSupervisorStallDetectionTests {
         """
         let result = try await ProcessSupervisor.run(
             executable: "/bin/sh", arguments: ["-c", script],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 5,
-            stallDetection: StallDetection(progressFilePath: path, stallTimeoutSeconds: 0.3, checkIntervalSeconds: 0.05)
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 20,
+            stallDetection: StallDetection(progressFilePath: path, stallTimeoutSeconds: 1.5, checkIntervalSeconds: 0.1)
         )
         #expect(result.succeeded, "diagnosis: exitCode=\(result.exitCode) timedOut=\(result.timedOut) signal=\(String(describing: result.terminatingSignal))")
         #expect(!result.timedOut)

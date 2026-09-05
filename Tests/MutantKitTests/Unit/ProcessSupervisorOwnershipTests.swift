@@ -109,15 +109,28 @@ struct ProcessSupervisorOwnershipTests {
 
     @Test("A child ignoring SIGTERM is escalated to SIGKILL only after the configured grace period, without stall detection involved")
     func sigtermIgnoringChildEscalatesToSIGKILL() async throws {
+        // Named rather than repeated as literals, so the lower bound below
+        // cannot drift away from the values actually passed in.
+        //
+        // `timeout` was 1. It is also the fixture child's entire budget for
+        // python3 startup plus announcing its pid (see `runIgnoringSIGTERM`'s
+        // own comment): under a full-suite run that race is intermittently
+        // lost, and the test then fails on a setup error instead of on
+        // anything about escalation. What this test measures is that the
+        // grace period elapses *after* the timeout fires, which is
+        // independent of how large the timeout is.
+        let timeout: Double = 5
+        let grace: Double = 2
+
         let started = Date()
         let outcome = try await ProcessSupervisorOwnershipFixture.runIgnoringSIGTERM(
-            timeoutSeconds: 1, terminationGracePeriodSeconds: 2
+            timeoutSeconds: timeout, terminationGracePeriodSeconds: grace
         )
         let elapsed = Date().timeIntervalSince(started)
 
         #expect(outcome.processResult.timedOut)
         #expect(outcome.processResult.terminatingSignal == SIGKILL)
-        #expect(elapsed >= 1 + 2, "the grace period must actually elapse before escalation — \(elapsed)s")
+        #expect(elapsed >= timeout + grace, "the grace period must actually elapse before escalation — \(elapsed)s")
         #expect(!isAlive(outcome.descendantPID), "the SIGTERM-ignoring child must still be gone after SIGKILL escalation")
     }
 

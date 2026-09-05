@@ -68,7 +68,7 @@ inputs:
 
   version:
     description: >-
-      MutantKit release to install, e.g. "v0.3.0", or the literal "latest".
+      MutantKit release to install, e.g. "v0.2.0", or the literal "latest".
       Always wins when set, including the literal "latest" typed out loud.
       Left unset (the default), the resolution is: if this action itself was
       invoked at a release-tag ref (`uses: juntaki/mutantkit@vX.Y.Z`), that

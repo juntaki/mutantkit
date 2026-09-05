@@ -1,0 +1,647 @@
+name: Release validation
+
+# What this workflow proves, and why it is not part of `ci.yml` or `release.yml`.
+#
+# `ci.yml` proves the *override* path: `ror-schemata-differential` and
+# `ios-simulator-schemata-runtime` both build the schemata runtime archives out
+# of this checkout and hand them to the CLI through
+# `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE`. That proves the runtime works when a
+# developer points at one. It proves nothing about the path an end user is on,
+# where no such variable is set and no source checkout exists — resolution has to
+# come from the `lib/mutantkit/schemata/` tree `Scripts/release-build.sh` packages
+# next to the executable (`SchemataRuntimeLibraryLocator`'s `.bundled` provenance).
+#
+# `release.yml` builds and ships that real package, and its `clean-machine-e2e`
+# job runs the quick start (doctor -> init -> plan -> run) against a generated
+# SwiftPM fixture with no repo present. But that path is the *isolated* execution
+# strategy: it never asks for `execution.strategy: schemata`, so it never links
+# the bundled runtime at all, and it never touches an iOS Simulator. A release
+# whose bundled schemata tree was missing, mis-manifested, built for the wrong
+# platform, or silently falling back to isolated would sail straight through it.
+#
+# This workflow closes exactly that gap: does the bundled schemata runtime resolve
+# and actually *run*, with no override anywhere in the environment, on both macOS
+# and the iOS Simulator? The proof is four tests, in two layers, in
+# `Tests/MutantKitTests/Acceptance/ReleaseBundledSchemataRuntimeAcceptanceTests.swift`
+# (each given its own step and its own `assert-tests-ran.sh` call on purpose — a
+# single combined `--filter "a|b"` cannot tell "both ran" apart from "the real-run
+# test silently vanished and the archive-inspection one kept the count above zero"):
+#
+#   Artifact is real (nm/lipo/otool against the packaged archive):
+#     - `macOSArchiveResolvesFromBundle`          — provenance `.bundled`, both v3
+#                                                   runtime entry points exported.
+#     - `iOSSimulatorArchiveResolvesFromBundle`   — provenance `.bundled`, arm64 +
+#                                                   x86_64 slices, every slice
+#                                                   LC_BUILD_VERSION platform 7.
+#   A released binary can actually use it (full plan/run through the packaged
+#   executable, `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` set nowhere in the job —
+#   both suites assert its absence themselves and fail loudly if it ever leaks in):
+#     - `schemataRunSucceedsFromBundledRuntimeAlone` (macOS, `SchemataSwiftPackageMacOS`)
+#     - `xcodeProjectSchemataRunSucceedsFromBundledRuntimeAlone` (iOS Simulator, real
+#       simulator, `Fixtures/SchemataMatrixXcodeProject`, zero fallback, zero
+#       integrity violations, `effectiveCount == integrity.planned`).
+#
+# `workflow_dispatch` ONLY — no push, no pull_request, no schedule. Cost: roughly
+# **80 minutes** of macOS runner time per dispatch, not the ~50 these jobs cost
+# inside the private `ci.yml` they were lifted from. The difference is structural
+# and worth stating so nobody re-derives the smaller number: over there a single
+# shared `build` job compiled the test harness once and both acceptance jobs
+# downloaded its `build-tests` tarball. There is no such job here, so each
+# acceptance job pays its own `swift build --build-tests` — two independent debug
+# builds of swift-syntax and friends, roughly +30 min in total. The SwiftPM
+# caches below claw a large part of that back on a warm cache, but the
+# `timeout-minutes` budgets are all sized for the *cold* case, because a
+# `timeout-minutes` overrun is reported as `cancelled` rather than `failure`, and
+# a release gate whose normal outcome is "no evidence" is its own failure mode.
+#
+# Paying 80 minutes on every PR was the reason these jobs were dropped from
+# `ci.yml`. Run this deliberately before cutting a release. It is not a human
+# checklist: release-time evidence stays reproducible on GitHub Actions, with
+# `release-validation-gate` as the single check that says whether the evidence
+# exists — and `release.yml`'s own `require-validation` job refuses to publish a
+# tag whose commit has no successful run of *this* workflow, so a forgotten
+# dispatch blocks the release instead of silently shipping unvalidated.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # No `cancel-in-progress`. A cancelled run produces no evidence, and this
+  # workflow exists precisely to produce evidence — a second dispatch queues
+  # behind the first rather than destroying it. Note the real bound, so nobody
+  # relies on more than GitHub actually offers: GitHub holds only ONE pending run
+  # per concurrency group, so a *third* dispatch supersedes (cancels) the queued
+  # second one. That loses evidence-in-waiting, not evidence already produced,
+  # and the superseded run reports `cancelled`, which this workflow's gate treats
+  # as failure — but do not assume unbounded queuing.
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  # Builds the real end-user artifact once, so both acceptance jobs below extract
+  # and test the *identical* package rather than each paying the several-minute
+  # `swift build -c release` separately (and rather than each proving something
+  # about a differently-built package).
+  #
+  # Standalone in this repo: the private CI this was lifted from gated it behind
+  # `needs: route` and a `run_full || run_schemata_targeted` condition. There is no
+  # `route` job here and nothing to route — a `workflow_dispatch` is already the
+  # deliberate decision that condition was approximating, so it is simply gone.
+  release-package:
+    name: Build release package (bundled schemata runtime)
+    runs-on: macos-15
+    # A real `swift build -c release` of the whole CLI plus the schemata runtime
+    # archives for every supported platform. Legitimately slow, but bounded, per
+    # this project's own "nothing runs unbounded" rule.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same gate as `ci.yml`'s `lint` job, for the same reason: the macos-15
+      # runner image drifts, and printing versions is not enforcing them. This
+      # workflow never runs alongside `ci.yml`, so it has to carry the floor
+      # itself or run without one. Placed before anything expensive, and in this
+      # job specifically — both jobs below `needs:` it, so a floor regression
+      # fails the whole workflow here rather than three times over.
+      - name: Toolchain floor (Xcode 16+, Swift 6+)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `xcodebuild -version | head -n 1` aborts xcodebuild with SIGABRT on
+          # this runner image (Foundation turns the broken pipe into an uncaught
+          # NSFileHandleOperationException); capture to a variable first. See
+          # ci.yml's identical step for the full write-up.
+          xcode_version_output="$(xcodebuild -version)"
+          xcode_major="$(head -n 1 <<<"$xcode_version_output" | awk '{print $2}' | cut -d. -f1)"
+          # `|| true` deliberately, and this diverges from ci.yml's copy of this
+          # step: under `set -e` a `grep` that matches nothing kills the whole
+          # step at the assignment, so the friendly `::error::Swift 6+ required,
+          # found 'unknown'` branch below could never be reached. Both shapes
+          # fail closed; only this one says why.
+          swift_major="$(swift --version 2>&1 | grep -oE 'Apple Swift version [0-9]+' | grep -oE '[0-9]+' || true)"
+          echo "Xcode major: ${xcode_major:-unknown}, Swift major: ${swift_major:-unknown}"
+          if [ -z "$xcode_major" ] || [ "$xcode_major" -lt 16 ]; then
+            echo "::error::Xcode 16+ required, found '${xcode_major:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
+          if [ -z "$swift_major" ] || [ "$swift_major" -lt 6 ]; then
+            echo "::error::Swift 6+ required, found '${swift_major:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      # An obviously-not-a-real-release version. Nothing here tags, attests,
+      # publishes or uploads anything a user can reach — `release.yml` owns that
+      # — and the version string says so out loud so a package from this workflow
+      # can never be mistaken for a shippable one.
+      - name: Build the release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          Scripts/release-build.sh "0.0.0-validation.${GITHUB_SHA:0:7}" dist
+
+      # `Scripts/release-build.sh` stamps `Sources/CLI/Version.swift` in place and
+      # relies on an EXIT trap running `git checkout --` to put it back. A trap
+      # that silently stopped firing (or a future edit that moved the stamp
+      # outside its reach) leaves a modified working tree behind. Nothing later in
+      # THIS workflow depends on that, but `release.yml` runs the same script on
+      # the same assumption, so prove it here where it is cheap.
+      - name: Assert release-build.sh left the working tree clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- Sources/CLI/Version.swift; then
+            echo "::error::Scripts/release-build.sh did not revert its in-place stamp of Sources/CLI/Version.swift — its restore trap is not firing"
+            exit 1
+          fi
+
+      # Fail loudly here rather than letting a package with a missing, empty or
+      # mis-manifested bundled schemata tree travel downstream and fail as a
+      # confusing locator/link error three jobs later. Zero work is never success:
+      # the artifact this workflow's whole proof rests on has to be verified to
+      # contain the thing being proven before anything else runs.
+      #
+      # Three separate questions, deliberately not collapsed into one:
+      #   1. are the entries in the tarball at all (`tar -tzf` listing)?
+      #   2. is each one non-empty and, for the executable, executable? A
+      #      `grep -qx` against a listing happily matches a 0-byte entry, so
+      #      "present" is not "usable" — extract and stat instead.
+      #   3. does manifest.json describe THE FILES ACTUALLY SHIPPED? The manifest
+      #      is generated by grepping a C header and a Swift source for two
+      #      numbers; a grep that silently matched the wrong thing still produces
+      #      a well-formed package. So re-derive both numbers independently here
+      #      and re-hash both archives, rather than trusting the file's presence.
+      - name: Assert the package really bundles a schemata runtime tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="dist/mutantkit-macos-arm64.tar.gz"
+          if [ ! -f "$tarball" ]; then
+            echo "::error::Scripts/release-build.sh produced no $tarball"
+            exit 1
+          fi
+          if [ ! -f dist/SHA256SUMS ]; then
+            echo "::error::Scripts/release-build.sh produced no dist/SHA256SUMS"
+            exit 1
+          fi
+
+          listing="$(tar -tzf "$tarball")"
+          echo "$listing"
+          for required in \
+            "mutantkit-macos-arm64/mutantkit" \
+            "mutantkit-macos-arm64/lib/mutantkit/schemata/manifest.json" \
+            "mutantkit-macos-arm64/lib/mutantkit/schemata/macosx/libMutantKitSchemataRuntime.a" \
+            "mutantkit-macos-arm64/lib/mutantkit/schemata/iphonesimulator/libMutantKitSchemataRuntime.a"
+          do
+            if ! grep -qx "$required" <<<"$listing"; then
+              echo "::error::$tarball does not contain '$required' — the bundled schemata runtime this workflow exists to validate is not in the package"
+              exit 1
+            fi
+          done
+
+          verify_dir="$(mktemp -d)"
+          tar -xzf "$tarball" -C "$verify_dir"
+          root="$verify_dir/mutantkit-macos-arm64"
+
+          if [ ! -x "$root/mutantkit" ]; then
+            echo "::error::$tarball contains mutantkit but it is not executable"
+            exit 1
+          fi
+          for f in \
+            "lib/mutantkit/schemata/manifest.json" \
+            "lib/mutantkit/schemata/macosx/libMutantKitSchemataRuntime.a" \
+            "lib/mutantkit/schemata/iphonesimulator/libMutantKitSchemataRuntime.a"
+          do
+            if [ ! -s "$root/$f" ]; then
+              echo "::error::$tarball contains '$f' but it is empty — a 0-byte archive is present in the listing and useless at link time"
+              exit 1
+            fi
+          done
+
+          # Independent re-derivation, on purpose: this must NOT reuse
+          # release-build.sh's own grep expressions, or a drifted extraction
+          # would agree with itself.
+          python3 - "$root" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          manifest_path = root / "lib/mutantkit/schemata/manifest.json"
+
+          def fail(msg):
+              print(f"::error::{msg}")
+              sys.exit(1)
+
+          try:
+              manifest = json.loads(manifest_path.read_text())
+          except Exception as exc:  # noqa: BLE001 - any parse failure is a hard fail
+              fail(f"manifest.json is present but does not parse as JSON: {exc}")
+
+          def source_int(path, pattern):
+              text = pathlib.Path(path).read_text()
+              found = re.findall(pattern, text)
+              if len(found) != 1:
+                  fail(
+                      f"expected exactly one match for {pattern!r} in {path}, found {len(found)} "
+                      "— cannot establish the expected value independently, so this is unknown, not OK"
+                  )
+              return int(found[0])
+
+          expected_abi = source_int(
+              "Sources/MutantKitSchemataRuntimeC/include/mutantkit_protocol_v3.h",
+              r"#define\s+MUTANTKIT_V3_RUNTIME_ABI_VERSION\s+([0-9]+)",
+          )
+          expected_schema = source_int(
+              "Sources/AppleBuildAdapters/SchemataRuntimeManifest.swift",
+              r"static let supportedSchemaVersion\s*=\s*([0-9]+)",
+          )
+
+          if manifest.get("runtimeABIVersion") != expected_abi:
+              fail(
+                  f"manifest.json runtimeABIVersion={manifest.get('runtimeABIVersion')!r} but the C header "
+                  f"declares {expected_abi} — the packaged manifest would be rejected (or worse, accepted) "
+                  "against the wrong ABI"
+              )
+          if manifest.get("schemaVersion") != expected_schema:
+              fail(
+                  f"manifest.json schemaVersion={manifest.get('schemaVersion')!r} but "
+                  f"SchemataRuntimeManifest.supportedSchemaVersion is {expected_schema}"
+              )
+
+          archives = {a.get("platform"): a for a in manifest.get("archives", [])}
+          if set(archives) != {"macosx", "iphonesimulator"}:
+              fail(f"manifest.json archives cover {sorted(archives)}, expected ['iphonesimulator', 'macosx']")
+
+          for platform, entry in sorted(archives.items()):
+              rel = entry.get("path")
+              if not rel:
+                  fail(f"manifest.json archive '{platform}' has no path")
+              actual = root / "lib/mutantkit/schemata" / rel
+              if not actual.is_file() or actual.stat().st_size == 0:
+                  fail(f"manifest.json points '{platform}' at '{rel}', which is missing or empty in the package")
+              digest = hashlib.sha256(actual.read_bytes()).hexdigest()
+              if digest != entry.get("sha256"):
+                  fail(
+                      f"manifest.json records sha256={entry.get('sha256')!r} for '{platform}' but the shipped "
+                      f"file hashes to {digest} — the manifest does not describe the package it ships in"
+                  )
+              archs = entry.get("architectures") or []
+              if not archs:
+                  fail(f"manifest.json lists no architectures for '{platform}'")
+              print(f"manifest {platform}: {rel} sha256 OK, archs={archs}")
+
+          print(f"manifest OK: schemaVersion={expected_schema} runtimeABIVersion={expected_abi}")
+          PY
+
+          {
+            echo "### Release validation package"
+            echo
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- tarball: \`$(cat dist/SHA256SUMS)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          # SHA256SUMS travels with the tarball so the two consumers below can
+          # prove they tested the package this job built, rather than assuming
+          # the artifact round-trip was lossless.
+          path: |
+            dist/mutantkit-macos-arm64.tar.gz
+            dist/SHA256SUMS
+          # Deliberately short-lived. This is a validation input, not a release
+          # artifact — the run log and the failure logs below are the evidence
+          # that outlives the run. `release.yml` is the only place a package
+          # anyone should install comes from.
+          retention-days: 1
+
+  # The clean-machine proof, macOS side: `mutantkit plan`/`mutantkit run` through
+  # the *extracted release binary itself*, with
+  # MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE never set anywhere in this job. If
+  # `SchemataRuntimeLibraryLocator`'s bundled path or the manifest
+  # `Scripts/release-build.sh` writes ever regressed, this is what fails —
+  # not merely a unit test against a synthetic fixture tree.
+  release-bundled-schemata-macos:
+    name: Release package's bundled schemata runtime (macOS, clean-machine E2E)
+    runs-on: macos-15
+    needs: release-package
+    # 35, not 25. This job inlines the work the private CI split into a separate
+    # `build` job (`timeout-minutes: 15`) plus the acceptance job itself
+    # (`timeout-minutes: 15`): a cold `swift build --build-tests` here means a
+    # full debug build of swift-syntax 603 (Package.swift) before the first test
+    # runs. Budget the sum, with headroom, because an overrun surfaces as
+    # `cancelled` — which the gate correctly treats as failure, producing a
+    # reliably red gate with no evidence rather than a false green.
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same cache as the private `build` job carried, for the same reason: the
+      # dependency resolve + checkout of swift-syntax is the bulk of the cold
+      # build this job now pays on its own.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Toolchain
+        run: swift --version
+
+      # Built here rather than downloaded: the private CI this came from pulled a
+      # `build-tests` tarball from a shared `build` job, which does not exist in
+      # this repo. This is the *test harness* binary, distinct from the release
+      # package below — which is what the harness drives as a subprocess.
+      - name: Build tests
+        shell: bash
+        run: swift build --build-tests 2>&1 | tee build.log
+
+      - name: Download release package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+
+      - name: Extract release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The package this job tests must be byte-identical to the one
+          # release-package built and verified; otherwise every assertion below
+          # is about some other file.
+          shasum -a 256 -c SHA256SUMS
+          mkdir -p release-install
+          tar -xzf mutantkit-macos-arm64.tar.gz -C release-install
+          # MUTANTKIT_RELEASE_PACKAGE_ROOT below is a hardcoded path while the
+          # directory name comes out of the tarball. Assert they agree here, so a
+          # rename fails with that sentence instead of as an opaque
+          # "release package binary not found" three steps later.
+          if [ ! -x release-install/mutantkit-macos-arm64/mutantkit ]; then
+            echo "::error::extracted tree has no executable at release-install/mutantkit-macos-arm64/mutantkit — MUTANTKIT_RELEASE_PACKAGE_ROOT below would point at nothing"
+            exit 1
+          fi
+
+      # No MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE in either env block below, on
+      # purpose: the CLI subprocess these tests spawn must have no way to resolve
+      # the runtime except its own bundled lib/mutantkit/schemata/. The suite
+      # itself re-checks this (`requireNoOverrideInEnvironment`) so a future edit
+      # that adds one fails loudly instead of quietly proving nothing.
+      #
+      # Two steps and two `assert-tests-ran.sh` calls, not one combined filter:
+      # that script proves "at least one test ran", never *which*. A single
+      # pair would let the real-E2E test be renamed or deleted while the
+      # archive-inspection test alone kept the count non-zero and the job green.
+      #
+      # SHELL CONTRACT, read this before editing any `run:` below. GitHub runs a
+      # `shell: bash` step as `bash --noprofile --norc -eo pipefail {0}`: `-e` and
+      # `pipefail` are ALREADY ON. An in-script `set -o pipefail` is therefore
+      # redundant, and — more importantly — under the inherited `-e` a failing
+      # `swift test` aborts the step at the pipeline, so `test_exit=$?` never runs
+      # and `assert-tests-ran.sh` never runs on a failing test. `set +e` below
+      # turns `-e` back off (keeping `pipefail`, which is what makes `$?` reflect
+      # `swift test` rather than `tee`) precisely so BOTH facts get reported: a
+      # run that failed AND matched zero tests should say both, not just the
+      # first. `|| test_exit=1` on the helper, never a bare call, for the same
+      # reason — with `-e` off, a bare call's non-zero status is discarded and the
+      # trailing `exit $test_exit` would report success.
+      - name: Bundled schemata acceptance (macOS, archive inspection)
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
+        run: |
+          set +e
+          swift test --skip-build --filter "macOSArchiveResolvesFromBundle" 2>&1 | tee acceptance-archive.log
+          test_exit=$?
+          Scripts/assert-tests-ran.sh acceptance-archive.log "ReleaseBundledSchemataRuntimeAcceptanceTests (macOS archive inspection)" || test_exit=1
+          exit $test_exit
+
+      - name: Bundled schemata acceptance (macOS, real E2E run)
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
+        run: |
+          set +e
+          swift test --skip-build --filter "schemataRunSucceedsFromBundledRuntimeAlone" 2>&1 | tee acceptance-run.log
+          test_exit=$?
+          Scripts/assert-tests-ran.sh acceptance-run.log "ReleaseBundledSchemataRuntimeAcceptanceTests (macOS real E2E run)" || test_exit=1
+          exit $test_exit
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundled-schemata-macos-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance-archive.log
+            acceptance-run.log
+
+  # The clean-machine proof, iOS-Simulator side. Two things, not one:
+  #
+  # - `iOSSimulatorArchiveResolvesFromBundle`: the bundled
+  #   `iphonesimulator/libMutantKitSchemataRuntime.a` is a genuine, correctly
+  #   built archive resolving with `.bundled` provenance — both slices present,
+  #   real iOS-Simulator LC_BUILD_VERSION, both v3 runtime symbols exported.
+  #   The same depth `ci.yml`'s `ios-simulator-schemata-runtime` applies to the
+  #   source-built archive, applied to the *packaged* one instead.
+  # - `xcodeProjectSchemataRunSucceedsFromBundledRuntimeAlone`: a real, full
+  #   plan/run against a real, fully-covered Xcode project fixture
+  #   (`Fixtures/SchemataMatrixXcodeProject`, whose `.xcodeproj` is checked in —
+  #   no `xcodegen` install needed here, unlike the `xcode-project` acceptance
+  #   entry in `ci.yml`), through the packaged executable, on a real simulator,
+  #   with no override anywhere. Archive inspection proves the artifact is real;
+  #   only this proves a released binary can *run* iOS-Simulator schemata mode
+  #   end to end on nothing but what it bundles.
+  release-bundled-schemata-ios-simulator:
+    name: Release package's bundled schemata runtime (iOS Simulator, clean-machine E2E)
+    runs-on: macos-15
+    needs: release-package
+    # 45, not 30 — same arithmetic as the macOS job: the private split was a
+    # 15-minute shared `build` plus a 20-minute iOS acceptance job, and this one
+    # does both. Simulator boot and the Xcode-project fixture build make this the
+    # slower of the two, hence the wider budget.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+
+      # The suite picks whichever iPhone this machine actually has rather than
+      # pinning a model, so this is context for a failure, not a gate.
+      - name: Available simulators
+        run: xcrun simctl list devices available | grep -i iphone || true
+
+      - name: Build tests
+        shell: bash
+        run: swift build --build-tests 2>&1 | tee build.log
+
+      - name: Download release package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+
+      - name: Extract release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          shasum -a 256 -c SHA256SUMS
+          mkdir -p release-install
+          tar -xzf mutantkit-macos-arm64.tar.gz -C release-install
+          if [ ! -x release-install/mutantkit-macos-arm64/mutantkit ]; then
+            echo "::error::extracted tree has no executable at release-install/mutantkit-macos-arm64/mutantkit — MUTANTKIT_RELEASE_PACKAGE_ROOT below would point at nothing"
+            exit 1
+          fi
+
+      # MUTANTKIT_ACCEPTANCE_SIMULATOR is set explicitly rather than left to
+      # `Acceptance.simulatorEnabled`'s `!= "0"` default: this job's real-run
+      # test is gated on it, and a dependency this load-bearing should be
+      # declared, not inherited from a default that could later flip.
+      # Still no MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE — same reason, and the
+      # same self-check inside the suite, as the macOS job above.
+      #
+      # Two independent steps/assertions, and the same `set +e` shell contract
+      # spelled out on the macOS job above — read that comment before editing.
+      - name: Bundled schemata acceptance (iOS Simulator, archive inspection)
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_ACCEPTANCE_SIMULATOR: "1"
+          MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
+        run: |
+          set +e
+          swift test --skip-build --filter "iOSSimulatorArchiveResolvesFromBundle" 2>&1 | tee acceptance-archive.log
+          test_exit=$?
+          Scripts/assert-tests-ran.sh acceptance-archive.log "ReleaseBundledSchemataRuntimeAcceptanceTests (iOS Simulator archive inspection)" || test_exit=1
+          exit $test_exit
+
+      - name: Bundled schemata acceptance (iOS Simulator, real E2E run)
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_ACCEPTANCE_SIMULATOR: "1"
+          MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
+        run: |
+          set +e
+          swift test --skip-build --filter "xcodeProjectSchemataRunSucceedsFromBundledRuntimeAlone" 2>&1 | tee acceptance-run.log
+          test_exit=$?
+          Scripts/assert-tests-ran.sh acceptance-run.log "ReleaseBundledSchemataXcodeIOSSimulatorAcceptanceTests (iOS Simulator real E2E run)" || test_exit=1
+          exit $test_exit
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundled-schemata-ios-simulator-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance-archive.log
+            acceptance-run.log
+
+  # One stably-named check that says whether this workflow's evidence actually
+  # exists, in the same spirit as `ci.yml`'s `merge-gate`: read this job's
+  # conclusion, not three separate ones, when deciding whether a release is
+  # cleared to cut.
+  #
+  # The difference from `merge-gate` is that there is nothing to compare against
+  # here. `merge-gate` derives each job's expected result from `route`'s declared
+  # plan because some skips there are deliberate. Nothing in this workflow is ever
+  # deliberately skipped — a `workflow_dispatch` means "run all of it" — so the
+  # expected result for every job is exactly `success`, and anything else
+  # (failure, skipped, cancelled, or an empty result from a job that never
+  # scheduled at all) fails this gate. A skipped upstream job is not a pass with
+  # nothing to report; it is the absence of the proof this workflow exists to
+  # produce. Zero work is never success.
+  #
+  # This job's conclusion is also what `release.yml`'s `require-validation` job
+  # queries by commit SHA at tag time, so the SHA is written into the step
+  # summary: the evidence stays greppable from the run itself, not only from the
+  # API.
+  release-validation-gate:
+    name: Release validation gate
+    runs-on: ubuntu-latest
+    needs:
+      - release-package
+      - release-bundled-schemata-macos
+      - release-bundled-schemata-ios-simulator
+    # `always()`, not the default `success()`: this job's entire purpose is to
+    # report on every other job's outcome, including a failure or a
+    # GitHub-initiated cancellation upstream. The default `if:` would skip the
+    # one check meant to be authoritative in exactly the case it matters,
+    # leaving it silently absent rather than reporting `failure`.
+    if: always()
+    steps:
+      - name: Confirm every release-validation job genuinely succeeded
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed="false"
+
+          check() {
+            local name="$1" actual="${2:-}"
+            echo "$name -> ${actual:-<no result>}"
+            if [ "$actual" != "success" ]; then
+              echo "::error::$name reported '${actual:-<no result>}', expected 'success' — a skipped, cancelled, failed or never-scheduled job produces no release evidence and must not satisfy this gate"
+              failed="true"
+            fi
+          }
+
+          check "release-package" "${{ needs.release-package.result }}"
+          check "release-bundled-schemata-macos" "${{ needs.release-bundled-schemata-macos.result }}"
+          check "release-bundled-schemata-ios-simulator" "${{ needs.release-bundled-schemata-ios-simulator.result }}"
+
+          if [ "$failed" = "true" ]; then
+            {
+              echo "### Release validation: FAILED for \`${GITHUB_SHA}\`"
+              echo
+              echo "Do not cut a release from this commit."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::release-validation-gate: the bundled schemata runtime is NOT validated for this commit (${GITHUB_SHA}) — do not cut a release from it"
+            exit 1
+          fi
+
+          {
+            echo "### Release validation: PASSED for \`${GITHUB_SHA}\`"
+            echo
+            echo "The packaged release binary resolves and runs its bundled schemata"
+            echo "runtime with no override, on macOS and on the iOS Simulator."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "release-validation-gate: the packaged release binary resolves and runs its bundled schemata runtime with no override, on macOS and on the iOS Simulator (commit ${GITHUB_SHA})"

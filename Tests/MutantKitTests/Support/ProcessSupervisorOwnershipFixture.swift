@@ -201,12 +201,38 @@ enum ProcessSupervisorOwnershipFixture {
             time.sleep(0.05)
         """
 
+        // Unlike every other fixture here, this one cannot wait for the
+        // readiness file before the clock starts: `timeoutSeconds` is what
+        // forces the TERM -> grace -> KILL escalation this mode exists to
+        // produce, and it begins at spawn. So the interpreter's own startup
+        // is charged against the caller's timeout, and the child only
+        // announces its pid if it wins that race.
+        //
+        // Idle, python3 starts in ~0.02s and a 1s timeout looked like a
+        // 50x margin. Under a full `swift test` run — ~2400 tests, many of
+        // them spawning real subprocesses, on a few real cores — that same
+        // startup can exceed a second, the child is killed before it ever
+        // writes the file, and `readPID` fails with a setup error that
+        // looks nothing like the invariant under test. Observed for real on
+        // unmodified `main`, intermittently, in full-suite runs.
+        //
+        // Reported as what it is, rather than letting a lost startup race
+        // read as a product failure. Callers pass a timeout with enough
+        // headroom that this should not fire; if it does, the message says
+        // the child never announced itself, not that an invariant broke.
         let result = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", script],
             workingDirectory: FileManager.default.temporaryDirectory, environment: ProcessInfo.processInfo.environment,
             timeoutSeconds: timeoutSeconds, terminationGracePeriodSeconds: terminationGracePeriodSeconds,
             stallDetection: nil, lifecycleEventHook: lifecycleEventHook
         )
+        guard FileManager.default.fileExists(atPath: readyPath) else {
+            throw SetupFailure(description: """
+            the SIGTERM-ignoring child never announced its pid within timeoutSeconds=\(timeoutSeconds)s — \
+            python3 startup lost the race against the supervisor's own deadline, which is a machine-load \
+            artifact of this fixture, not a ProcessSupervisor failure. Raise timeoutSeconds at the call site.
+            """)
+        }
         let descendantPID = try readPID(at: readyPath)
         return FastExitResult(processResult: result, descendantPID: descendantPID, grandchildPID: nil)
     }
