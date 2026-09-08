@@ -1,12 +1,26 @@
+import ApplePlatformOperators
 import MutationModel
 import SwiftCoreOperators
 import SwiftFrontend
 
-// ApplePlatformOperators is deliberately not imported here. The module does
-// ship a type — LifecycleSuperCallRemovalOperator — but it is not registered:
-// it has no RED tests proving its discovery logic, and its own doc comment
-// explains why it must not be reachable until the fault study behind it is
-// done. See that type's doc comment before registering it.
+// ApplePlatformOperators ships eight types today. LifecycleSuperCallRemovalOperator
+// is deliberately NOT in `builtIn` below — it has no RED tests proving its
+// discovery logic, and its own doc comment explains why it must not be
+// reachable until the fault study behind it is done. See that type's doc
+// comment before registering it. The other seven ARE registered: each has a
+// real fault study cited in its own `faultEvidence` and real RED tests (see
+// each type's own `...REDTests.swift`). ContinuationResumeRemovalOperator and
+// RequiredDecodeIntroductionOperator are `defaultEnabled: false`/
+// `confidence: .medium` (each promoted, corpus-validated opt-in -- see each
+// type's own doc comment for its own corpus evidence and why it stays opt-in
+// despite clean compile safety). PostAwaitCancellationGuardRemovalOperator,
+// TaskIDRemovalOperator, ForegroundEventReplacementOperator,
+// ExplicitLabelRemovalOperator, and HitAreaShapeRemovalOperator all land at
+// `confidence: .experimental` for their own documented empirical reasons --
+// see each type's own doc comment. Either way, registry
+// membership only makes an operator reachable via `profile: experimental`,
+// `profile: default` once `defaultEnabled` is true, or an explicit
+// `operators.enable` entry — exactly like the core catalog's own operators.
 
 /// Every operator the tool knows about, and the rules for turning
 /// `OperatorSettings` into the set that will actually run.
@@ -31,7 +45,14 @@ public struct MutationRegistry: Sendable {
         ReturnValueReplacementOperator(),
         ElseClauseDeletionOperator(),
         RangeBoundaryReplacementOperator(),
-        SideEffectCallRemovalOperator()
+        SideEffectCallRemovalOperator(),
+        ContinuationResumeRemovalOperator(),
+        RequiredDecodeIntroductionOperator(),
+        PostAwaitCancellationGuardRemovalOperator(),
+        TaskIDRemovalOperator(),
+        ForegroundEventReplacementOperator(),
+        ExplicitLabelRemovalOperator(),
+        HitAreaShapeRemovalOperator()
     ]
 
     /// The outcome of applying settings to the registry.

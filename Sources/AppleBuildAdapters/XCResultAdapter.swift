@@ -519,7 +519,15 @@ extension XCResultAdapter {
         var configurationNames: Set<String> = []
 
         func walk(_ node: BatchTestNodesJSON.Node, target: String?) {
-            let currentTarget = node.nodeType == "Unit test bundle" ? node.name : target
+            // See `XcodeBuildAdapter.isTestBundleNode` — a UI test target's
+            // bundle node is `"UI test bundle"`, not `"Unit test bundle"`,
+            // and this target name only feeds `TestSummaryJSON.Failure`'s
+            // `targetName` display field here (never gates whether a
+            // failure is recorded at all, unlike the enumeration walk this
+            // mirrors), but it should still name the real target rather
+            // than silently falling back to the empty string for every UI
+            // test failure.
+            let currentTarget = XcodeBuildAdapter.isTestBundleNode(node.nodeType) ? node.name : target
 
             if node.nodeType == "Test Case" {
                 for configuration in node.children ?? [] where configuration.nodeType == "Test Plan Configuration" {

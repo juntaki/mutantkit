@@ -47,9 +47,11 @@ struct SchemataBuiltImageInspectionTests {
         compile.standardError = pipe
         compile.standardOutput = pipe
         try compile.run()
-        BoundedProcessWait.wait(compile)
-        guard compile.terminationStatus == 0 else {
-            let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let exitedOnItsOwn = BoundedProcessWait.wait(compile)
+        guard exitedOnItsOwn, compile.terminationStatus == 0 else {
+            let output = exitedOnItsOwn
+                ? String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                : "compile timed out and was force-killed"
             throw CompileError.failed(output)
         }
         return binaryURL

@@ -1,0 +1,48 @@
+# Acceptance fixture config for Phase 5A's UI-test execution substrate. The
+# scheme and destination are pinned rather than detected so the fixture is
+# reproducible on any machine with a matching runtime.
+#
+# `tests.targets` names only the UI test target — this fixture has no unit
+# test target at all, so `isRowTapRegistered(currentCount:)`'s one real
+# mutant (from an existing, already-registered built-in operator) can only
+# ever be killed by the UI test, proving a UI-test-only-covered mutation
+# flows end to end through a real `mutantkit plan` + `mutantkit run`
+# campaign — see Research/phase5a-ui-test-substrate-2026-09/README.md.
+#
+# `timeouts.mutant.strategy: fixed` follows the same convention established
+# in Research/corpus-validation/continuation-resume-removal-2026-09/README.md:
+# a UI test's baseline duration (Simulator boot + app launch + AX-tree
+# settle time) is not a representative multiplier base the way a unit test's
+# is, so an adaptive ceiling computed from it is exactly the reproducibility
+# hazard that round's README documents. 5 minutes covers this fixture's
+# ~15-20s real baseline many times over.
+version: 1
+
+project:
+  kind: xcodeProject
+  scheme: AccessibilityUISubstrate
+  destination: platform=iOS Simulator,name=iPhone 17 Pro
+
+sources:
+  include:
+    - Sources/**
+
+tests:
+  targets:
+    - AccessibilityUITests
+
+operators:
+  profile: default
+
+execution:
+  strategy: isolated
+  workers: 1
+
+timeouts:
+  baseline: 3m
+  mutant:
+    strategy: fixed
+    maximum: 5m
+
+reports:
+  - console

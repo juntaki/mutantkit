@@ -162,34 +162,54 @@ matrix does not re-measure that parity, only cross-references it.
 
 ## The CI/acceptance matrix this lands in
 
-`.github/workflows/ci.yml` already is a real, dynamic acceptance matrix,
-not a single fixed job list:
+**Corrected 2026-09.** This section previously described a `route`/`build`
+dynamic-matrix design (path-based routing into a full-vs-narrow run, a
+shared `build` job reused by `unit-fast`/`unit-system`/`acceptance`) with
+specific `ci.yml` line-number citations. That design does not exist in the
+CI actually running today — it was lost in the `git-projector publish`
+incident recorded in `HANDOVER.md` and was not restored in that shape; the
+restoration (commit `e7fb818` and its `integration/release-ci-repair`
+merge) rebuilt a deliberately simpler workflow instead, by design, per that
+workflow's own comments. Job names are cited below instead of line numbers,
+since line numbers are exactly what drifted silently last time.
 
-- **`route`** (`ci.yml:130-193`) classifies every push/PR by changed
-  paths into a full run or a narrower, path-targeted slice, reading
-  `Scripts/ci-fixtures.json` (18 fixtures: 6 host-only SwiftPM, 12
-  requiring a real iOS Simulator) as the single source of truth for which
-  fixture covers which project-kind/framework/destination combination.
-- **`build`** compiles once; **`unit-fast`**/**`unit-system`** and every
-  **`acceptance`** matrix entry download that shared output rather than
-  each rebuilding from scratch.
+The public repo's `.github/workflows/ci.yml`, run on every push/PR (no
+`route`, everything unconditional):
+
+- **`lint`**, **`complexity`**, **`analyze`** — static checks (format/lint,
+  cognitive-complexity gate, `swiftlint analyze`).
+- **`unit`** — the full `swift test` unit suite, once, no fast/system
+  split.
+- **`acceptance`** — a matrix of all 18 fixtures from
+  `Scripts/ci-fixtures.json` (6 host-only SwiftPM, 12 requiring a real iOS
+  Simulator), each job doing its own build; there is no shared `build` job
+  and no path-based narrowing — every fixture runs on every push.
 - **`ror-schemata-differential`** and **`ios-simulator-schemata-runtime`**
   prove the schemata runtime's real linked behavior (not just lowered
   source), on macOS and iOS Simulator respectively.
-- **`release-package`** builds a real release tarball once;
-  **`release-bundled-schemata-macos`** and
-  **`release-bundled-schemata-ios-simulator`** each run a clean-machine
-  end-to-end proof against the *extracted, bundled* runtime — no
-  `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` set anywhere in either job —
-  the actual end-user path, not a developer's own build tree.
-- **`merge-gate`** (`ci.yml:1240-1331`) derives each dependency's
-  *expected* result from `route`'s own execution plan and fails if the
-  actual result doesn't match, so a silently-skipped required job cannot
-  pass the gate.
+- **`merge-gate`** — the one required status. With no `route` job there is
+  no execution plan to derive an expectation from, so it instead asserts,
+  unconditionally, that `lint`, `complexity`, `unit`, `acceptance`,
+  `ror-schemata-differential`, and `ios-simulator-schemata-runtime` all
+  report `success` — a skip or cancellation on any of them fails the gate,
+  by the same "no plan, so nothing here is ever a deliberate skip"
+  reasoning as its own comment states.
+
+Separately, `.github/workflows/release-validation.yml` (`workflow_dispatch`
+only — deliberately not run on every push, since it costs real minutes on
+real hardware) runs **`release-package`** (builds the real release tarball
+once), **`release-bundled-schemata-macos`** and
+**`release-bundled-schemata-ios-simulator`** (each a clean-machine
+end-to-end proof against the *extracted, bundled* runtime — no
+`MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` override in either job, the
+actual end-user path), and **`release-validation-gate`**. `release.yml`'s
+own `require-validation` job refuses to publish a tag whose commit has no
+successful run of `release-validation.yml`, so a forgotten manual dispatch
+blocks the release rather than shipping unvalidated.
 
 This is a real CI/acceptance matrix, not merely a fixed unit-test job —
-every citation in this document that names an acceptance-test class is
-exercised by it on every push.
+every acceptance-test class this document names is exercised by it on
+every push (`ci.yml`) or before every release (`release-validation.yml`).
 
 ## Summary
 

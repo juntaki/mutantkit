@@ -1,0 +1,57 @@
+# Phase 5A acceptance fixture: a minimal SwiftUI app whose only observable
+# faults live in the UI/accessibility tree — an icon-only button whose
+# accessibility label is the only thing identifying its purpose, and a wide
+# tappable row whose real hit area only matches its visible content unless
+# `.contentShape(Rectangle())` is present. Neither fault is visible to a
+# plain-Swift unit test; both require a real, booted Simulator and XCUITest.
+#
+# This fixture validates Phase 5A's UI-test execution substrate itself (see
+# Tests/MutantKitTests/Acceptance/AccessibilityUISubstrateAcceptanceTests.swift
+# and Research/phase5a-ui-test-substrate-2026-09/). It intentionally carries
+# no mutation operator of its own — `isRowTapRegistered(currentCount:)` below
+# exists only so a real, already-existing built-in operator (a relational-
+# boundary mutation) has something to discover and kill exclusively via the
+# UI test target, proving a UI-test-only-covered mutant flows end to end
+# through a real `mutantkit plan` + `mutantkit run` campaign.
+#
+# The generated .xcodeproj is committed alongside this manifest so the
+# fixture works without xcodegen installed. Regenerate with:
+#   cd Fixtures/AccessibilityUISubstrate && xcodegen generate
+name: AccessibilityUISubstrate
+options:
+  bundleIdPrefix: dev.mutantkit.fixture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  AccessibilityUISubstrate:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.mutantkit.fixture.AccessibilityUISubstrate
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+
+  AccessibilityUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: AccessibilityUISubstrate
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: AccessibilityUISubstrate
+
+schemes:
+  AccessibilityUISubstrate:
+    build:
+      targets:
+        AccessibilityUISubstrate: all
+        AccessibilityUITests: [test]
+    test:
+      targets: [AccessibilityUITests]

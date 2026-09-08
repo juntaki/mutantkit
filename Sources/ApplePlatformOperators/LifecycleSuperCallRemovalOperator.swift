@@ -33,6 +33,19 @@ import SwiftSyntax
 /// `MutationRegistry.swift` and adding this type to `builtIn`. Until all of
 /// that lands, it stays exactly what it is today: a demonstration of the
 /// extension point, compiled but unregistered.
+///
+/// **Known guard bug (found while developing
+/// `ContinuationResumeRemovalOperator`'s own switch-case exclusion, not
+/// fixed here since this type is not reachable from the CLI either way):**
+/// `visit`'s `node.parent?.is(CodeBlockItemSyntax.self) == true` guard only
+/// proves the target is a statement-in-a-statement-list, not that it is the
+/// *sole* one — deleting a sole `super.foo()` call from a `switch` case body
+/// leaves an empty case, which Swift rejects ("'case' label in a 'switch'
+/// must have at least one executable statement", confirmed with a real
+/// `swiftc` compile). `if`/`catch` bodies do not have this problem (both
+/// compile fine empty) — only `switch` case bodies do. Fix before
+/// registering this operator: add the same `isSoleStatementOfSwitchCase`
+/// exclusion `ContinuationResumeRemovalOperator` uses.
 public struct LifecycleSuperCallRemovalOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "apple.lifecycle.super-call-removal",

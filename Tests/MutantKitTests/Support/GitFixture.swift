@@ -64,12 +64,13 @@ enum GitFixture {
         process.standardError = standardError
         try process.run()
         let message = String(decoding: standardError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        BoundedProcessWait.wait(process)
-        guard process.terminationStatus == 0 else {
+        let exitedOnItsOwn = BoundedProcessWait.wait(process)
+        guard exitedOnItsOwn, process.terminationStatus == 0 else {
+            let detail = exitedOnItsOwn ? "failed: \(message)" : "timed out and was force-killed"
             throw NSError(
                 domain: "GitFixture",
-                code: Int(process.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "git \(arguments.joined(separator: " ")) failed: \(message)"]
+                code: exitedOnItsOwn ? Int(process.terminationStatus) : -1,
+                userInfo: [NSLocalizedDescriptionKey: "git \(arguments.joined(separator: " ")) \(detail)"]
             )
         }
     }

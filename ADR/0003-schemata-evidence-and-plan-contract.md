@@ -326,7 +326,10 @@ implemented now, because no consumer exists yet for either:
   exists yet, since `BoolLiteralSchemataLowerer` is still the only
   conforming type. Building the registry itself is S4's concern, once a
   second lowerer makes "which lowerer handles this operator" a real
-  question.
+  question. (S4 did build it: `SchemataLowererRegistry` now exists and, as
+  of 2026-09, registers all six default/conservative operators — see
+  `SchemataLowererRegistry.builtIn`'s own doc comment for each one's
+  promotion history.)
 
 `SchemataSourceFile.contents` staying `String` rather than `Data` was also
 raised and considered lower priority (P2): `MutationApplication` and

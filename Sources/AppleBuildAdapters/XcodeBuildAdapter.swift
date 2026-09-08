@@ -1483,7 +1483,18 @@ extension XcodeBuildAdapter: TestSelecting {
         var found: [TestIdentifier] = []
         func walk(_ node: [String: Any], target: String?) {
             let nodeType = node["nodeType"] as? String
-            let currentTarget = nodeType == "Unit test bundle" ? (node["name"] as? String) : target
+            // `xcresulttool` names a UI test target's own bundle node "UI
+            // test bundle", never "Unit test bundle" — confirmed against a
+            // real UI-test-only bundle (Phase 5A,
+            // `Fixtures/AccessibilityUISubstrate`). Recognizing only "Unit
+            // test bundle" here silently dropped every UI test's identifier
+            // from enumeration (`currentTarget` stayed `nil`, so the `Test
+            // Case` guard below never matched): a UI test target added to
+            // `tests.targets` would enumerate as if it had zero tests,
+            // starving `selectCoveringTests`'s per-test coverage
+            // measurement and any schemata identifier resolution of a UI
+            // test's own identifiers, even though the test genuinely ran.
+            let currentTarget = isTestBundleNode(nodeType) ? (node["name"] as? String) : target
 
             if nodeType == "Test Case", let currentTarget,
                let identifier = node["nodeIdentifier"] as? String {
@@ -1497,6 +1508,17 @@ extension XcodeBuildAdapter: TestSelecting {
         }
         for node in testNodes { walk(node, target: nil) }
         return found
+    }
+
+    /// Whether an `xcresulttool` `nodeType` names a test-bundle-level node —
+    /// the node whose own `name` is the actual test target's name. Shared
+    /// with `XCResultAdapter.ownFailures`, which threads a target name down
+    /// for display the identical way. Two node type strings, empirically
+    /// confirmed against real result bundles: `"Unit test bundle"` for an
+    /// XCTest/Swift Testing unit target, `"UI test bundle"` for an XCUITest
+    /// target (see `Fixtures/AccessibilityUISubstrate`, Phase 5A).
+    static func isTestBundleNode(_ nodeType: String?) -> Bool {
+        nodeType == "Unit test bundle" || nodeType == "UI test bundle"
     }
 }
 

@@ -28,7 +28,14 @@ struct MutationRegistryTests {
                         "swift.core.return-value-replacement",
                         "swift.core.else-clause-deletion",
                         "swift.core.range-boundary-replacement",
-                        "swift.core.side-effect-call-removal"])
+                        "swift.core.side-effect-call-removal",
+                        "apple.concurrency.continuation-resume-removal",
+                        "apple.persistence.required-decode-introduction",
+                        "apple.concurrency.post-await-cancellation-guard-removal",
+                        "apple.swiftui.task-id-removal",
+                        "apple.lifecycle.foreground-event-replacement",
+                        "apple.accessibility.explicit-label-removal",
+                        "apple.swiftui.hit-area-shape-removal"])
         #expect(Set(ids).count == ids.count)
     }
 

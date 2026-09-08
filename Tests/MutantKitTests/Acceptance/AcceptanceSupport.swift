@@ -165,7 +165,13 @@ enum Acceptance {
         // Read before waiting: a full pipe blocks the child, and these commands
         // are verbose enough to fill one.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        BoundedProcessWait.wait(process)
+        guard BoundedProcessWait.wait(process) else {
+            throw AcceptanceError.commandFailed(
+                command: arguments.joined(separator: " "),
+                exitCode: -1,
+                output: "timed out and was force-killed: \(String(decoding: data, as: UTF8.self))"
+            )
+        }
 
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }

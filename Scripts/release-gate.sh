@@ -135,6 +135,22 @@ fi
 section "Phase 1/3: swift build --build-tests"
 swift build --build-tests
 
+# ── Schemata runtime: build the iOS-Simulator slice acceptance tests need ───
+#
+# `swift build --build-tests` above only produces the macOS archive of
+# MutantKitSchemataRuntimeC. Without the iOS-Simulator slice alongside it,
+# every acceptance test that exercises schemata mode fails with "schemata
+# execution found no usable runtime" — a machine-setup gap, not a code
+# defect, but one this gate must close itself rather than silently passing
+# on a machine where it happens to already be built. Scripts/build-schemata-runtime.sh
+# is the documented, existing mechanism (see CONTRIBUTING.md); this just
+# calls it and points the same env var swift test consults at the same
+# directory swift build already used for the macOS archive.
+section "Building schemata runtime (iOS-Simulator slice)"
+BIN_PATH="$(swift build --show-bin-path)"
+Scripts/build-schemata-runtime.sh "$BIN_PATH"
+export MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE="$BIN_PATH"
+
 # ── Phase 2: unit / regression tests (acceptance suites stay disabled) ───────
 section "Phase 2/3: swift test (unit/regression only)"
 swift test
@@ -145,7 +161,20 @@ swift test
 # enables every acceptance suite, including the ones gated on
 # Acceptance.simulatorEnabled (see AcceptanceSupport.swift) — this is the
 # phase that exercises real xcodebuild/xctestrun/simulator behavior.
-section "Phase 3/3: MUTANTKIT_ACCEPTANCE=1 swift test (full suite, real simulator)"
-MUTANTKIT_ACCEPTANCE=1 swift test
+#
+# Full acceptance suites are intentionally serialized at the outer
+# SwiftPM/Swift Testing layer. Many suites internally launch xcodebuild,
+# simulators, and MutantKit workers in parallel; running several such
+# suites concurrently caused self-contention, 600s build timeouts, and
+# timing-oracle failures on an otherwise idle validation machine (see
+# Research/release-gate-phase3-concurrency-2026-09/README.md — a same-SHA,
+# same-timeout controlled experiment proved this outer parallelism, not a
+# product or test-design bug: unbounded run 121 failures/56 distinct tests,
+# outer-serialized run 2596/2596 pass).
+#
+# Keep the product's own internal concurrency intact; only serialize
+# independent top-level tests here.
+section "Phase 3/3: MUTANTKIT_ACCEPTANCE=1 swift test --no-parallel (full suite, real simulator)"
+MUTANTKIT_ACCEPTANCE=1 swift test --no-parallel
 
 section "Release gate passed: build, unit tests, and full acceptance suite all green."

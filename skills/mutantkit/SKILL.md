@@ -107,6 +107,24 @@ This shows the original/mutated source, which tests ran, the exact outcome
 and why, and a `mutantkit reproduce` command to rerun that one mutant in
 isolation.
 
+Before doing any of that by hand, prefer the built-in commands that already
+do it — they're evidence-grounded, not heuristics layered on top of yours:
+
+```bash
+mutantkit trust --report report.json      # is this report trustworthy at all? fails closed if not
+mutantkit survivors --report report.json  # survivors grouped by declaration, one entry per root cause
+mutantkit fix-plan --report report.json --format agent  # per-survivor facts/inference/obligation/reproduce, terse
+mutantkit next --report report.json --format agent      # the single recommended-next survivor, with why
+```
+
+Run `trust` before quoting a score from any report you didn't just produce
+yourself in this session — it catches the same integrity problems the
+manual `python3 -c ...` check above does, plus batching/attribution
+soundness the raw JSON doesn't surface directly. Use `fix-plan --format
+agent` or `next --format agent` instead of re-deriving a fix from
+`inspect`'s raw diff when you are about to recommend or make a specific
+code change — they already carry the same-obligation/reproduce chain.
+
 ### Distinguishing a real gap from noise
 
 A survived mutant is not automatically "add a test." Read the operator and

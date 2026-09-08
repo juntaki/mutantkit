@@ -44,7 +44,7 @@ framework-specific branch anywhere in the schemata result-classification
 path) — proven once, for the SwiftPM matrix rows above, which is where the
 mixed-framework case actually matters.
 
-Out of scope for F2 schemata support, not merely "unsupported here": physical
+Out of scope for schemata support, not merely "unsupported here": physical
 iOS devices, Mac Catalyst, tvOS, watchOS, and visionOS. `SchemataRuntimePlatform
 .resolve(destination:)` fails closed (`nil`, never a guess) for every one of
 these — see `Tests/MutantKitTests/Unit/SchemataRuntimePlatformTests.swift`,

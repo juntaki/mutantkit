@@ -29,12 +29,26 @@ import Foundation
 /// its own signal (e.g. `.terminate()`) before calling this, the way
 /// `ProcessSupervisorResidueTests.terminateBoundedly` does.
 enum BoundedProcessWait {
-    static func wait(_ process: Process, timeoutSeconds: Double = 10) {
+    /// Returns `true` if `process` exited on its own within `timeoutSeconds`;
+    /// `false` if it had to be escalated to `SIGKILL` and reaped directly.
+    ///
+    /// A caller MUST NOT read `process.terminationStatus` (or any other
+    /// post-exit property) after a `false` result. The escalation path below
+    /// reaps the child itself via a raw `waitpid`, which is what makes it
+    /// possible to bound this call at all -- but it also means Foundation's
+    /// own `Process` bookkeeping is never told the child exited, so asking
+    /// `terminationStatus` afterward throws `NSInvalidArgumentException`
+    /// ("task still running") even though the process is, in fact, dead.
+    /// Confirmed by a real crash: a `clang` compile that ran past one call
+    /// site's 10s budget under heavy machine load hit exactly this path and
+    /// took the whole test run down reading `terminationStatus` next.
+    @discardableResult
+    static func wait(_ process: Process, timeoutSeconds: Double = 10) -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while process.isRunning, Date() < deadline {
             usleep(10000)
         }
-        guard process.isRunning else { return }
+        guard process.isRunning else { return true }
         kill(process.processIdentifier, SIGKILL)
         var status: Int32 = 0
         // Blocking, not WNOHANG: safe here specifically because SIGKILL
@@ -45,5 +59,6 @@ enum BoundedProcessWait {
         // never exits" left for this call to hang on the way
         // `waitUntilExit()` did.
         _ = waitpid(process.processIdentifier, &status, 0)
+        return false
     }
 }
