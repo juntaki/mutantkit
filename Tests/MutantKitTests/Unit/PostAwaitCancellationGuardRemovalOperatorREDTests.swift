@@ -8,7 +8,7 @@ import Testing
 /// `zubair-io/Maple` PR #3018 and `whysasse/verso-app` PR #375; negative
 /// scenarios prove each narrowing constraint in the operator's own doc
 /// comment actually fires. See
-/// `PostAwaitCancellationGuardRemovalCompileViabilityAcceptanceTests` for the
+/// `PostAwaitCancellationGuardCompileViabilityAcceptanceTests` for the
 /// direct `swiftc` compile-safety proof this suite's shapes are grounded in.
 @Suite("RED: Apple concurrency post-await-cancellation-guard-removal operator")
 struct PostAwaitCancellationGuardRemovalOperatorREDTests {

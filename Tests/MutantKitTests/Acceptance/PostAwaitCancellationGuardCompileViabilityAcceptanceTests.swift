@@ -16,7 +16,7 @@ import Testing
 /// Off by default like every other acceptance suite (a real `swiftc`
 /// invocation per case): `MUTANTKIT_ACCEPTANCE=1 swift test`.
 @Suite("Acceptance: post-await-cancellation-guard-removal compile viability", .enabled(if: Acceptance.isEnabled))
-struct PostAwaitCancellationGuardRemovalCompileViabilityAcceptanceTests {
+struct PostAwaitCancellationGuardCompileViabilityAcceptanceTests {
     private let operatorID = "apple.concurrency.post-await-cancellation-guard-removal"
 
     /// A full compile, not `-typecheck` -- same reasoning as the sibling

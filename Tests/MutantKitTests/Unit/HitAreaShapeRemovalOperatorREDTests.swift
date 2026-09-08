@@ -3,18 +3,19 @@ import MutationModel
 import SwiftFrontend
 import Testing
 
-/// RED tests for `apple.swiftui.hit-area-shape-removal`. Positive scenarios
-/// prove discovery finds the exact fault shape described in this operator's
-/// own doc comment (cashubtc/wallet PR #305 / cwharris77/depth PR #476);
-/// negative scenarios prove the Button-ancestry + exact-Rectangle-argument
-/// matcher rejects every excluded shape named by the task's own point 6. See
+/// RED tests for `apple.swiftui.hit-area-shape-removal`. Split into two
+/// suites (positive/negative) purely to stay under SwiftLint's
+/// `type_body_length`; both share the same operator ID and fault-shape
+/// provenance described here. Positive scenarios prove discovery finds the
+/// exact fault shape described in this operator's own doc comment
+/// (cashubtc/wallet PR #305 / cwharris77/depth PR #476); negative scenarios
+/// prove the Button-ancestry + exact-Rectangle-argument matcher rejects
+/// every excluded shape named by the task's own point 6. See
 /// `HitAreaShapeRemovalCompileViabilityAcceptanceTests` for the direct
 /// `swiftc` compile-safety proof this suite's shapes are grounded in.
-@Suite("RED: Apple SwiftUI hit-area-shape-removal operator")
-struct HitAreaShapeRemovalOperatorREDTests {
+@Suite("RED: Apple SwiftUI hit-area-shape-removal operator, positive scenarios")
+struct HitAreaShapeRemovalOperatorPositiveREDTests {
     private let operatorID = "apple.swiftui.hit-area-shape-removal"
-
-    // MARK: - Positive scenarios
 
     @Test("Canonical Button label: HStack { Text; Spacer; Text }.contentShape(Rectangle()) is one candidate")
     func canonicalButtonLabelIsCandidate() throws {
@@ -141,7 +142,7 @@ struct HitAreaShapeRemovalOperatorREDTests {
         #expect(points.count == 1, "expected exactly one candidate, got \(points.map(\.originalText))")
     }
 
-    @Test("Single-trailing-closure Button(action:) form -- the sole trailing closure is the label because action: is already supplied -- is a candidate")
+    @Test("Single-trailing-closure Button(action:) form -- the closure is the label since action: is already supplied -- is a candidate")
     func actionArgumentSingleTrailingClosureFormIsCandidate() throws {
         let source = """
         struct RowView: View {
@@ -180,8 +181,11 @@ struct HitAreaShapeRemovalOperatorREDTests {
         // of this node's own text.
         #expect(!point.originalText.contains("buttonStyle"))
     }
+}
 
-    // MARK: - Negative scenarios
+@Suite("RED: Apple SwiftUI hit-area-shape-removal operator, negative scenarios")
+struct HitAreaShapeRemovalOperatorNegativeREDTests {
+    private let operatorID = "apple.swiftui.hit-area-shape-removal"
 
     @Test(".contentShape(Circle()) is excluded")
     func circleShapeIsExcluded() throws {
