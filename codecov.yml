@@ -1,0 +1,34 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: 80%
+        informational: true
+
+comment:
+  layout: "diff, files"
+  require_changes: false
+
+# Mirrors sonar-project.properties' sonar.exclusions/sonar.coverage.exclusions
+# so Sonar and Codecov measure the same "production code" denominator:
+# sample fixtures, research notes/tools, gitignored reference clones, build
+# output, and the research/probe/benchmark-only executable targets are all
+# excluded from both.
+ignore:
+  - "Tests/**"
+  - "Fixtures/**"
+  - "Research/**"
+  - "reference/**"
+  - ".build/**"
+  - "Sources/BenchmarkRunner/**"
+  - "Sources/BudgetV2Eval/**"
+  - "Sources/PlanSubsetDerivation/**"
+  - "Sources/SchemataEligibilityClassifier/**"
+  - "Sources/PlanStats/**"
+  - "Sources/SchemataChunkBuildProbe/**"
+  - "Sources/DirectXCTestInvokeProbe/**"

@@ -235,7 +235,12 @@ jobs:
     # fails fast and visibly instead of silently burning an hour+ again.
     timeout-minutes: 15
     steps:
+      # fetch-depth: 0 (a full clone, not this action's normal shallow
+      # default) so the Sonar/Codecov steps below have the git history they
+      # need for blame/PR-diff coverage reporting.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Toolchain
         shell: bash
         run: |
@@ -337,7 +342,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p samples
-          swift test > test.log 2>&1 &
+          swift test --enable-code-coverage > test.log 2>&1 &
           test_pid=$!
           echo "swift test started, pid=$test_pid"
           last_lines=0
@@ -404,6 +409,74 @@ jobs:
           # to 1, never clear it.
           Scripts/assert-tests-ran.sh test.log "unit (all suites)" || exit_code=1
           exit $exit_code
+      # Coverage-lane scope, v0 (this round) vs. later:
+      #   v0:    Codecov coverage (project + patch, informational) and
+      #          Sonar static analysis/duplication (no coverage import,
+      #          informational). Test Analytics / JUnit output is explicitly
+      #          NOT a goal of this round — SwiftPM's `--xunit-output`
+      #          fidelity with Swift Testing was never independently
+      #          verified, so it is left out rather than wired on trust.
+      #   later: Codecov Test Analytics (once JUnit output is verified
+      #          reliable), Sonar coverage import (generic coverage XML
+      #          converted from this same lcov, once a converter is worth
+      #          the added scope), and promoting either gate to blocking
+      #          (once a few real runs show what the noise/denominator
+      #          actually look like).
+      #
+      # One test execution (the `swift test --enable-code-coverage` above)
+      # feeds both Sonar and Codecov — deliberately not a second `swift
+      # test` invocation just to collect coverage. SwiftPM writes raw
+      # profile data to `.build/debug/codecov/default.profdata`, keyed to
+      # the test binary at `.build/debug/<Package>PackageTests.xctest/
+      # Contents/MacOS/<Package>PackageTests`; `llvm-cov export` turns that
+      # pair into a single portable lcov.info that both tools consume.
+      # `always()`: coverage is informational, so still attempt it (and let
+      # the step no-op if the earlier build never got far enough to produce
+      # profile data) even when the Test step above reported a failure.
+      - name: Export coverage (lcov)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          profdata=".build/debug/codecov/default.profdata"
+          test_bin=".build/debug/MutantKitPackageTests.xctest/Contents/MacOS/MutantKitPackageTests"
+          if [ ! -f "$profdata" ] || [ ! -f "$test_bin" ]; then
+            echo "No coverage profile data found at $profdata / $test_bin — skipping lcov export."
+            exit 0
+          fi
+          xcrun llvm-cov export "$test_bin" -instr-profile "$profdata" -format=lcov > lcov.info
+          wc -l lcov.info
+      # Sonar/Codecov are informational-only at this stage (point 8 of the
+      # coverage-lane plan): `continue-on-error: true` on both so a Sonar
+      # outage, a missing SONAR_TOKEN (see below), or a Codecov upload
+      # hiccup never fails this job or blocks merge-gate.
+      #
+      # This workflow triggers on plain `pull_request`, not
+      # `pull_request_target` — GitHub already withholds repository secrets
+      # from fork-PR runs under `pull_request`. Codecov's action supports a
+      # tokenless upload for public repos, so it stays unconditional and
+      # just uploads without a token on a fork PR. Sonar has no such
+      # fallback — it hard-requires SONAR_TOKEN — so on a fork PR the step
+      # is skipped outright rather than left to run as an expected,
+      # continue-on-error'd failure every time. Do not switch this workflow
+      # to `pull_request_target` to give forks a token instead — that would
+      # hand fork-controlled code execution access to a real secret.
+      - name: SonarCloud Scan
+        if: >
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Upload coverage to Codecov
+        if: always()
+        continue-on-error: true
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
       # `always()`, not `failure()`: a job that hits its own
       # `timeout-minutes` is reported as *cancelled*, not failed, and
       # `if: failure()` does not run for a cancelled job's steps — the
