@@ -84,7 +84,7 @@ Full depth — integrity violation kinds, the `noCoverage` fast path's own
 history, what "activation" actually means end to end — lives in
 [docs/evidence-model.md](docs/evidence-model.md).
 
-> **v0.2.0 (latest release) · active development.** SwiftPM and Xcode projects, isolated and
+> **v0.3.0 (latest release) · active development.** SwiftPM and Xcode projects, isolated and
 > schemata execution, CI gating, coverage-based test selection, caching,
 > sharding, and resumable runs. Six operators are enabled by default;
 > more remain experimental pending further validation — see
@@ -124,7 +124,7 @@ On GitHub Actions, the bundled composite action wraps the tarball recipe
 above (checksum-verified, attestation-verified) in one step:
 
 ```yaml
-- uses: juntaki/mutantkit@v0.2.0   # pin an exact release tag
+- uses: juntaki/mutantkit@v0.3.0   # pin an exact release tag
 ```
 
 That is the entire effect — install, verify, add to `PATH`, stop. See
@@ -227,7 +227,7 @@ regression checks, a job summary, and a downloadable report artifact:
   with:
     fetch-depth: 0        # only needed if you pass `diff:` below
 
-- uses: juntaki/mutantkit@v0.2.0
+- uses: juntaki/mutantkit@v0.3.0
   with:
     mode: ci
     diff: origin/main      # optional — scope planning to lines changed against this ref

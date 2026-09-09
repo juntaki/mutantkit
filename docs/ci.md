@@ -20,8 +20,8 @@ Beyond `mode`/`version`/`diff`:
 ## Version pinning
 
 An explicit `version:` always wins. Otherwise, pinning the action itself to a
-release tag also pins the binary — `uses: juntaki/mutantkit@v0.2.0` installs
-`v0.2.0`, no separate `version:` needed. Only a ref that is not itself a
+release tag also pins the binary — `uses: juntaki/mutantkit@v0.3.0` installs
+`v0.3.0`, no separate `version:` needed. Only a ref that is not itself a
 release tag (`uses: juntaki/mutantkit@main`, or a local `uses: ./` checkout
 of this repo) falls back to the floating `latest` GitHub Release, and says
 so with a visible `::warning::` in the log — that is the one case where the
