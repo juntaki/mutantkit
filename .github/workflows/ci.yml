@@ -233,7 +233,13 @@ jobs:
     # build + full unit suite) so it never fires on a real, if slow, run,
     # but bounded so a recurrence (this exact class of bug, or a new one)
     # fails fast and visibly instead of silently burning an hour+ again.
-    timeout-minutes: 15
+    # Raised from 15 to 25 when the coverage lane was added: a cold build
+    # with `--enable-code-coverage` plus the lcov export/Sonar/Codecov
+    # steps measured ~15m35s on this runner (every step individually
+    # succeeded, but the job as a whole was reported `cancelled` at the
+    # old 15-minute mark) — still an order of magnitude below the 68+
+    # minute hang this ceiling exists to catch, not a loosening of it.
+    timeout-minutes: 25
     steps:
       # fetch-depth: 0 (a full clone, not this action's normal shallow
       # default) so the Sonar/Codecov steps below have the git history they
