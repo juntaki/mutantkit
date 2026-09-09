@@ -426,10 +426,15 @@ jobs:
       # One test execution (the `swift test --enable-code-coverage` above)
       # feeds both Sonar and Codecov — deliberately not a second `swift
       # test` invocation just to collect coverage. SwiftPM writes raw
-      # profile data to `.build/debug/codecov/default.profdata`, keyed to
-      # the test binary at `.build/debug/<Package>PackageTests.xctest/
-      # Contents/MacOS/<Package>PackageTests`; `llvm-cov export` turns that
-      # pair into a single portable lcov.info that both tools consume.
+      # profile data to `<bin path>/codecov/default.profdata`, keyed to the
+      # test binary at `<bin path>/<Package>PackageTests.xctest/Contents/
+      # MacOS/<Package>PackageTests`; `llvm-cov export` turns that pair into
+      # a single portable lcov.info that both tools consume. The bin path
+      # itself is resolved via `swift build --show-bin-path` rather than
+      # hardcoded as `.build/debug` — it actually varies by toolchain/SDK
+      # (verified: a local Xcode 26.6/Swift 6.3.3 run and this job's own
+      # macos-15/Xcode 16.4 runner resolved to different paths, and a
+      # hardcoded guess silently no-op'd here on the very first live run).
       # `always()`: coverage is informational, so still attempt it (and let
       # the step no-op if the earlier build never got far enough to produce
       # profile data) even when the Test step above reported a failure.
@@ -438,10 +443,16 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          profdata=".build/debug/codecov/default.profdata"
-          test_bin=".build/debug/MutantKitPackageTests.xctest/Contents/MacOS/MutantKitPackageTests"
-          if [ ! -f "$profdata" ] || [ ! -f "$test_bin" ]; then
-            echo "No coverage profile data found at $profdata / $test_bin — skipping lcov export."
+          bin_path="$(swift build --show-bin-path)"
+          profdata="$bin_path/codecov/default.profdata"
+          test_bundle="$(find "$bin_path" -maxdepth 1 -name '*.xctest' -type d | head -n1)"
+          if [ -z "$test_bundle" ] || [ ! -f "$profdata" ]; then
+            echo "No coverage profile data found under $bin_path (profdata=$profdata, test bundle=${test_bundle:-<none>}) — skipping lcov export."
+            exit 0
+          fi
+          test_bin="$test_bundle/Contents/MacOS/$(basename "$test_bundle" .xctest)"
+          if [ ! -f "$test_bin" ]; then
+            echo "Found test bundle $test_bundle but no binary at $test_bin — skipping lcov export."
             exit 0
           fi
           xcrun llvm-cov export "$test_bin" -instr-profile "$profdata" -format=lcov > lcov.info
@@ -461,10 +472,18 @@ jobs:
       # continue-on-error'd failure every time. Do not switch this workflow
       # to `pull_request_target` to give forks a token instead — that would
       # hand fork-controlled code execution access to a real secret.
+      #
+      # `always()` is required here, not implied: unless a step's own `if`
+      # uses one of always()/failure()/cancelled(), GitHub Actions silently
+      # ANDs it with success() — so without this, the earlier Test step
+      # failing (which coverage/Sonar/Codecov are meant to survive) would
+      # skip this step even on a same-repo push/PR. Verified live: the
+      # first real run on this branch had exactly that happen.
       - name: SonarCloud Scan
         if: >
-          github.event_name != 'pull_request' ||
-          github.event.pull_request.head.repo.full_name == github.repository
+          always() &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
         env:
