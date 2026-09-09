@@ -152,7 +152,9 @@ static void mutantkit_v3_write_record(
     memcpy(record.image_uuid, descriptor->image_uuid, MUTANTKIT_V3_UUID_SIZE);
     record.runtime_abi_be = OSSwapHostToBigInt32(MUTANTKIT_V3_RUNTIME_ABI_VERSION);
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    // Owner-only: this file records per-run observability data (run ID,
+    // PID, digests) with no reason to be group/other-readable.
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
     if (fd < 0) {
         return;
     }
