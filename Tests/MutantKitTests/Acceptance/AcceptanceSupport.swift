@@ -108,8 +108,26 @@ enum Acceptance {
     /// Xcode — and fail as an infrastructure error, which looks exactly like the
     /// tool being broken. Any iPhone exercises the same code path.
     ///
-    /// The name is passed through, not the UDID: the point is to let the pool do
-    /// the resolving, since that is the behaviour under test.
+    /// Deliberately scoped to the **latest installed iOS runtime
+    /// specifically**, not "any iPhone-named device under any runtime" — a
+    /// runner image that ships several iOS Simulator runtimes side by side
+    /// (the v0.8 macos-26 image does: iOS 26.2/26.4.1/26.5 simultaneously)
+    /// can easily have a device provisioned under an older runtime but not
+    /// the newest one. Naming that device with no explicit `OS=` then
+    /// collides with `xcodebuild`'s own "no OS means latest" resolution: it
+    /// looks for that name under the *latest* runtime, finds nothing, and
+    /// refuses to guess (this tool's own destination resolver does the
+    /// identical fail-closed refusal for the identical reason, on the real
+    /// config path — see `Sources/AppleBuildAdapters/XcodeConfigDetector.swift`'s
+    /// destination resolution).
+    ///
+    /// The returned destination names the resolved OS version explicitly
+    /// (`OS=26.5`, not just `name=iPhone 17`): a bare device name is still
+    /// ambiguous whenever more than one runtime happens to provision a
+    /// device under that same model name, and an explicit `OS=` is the only
+    /// way to guarantee this helper's own choice — "the device under the
+    /// latest runtime" — is the same one `xcodebuild` resolves, rather than
+    /// two fail-closed refusals independently agreeing to disagree.
     static func iPhoneDestination() throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
@@ -131,11 +149,29 @@ enum Acceptance {
         }
 
         let listing = try JSONDecoder().decode(Listing.self, from: data)
+        // Runtime identifiers look like
+        // "com.apple.CoreSimulator.SimRuntime.iOS-26-5" — extracting the
+        // dot-separated version suffix and comparing numerically (not
+        // lexically: "iOS-26-10" must sort after "iOS-26-9") finds the
+        // actual latest installed iOS runtime, the same one an unqualified
+        // `OS:latest` destination resolves to.
+        func iOSVersion(fromRuntimeKey key: String) -> [Int]? {
+            guard let range = key.range(of: "SimRuntime.iOS-") else { return nil }
+            let versionPart = key[range.upperBound...]
+            let components = versionPart.split(separator: "-").compactMap { Int($0) }
+            return components.isEmpty ? nil : components
+        }
+
+        guard let (latestRuntimeKey, latestVersion) = listing.devices.keys
+            .compactMap({ key in iOSVersion(fromRuntimeKey: key).map { (key, $0) } })
+            .max(by: { $0.1.lexicographicallyPrecedes($1.1) })
+        else {
+            throw AcceptanceError.noSimulator
+        }
+
         // Sorted for determinism: two runs on one machine must choose the same
         // device, or a flake becomes impossible to reproduce.
-        let iPhones = listing.devices
-            .filter { $0.key.contains("iOS") }
-            .flatMap(\.value)
+        let iPhones = (listing.devices[latestRuntimeKey] ?? [])
             .filter { ($0.isAvailable ?? true) && $0.name.hasPrefix("iPhone") }
             .map(\.name)
             .sorted()
@@ -143,7 +179,13 @@ enum Acceptance {
         guard let device = iPhones.first else {
             throw AcceptanceError.noSimulator
         }
-        return "platform=iOS Simulator,name=\(device)"
+        // Hyphen-joined, not dot-joined: `DestinationResolver.explicitOS`
+        // matches this value against the internal `SimRuntime` identifier
+        // (`iOS-26-5`), not against `xcodebuild`'s own dotted `OS=17.4`
+        // syntax — the resolved device's UDID, not this string, is what
+        // actually reaches `xcodebuild` (see `SimulatorDevice.destination`).
+        let osVersion = latestVersion.map(String.init).joined(separator: "-")
+        return "platform=iOS Simulator,name=\(device),OS=\(osVersion)"
     }
 
     /// - Parameter binary: which `mutantkit` executable to run — defaults to the

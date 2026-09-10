@@ -302,8 +302,21 @@ struct ProcessSupervisorResidueTests {
     /// this remaining race is a deliberate, documented F3 scope boundary,
     /// not an oversight. `scenario` must generate fresh marker/process
     /// state each call, never reuse a failed attempt's own state.
+    /// `maxAttempts` was 3. Real public CI evidence (2026-09-11, v0.8
+    /// toolchain migration to `macos-26`) showed this specific scenario
+    /// (`promptExitReapsAChildThatEscapedItsProcessGroup`) lose the fork-
+    /// observation race on all 3 attempts in one real full-suite run
+    /// (~2442 concurrent tests contending for CPU/process resources) —
+    /// confirmed passing cleanly and quickly (<1s) in isolation on the same
+    /// machine immediately after, so this is real load-sensitivity in the
+    /// documented race window above, not a correctness regression. Raised
+    /// with real headroom (3 -> 6 attempts, not another small nudge) for
+    /// the same reason `runIgnoringSIGTERM`'s own timeout was raised with
+    /// real headroom rather than incrementally: a full-suite CI run is the
+    /// realistic worst case this margin has to survive, not the common
+    /// case measured in isolation.
     private func retryingKnownForkRaceWindow(
-        maxAttempts: Int = 3, _ scenario: () async throws -> [String]
+        maxAttempts: Int = 6, _ scenario: () async throws -> [String]
     ) async rethrows -> [String] {
         var lastSurvivors: [String] = []
         for _ in 1 ... maxAttempts {

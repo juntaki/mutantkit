@@ -180,20 +180,15 @@ jobs:
   # change the count) was removed outright before this gate was switched on,
   # so any finding here is new debt.
   #
-  # NOT YET in merge-gate's `needs` (v0.8 toolchain migration, 2026-09-11):
-  # `swiftlint analyze` segfaulted deterministically on the previous
-  # macos-15/Xcode 16.4 CI toolchain (SourceKit's
-  # IDEInspectionSecondPassRequest, type-checking
-  # Sources/MutationPlanner/SourceFileWalker.swift's `walk()`, exit 139) --
-  # a SwiftLint/SourceKit toolchain-compatibility crash, not an unused-import
-  # finding, and confirmed to run clean locally on Xcode 26.6 the whole time.
-  # This job has just moved to the same pinned Xcode 26.6 CI now runs on
-  # everywhere else (see the `Select pinned Xcode` step below) -- left
-  # informational for exactly one more CI cycle to get real evidence this
-  # crash does not reproduce on the new pinned toolchain before promoting it
-  # back to a required, blocking gate. If this run is green, the next change
-  # should delete this whole waiver comment, fold `analyze` back into
-  # `merge-gate`'s `needs`, and treat any subsequent failure as a real
+  # Required, blocking (restored 2026-09-11): previously ran informational-
+  # only for one CI cycle after the v0.8 toolchain migration, because
+  # `swiftlint analyze` segfaulted deterministically on the prior macos-15/
+  # Xcode 16.4 toolchain (SourceKit's IDEInspectionSecondPassRequest,
+  # type-checking Sources/MutationPlanner/SourceFileWalker.swift's `walk()`,
+  # exit 139) -- a SwiftLint/SourceKit toolchain-compatibility crash, not an
+  # unused-import finding. That cycle's run was green on the newly pinned
+  # Xcode 26.6, confirming the crash does not reproduce there, so this job
+  # is back to a required, blocking gate -- any failure now is a real
   # unused-import finding again.
   analyze:
     name: Unused imports (swiftlint analyze)
@@ -915,6 +910,7 @@ jobs:
     timeout-minutes: 5
     needs:
       - lint
+      - analyze
       - complexity
       - unit
       - acceptance
@@ -938,6 +934,7 @@ jobs:
           }
 
           check "lint" "${{ needs.lint.result }}"
+          check "analyze" "${{ needs.analyze.result }}"
           check "complexity" "${{ needs.complexity.result }}"
           check "unit" "${{ needs.unit.result }}"
           check "acceptance" "${{ needs.acceptance.result }}"
