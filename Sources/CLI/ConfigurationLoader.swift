@@ -141,6 +141,13 @@ enum ConfigurationLoader {
     /// completion and validation against it.
     private static let schemaURL = "https://raw.githubusercontent.com/juntaki/mutantkit/main/Schema/mutantkit-v1.json"
 
+    /// v0.5 Stable Contracts: this generator and `docs/configuration.md`'s
+    /// own hand-written example are two independently-maintained "what does
+    /// a real config look like" documents with no test comparing them
+    /// field-for-field — a new field can land here without that doc
+    /// mentioning it, or vice versa. See that doc's own cross-reference
+    /// note. `Sources/MutationModel/Configuration.swift` is the actual
+    /// source of truth for what exists.
     static func template(for kind: ProjectKind, scheme: String?, destination: String?, testTargets: [String]) -> String {
         var lines = [
             "# yaml-language-server: $schema=\(schemaURL)",

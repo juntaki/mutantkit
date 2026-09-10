@@ -266,6 +266,35 @@ struct CLICommandsAcceptanceTests {
         #expect(!decoded.mutations.isEmpty)
     }
 
+    /// v0.5 Stable Contracts: a real-project discovery pass found that
+    /// `plan` against a `sources.include` glob matching zero real files
+    /// exits 0 with a plausible-looking "discovered: 0" summary and no
+    /// indication anything is wrong — a config whose source layout doesn't
+    /// match the `setup`-generated SwiftPM-shaped default silently produces
+    /// an empty, useless plan. Pins that a warning is now surfaced.
+    @Test("plan against a non-matching sources.include warns about zero discovered mutations")
+    func planWithNonMatchingSourcesWarnsOnZeroDiscovery() throws {
+        let staged = try Acceptance.stageFixture("SwiftPackageMacOS")
+        defer { try? FileManager.default.removeItem(at: staged) }
+
+        let badConfiguration = """
+        version: 1
+        project:
+          kind: swiftPackageMacOS
+        sources:
+          include: [ThisDirectoryDoesNotExist/**]
+        operators:
+          profile: default
+        """
+        try Data(badConfiguration.utf8).write(to: staged.appendingPathComponent("mutantkit.yml"), options: .atomic)
+
+        let result = try Acceptance.run(["plan", "--output", "empty-plan.json"], in: staged)
+
+        #expect(result.exitCode == 0, "an empty discovery is not itself an error")
+        #expect(result.output.contains("discovered: 0"))
+        #expect(result.output.contains("warning: zero mutations discovered"), "expected the new zero-discovery warning, got: \(result.output)")
+    }
+
     // MARK: - verify
 
     /// `verify` checks a plan's anchors against the current tree. A plan
@@ -284,6 +313,28 @@ struct CLICommandsAcceptanceTests {
         )
 
         #expect(result.exitCode == 0)
+    }
+
+    /// v0.5 Stable Contracts: `verify --json` is new — real proof it emits
+    /// valid, schema-versioned JSON against a real plan for a real tree,
+    /// not just the unit-level `VerifyResult` encode/decode round-trip.
+    @Test("verify --json produces a valid, schema-versioned result for a fresh plan")
+    func verifyJSONProducesValidResult() throws {
+        let dir = try directory()
+
+        let planPath = ".mutantkit/plan.json"
+        try Acceptance.run(["plan", "--output", planPath], in: dir)
+
+        let result = try Acceptance.run(["verify", "--plan", planPath, "--json"], in: dir)
+
+        #expect(result.exitCode == 0)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any], "stdout was not valid JSON: \(result.output)")
+        #expect(json["schemaVersion"] as? Int == SchemaVersion.verifyResult)
+        #expect(json["valid"] as? Bool == true)
+        #expect((json["idViolations"] as? [Any])?.isEmpty == true)
+        #expect((json["missingFiles"] as? [Any])?.isEmpty == true)
+        #expect((json["anchorViolations"] as? [Any])?.isEmpty == true)
+        #expect(json["compatibility"] is String)
     }
 
     /// `verify` with a hand-corrupted plan must exit non-zero. A plan whose

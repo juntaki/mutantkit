@@ -94,7 +94,7 @@ struct GateCommand: ParsableCommand {
     private func decode(reportPath: String, role: String) throws -> RunReport {
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
-            return try MutationPlan.decoder().decode(RunReport.self, from: data)
+            return try RunReport.decode(from: data)
         } catch {
             guard json else {
                 return try MutantKitExit.onFailure { throw error }

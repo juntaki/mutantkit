@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 import MutationModel
 
 /// Validates `mutantkit.yml` or emits the JSON Schema used by editors/CI.
@@ -32,10 +33,7 @@ struct ConfigCommand: ParsableCommand {
         }
 
         let root = common.resolvedProjectRoot
-        let configuration = try ConfigurationLoader.load(
-            explicitPath: common.configPath,
-            projectRoot: root
-        )
+        let configuration = try Self.load(explicitPath: common.configPath, projectRoot: root, json: json)
         let issues = ConfigurationValidator.validate(configuration, projectRoot: root)
         let result = ConfigurationValidationResult(issues: issues)
 
@@ -50,6 +48,29 @@ struct ConfigCommand: ParsableCommand {
         }
 
         if !result.valid {
+            throw ExitCode(MutantKitExit.operationalError)
+        }
+    }
+
+    /// v0.5 Stable Contracts: `--json` previously only enveloped a
+    /// *validation* failure (an already-loaded `Configuration` with
+    /// `.error`-severity issues) — a *load* failure (missing file,
+    /// malformed YAML, an unsupported `version:`) fell straight through to
+    /// `ConfigurationLoader.load`'s own thrown error, unmapped, the one gap
+    /// `config --json` had that every other `--json`-capable command's own
+    /// report-decode path had already closed (see `GateCommand.decode`).
+    private static func load(explicitPath: String?, projectRoot: URL, json: Bool) throws -> Configuration {
+        do {
+            return try ConfigurationLoader.load(explicitPath: explicitPath, projectRoot: projectRoot)
+        } catch {
+            guard json else {
+                return try MutantKitExit.onFailure { throw error }
+            }
+            try JSONOutput.emitError(
+                code: "configurationUnreadable",
+                message: "Could not load the configuration: \(error)",
+                remedy: "Check --config (or the default mutantkit.yml path) points at a real, valid MutantKit configuration."
+            )
             throw ExitCode(MutantKitExit.operationalError)
         }
     }

@@ -21,6 +21,27 @@ struct RunHistoryTests {
         #expect(records.allSatisfy { $0.schemaVersion == SchemaVersion.runHistoryRecord })
     }
 
+    /// v0.5 Stable Contracts: a `.json` file in the history directory that
+    /// fails to decode (corrupt, or a genuinely incompatible future shape)
+    /// must not take down `mutantkit history` — every other real record
+    /// still surfaces. This does not assert on the stderr warning text
+    /// (no established convention in this codebase for capturing it
+    /// in-process); it pins the functional guarantee: skip and continue.
+    @Test("A corrupt history file is skipped; every other real record still surfaces")
+    func corruptHistoryFileIsSkippedNotFatal() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MutantKit-RunHistoryTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RunHistoryStore(root: root)
+
+        try store.record(report(planID: "real", finishedAt: Date(timeIntervalSince1970: 10)))
+        try Data("{ this is not a valid history record".utf8)
+            .write(to: root.appendingPathComponent("corrupt.json"), options: .atomic)
+
+        let records = store.records()
+        #expect(records.map(\.planID) == ["real"])
+    }
+
     /// A history file written before `schemaVersion` existed has no such
     /// key. Decoding that as a hard failure would silently drop every
     /// history record recorded before this change from `mutantkit

@@ -193,19 +193,36 @@ jobs:
     permissions:
       actions: read
     steps:
-      - name: Require a successful release-validation run for this commit
+      - name: Require the *latest* release-validation run for this commit to have succeeded
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           sha="${{ github.sha }}"
           runs="$(gh api "repos/${{ github.repository }}/actions/workflows/release-validation.yml/runs?head_sha=${sha}&status=completed" --jq '.workflow_runs')"
-          success_count="$(echo "$runs" | jq '[.[] | select(.conclusion == "success")] | length')"
-          if [ "$success_count" -eq 0 ]; then
-            echo "::error::No successful release-validation.yml run found for commit ${sha}. Dispatch release-validation.yml against this commit and wait for release-validation-gate to pass before tagging a release."
+          run_count="$(echo "$runs" | jq 'length')"
+          if [ "$run_count" -eq 0 ]; then
+            echo "::error::No completed release-validation.yml run found for commit ${sha}. Dispatch release-validation.yml against this commit and wait for release-validation-gate to pass before tagging a release."
             exit 1
           fi
-          echo "Found ${success_count} successful release-validation.yml run(s) for commit ${sha}."
+          # v0.6 Distribution Trust: the *latest* completed run for this
+          # exact commit must have succeeded -- not "any run ever did".
+          # This SHA can only be validated by re-dispatching against it
+          # (its own commit content, including this workflow file, is
+          # fixed by the SHA), but a flaky pass followed by a genuine
+          # investigative re-run that failed must not leave the earlier
+          # lucky pass permanently satisfying this gate. Sort by
+          # created_at, not array order, since the API's own ordering is
+          # not part of its documented contract.
+          latest="$(echo "$runs" | jq 'sort_by(.created_at) | last')"
+          latest_conclusion="$(echo "$latest" | jq -r '.conclusion')"
+          latest_id="$(echo "$latest" | jq -r '.id')"
+          latest_created="$(echo "$latest" | jq -r '.created_at')"
+          if [ "$latest_conclusion" != "success" ]; then
+            echo "::error::The most recent completed release-validation.yml run for commit ${sha} (run ${latest_id}, ${latest_created}) concluded '${latest_conclusion}', not 'success' -- an earlier successful run for this same commit, if any, does not count. Dispatch release-validation.yml again and wait for a genuine success before tagging a release."
+            exit 1
+          fi
+          echo "Latest release-validation.yml run for commit ${sha} (run ${latest_id}, ${latest_created}) succeeded."
 
   publish-release:
     if: github.ref_type == 'tag'

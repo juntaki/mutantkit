@@ -263,7 +263,7 @@ extension InspectCommand {
     func loadResult(for id: MutationID, root: URL) -> (run: RunReport?, result: MutationResult?) {
         let reportURL = report.map { URL(fileURLWithPath: $0) } ?? root.appendingPathComponent(".mutantkit/report.json")
         let loadedRun: RunReport? = (try? Data(contentsOf: reportURL))
-            .flatMap { try? MutationPlan.decoder().decode(RunReport.self, from: $0) }
+            .flatMap { try? RunReport.decode(from: $0) }
         return (loadedRun, loadedRun?.results.first { $0.id == id })
     }
 

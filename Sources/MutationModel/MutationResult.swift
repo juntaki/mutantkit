@@ -615,6 +615,23 @@ public struct RunReport: Codable, Sendable {
         try MutationPlan.encoder().encode(self)
     }
 
+    /// The one place every caller should reach a `RunReport` from disk —
+    /// mirrors `MutationPlan.decode(from:)`'s own schema-version gate
+    /// (v0.5 Stable Contracts: before this, `MutationPlan` was the only one
+    /// of the two report-shaped artifacts that refused an unrecognized
+    /// `schemaVersion`; a `report.json` from a future, incompatibly
+    /// reshaped schema would decode without complaint as long as field
+    /// types still happened to line up, and be trusted). A reader that does
+    /// not recognize a report's schema version must refuse it, the same
+    /// discipline `MutationPlan.decode` already applies.
+    public static func decode(from data: Data) throws -> RunReport {
+        let report = try MutationPlan.decoder().decode(RunReport.self, from: data)
+        guard report.schemaVersion == SchemaVersion.result else {
+            throw ReportError.unsupportedSchemaVersion(found: report.schemaVersion, expected: SchemaVersion.result)
+        }
+        return report
+    }
+
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, planID, startedAt, finishedAt, projectRoot, toolchain, baseline, results, integrity, score,
              batchExecution, executionStrategy, operationalIssues
@@ -637,5 +654,18 @@ public struct RunReport: Codable, Sendable {
         // Absent from report JSON written before this field existed —
         // treated as "no operational issues recorded", not an error.
         operationalIssues = try container.decodeIfPresent([OperationalIssue].self, forKey: .operationalIssues) ?? []
+    }
+}
+
+/// Mirrors `PlanError`'s shape for the same reason: a `RunReport.decode`
+/// failure needs its own named, described error, not a bare `DecodingError`.
+public enum ReportError: Error, CustomStringConvertible {
+    case unsupportedSchemaVersion(found: Int, expected: Int)
+
+    public var description: String {
+        switch self {
+        case let .unsupportedSchemaVersion(found, expected):
+            "Report schema version \(found) is not supported by this tool (expects \(expected))."
+        }
     }
 }

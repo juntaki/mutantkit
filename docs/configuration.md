@@ -6,6 +6,15 @@ for you). See [Execution](execution.md) for `execution.profile` and the
 recommended production tuning, and [Benchmarks](benchmarks.md) for the
 measurements behind it.
 
+The example below is a hand-maintained reference showing every field with
+its default or a representative value; `Sources/CLI/ConfigurationLoader
+.swift`'s own `template(for:)` is the actual generator `setup`/`init` run,
+and can drift from this example independently (each is maintained by
+hand — there is no test comparing them field-for-field). If a field looks
+present in one but not the other, that is worth double-checking against
+the source of truth, `Sources/MutationModel/Configuration.swift`, rather
+than assuming either document is complete.
+
 ```yaml
 version: 1
 
@@ -48,6 +57,14 @@ execution:
   # the common case in a well-tested project — real cost for a suite you already
   # suspect of flaking under `tests.parallel`.
   retestKilledMutants: false
+  # On by default. A mutant whose test run crashes, or times out, is re-run
+  # once before the verdict is trusted, the same "prove it reproduces"
+  # discipline retestKilledMutants applies to an ordinary failure — a crash
+  # or hang is exactly as easy to mistake for a real kill from one
+  # observation as an assertion failure is. Real re-run cost on every crash/
+  # timeout, same trade-off as retestKilledMutants above.
+  confirmCrashKills: true
+  confirmTimedOutMutants: true
   # Narrows each mutant's test run to only the tests that cover its mutated
   # line, measured once against the unmutated baseline. A mutant on a line no
   # test reaches is `noCoverage` without ever being built. The single largest
@@ -85,6 +102,9 @@ execution:
   # testBatchSize: 10
 
 timeouts:
+  # How long the unmutated baseline (dry-run) may take before it's treated
+  # as hung, not merely slow. 10 minutes by default.
+  baseline: 10m
   mutant:
     strategy: adaptive      # baseline × multiplier + overheadAllowance
     multiplier: 3
@@ -133,6 +153,20 @@ version concept of its own, into a fresh MutantKit config. The file it
 writes is stamped with `version: 1` explicitly, and its report says so —
 distinguishing a tool-authored file with a known, deliberate version from a
 hand-written one that reaches the same default implicitly.
+
+**An unrecognized *key*, at any level, is a different case from an
+unrecognized *version* — and is currently ignored, not rejected.** A typo
+(`workerz` instead of `workers`, say) or a leftover key from a hand-edited
+file decodes silently: the real field falls back to its default, with no
+error and no warning from `mutantkit` itself. The JSON Schema this project
+publishes (`mutantkit config --schema`) does mark every object
+`additionalProperties: false`, so an editor that honors the generated
+`# yaml-language-server: $schema=...` hint will flag the same typo — but
+that is editor-side linting, not enforcement by the CLI. Renaming or
+removing a key *within* `version: 1` (the only precedent so far:
+`execution.budget`'s old `sampling`/`stratifyWithinOperatorBy` keys) is
+handled case by case with an explicit, named error pointing at the
+replacement — not a silent version bump and not silent reinterpretation.
 
 ## Coming from Muter
 

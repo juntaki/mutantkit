@@ -84,7 +84,7 @@ Full depth — integrity violation kinds, the `noCoverage` fast path's own
 history, what "activation" actually means end to end — lives in
 [docs/evidence-model.md](docs/evidence-model.md).
 
-> **v0.3.0 (latest release) · active development.** SwiftPM and Xcode projects, isolated and
+> **v0.3.0 (latest release).** SwiftPM and Xcode projects, isolated and
 > schemata execution, CI gating, coverage-based test selection, caching,
 > sharding, and resumable runs. Six operators are enabled by default;
 > more remain experimental pending further validation — see
@@ -399,12 +399,7 @@ result directly.
 
 See `docs/apple-support-matrix.md` for the full, citation-backed contract
 (supported / tested / best-effort / unsupported) across Swift/Xcode/macOS
-versions, project kind, test framework, and execution mode. Also not yet
-implemented: external binary plugins, LLVM IR mutation, LLM-generated
-mutations, automatic equivalent-mutant detection, Muter score parity,
-arbitrary runners (Fastlane, Buck). See
-[GitHub Issues](https://github.com/juntaki/mutantkit/issues) for what's
-planned.
+versions, project kind, test framework, and execution mode.
 
 ## Reports
 

@@ -58,7 +58,20 @@ struct OperatorCatalogCommand: ParsableCommand {
         if let operatorID {
             guard let entry = Self.entry(for: operatorID, registry: registry) else {
                 let known = registry.allDescriptors.map(\.id).sorted().joined(separator: "\n  ")
-                print("No operator '\(operatorID)'. Known operators:\n  \(known)")
+                guard json else {
+                    print("No operator '\(operatorID)'. Known operators:\n  \(known)")
+                    throw ExitCode(MutantKitExit.operationalError)
+                }
+                // v0.5 Stable Contracts: this path used to print prose
+                // unconditionally, even under --json — a violation of
+                // JSONOutput.swift's own "exactly one JSON document on
+                // every path" discipline every other --json command here
+                // follows.
+                try JSONOutput.emitError(
+                    code: "unknownOperator",
+                    message: "No operator '\(operatorID)'.",
+                    remedy: "Known operators: \(registry.allDescriptors.map(\.id).sorted().joined(separator: ", "))"
+                )
                 throw ExitCode(MutantKitExit.operationalError)
             }
             if json {

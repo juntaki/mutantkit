@@ -151,6 +151,33 @@ struct MutationIDTests {
         #expect(baseline != changed)
     }
 
+    /// v0.5 Stable Contracts: every test above is differential (compares two
+    /// freshly-computed IDs against each other) and would pass unchanged
+    /// through a silent change to the derivation scheme itself — a different
+    /// field order, separator, hash algorithm, or truncation length in
+    /// `MutationID.compute`/`ContentHash.shortDigest` recomputes both sides
+    /// of every comparison above identically and stays green. This is the
+    /// one test that pins the actual scheme: fixed literal inputs, a
+    /// hardcoded expected ID computed independently (SHA-256 of the exact
+    /// "v1"-tagged, U+001F-joined preimage, truncated to 16 hex chars,
+    /// "mut_"-prefixed). A change to any of those choices must fail this
+    /// test by name, not silently pass every relative comparison elsewhere.
+    @Test("MutationID.compute is a golden vector: fixed inputs produce this exact, hardcoded ID")
+    func computeIsAGoldenVector() {
+        let fingerprint = ContentHash.shortDigest(of: "true")
+        #expect(fingerprint == "b5bea41b6c623f7c", "fixture assumption: ContentHash.shortDigest(of: \"true\") itself changed")
+
+        let id = MutationID.compute(
+            filePath: "Sources/Cart.swift",
+            declaration: DeclarationIdentity(path: ["Cart", "isEmpty()"]),
+            operatorID: "swift.core.bool-literal-inversion",
+            operatorVersion: 1,
+            originalTokenFingerprint: fingerprint,
+            occurrenceIndex: 0
+        )
+        #expect(id.rawValue == "mut_f1f393e2e37a1790")
+    }
+
     /// `verify` recomputes every ID from the plan's own components and refuses
     /// the run if any of them fails to reproduce. That check is worthless unless
     /// discovery genuinely produces IDs that survive it.

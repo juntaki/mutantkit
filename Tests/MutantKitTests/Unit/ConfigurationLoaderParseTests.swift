@@ -42,6 +42,39 @@ struct ConfigurationLoaderParseTests {
         }
     }
 
+    /// v0.5 Stable Contracts: an unrecognized key, at any level, is
+    /// currently ignored rather than rejected by the decoder itself — the
+    /// JSON Schema's `additionalProperties: false` is only ever advertised
+    /// to a schema-aware editor (`ConfigurationSchemaParityTests
+    /// .typoNestedKeyIsRejectedByTheSchema` pins that half), never enforced
+    /// by `ConfigurationLoader`/`mutantkit config` at load time (see
+    /// `ConfigurationValidation.swift`'s own comment on this exact gap).
+    /// That behavior was previously correct-but-unpinned: nothing failed if
+    /// it silently changed (e.g. a Yams/Codable version bump adding strict
+    /// unknown-key rejection). This locks it in as an explicit, enforced
+    /// contract rather than an artifact of how `Codable` happens to behave
+    /// today.
+    @Test("An unrecognized key, top-level or nested, is silently ignored rather than rejected")
+    func unrecognizedKeysAreIgnored() throws {
+        let configuration = try ConfigurationLoader.parse("""
+        version: 1
+        bogusTopLevelKey: 1
+        project:
+          kind: xcodeProject
+          scheme: MyApp
+        execution:
+          workerz: 4
+        tests:
+          targets:
+            - MyAppTests
+        """, environment: [:])
+
+        #expect(configuration.project.kind == .xcodeProject)
+        #expect(configuration.project.scheme == "MyApp")
+        #expect(configuration.tests.targets == ["MyAppTests"])
+        #expect(configuration.execution.workers == Configuration().execution.workers, "the typo'd 'workerz' must not affect the real 'workers' default")
+    }
+
     @Test("ProjectDetectionPlan's own generated template always parses back cleanly")
     func detectionPlanTemplateRoundTrips() throws {
         for kind: ProjectKind in [.auto, .swiftPackageMacOS, .swiftPackageApple, .xcodeProject, .xcodeWorkspace] {

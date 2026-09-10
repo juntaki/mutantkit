@@ -652,6 +652,14 @@ jobs:
           - fixture: xcode-batch-testing-ui-target
             filter: XcodeBatchTestingUITargetAcceptanceTests
             simulator: "1"
+          # v0.4 Trust Closure Workstream B: batched OnlyTestIdentifiers,
+          # proven for XCTest by xcode-batch-testing above -- this is the
+          # Swift Testing sibling, empirically confirming the bare
+          # qualifiedName (no trailing "()") is the correct form for a
+          # batched Swift Testing target too.
+          - fixture: xcode-batch-testing-swift-testing
+            filter: XcodeBatchTestingSwiftTestingAcceptanceTests
+            simulator: "1"
           - fixture: xcode-coverage-selection
             filter: XcodeCoverageSelectionAcceptanceTests
             simulator: "1"

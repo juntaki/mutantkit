@@ -240,6 +240,50 @@ struct DocumentedVersionPinConsistencyTests {
         )
     }
 
+    /// v0.6 Distribution Trust: a second, real instance of the same bug
+    /// class the suite's own doc comment describes, invisible to
+    /// `versionTokens`/`versionTokenEnd` above because it isn't the
+    /// `vMAJOR.MINOR.PATCH` shape at all. `action.yml`'s own usage-comment
+    /// examples once read `uses: juntaki/mutantkit@v1` — a bare,
+    /// major-only floating-tag reference — while no `v1` ref has ever
+    /// existed (only `vMAJOR.MINOR.PATCH`/`-prerelease` tags are cut). This
+    /// project has no floating major-version tag policy (unlike, say,
+    /// `actions/checkout@v4`), so a bare `@vN` naming this repository is
+    /// never valid and is checked separately, by exact substring match
+    /// rather than by extending the dotted-version scanner (which would
+    /// have to grow real ambiguity-resolution logic — `v4` alone is not
+    /// obviously a version reference the way `v0.3.0` is).
+    @Test("No shipped file references a bare, major-only floating tag for this repository")
+    func noBareFloatingMajorTagReferencesThisRepo() throws {
+        var hits: [VersionReference] = []
+        for file in Self.scannedFiles {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let relative = file.path.replacingOccurrences(of: Self.repositoryRoot.path + "/", with: "")
+            for (index, rawLine) in text.components(separatedBy: .newlines).enumerated() {
+                guard rawLine.contains("juntaki/mutantkit@v") else { continue }
+                // A real `vMAJOR.MINOR.PATCH` pin on the same line is fine;
+                // only flag a line whose `@v` is followed directly by
+                // digits then a non-`.` boundary (a bare major number).
+                guard let range = rawLine.range(of: "juntaki/mutantkit@v") else { continue }
+                let afterV = rawLine[range.upperBound...]
+                let digits = afterV.prefix { $0.isNumber }
+                guard !digits.isEmpty else { continue }
+                let afterDigits = afterV.dropFirst(digits.count)
+                if afterDigits.first != "." {
+                    hits.append(VersionReference(version: "v\(digits)", file: relative, line: index + 1, text: rawLine))
+                }
+            }
+        }
+        #expect(
+            hits.isEmpty,
+            """
+            \(hits.count) reference(s) to a bare, major-only floating tag for this repository \
+            (this project has no such tag; only vMAJOR.MINOR.PATCH tags are ever cut):
+            \(hits.map(\.description).joined(separator: "\n"))
+            """
+        )
+    }
+
     // MARK: - The scanner itself is tested, not assumed
 
     @Test("The scan catches the exact shape of the bug it exists to prevent")

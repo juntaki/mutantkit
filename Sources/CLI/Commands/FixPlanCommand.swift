@@ -36,7 +36,17 @@ struct FixPlanCommand: ParsableCommand {
 
     func run() throws {
         guard format == nil || format == "agent" else {
-            print("Unknown --format '\(format ?? "")'. Expected: agent (or omit --format for text).")
+            // v0.5 Stable Contracts: see NextCommand's identical fix — this
+            // check ran before the `json` branch and always printed prose.
+            guard json else {
+                print("Unknown --format '\(format ?? "")'. Expected: agent (or omit --format for text).")
+                throw ExitCode(MutantKitExit.operationalError)
+            }
+            try JSONOutput.emitError(
+                code: "unknownFormat",
+                message: "Unknown --format '\(format ?? "")'.",
+                remedy: "Expected: agent (or omit --format for text)."
+            )
             throw ExitCode(MutantKitExit.operationalError)
         }
 
@@ -175,7 +185,7 @@ struct FixPlanCommand: ParsableCommand {
     private func decode(reportPath: String) throws -> RunReport {
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
-            return try MutationPlan.decoder().decode(RunReport.self, from: data)
+            return try RunReport.decode(from: data)
         } catch {
             guard json else {
                 return try MutantKitExit.onFailure { throw error }

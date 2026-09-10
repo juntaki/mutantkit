@@ -17,7 +17,7 @@ struct PerfCommand: ParsableCommand {
 
     func run() throws {
         let data = try Data(contentsOf: URL(fileURLWithPath: report))
-        let runReport = try MutationPlan.decoder().decode(RunReport.self, from: data)
+        let runReport = try RunReport.decode(from: data)
         print(try PerformanceReporter().render(runReport))
 
         if let output {

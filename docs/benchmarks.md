@@ -3,7 +3,9 @@
 Real measurements behind the execution recommendations in
 [Execution](execution.md) and [Configuration](configuration.md). Not
 synthetic — every number here is from a real, large iOS app, run through
-`mutantkit` itself.
+`mutantkit` itself. See [Performance budget](performance-budget.md) for
+what these numbers say (and don't yet say) about what "fast enough for
+daily CI use" means.
 
 ## Worker count and simulator pooling
 

@@ -90,10 +90,22 @@ public struct RunHistoryStore: Sendable {
         ) else { return [] }
 
         var records = entries.compactMap { url -> RunHistoryRecord? in
-            guard url.pathExtension == "json",
-                  let data = try? Data(contentsOf: url),
+            guard url.pathExtension == "json" else { return nil }
+            guard let data = try? Data(contentsOf: url),
                   let record = try? MutationPlan.decoder().decode(RunHistoryRecord.self, from: data)
-            else { return nil }
+            else {
+                // v0.5 Stable Contracts: a .json file in the history
+                // directory that fails to decode used to vanish silently,
+                // indistinguishable from an empty history directory —
+                // opposite of MutationPlan's own fail-closed philosophy
+                // (a reader that does not recognize a file should say so,
+                // not guess it away). This does not fail the command
+                // (history is best-effort, additive evidence, not a trust
+                // boundary the way a plan/report is) but it is no longer
+                // silent.
+                FileHandle.standardError.write(Data("warning: could not read history record \(url.lastPathComponent), skipping it\n".utf8))
+                return nil
+            }
             return record
         }
         records.sort { $0.finishedAt > $1.finishedAt }

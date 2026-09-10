@@ -15,6 +15,7 @@
     { "fixture": "process-supervision", "filter": "ProcessSupervisionAcceptanceTests", "simulator": "0" },
     { "fixture": "xcode-batch-testing", "filter": "XcodeBatchTestingAcceptanceTests", "simulator": "1" },
     { "fixture": "xcode-batch-testing-ui-target", "filter": "XcodeBatchTestingUITargetAcceptanceTests", "simulator": "1" },
+    { "fixture": "xcode-batch-testing-swift-testing", "filter": "XcodeBatchTestingSwiftTestingAcceptanceTests", "simulator": "1" },
     { "fixture": "xcode-coverage-selection", "filter": "XcodeCoverageSelectionAcceptanceTests", "simulator": "1" },
     { "fixture": "xcode-incremental-batch-testing", "filter": "XcodeIncrementalBatchTestingAcceptanceTests", "simulator": "1" },
     { "fixture": "ror-schemata-compile", "filter": "RORSchemataCompileViabilityAcceptanceTests", "simulator": "0" },

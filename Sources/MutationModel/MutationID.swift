@@ -17,6 +17,19 @@
 /// Every input is stored on the `MutationPoint` that carries the ID, so `verify`
 /// can recompute an ID from the plan and reject any file whose IDs do not
 /// reproduce.
+///
+/// **v0.5 Stable Contracts: what a Swift toolchain/SwiftSyntax upgrade does
+/// to an existing ID is explicitly *not* guaranteed.** None of the inputs
+/// above include a toolchain or parser version, so an upgrade is not itself
+/// an ID input — but nothing here proves a newer SwiftSyntax parses a given
+/// file's structure identically to an older one in every case (a node
+/// reclassified, trivia attached differently). If it does not, the
+/// `declaration`/token-fingerprint inputs derived from that parse could
+/// change even though the source bytes did not, which would change the ID.
+/// Baselines pinned across a toolchain upgrade are not proven stable by
+/// this design; `MutationPoint.recomputedID`'s check (see `verify`) is what
+/// would surface such a change, as an ID-mismatch failure rather than a
+/// silent misattribution.
 public struct MutationID: Hashable, Sendable, CustomStringConvertible {
     public let rawValue: String
 

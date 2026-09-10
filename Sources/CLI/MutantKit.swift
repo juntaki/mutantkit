@@ -141,7 +141,14 @@ struct OverrideOptions: ParsableArguments {
         if let maxMutants { configuration.execution.budget.maxMutants = maxMutants }
         if let executionProfile {
             guard let parsed = ExecutionProfile(rawValue: executionProfile) else {
-                print("Unknown execution profile '\(executionProfile)'. Expected: reference, optimized, experimental.")
+                // v0.5 Stable Contracts: diagnostics go to stderr, not
+                // stdout — this is shared by every command with an
+                // `--execution-profile`/`--profile` override, several of
+                // which support `--json`, and a diagnostic printed to
+                // stdout ahead of that branch is exactly the kind of prose
+                // leak fixed elsewhere in this pass (OperatorCatalogCommand,
+                // NextCommand, FixPlanCommand).
+                FileHandle.standardError.write(Data("Unknown execution profile '\(executionProfile)'. Expected: reference, optimized, experimental.\n".utf8))
                 throw ExitCode(MutantKitExit.operationalError)
             }
             configuration.execution.profile = parsed
@@ -153,8 +160,9 @@ struct OverrideOptions: ParsableArguments {
                 // input case in the commands that reach here already throws
                 // `MutantKitExit.operationalError` explicitly, and this one
                 // should be no different (see the CLI's own exit-code
-                // contract, `MutantKitExit`).
-                print("Unknown operator profile '\(profile)'. Expected: conservative, default, experimental.")
+                // contract, `MutantKitExit`). Diagnostics go to stderr, not
+                // stdout — see the identical note above.
+                FileHandle.standardError.write(Data("Unknown operator profile '\(profile)'. Expected: conservative, default, experimental.\n".utf8))
                 throw ExitCode(MutantKitExit.operationalError)
             }
             configuration.operators.profile = parsed

@@ -236,8 +236,8 @@ The public repo's `.github/workflows/ci.yml`, run on every push/PR (no
   cognitive-complexity gate, `swiftlint analyze`).
 - **`unit`** — the full `swift test` unit suite, once, no fast/system
   split.
-- **`acceptance`** — a matrix of all 18 fixtures from
-  `Scripts/ci-fixtures.json` (6 host-only SwiftPM, 12 requiring a real iOS
+- **`acceptance`** — a matrix of all 19 fixtures from
+  `Scripts/ci-fixtures.json` (6 host-only SwiftPM, 13 requiring a real iOS
   Simulator), each job doing its own build; there is no shared `build` job
   and no path-based narrowing — every fixture runs on every push.
 - **`ror-schemata-differential`** and **`ios-simulator-schemata-runtime`**
@@ -280,4 +280,4 @@ every push (`ci.yml`) or before every release (`release-validation.yml`).
 | macOS / iOS | Supported, both modes |
 | tvOS / watchOS / visionOS | Best-effort (`isolated`, real-simulator proof deferred); unsupported (`schemata`, explicit) |
 | Physical iOS device / Mac Catalyst | Unsupported (`schemata`, explicit fail-closed); unknown (`isolated`, unattempted) |
-| CI/acceptance matrix | Real and comprehensive — 18 fixtures, isolated/schemata differential, bundled-runtime clean-machine E2E |
+| CI/acceptance matrix | Real and comprehensive — 19 fixtures, isolated/schemata differential, bundled-runtime clean-machine E2E |
