@@ -181,7 +181,15 @@ public enum DestinationResolver {
         }
 
         if let explicitOS = Self.explicitOS(inDestination: requested) {
-            guard let match = matches.first(where: { $0.runtimeIdentifier.localizedCaseInsensitiveContains(explicitOS) })
+            // `xcodebuild`'s own `-destination` syntax dot-separates an OS
+            // version (`OS=17.4`); a `SimRuntime` identifier hyphen-separates
+            // the same version (`iOS-17-4`). Normalizing to hyphens before
+            // matching accepts both — an explicit OS written the standard
+            // xcodebuild way must resolve exactly like one written in the
+            // internal identifier's own separator, never fail only because
+            // it used the separator any real `-destination` string uses.
+            let normalizedOS = explicitOS.replacingOccurrences(of: ".", with: "-")
+            guard let match = matches.first(where: { $0.runtimeIdentifier.localizedCaseInsensitiveContains(normalizedOS) })
             else {
                 throw DestinationResolutionError.notFound(
                     name: "\(name) (OS \(explicitOS))",

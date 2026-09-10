@@ -114,6 +114,16 @@ struct DestinationResolverTests {
         #expect(resolved.device?.udid == older.udid)
     }
 
+    @Test("An explicit OS written in xcodebuild's own dot-separated syntax resolves identically to the hyphenated form")
+    func explicitOSAcceptsXcodebuildDotSyntax() throws {
+        let older = Self.device("iPhone 16e", runtime: "26-3-1")
+        let latest = Self.device("iPhone 16e", runtime: "26-5")
+        let resolved = try DestinationResolver.resolve(
+            "platform=iOS Simulator,name=iPhone 16e,OS=26.3.1", against: [older, latest]
+        )
+        #expect(resolved.device?.udid == older.udid)
+    }
+
     @Test("OS=latest is treated the same as no explicit OS")
     func osLatestIsTreatedAsImplicit() throws {
         let older = Self.device("iPhone 16e", runtime: "26-3-1")

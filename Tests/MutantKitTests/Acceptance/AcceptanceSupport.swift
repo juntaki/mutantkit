@@ -179,12 +179,13 @@ enum Acceptance {
         guard let device = iPhones.first else {
             throw AcceptanceError.noSimulator
         }
-        // Hyphen-joined, not dot-joined: `DestinationResolver.explicitOS`
-        // matches this value against the internal `SimRuntime` identifier
-        // (`iOS-26-5`), not against `xcodebuild`'s own dotted `OS=17.4`
-        // syntax — the resolved device's UDID, not this string, is what
-        // actually reaches `xcodebuild` (see `SimulatorDevice.destination`).
-        let osVersion = latestVersion.map(String.init).joined(separator: "-")
+        // Dot-joined: `xcodebuild`'s own standard `-destination` syntax
+        // (`OS=17.4`) — some acceptance suites hand this string straight to
+        // `xcodebuild` (e.g. a direct `build-for-testing` invocation), not
+        // only through `DestinationResolver`'s own UDID-substituting
+        // resolution, so it must be valid on its own as a real destination,
+        // not just as `DestinationResolver`'s internal matching input.
+        let osVersion = latestVersion.map(String.init).joined(separator: ".")
         return "platform=iOS Simulator,name=\(device),OS=\(osVersion)"
     }
 
