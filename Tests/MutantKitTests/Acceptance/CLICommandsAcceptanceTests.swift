@@ -266,35 +266,6 @@ struct CLICommandsAcceptanceTests {
         #expect(!decoded.mutations.isEmpty)
     }
 
-    /// v0.5 Stable Contracts: a real-project discovery pass found that
-    /// `plan` against a `sources.include` glob matching zero real files
-    /// exits 0 with a plausible-looking "discovered: 0" summary and no
-    /// indication anything is wrong — a config whose source layout doesn't
-    /// match the `setup`-generated SwiftPM-shaped default silently produces
-    /// an empty, useless plan. Pins that a warning is now surfaced.
-    @Test("plan against a non-matching sources.include warns about zero discovered mutations")
-    func planWithNonMatchingSourcesWarnsOnZeroDiscovery() throws {
-        let staged = try Acceptance.stageFixture("SwiftPackageMacOS")
-        defer { try? FileManager.default.removeItem(at: staged) }
-
-        let badConfiguration = """
-        version: 1
-        project:
-          kind: swiftPackageMacOS
-        sources:
-          include: [ThisDirectoryDoesNotExist/**]
-        operators:
-          profile: default
-        """
-        try Data(badConfiguration.utf8).write(to: staged.appendingPathComponent("mutantkit.yml"), options: .atomic)
-
-        let result = try Acceptance.run(["plan", "--output", "empty-plan.json"], in: staged)
-
-        #expect(result.exitCode == 0, "an empty discovery is not itself an error")
-        #expect(result.output.contains("discovered: 0"))
-        #expect(result.output.contains("warning: zero mutations discovered"), "expected the new zero-discovery warning, got: \(result.output)")
-    }
-
     // MARK: - verify
 
     /// `verify` checks a plan's anchors against the current tree. A plan

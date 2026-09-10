@@ -33,38 +33,58 @@ struct VerifyCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Emit the verification result as JSON instead of the text report below.")
     var json = false
 
+    /// Kept deliberately thin: every branch below is either "compute a
+    /// value" or "hand already-computed values to exactly one of two
+    /// renderers" (`printReport`/`VerifyResult`) — see those for where the
+    /// actual `--json`-vs-prose decisions live, so this function's own
+    /// complexity doesn't grow with every output-path fix the way it did
+    /// when the printing was inline here.
     func run() async throws {
         let root = common.resolvedProjectRoot
         let loadedPlan = try Self.decode(planPath: plan, json: json)
 
-        if !json {
-            print("Verifying plan \(loadedPlan.planID) — \(loadedPlan.mutations.count) mutation(s)\n")
-        }
-
         let compatibility = await Self.resolveCompatibility(of: loadedPlan, root: root, configPath: common.configPath)
-        if !json {
-            Self.printCompatibility(compatibility)
-        }
-
         let idViolations = IntegrityChecker.validatePlan(loadedPlan)
-        if !json {
-            if idViolations.isEmpty {
-                print("✓ Mutation IDs  every ID recomputes from its own components")
-            } else {
-                print("✗ Mutation IDs  \(idViolations.count) problem(s)")
-                for violation in idViolations {
-                    print("  └─ \(violation.detail)")
-                }
-            }
+        let anchors = Self.checkAnchors(in: loadedPlan, root: root, verbose: verbose && !json)
+        let valid = idViolations.isEmpty && anchors.rejected.isEmpty && anchors.unreadable.isEmpty
+
+        if json {
+            try JSONOutput.emit(VerifyResult(
+                planID: loadedPlan.planID,
+                mutationCount: loadedPlan.mutations.count,
+                valid: valid,
+                idViolations: idViolations.map(\.detail),
+                missingFiles: Set(anchors.unreadable).sorted(),
+                anchorViolations: anchors.rejected.map {
+                    VerifyResult.AnchorViolation(mutationID: $0.0.id.rawValue, location: $0.0.displayLocation, diagnosis: $0.1.diagnosis)
+                },
+                compatibility: compatibility.jsonValue
+            ))
+        } else {
+            Self.printReport(plan: loadedPlan, compatibility: compatibility, idViolations: idViolations, anchors: anchors, valid: valid)
         }
 
-        // Read each file once: a plan typically holds many mutations per file,
-        // and re-reading per mutation would make verify slower than it needs to be.
+        guard valid else { throw ExitCode(MutantKitExit.integrityFailure) }
+    }
+
+    /// One process's worth of anchor evidence for every mutation in
+    /// `plan` — pulled out of `run()` so the loop's own branching doesn't
+    /// count against that function's complexity budget, mirroring
+    /// `resolveCompatibility`'s own reason for being a standalone function.
+    private struct AnchorCheckResult {
+        let rejected: [(MutationPoint, AnchorVerification)]
+        let unreadable: [String]
+    }
+
+    private static func checkAnchors(in plan: MutationPlan, root: URL, verbose: Bool) -> AnchorCheckResult {
+        // Read each file once: a plan typically holds many mutations per
+        // file, and re-reading per mutation would make verify slower than
+        // it needs to be.
         var sources: [String: Data] = [:]
         var rejected: [(MutationPoint, AnchorVerification)] = []
         var unreadable: [String] = []
 
-        for point in loadedPlan.mutations {
+        for point in plan.mutations {
             let data: Data
             if let cached = sources[point.file] {
                 data = cached
@@ -81,61 +101,62 @@ struct VerifyCommand: AsyncParsableCommand {
             let verification = SourceAnchorVerifier.verify(point, against: data, depth: .full)
             if !verification.isValid {
                 rejected.append((point, verification))
-            } else if verbose, !json {
+            } else if verbose {
                 print("  ✓ \(point.id) \(point.displayLocation) \(point.operatorID)")
             }
         }
+        return AnchorCheckResult(rejected: rejected, unreadable: unreadable)
+    }
 
-        let verified = loadedPlan.mutations.count - rejected.count - unreadable.count
-        if !json {
-            if rejected.isEmpty, unreadable.isEmpty {
-                print("✓ Anchors       all \(verified) anchor(s) match the current source")
-            } else {
-                print("✗ Anchors       \(verified) of \(loadedPlan.mutations.count) match")
-                for file in Set(unreadable).sorted() {
-                    print("  └─ missing file: \(file)")
-                }
-                for (point, verification) in rejected.prefix(20) {
-                    print("  └─ \(point.displayLocation) (\(point.id))")
-                    print("     \(verification.diagnosis)")
-                }
-                if rejected.count > 20 {
-                    print("  └─ …and \(rejected.count - 20) more")
-                }
-            }
-        }
-
-        let valid = idViolations.isEmpty && rejected.isEmpty && unreadable.isEmpty
-
-        if json {
-            try JSONOutput.emit(VerifyResult(
-                planID: loadedPlan.planID,
-                mutationCount: loadedPlan.mutations.count,
-                valid: valid,
-                idViolations: idViolations.map(\.detail),
-                missingFiles: Set(unreadable).sorted(),
-                anchorViolations: rejected.map {
-                    VerifyResult.AnchorViolation(mutationID: $0.0.id.rawValue, location: $0.0.displayLocation, diagnosis: $0.1.diagnosis)
-                },
-                compatibility: compatibility.jsonValue
-            ))
-        }
+    private static func printReport(
+        plan: MutationPlan, compatibility: VerifyCompatibilityStatus,
+        idViolations: [IntegrityViolation], anchors: AnchorCheckResult, valid: Bool
+    ) {
+        print("Verifying plan \(plan.planID) — \(plan.mutations.count) mutation(s)\n")
+        printCompatibility(compatibility)
+        printMutationIDs(idViolations)
+        printAnchors(plan: plan, anchors: anchors)
 
         guard valid else {
-            if !json {
-                print("""
+            print("""
 
-                This plan is stale. Anchors are never relocated by guesswork — a mismatched \
-                mutation would be reported `notApplied` rather than applied somewhere else. \
-                Re-run `mutantkit plan` to plan against the current source.
-                """)
+            This plan is stale. Anchors are never relocated by guesswork — a mismatched \
+            mutation would be reported `notApplied` rather than applied somewhere else. \
+            Re-run `mutantkit plan` to plan against the current source.
+            """)
+            return
+        }
+        print("\nPlan is valid and current.")
+    }
+
+    private static func printMutationIDs(_ idViolations: [IntegrityViolation]) {
+        if idViolations.isEmpty {
+            print("✓ Mutation IDs  every ID recomputes from its own components")
+        } else {
+            print("✗ Mutation IDs  \(idViolations.count) problem(s)")
+            for violation in idViolations {
+                print("  └─ \(violation.detail)")
             }
-            throw ExitCode(MutantKitExit.integrityFailure)
         }
+    }
 
-        if !json {
-            print("\nPlan is valid and current.")
+    private static func printAnchors(plan: MutationPlan, anchors: AnchorCheckResult) {
+        let verified = plan.mutations.count - anchors.rejected.count - anchors.unreadable.count
+        guard anchors.rejected.isEmpty, anchors.unreadable.isEmpty else {
+            print("✗ Anchors       \(verified) of \(plan.mutations.count) match")
+            for file in Set(anchors.unreadable).sorted() {
+                print("  └─ missing file: \(file)")
+            }
+            for (point, verification) in anchors.rejected.prefix(20) {
+                print("  └─ \(point.displayLocation) (\(point.id))")
+                print("     \(verification.diagnosis)")
+            }
+            if anchors.rejected.count > 20 {
+                print("  └─ …and \(anchors.rejected.count - 20) more")
+            }
+            return
         }
+        print("✓ Anchors       all \(verified) anchor(s) match the current source")
     }
 
     /// `--json` needs the same "one JSON document on every path" discipline

@@ -40,7 +40,7 @@ struct PublicTreeConfigRegressionTests {
     }
 
     @Test(
-        "forbidden_strings still lists every known-leaked internal project name, exclude lists still cover the known-sensitive files/directories",
+        "forbidden_strings still lists every known-leaked internal project name, exclude lists still cover known-sensitive files/dirs",
         .enabled(if: PublicTreeConfigRegressionTests.isPrivateRepoCheckout)
     )
     func floorEntriesArePresent() throws {

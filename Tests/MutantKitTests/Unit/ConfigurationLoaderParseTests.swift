@@ -72,7 +72,10 @@ struct ConfigurationLoaderParseTests {
         #expect(configuration.project.kind == .xcodeProject)
         #expect(configuration.project.scheme == "MyApp")
         #expect(configuration.tests.targets == ["MyAppTests"])
-        #expect(configuration.execution.workers == Configuration().execution.workers, "the typo'd 'workerz' must not affect the real 'workers' default")
+        #expect(
+            configuration.execution.workers == Configuration().execution.workers,
+            "the typo'd 'workerz' must not affect the real 'workers' default"
+        )
     }
 
     @Test("ProjectDetectionPlan's own generated template always parses back cleanly")

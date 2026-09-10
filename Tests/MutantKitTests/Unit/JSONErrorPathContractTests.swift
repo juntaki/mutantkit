@@ -83,7 +83,10 @@ struct JSONErrorPathContractTests {
 
         let (runExitCode, runHelp) = try Acceptance.run(["run", "--help"], in: dir)
         #expect(runExitCode == 0)
-        #expect(runHelp.contains("--also-report"), "Scripts/action/preflight-capabilities.sh greps `mutantkit run --help` for '--also-report'")
+        #expect(
+            runHelp.contains("--also-report"),
+            "Scripts/action/preflight-capabilities.sh greps `mutantkit run --help` for '--also-report'"
+        )
     }
 
     /// v0.5 Stable Contracts, Agent C finding: `oss-public/.github/workflows/
@@ -103,7 +106,10 @@ struct JSONErrorPathContractTests {
         let (exitCode, output) = try Acceptance.run(["doctor"], in: dir)
 
         #expect(exitCode == MutantKitExit.operationalError)
-        #expect(output.contains("No Swift project found"), "oss-public/.github/workflows/action-smoke-test.yml greps doctor's output for this substring")
+        #expect(
+            output.contains("No Swift project found"),
+            "oss-public/.github/workflows/action-smoke-test.yml greps doctor's output for this substring"
+        )
         #expect(output.contains("Not ready"), "oss-public/.github/workflows/action-smoke-test.yml greps doctor's output for this substring")
     }
 }

@@ -96,28 +96,7 @@ struct PlanCommand: AsyncParsableCommand {
         let encoded = try plan.encoded()
         try encoded.write(to: url, options: .atomic)
 
-        // v0.5 Stable Contracts: a real-project discovery pass found a
-        // config whose `sources.include` glob (the `setup`-generated
-        // SwiftPM-shaped `Sources/**` default, against a project whose
-        // real sources live elsewhere — a plain Xcode-app-template layout,
-        // in the case that surfaced this) matched nothing at all. `plan`
-        // still exited 0 with a plausible-looking "discovered: 0" summary
-        // and wrote a technically-valid, entirely empty plan — nothing
-        // distinguished "this project genuinely has zero eligible mutation
-        // sites" from "sources.include matches no real file." Both are
-        // real possibilities; only the second is almost always a
-        // misconfiguration, and it is the overwhelmingly more likely one
-        // for any project with actual production code.
-        if plan.discoveredCount == 0 {
-            FileHandle.standardError.write(Data("""
-            warning: zero mutations discovered. This is either a genuinely trivial project, \
-            or sources.include/exclude in mutantkit.yml does not match this project's real \
-            source layout (a common cause: setup's generated default of "Sources/**" assumes \
-            a SwiftPM-style layout, which a plain Xcode-app-template project — sources directly \
-            under a folder named after the app, not "Sources/" — does not follow). Check \
-            sources.include against your project's actual source directories.\n\n
-            """.utf8))
-        }
+        Self.warnIfNothingDiscovered(plan)
 
         print("""
 
@@ -187,6 +166,29 @@ struct PlanCommand: AsyncParsableCommand {
             throw ExitCode(MutantKitExit.operationalError)
         }
         return toolchain
+    }
+
+    /// v0.5 Stable Contracts: a real-project discovery pass found a config
+    /// whose `sources.include` glob (the `setup`-generated SwiftPM-shaped
+    /// `Sources/**` default, against a project whose real sources live
+    /// elsewhere — a plain Xcode-app-template layout, in the case that
+    /// surfaced this) matched nothing at all. `plan` still exited 0 with a
+    /// plausible-looking "discovered: 0" summary and wrote a technically-
+    /// valid, entirely empty plan — nothing distinguished "this project
+    /// genuinely has zero eligible mutation sites" from "sources.include
+    /// matches no real file." Both are real possibilities; only the second
+    /// is almost always a misconfiguration, and it is the overwhelmingly
+    /// more likely one for any project with actual production code.
+    private static func warnIfNothingDiscovered(_ plan: MutationPlan) {
+        guard plan.discoveredCount == 0 else { return }
+        FileHandle.standardError.write(Data("""
+        warning: zero mutations discovered. This is either a genuinely trivial project, \
+        or sources.include/exclude in mutantkit.yml does not match this project's real \
+        source layout (a common cause: setup's generated default of "Sources/**" assumes \
+        a SwiftPM-style layout, which a plain Xcode-app-template project — sources directly \
+        under a folder named after the app, not "Sources/" — does not follow). Check \
+        sources.include against your project's actual source directories.\n\n
+        """.utf8))
     }
 }
 
