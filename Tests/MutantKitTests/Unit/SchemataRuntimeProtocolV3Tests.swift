@@ -325,6 +325,26 @@ struct SchemataRuntimeProtocolV3Tests {
         #expect(result.transcript == nil || result.transcript?.isEmpty == true)
     }
 
+    // MARK: - Transcript file permissions
+
+    /// Sonar flagged the runtime's `open()` call for creating this file
+    /// world/group-readable (0644); fixed to owner-only (0600). A future
+    /// reimplementation of `mutantkit_v3_write_record` must not regress
+    /// back to 0644 without this test failing.
+    @Test("the transcript file the runtime creates is owner-only (0600), not group/other-readable")
+    func transcriptFileIsCreatedOwnerOnly() throws {
+        let transcriptURL = makeTranscriptPath()
+        _ = try run(environment: [
+            "MUTANTKIT_SCHEMATA_TOKEN": "928374982374:17",
+            "MUTANTKIT_SCHEMATA_RUN_ID": Self.runIDHex,
+            "MUTANTKIT_SCHEMATA_TRANSCRIPT_PATH": transcriptURL.path
+        ])
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: transcriptURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        #expect(permissions == 0o600)
+    }
+
     // MARK: - Sequence numbers span multiple invocations correctly
 
     @Test("each process's own sequence starts fresh at 1, not continuing a shared file's prior count")
