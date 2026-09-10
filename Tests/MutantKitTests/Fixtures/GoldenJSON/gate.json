@@ -1,0 +1,10 @@
+{
+  "passed" : false,
+  "schemaVersion" : 1,
+  "violations" : [
+    {
+      "detail" : "1 mutant survived (maximum 0).",
+      "kind" : "survivorCount"
+    }
+  ]
+}

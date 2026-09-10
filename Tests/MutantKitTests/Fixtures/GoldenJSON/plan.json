@@ -1,0 +1,63 @@
+{
+  "configurationHash" : "sha256:5c4ecd20ff2e879874209efb59c5e4986a73f90e1b544a7c4312cabc4efb4ffa",
+  "createdAt" : "2023-11-14T22:13:20Z",
+  "mutations" : [
+    {
+      "column" : 37,
+      "confidence" : "high",
+      "enclosingDeclaration" : {
+        "path" : [
+          "Example",
+          "isReady()"
+        ]
+      },
+      "executionMode" : "isolated",
+      "expectedSyntaxKind" : "booleanLiteralExpr",
+      "file" : "Sources/Example.swift",
+      "id" : "mut_bd2e0bb20e590e7f",
+      "line" : 2,
+      "occurrenceIndex" : 0,
+      "operatorID" : "swift.core.bool-literal-inversion",
+      "operatorVersion" : 1,
+      "originalText" : "true",
+      "prefixTokenFingerprint" : "1e40e0133c9d",
+      "replacementText" : "false",
+      "sourceFileHash" : "sha256:4d2ad052a8ffa90c3d1d9fb7520de1d81ae9421a09ea7fa9ac1cba9b70446969",
+      "suffixTokenFingerprint" : "e8e15dfbac71",
+      "utf8Range" : {
+        "end" : 57,
+        "start" : 53
+      }
+    }
+  ],
+  "operators" : [
+    {
+      "category" : "literal",
+      "confidence" : "high",
+      "defaultEnabled" : true,
+      "faultEvidence" : [
+        "Inverted feature-flag and guard defaults are a recurring class of regression in Swift apps; a boolean default that no test pins down can be flipped without any test noticing."
+      ],
+      "id" : "swift.core.bool-literal-inversion",
+      "requiresSymbolResolution" : false,
+      "schemataEligible" : false,
+      "summary" : "Replaces a boolean literal with its opposite (true ↔ false).",
+      "version" : 1
+    }
+  ],
+  "planID" : "plan-0001",
+  "projectRoot" : "/tmp/project",
+  "schemaVersion" : 1,
+  "skipped" : [
+
+  ],
+  "sourceFileHashes" : {
+
+  },
+  "toolchain" : {
+    "swiftSyntaxVersion" : "603.0.2",
+    "swiftVersion" : "6.3.3",
+    "toolCommitSHA" : "0000000000000000000000000000000000000000",
+    "toolVersion" : "0.1.0"
+  }
+}

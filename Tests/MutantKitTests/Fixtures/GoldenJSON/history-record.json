@@ -1,0 +1,16 @@
+[
+  {
+    "effectiveScore" : 0,
+    "finishedAt" : "2023-11-14T22:15:00Z",
+    "integrityPassed" : true,
+    "killed" : 0,
+    "noCoverage" : 0,
+    "planID" : "plan-0001",
+    "schemaVersion" : 1,
+    "survived" : 1,
+    "testedScore" : 0,
+    "toolCommitSHA" : "0000000000000000000000000000000000000000",
+    "toolVersion" : "0.1.0",
+    "wallClockSeconds" : 100
+  }
+]

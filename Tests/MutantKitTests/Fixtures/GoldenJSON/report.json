@@ -1,0 +1,125 @@
+{
+  "baseline" : {
+    "buildProductHash" : "sha256:c329127855982bcb8b8e7027af5a1039e9a27752097d740978b853fd89a56d2d",
+    "durationSeconds" : 12,
+    "passed" : true,
+    "testSummary" : {
+      "durationSeconds" : 1.5,
+      "failed" : 0,
+      "failingTests" : [
+
+      ],
+      "passed" : 10,
+      "total" : 10
+    }
+  },
+  "finishedAt" : "2023-11-14T22:15:00Z",
+  "integrity" : {
+    "buildFailures" : 0,
+    "buildObserved" : 1,
+    "classified" : 1,
+    "discovered" : 1,
+    "executed" : 1,
+    "explicitlySkipped" : 0,
+    "planned" : 1,
+    "reported" : 1,
+    "skippedByReason" : [
+
+    ],
+    "sourceApplied" : 1,
+    "violations" : [
+
+    ]
+  },
+  "operationalIssues" : [
+
+  ],
+  "planID" : "plan-0001",
+  "projectRoot" : "/tmp/project",
+  "results" : [
+    {
+      "diagnosis" : "test diagnosis",
+      "durationSeconds" : 2,
+      "evidence" : {
+        "applicationEvidence" : {
+          "isolated" : {
+            "_0" : {
+              "buildProductDiffersFromBaseline" : {
+                "baselineHash" : "sha256:c329127855982bcb8b8e7027af5a1039e9a27752097d740978b853fd89a56d2d",
+                "mutantHash" : "sha256:166270c60ea39e6063d2cc3a8636430faa26f022914f43862f26201d80526ebb"
+              }
+            }
+          }
+        },
+        "buildProductHash" : "sha256:166270c60ea39e6063d2cc3a8636430faa26f022914f43862f26201d80526ebb",
+        "sourceAfterHash" : "sha256:f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8",
+        "sourceBeforeHash" : "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+        "sourceDiff" : "--- a/Sources/Example.swift\n+++ b/Sources/Example.swift\n@@ -1,1 +1,1 @@\n-true\n+false\n",
+        "testAttempts" : [
+
+        ]
+      },
+      "mutationRef" : {
+        "mutationID" : "mut_bd2e0bb20e590e7f",
+        "planID" : "plan-0001",
+        "pointDigest" : "sha256:4259de2c2a0a30ad4b52b23564d9366636058361fff21c351fddd10c0ea2e7f7",
+        "workUnitID" : "plan-0001"
+      },
+      "origin" : "fresh",
+      "outcome" : "survived",
+      "point" : {
+        "column" : 37,
+        "confidence" : "high",
+        "enclosingDeclaration" : {
+          "path" : [
+            "Example",
+            "isReady()"
+          ]
+        },
+        "executionMode" : "isolated",
+        "expectedSyntaxKind" : "booleanLiteralExpr",
+        "file" : "Sources/Example.swift",
+        "id" : "mut_bd2e0bb20e590e7f",
+        "line" : 2,
+        "occurrenceIndex" : 0,
+        "operatorID" : "swift.core.bool-literal-inversion",
+        "operatorVersion" : 1,
+        "originalText" : "true",
+        "prefixTokenFingerprint" : "1e40e0133c9d",
+        "replacementText" : "false",
+        "sourceFileHash" : "sha256:4d2ad052a8ffa90c3d1d9fb7520de1d81ae9421a09ea7fa9ac1cba9b70446969",
+        "suffixTokenFingerprint" : "e8e15dfbac71",
+        "utf8Range" : {
+          "end" : 57,
+          "start" : 53
+        }
+      },
+      "testSummary" : {
+        "durationSeconds" : 1.5,
+        "failed" : 0,
+        "failingTests" : [
+
+        ],
+        "passed" : 10,
+        "total" : 10
+      },
+      "verificationVersion" : 12
+    }
+  ],
+  "schemaVersion" : 1,
+  "score" : {
+    "excluded" : {
+
+    },
+    "killed" : 0,
+    "noCoverage" : 0,
+    "survived" : 1
+  },
+  "startedAt" : "2023-11-14T22:13:20Z",
+  "toolchain" : {
+    "swiftSyntaxVersion" : "603.0.2",
+    "swiftVersion" : "6.3.3",
+    "toolCommitSHA" : "0000000000000000000000000000000000000000",
+    "toolVersion" : "0.1.0"
+  }
+}

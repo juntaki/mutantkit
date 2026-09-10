@@ -422,6 +422,7 @@ extension MutationPoint {
         id: MutationID? = nil,
         utf8Range: ByteRange? = nil,
         occurrenceIndex: Int? = nil,
+        operatorID: String? = nil,
         operatorVersion: Int? = nil,
         replacementText: String? = nil
     ) -> MutationPoint {
@@ -429,7 +430,7 @@ extension MutationPoint {
             id: id ?? self.id,
             file: file,
             enclosingDeclaration: enclosingDeclaration,
-            operatorID: operatorID,
+            operatorID: operatorID ?? self.operatorID,
             operatorVersion: operatorVersion ?? self.operatorVersion,
             occurrenceIndex: occurrenceIndex ?? self.occurrenceIndex,
             utf8Range: utf8Range ?? self.utf8Range,

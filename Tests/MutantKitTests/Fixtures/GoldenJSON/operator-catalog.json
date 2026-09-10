@@ -1,0 +1,17 @@
+[
+  {
+    "category" : "literal",
+    "confidence" : "high",
+    "defaultEnabled" : true,
+    "faultEvidence" : [
+      "Inverted feature-flag and guard defaults are a recurring class of regression in Swift apps; a boolean default that no test pins down can be flipped without any test noticing."
+    ],
+    "id" : "swift.core.bool-literal-inversion",
+    "reachableProfile" : "conservative",
+    "requiresSymbolResolution" : false,
+    "schemaVersion" : 1,
+    "schemataEligible" : false,
+    "summary" : "Replaces a boolean literal with its opposite (true ↔ false).",
+    "version" : 1
+  }
+]

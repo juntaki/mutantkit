@@ -238,6 +238,36 @@ struct MutationIDTests {
         #expect(points[0].id != points[1].id)
     }
 
+    /// `DeclarationIdentityResolver` renders argument labels, not types, so two
+    /// overloads distinguished only by parameter type (`foo(x: Int)` vs.
+    /// `foo(x: String)`) resolve to the *same* declaration path (`foo(x:)`).
+    /// Disambiguation for their mutations therefore falls entirely on the
+    /// occurrence-index counter, which is scoped to (operator, declaration,
+    /// original text) and ordered by byte offset across the whole file — not
+    /// per-function. This test proves that shared counter still keeps their
+    /// IDs distinct.
+    @Test("Same-named overloads that share a declaration path get distinct IDs via occurrence index")
+    func sameNameOverloadsAreDistinguishedByOccurrenceIndex() throws {
+        let source = """
+        struct S {
+            func foo(x: Int) -> Bool { return true }
+            func foo(x: String) -> Bool { return true }
+        }
+        """
+
+        let points = try discover(source, using: Operators.boolLiteral)
+
+        #expect(points.count == 2)
+        // Both overloads collide on declaration path: the type annotation
+        // (`Int` vs. `String`) is not part of the argument-label rendering.
+        #expect(points[0].enclosingDeclaration == points[1].enclosingDeclaration)
+        #expect(points[0].enclosingDeclaration.description.hasSuffix("foo(x:)"))
+
+        // Yet the shared occurrence-index counter still tells them apart.
+        #expect(points.map(\.occurrenceIndex) == [0, 1])
+        #expect(points[0].id != points[1].id)
+    }
+
     /// One operator emits several candidates at one site (`<` becomes both `<=`
     /// and `>=`). Those share offset, operator and original text, so only a
     /// total ordering keeps their occurrence indices — and therefore their IDs —

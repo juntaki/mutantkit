@@ -1,0 +1,12 @@
+{
+  "canProceed" : true,
+  "items" : [
+    {
+      "code" : "swiftToolchain",
+      "detail" : "swift 6.3.3",
+      "name" : "Swift toolchain",
+      "status" : "ok"
+    }
+  ],
+  "schemaVersion" : 1
+}

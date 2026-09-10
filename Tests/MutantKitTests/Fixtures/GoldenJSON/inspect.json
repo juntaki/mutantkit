@@ -1,0 +1,38 @@
+{
+  "diagnosis" : "test diagnosis",
+  "durationSeconds" : 2,
+  "execution" : {
+    "mode" : "isolated"
+  },
+  "guidance" : {
+    "testBehaviorNotMutation" : true
+  },
+  "mutantId" : "mut_bd2e0bb20e590e7f",
+  "operator" : {
+    "category" : "logical",
+    "confidence" : "high",
+    "id" : "swift.core.bool-literal-inversion",
+    "summary" : "Inverts a boolean literal.",
+    "version" : 1
+  },
+  "origin" : "fresh",
+  "reproduce" : "mutantkit reproduce mut_bd2e0bb20e590e7f",
+  "schemaVersion" : 1,
+  "source" : {
+    "column" : 37,
+    "file" : "Sources/Example.swift",
+    "line" : 2,
+    "original" : "true",
+    "replacement" : "false",
+    "sourceFileHash" : "sha256:4d2ad052a8ffa90c3d1d9fb7520de1d81ae9421a09ea7fa9ac1cba9b70446969"
+  },
+  "tests" : {
+    "caughtBy" : [
+
+    ],
+    "failed" : 0,
+    "passed" : 10,
+    "total" : 10
+  },
+  "verdict" : "survived"
+}

@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import MutationModel
+import MutationPlanner
 
 /// Applies CI quality thresholds to an already-finished report.
 /// Keeping the gate separate from `run` lets CI change policy without
@@ -57,6 +58,7 @@ struct GateCommand: ParsableCommand {
     func run() throws {
         let runReport = try decode(reportPath: report, role: "report")
         let baselineReport = try baseline.map { try decode(reportPath: $0, role: "baseline report") }
+        if let baselineReport { Self.warnIfBaselineReferencesUnknownOperators(baselineReport) }
 
         var thresholds = try loadConfiguredThresholds()
         if let minimumTested { thresholds.minimumTested = minimumTested / 100 }
@@ -107,6 +109,28 @@ struct GateCommand: ParsableCommand {
             )
             throw ExitCode(MutantKitExit.operationalError)
         }
+    }
+
+    /// v0.5 Stable Contracts: a baseline referencing a mutation whose
+    /// operator ID has since been removed or renamed does not fail loudly —
+    /// `newSurvivorViolations` compares by `MutationID` alone, so a survivor
+    /// that can no longer be produced (its operator is gone) simply never
+    /// shows up in `report`'s results and reads as "fixed" rather than "not
+    /// re-verified." This does not change that comparison's behavior; it
+    /// only surfaces the gap as a warning, cross-checked against
+    /// `MutationRegistry`'s own known operator IDs, exactly the way
+    /// `RunHistoryStore.records()` warns on an unreadable history file
+    /// rather than silently treating it as absent.
+    private static func warnIfBaselineReferencesUnknownOperators(_ baselineReport: RunReport) {
+        let known = Set(MutationRegistry().allDescriptors.map(\.id))
+        let unknown = Set(baselineReport.results.map(\.point.operatorID)).subtracting(known)
+        guard !unknown.isEmpty else { return }
+        FileHandle.standardError.write(Data("""
+        warning: --baseline references operator ID(s) not known to this build's registry: \
+        \(unknown.sorted().joined(separator: ", ")). A baseline mutation produced by a since-removed \
+        or renamed operator cannot reappear in the current report and will read as "fixed" rather \
+        than "not re-verified" by regression/new-survivor checks.\n
+        """.utf8))
     }
 
     /// `gate` tolerates having no `mutantkit.yml` at all (CLI flags alone are
