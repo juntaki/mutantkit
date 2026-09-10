@@ -207,8 +207,22 @@ struct SchemataSupportedMatrixXcodeProjectAcceptanceTests {
         let transcriptPath = FileManager.default.temporaryDirectory.appendingPathComponent("transcript-\(UUID().uuidString).bin")
         defer { try? FileManager.default.removeItem(at: transcriptPath) }
 
+        // `timeoutSeconds` was 180. Real public CI evidence (2026-09-10/11,
+        // v0.8 toolchain migration correction batch) showed this specific
+        // test's iOS-Simulator run twice hit `.timedOut` instead of the
+        // expected `.failed` under real full-matrix CI load (build-for-
+        // testing plus this run together took 857s and 1024s wall-clock,
+        // vs. ~68s for the identical test measured locally) — real CI
+        // resource contention across concurrently running Xcode/simulator
+        // acceptance jobs on a shared runner, not a correctness regression.
+        // Raised with real headroom (180 -> 600, not an incremental nudge)
+        // for the same reason `ProcessSupervisorResidueTests`' own retry
+        // budget and `runIgnoringSIGTERM`'s own timeout were raised with
+        // real headroom rather than incrementally: a full-suite CI run
+        // under real contention is the realistic worst case this budget has
+        // to survive, not the common case measured in isolation.
         let mutated = try await adapter.runSchemataToken(
-            artifact, in: directory, timeoutSeconds: 180,
+            artifact, in: directory, timeoutSeconds: 600,
             environment: [
                 SchemataEvidenceCollector.tokenEnvironmentVariable: SchemataEvidenceCollector.tokenEnvironmentValue(for: token),
                 SchemataEvidenceCollector.transcriptPathEnvironmentVariable: transcriptPath.path,
