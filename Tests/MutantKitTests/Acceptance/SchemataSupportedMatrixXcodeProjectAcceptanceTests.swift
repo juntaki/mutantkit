@@ -99,7 +99,7 @@ struct SchemataSupportedMatrixXcodeProjectAcceptanceTests {
         let token: SchemataSelectorToken
     }
 
-    private func stageEvidenceProject() throws -> StagedEvidenceProject {
+    private func stageEvidenceProject() async throws -> StagedEvidenceProject {
         let points = try CoreOperatorExpansionTestSupport.discover(
             Self.evidenceLibrarySource,
             operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: "Sources/Widget.swift"
@@ -183,12 +183,44 @@ struct SchemataSupportedMatrixXcodeProjectAcceptanceTests {
         xcodegen.waitUntilExit()
         #expect(xcodegen.terminationStatus == 0, "xcodegen generate failed:\n\(xcodegenOutput)")
 
+        try await Self.awaitSharedScheme(inGeneratedProject: directory)
+
         return StagedEvidenceProject(directory: directory, program: program, entry: entry, token: token)
+    }
+
+    /// Real public CI evidence (2026-09-10/11, twice): `xcodebuild -list
+    /// -json` on this freshly generated project reported "No schemes are
+    /// available here" immediately after `xcodegen generate` exited 0 —
+    /// never reproduced locally across repeated attempts on the same
+    /// project.yml, where the shared scheme is visible to `xcodebuild`
+    /// instantly. `waitUntilExit()` only guarantees the xcodegen process
+    /// itself has exited, not that its write of
+    /// `xcshareddata/xcschemes/MatrixEvidenceLib.xcscheme` is visible to the
+    /// very next process to read this directory — a filesystem-visibility
+    /// race specific to the real CI runner's environment, not a MutantKit or
+    /// xcodegen correctness bug. Polling for the scheme file's own existence
+    /// directly (bounded, generous relative to a race the real CI evidence
+    /// suggests resolves well within a second once xcodegen had actually
+    /// exited) closes that window without masking a genuine xcodegen
+    /// failure, which `waitUntilExit` plus its own exit-status check above
+    /// already catch.
+    private static func awaitSharedScheme(inGeneratedProject directory: URL) async throws {
+        let schemeFile = directory
+            .appendingPathComponent("MatrixEvidenceLib.xcodeproj")
+            .appendingPathComponent("xcshareddata/xcschemes/MatrixEvidenceLib.xcscheme")
+        let deadline = Date().addingTimeInterval(10)
+        while !FileManager.default.fileExists(atPath: schemeFile.path), Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(
+            FileManager.default.fileExists(atPath: schemeFile.path),
+            "xcodegen exited 0 but never wrote \(schemeFile.path) within 10s"
+        )
     }
 
     @Test("A real iOS-Simulator run produces a genuine STARTUP/HIT pair whose image UUID matches the build receipt's own")
     func startupHitAndReceiptUUIDMatchOnIOSSimulator() async throws {
-        let staged = try stageEvidenceProject()
+        let staged = try await stageEvidenceProject()
         let directory = staged.directory
         let program = staged.program
         let entry = staged.entry
