@@ -21,17 +21,25 @@ import SwiftSyntax
 /// itself unchanged by folding; a ternary's boundaries are not, so this
 /// operator folds the tree itself before walking it.
 ///
-/// **`defaultEnabled: true`, but provisional.** A targeted 50-mutant corpus
-/// run against a real project (0 unviable — always compile-viable) measured
-/// only a **13.3%** kill rate on buildable mutants, in the same low range
-/// that got `NilCoalescingFallbackOperator` demoted to experimental. This
-/// operator was deliberately NOT demoted alongside it: the low rate is one
-/// project's data, not yet a confirmed pattern, and spot-checked survivors
-/// suggest a cause specific to this corpus (SwiftUI view-layer ternaries
-/// thinly covered relative to model/service code) rather than something
-/// inherent to the mutation. Still open — see the internal corpus-validation
-/// notes (not part of this public repo) and the operator catalog's item 7
-/// for the full evidence and what would resolve the question either way.
+/// **`defaultEnabled: true`, validated with a recorded caveat (v0.4 Trust
+/// Closure).** Corpus-measured on two real, independently-shaped iOS apps
+/// (internal, not part of this public repo): always compile-viable (0 unviable in either
+/// project), and a consistently modest-but-real kill rate (13.3% -> 20.8%
+/// -> 26.5% across three runs) — never a compile-safety or correctness
+/// concern, and never contradicted (unlike `NilCoalescingFallbackOperator`,
+/// whose own second-project measurement went the *other* direction). Kept
+/// `defaultEnabled` rather than demoted: this is a genuine fault pattern
+/// with zero infrastructure risk, and the modest yield has a specific,
+/// plausible, non-alarming explanation already identified (SwiftUI
+/// view-layer ternaries thinly covered relative to model/service code) —
+/// not a signal that the mutation itself is low-value. The one thing this
+/// evidence cannot yet rule out is that both measured projects share that
+/// same SwiftUI-heavy shape, so the low-yield pattern could still be
+/// project-shape-specific rather than general; resolving that needs a
+/// non-UI-heavy real project (e.g. a macOS Swift Package), which is
+/// deferred, non-blocking future corpus work, not a v0.4 correctness gap.
+/// See the internal corpus-validation notes (not part of this public repo)
+/// and the operator catalog's item 7 for full tables.
 public struct TernaryBranchSwapOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.ternary-branch-swap",

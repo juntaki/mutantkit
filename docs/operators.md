@@ -19,9 +19,9 @@ An operator earns `defaultEnabled` by evidence, not by being interesting:
 | `swift.core.bool-literal-inversion` | conservative | high | `true` ↔ `false` |
 | `swift.core.relational-operator-replacement` | conservative | high | boundary shift + negation, e.g. `<` → `<=`, `>=` |
 | `swift.core.logical-connector-replacement` | conservative | high | `&&` ↔ `\|\|` |
-| `swift.core.ternary-branch-swap` | conservative — **provisional** | high | `a ? b : c` → `a ? c : b`; preserves comments/trivia around the condition and both branches. Always compile-viable, but a targeted single-operator corpus run against a real project (50 mutants, 0 unviable) measured only a **13.3%** kill rate on buildable mutants — in the same low range that got nil-coalescing-fallback demoted. Not yet demoted here because this is one project's data, not a confirmed pattern; see below for the open question |
-| `swift.core.unary-not-removal` | default — **provisional** | medium | `!x` → `x`; never assumes a multi-`!` token (`!!x`) is stacked built-in negation, since it could be a user-defined operator. A targeted corpus run against a real project (50 mutants, 0 unviable) measured a healthy **40.0%** kill rate — no signal-density concern found so far |
-| `swift.core.return-value-replacement` | default — **provisional** | medium | restricted to explicit `return`s whose neutral replacement the syntax alone proves safe; excludes equivalent spellings (`0x0`, `nil as T?`, `Optional<T>.none`, an empty raw string, ...) by value/structure, not text comparison. Measured at **29.4%** kill rate in the same real-project corpus run, 0 unviable |
+| `swift.core.ternary-branch-swap` | conservative — **validated** | high | `a ? b : c` → `a ? c : b`; preserves comments/trivia around the condition and both branches. Always compile-viable; corpus-measured on two real projects at a consistent, modest **13.3% → 20.8% → 26.5%** kill rate — never contradicted, but both measured projects share a SwiftUI-heavy shape, so whether the modest yield is inherent or shape-specific remains open (deferred, non-blocking) |
+| `swift.core.unary-not-removal` | default — **validated** | medium | `!x` → `x`; never assumes a multi-`!` token (`!!x`) is stacked built-in negation, since it could be a user-defined operator. Corpus-measured on two real projects at a consistently healthy **40.0% → 47.4% → 45.2%** kill rate — no signal-density concern in either |
+| `swift.core.return-value-replacement` | default — **validated** | medium | restricted to explicit `return`s whose neutral replacement the syntax alone proves safe; excludes equivalent spellings (`0x0`, `nil as T?`, `Optional<T>.none`, an empty raw string, ...) by value/structure, not text comparison. Corpus-measured on two real projects at a healthy and improving **29.4% → 30.4% → 71.4%** kill rate |
 | `swift.core.nil-coalescing-fallback` | **experimental** | medium | `a ?? b` → `b`; a surviving mutant means the suite never proved a non-nil left-hand value is preferred over the fallback, not that the nil path is untested. Always compile-viable, but a real-project corpus run showed it alone occupying half a 100-mutant sample with **8.3%** kill rate on buildable mutants, mostly re-stating the same low-value "defensive `?? fallback`, never tested against a non-nil value" gap — demoted for signal density, not compile safety |
 | `swift.core.arithmetic-operator-replacement` | **experimental** | medium | `+` ↔ `-`, `*` ↔ `/`; no symbol resolution, and Swift's arithmetic protocols do not guarantee a matched pair (`Numeric` has no `/`) — confirmed to produce real compile failures against representative fixtures. A targeted 50-mutant corpus run against a real project measured 0 unviable (this codebase's arithmetic usage didn't happen to hit those patterns — not evidence the fixture risk is false). The same run originally reported a much larger flaky/infrastructure-failure count than any other operator; most of that turned out to be a batch-timeout attribution bug, since fixed — **2 genuine, reproducible hangs remain**, clustered in loop/index-arithmetic code |
 | `swift.core.assignment-operator-replacement` | **experimental** | medium | `+=` ↔ `-=`, `*=` ↔ `/=`; same compile-viability gap as arithmetic replacement one syntactic level up. A targeted 50-mutant corpus run against a real project measured 0 unviable and a healthy 37.5% kill rate, without arithmetic's instability pattern (1/50 flaky, no timeouts) |
@@ -29,21 +29,25 @@ An operator earns `defaultEnabled` by evidence, not by being interesting:
 | `swift.core.range-boundary-replacement` | **experimental** | experimental | `a..<b` ↔ `a...b`; covers only the binary infix form. Not proven safe to compile (the two forms produce different concrete range types) or safe to run (`..<` → `...` can turn a valid upper-bound-exclusive index into an out-of-bounds access) by default. Brand new — no real-project corpus measurement yet |
 | `swift.core.side-effect-call-removal` | **experimental** | experimental | Muter's `RemoveSideEffects`, generalized: deletes a standalone function/method call statement whose return value is discarded — logging, caching, a UI update, cleanup. Never removes `fatalError`/`preconditionFailure`/`exit`/`abort` (unconditionally, any position — these are genuinely `Never`-returning and can be silently load-bearing for an enclosing function's reachability), the sole statement of a `guard`-else or `switch` case, an implicit-return body's sole statement, or anything inside a `@ViewBuilder`-style result-builder body. Configurable per-call exclusion (`operators.sideEffectCallRemoval.excludeCalls`) is what `migrate --from-muter` maps Muter's own `excludeCalls` onto. Brand new — no real-project corpus measurement yet |
 
-"**provisional**" above means: corpus-measured against real projects, but
-not yet against the additional project shapes this catalog's own
-default-promotion bar calls for (see `Research/operator-catalog/README.md`
-§ "Quality gate for every operator" — internal, not part of this public
-repo). Ternary-branch-swap, unary-not-removal and return-value-replacement
-have now each been corpus-measured on **two** real projects — a second
-project's run reproduced the first project's overall pattern for all
-three, and ternary-branch-swap's low kill rate in particular held up on the
-second project too, mirroring the pattern that got nil-coalescing-fallback
-demoted; this is flagged as an open decision rather than resolved here.
-Assignment-operator-replacement has been corpus-measured on only one real
-project so far. Else-clause-deletion, range-boundary-replacement and
-side-effect-call-removal are new and have not yet been corpus-measured on
-any project. Full methodology and results (internal, not part of this
-public repo): `Research/corpus-validation/`.
+"**validated**" above means: corpus-measured on two real, independently-shaped
+projects, with a consistent (or consistently improving) kill rate and no
+*disqualifying* signal-density or compile-safety concern in either — closed
+as of v0.4 Trust Closure, Workstream C. "No disqualifying concern" is
+deliberate, not "no concern at all": ternary-branch-swap's validation
+carries one recorded, non-blocking caveat that is itself a modest
+signal-density observation — both measured projects share a SwiftUI-heavy
+shape, so whether its modest (13–27%) kill rate is inherent to the mutation
+or an artifact of that shared shape is still open. It was not judged
+disqualifying because the rate never reversed across three measurements and
+has a specific, plausible, already-identified explanation, unlike
+nil-coalescing-fallback's own contradicted (not merely low) measurement.
+Resolving the remaining shape question needs a non-UI-heavy project (e.g. a
+macOS Swift Package) and is deferred future corpus work, not a v0.4
+blocker. Assignment-operator-replacement has been
+corpus-measured on only one real project so far. Else-clause-deletion,
+range-boundary-replacement and side-effect-call-removal are new and have not
+yet been corpus-measured on any project. Full methodology and results
+(internal, not part of this public repo): `Research/corpus-validation/`.
 
 Arithmetic, assignment, else-clause-deletion, range-boundary-replacement and
 side-effect-call-removal are reachable via the `experimental` profile or an

@@ -112,6 +112,28 @@ struct SchemataConfirmationCrashTimeoutVerifierTests {
         #expect(record.outcome == .infrastructureFailure)
     }
 
+    /// Symmetry with `timeoutWithMismatchedImageUUIDFailsClosed` below: the
+    /// same gate (`schemataConfirmationChainProblem`, invoked unconditionally
+    /// in `MutationVerdictVerifier.confirm` before the switch on
+    /// `confirmation.kind`) protects every confirmation kind identically, so
+    /// a crash confirmation reporting a stale/mismatched image UUID must
+    /// fail closed exactly like a timeout confirmation does — pinned
+    /// directly, by name, rather than left to transfer only by inspection.
+    @Test("crash kill + confirmation reports a stale/mismatched image UUID: not killedByCrash, fails closed")
+    func crashWithMismatchedImageUUIDFailsClosed() throws {
+        let primary = makeConsistentSchemataObservation()
+        let staleImageUUID = ImageUUID(rawValue: String(repeating: "cc", count: 16))!
+        #expect(staleImageUUID != schemataFixtureImageUUID)
+        let confirmation = makeSchemataConfirmationObservation(imageUUID: staleImageUUID)
+        let record = try verify(
+            primary: primary, primaryStatus: .crashed,
+            confirmations: [ConfirmationObservation(
+                kind: .crash, run: run(status: .crashed), schemataObservation: confirmation, originalDiagnosis: "diag:crashed"
+            )]
+        )
+        #expect(record.outcome == .infrastructureFailure)
+    }
+
     // MARK: - Timeout confirmation
 
     @Test("timeout + valid timeout confirmation: verifiedTimeout")
@@ -140,6 +162,37 @@ struct SchemataConfirmationCrashTimeoutVerifierTests {
     func timeoutWithReusedRunID() throws {
         let primary = makeConsistentSchemataObservation()
         let confirmation = makeSchemataConfirmationObservation(runID: schemataFixtureRunID)
+        let record = try verify(
+            primary: primary, primaryStatus: .timedOut,
+            confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .timedOut), schemataObservation: confirmation)]
+        )
+        #expect(record.outcome == .infrastructureFailure)
+    }
+
+    /// Historical regression (`Research/known-issues/schemata-confirm-timeout-image-uuid-mismatch.md`,
+    /// 2026-08-23): a real, production-scale-app `confirmTimeout` retry observed a runtime
+    /// image UUID that did not match the build receipt's, and ended in
+    /// `infrastructureFailure` rather than a wrong verdict. Live repro of
+    /// the original trigger (a stale simulator install surfacing an older
+    /// image's UUID mid-confirmation) was never reproduced across three
+    /// separate investigations, but the identity-reconciliation layer
+    /// itself is deterministic and fully exercisable without a simulator:
+    /// `verifySchemataChain`'s `matchesExpectedIdentity` filters STARTUP/HIT
+    /// records by `imageUUID` *before* any cardinality check runs, so a
+    /// confirmation whose runtime reports a stale/foreign image UUID has
+    /// zero matching records — indistinguishable, by construction, from no
+    /// chain at all. This pins that guarantee directly at the confirmation
+    /// layer (`schemataConfirmationChainProblem`), independent of whether
+    /// the original trigger is ever reproduced live: a mismatched image
+    /// UUID during a `confirmTimeout` retry must never be credited as
+    /// `verifiedTimeout` (or any other killed/survived outcome) — only
+    /// `infrastructureFailure`.
+    @Test("timeout + confirmation reports a stale/mismatched image UUID: not verifiedTimeout, fails closed")
+    func timeoutWithMismatchedImageUUIDFailsClosed() throws {
+        let primary = makeConsistentSchemataObservation()
+        let staleImageUUID = ImageUUID(rawValue: String(repeating: "bb", count: 16))!
+        #expect(staleImageUUID != schemataFixtureImageUUID)
+        let confirmation = makeSchemataConfirmationObservation(imageUUID: staleImageUUID)
         let record = try verify(
             primary: primary, primaryStatus: .timedOut,
             confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .timedOut), schemataObservation: confirmation)]

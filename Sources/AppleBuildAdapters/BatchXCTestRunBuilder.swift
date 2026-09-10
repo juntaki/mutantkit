@@ -141,15 +141,21 @@ public enum BatchXCTestRunBuilder {
                 // in `onlyTestingArgument` (it was missing the trailing
                 // `()` a Swift Testing `@Test` function needs to match at
                 // all via `-only-testing:`) but deliberately left this
-                // call site untouched — known, honest limitation, not
-                // silently assumed fine: whether `OnlyTestIdentifiers`
-                // itself needs the same trailing `()` for a Swift Testing
-                // target has never been verified empirically, only for
-                // XCTest. `testBatchSize` (the only caller of this batched
-                // path) is not the shipped default for any project kind
-                // (see README.md's "Recommended production profile"), so
-                // this is not a correctness gap in the current production
-                // default — but it is unverified, not confirmed correct.
+                // call site untouched at the time, since whether
+                // `OnlyTestIdentifiers` needed the same trailing `()` for
+                // a Swift Testing target had never been verified
+                // empirically, only for XCTest.
+                //
+                // v0.4 Trust Closure, Workstream B: verified empirically
+                // against a real `xcodebuild` batch run
+                // (`XcodeBatchTestingSwiftTestingAcceptanceTests`,
+                // `SwiftTestingCheckoutDemo` scheme) — the bare
+                // `qualifiedName`, with no trailing `()`, is the correct
+                // `OnlyTestIdentifiers` form for a Swift Testing target
+                // too. Unlike `-only-testing:`'s own argument grammar, the
+                // `.xctestrun` `OnlyTestIdentifiers` plist key does not
+                // require the parenthesized form. Confirmed correct as
+                // written, not merely untested.
                 let ownIdentifiers = onlyTestingIdentifiers
                     .filter { $0.target == entry.name }
                     .map(\.qualifiedName)

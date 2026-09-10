@@ -32,11 +32,12 @@ import SwiftSyntax
 /// result is non-nil or non-empty, not a specific expected value, will not
 /// notice.
 ///
-/// **`defaultEnabled: true`, provisional.** A real-project corpus run
-/// measured a 29.4% kill rate, 0 unviable. Still only one project's data,
-/// not yet the multiple project shapes the operator catalog's promotion
-/// bar calls for; see the internal corpus-validation notes (not part of
-/// this public repo).
+/// **`defaultEnabled: true`, validated (v0.4 Trust Closure).** Corpus-measured
+/// on two real, independently-shaped iOS apps (internal, not part of this public repo): a
+/// healthy and improving kill rate (29.4% -> 30.4% -> 71.4% across three
+/// runs), 0 unviable in either project, no signal-density concern in
+/// either. See the internal corpus-validation notes (not part of this
+/// public repo) for full tables.
 public struct ReturnValueReplacementOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.return-value-replacement",

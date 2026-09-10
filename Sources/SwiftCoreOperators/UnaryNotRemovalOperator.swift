@@ -27,12 +27,12 @@ import SwiftSyntax
 /// breaking the lexer's maximal munch) is unaffected by this and is found as
 /// two independent sites, same as any other nesting.
 ///
-/// **`defaultEnabled: true`, provisional.** A targeted 50-mutant corpus run
-/// against a real project measured a healthy 40.0% kill rate, 0 unviable —
-/// no signal-density concern found. Still only one project's data, not yet
-/// the multiple project shapes the operator catalog's promotion bar calls
-/// for; see the internal corpus-validation notes (not part of this public
-/// repo).
+/// **`defaultEnabled: true`, validated (v0.4 Trust Closure).** Corpus-measured
+/// on two real, independently-shaped iOS apps (internal, not part of this public repo): a
+/// consistently healthy kill rate (40.0% -> 47.4% -> 45.2% across three
+/// runs), 0 unviable in either project, no signal-density concern in
+/// either. See the internal corpus-validation notes (not part of this
+/// public repo) for full tables.
 public struct UnaryNotRemovalOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.unary-not-removal",

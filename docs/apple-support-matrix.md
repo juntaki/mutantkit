@@ -110,6 +110,62 @@ own result classification reads the same `.xctestrun`-driven output
 regardless of which framework produced it, proven once at the SwiftPM
 level (`docs/schemata-support-matrix.md:34-39`).
 
+## UI tests (XCUITest)
+
+| Project kind | Test framework | Execution | Status |
+|---|---|---|---|
+| `xcodeProject`/`xcodeWorkspace`, existing UI test target/scheme | XCUITest | `isolated`, iOS Simulator | **Supported** — `AccessibilityUISubstrateAcceptanceTests.uiTestOnlyMutationIsKilled` proves a real, operator-generated mutant (`swift.core.relational-operator-replacement`) killed exclusively through a UI test target, end to end |
+
+No UI-automation DSL and no new project kind — an existing Xcode
+project/workspace UI test target/scheme is driven the same way any other
+`isolated`-mode test target is. Full account:
+`docs/execution.md`'s UI-test section and
+`Research/phase5a-ui-test-substrate-2026-09/README.md`. This row was
+declared supported in `README.md`'s own "Supported today" table before
+v0.4 Trust Closure Workstream D but had no citation in this matrix — the
+underlying evidence was real and already existed, this closes the
+citation gap between the two documents, not a correctness gap.
+
+## Test selection (`selectCoveringTests`) and batching (`testBatchSize`)
+
+Two independent axes, both declared **supported** in public docs
+(`docs/benchmarks.md`, `docs/configuration.md`) but, until v0.4 Trust
+Closure Workstream B, without a shared citation naming which test
+framework each was actually proven against:
+
+| Selection mechanism | XCTest | Swift Testing |
+|---|---|---|
+| `-only-testing:` (unbatched, `selectCoveringTests` alone) | **Supported** — `XcodeCoverageSelectionAcceptanceTests` | **Supported** — `XcodeSwiftTestingAcceptanceTests.swiftTestingCoverageSelectionNarrowsAttribution` |
+| Batched `.xctestrun` `OnlyTestIdentifiers` (`testBatchSize` + `selectCoveringTests`) | **Supported** — `XcodeBatchTestingAcceptanceTests` | **Supported** (v0.4 Workstream B) — `XcodeBatchTestingSwiftTestingAcceptanceTests`, confirming empirically that the bare `qualifiedName` (no trailing `()`) is the correct `OnlyTestIdentifiers` form for a Swift Testing target, against a real `xcodebuild` batch run |
+
+Before Workstream B, `BatchXCTestRunBuilder.build(items:)`'s own doc
+comment named this Swift Testing cell explicitly as "never verified
+empirically, only for XCTest" — a real supported-path correctness gap this
+audit closed with a targeted acceptance test rather than narrowing the
+contract. `testBatchSize` itself remains a non-default, opt-in setting
+(`docs/benchmarks.md`: slower than `simulatorPool` at scale, kept for
+CI runners that restrict simulator-clone provisioning) — that recommendation
+is unchanged; only the correctness-evidence gap for its Swift Testing cell
+is closed.
+
+**Recorded residual scope (not a v0.4 blocker):** both batched-selection
+acceptance suites (`XcodeBatchTestingAcceptanceTests` and its Swift Testing
+mirror) exercise exactly one shape — two mutants whose selection is the
+identical two-test pair, landing in one batch, everything killed as
+expected. Neither one separately proves single-sided narrowing within a
+batch (test A's own batched selection actually excludes test B, and vice
+versa) or the negative/fail-closed cases (an invalid `OnlyTestIdentifiers`
+entry, or an unexpected test executing outside the requested selection).
+The invalid-selection fail-closed guarantee *is* covered, but only at the
+unit level and framework-agnostically —
+`BatchXCTestRunBuilderTests.selectionMatchingNoTargetThrows` pins that a
+selection naming a target with none of the batch's own tests throws
+`BatchXCTestRunError` rather than silently running everything. This gap
+predates Workstream B (the pre-existing XCTest suite never covered these
+shapes either) and is not specific to Swift Testing; it is deferred as
+future acceptance-test work, not a v0.4 correctness gap, since it does not
+change any current supported/default behavior.
+
 ## Apple platform breadth (macOS / iOS / tvOS / watchOS / visionOS)
 
 | Platform | `isolated` | `schemata` |
