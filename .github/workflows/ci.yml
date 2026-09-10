@@ -45,7 +45,7 @@ jobs:
   # one deliberate change, not independently.
   lint:
     name: Lint & format check
-    runs-on: macos-15
+    runs-on: macos-26
     # Generous relative to observed reality (~20-25s on this exact job) —
     # bounds a hang (a stuck `brew install`/download, say) rather than
     # tuning for the common case. See the `unit` job's own comment for
@@ -55,13 +55,19 @@ jobs:
       SWIFTLINT_VERSION: "0.63.2"
     steps:
       - uses: actions/checkout@v4
-      # Enforces the documented toolchain floor (README "Install",
-      # docs/apple-support-matrix.md "Toolchain floor"): Xcode 16+ and
-      # Swift 6.0+. The macos-15 runner image drifts over time, so printing
-      # the versions (as every job's `Toolchain` step does) is not enough —
-      # this fails the build if the floor regresses. Placed first so a
-      # drift fails fast, before the installs below spend any time.
-      - name: Toolchain floor (Xcode 16+, Swift 6+)
+      # v0.8: pins the exact CI reference toolchain (docs/apple-support-matrix.md
+      # "Toolchain floor") instead of accepting whatever the macos-26 runner
+      # image's own default happens to be — a runner image update that
+      # changes its default Xcode must not silently change what this repo's
+      # CI actually built/tested with. `/Applications/Xcode_26.6.app` is the
+      # exact bundle GitHub's macos-26 runner image ships; if a future image
+      # renames or drops it, this step fails loudly (a missing bundle is a
+      # hard `xcode-select` error) rather than silently falling back to a
+      # different version. Bumping to a newer Xcode 26.x patch/minor is a
+      # deliberate edit to this path, not automatic.
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Toolchain (Xcode 26.6 pinned, Swift 6+)
         shell: bash
         run: |
           set -euo pipefail
@@ -70,15 +76,16 @@ jobs:
           # own Foundation-based stdout write then hits a broken pipe,
           # which xcodebuild turns into an uncaught NSFileHandleOperationException
           # (SIGABRT, exit 134) instead of the plain SIGPIPE a non-Foundation
-          # tool would just die from quietly — reproduced for real on this
-          # exact runner image. Capturing full output to a variable first
+          # tool would just die from quietly — reproduced for real on an
+          # earlier runner image. Capturing full output to a variable first
           # (command substitution reads to EOF, no early pipe closure) sidesteps it.
           xcode_version_output="$(xcodebuild -version)"
-          xcode_major="$(head -n 1 <<<"$xcode_version_output" | awk '{print $2}' | cut -d. -f1)"
+          echo "$xcode_version_output"
+          swift --version
+          xcode_version="$(head -n 1 <<<"$xcode_version_output" | awk '{print $2}')"
           swift_major="$(swift --version 2>&1 | grep -oE 'Apple Swift version [0-9]+' | grep -oE '[0-9]+')"
-          echo "Xcode major: $xcode_major, Swift major: $swift_major"
-          if [ -z "$xcode_major" ] || [ "$xcode_major" -lt 16 ]; then
-            echo "::error::Xcode 16+ required, found '${xcode_major:-unknown}'. See docs/apple-support-matrix.md."
+          if [ "$xcode_version" != "26.6" ]; then
+            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}' — the select step above should have failed first if the bundle were missing. See docs/apple-support-matrix.md."
             exit 1
           fi
           if [ -z "$swift_major" ] || [ "$swift_major" -lt 6 ]; then
@@ -133,7 +140,7 @@ jobs:
   # this belongs in the same fast, always-required tier as `lint`.
   complexity:
     name: Complexity gate (swift-complexity)
-    runs-on: macos-15
+    runs-on: macos-26
     # Generous relative to observed reality (a few seconds of analysis over
     # the whole tree) — bounds a stuck `brew install`, not the analysis.
     timeout-minutes: 10
@@ -173,30 +180,31 @@ jobs:
   # change the count) was removed outright before this gate was switched on,
   # so any finding here is new debt.
   #
-  # NOT in merge-gate's `needs` (2026-09-05): `swiftlint analyze` segfaults
-  # deterministically on this runner image's Xcode 16.4 -- reproduced twice
-  # on the identical commit, same crash both times (SourceKit's
+  # NOT YET in merge-gate's `needs` (v0.8 toolchain migration, 2026-09-11):
+  # `swiftlint analyze` segfaulted deterministically on the previous
+  # macos-15/Xcode 16.4 CI toolchain (SourceKit's
   # IDEInspectionSecondPassRequest, type-checking
-  # Sources/MutationPlanner/SourceFileWalker.swift's `walk()`, exit 139).
-  # This is a SwiftLint/SourceKit toolchain-compatibility crash, not an
-  # unused-import finding -- `swiftlint analyze` never reached the point of
-  # reporting a violation, so there is nothing here for `--strict` to have
-  # caught correctly or incorrectly. Deliberately not papered over with
-  # `continue-on-error` (that would make this job always-green and useless
-  # as a signal) or silently dropped from CI (the unused-import gate itself,
-  # and the fixes it already found, stay real product value on any
-  # toolchain where the analyzer doesn't crash -- e.g. this exact command
-  # runs clean locally on Xcode 26.6). It stays informational -- expect it
-  # red until the runner image's Xcode moves past 16.4 or upstream fixes the
-  # crash -- and required-again once one of those happens.
+  # Sources/MutationPlanner/SourceFileWalker.swift's `walk()`, exit 139) --
+  # a SwiftLint/SourceKit toolchain-compatibility crash, not an unused-import
+  # finding, and confirmed to run clean locally on Xcode 26.6 the whole time.
+  # This job has just moved to the same pinned Xcode 26.6 CI now runs on
+  # everywhere else (see the `Select pinned Xcode` step below) -- left
+  # informational for exactly one more CI cycle to get real evidence this
+  # crash does not reproduce on the new pinned toolchain before promoting it
+  # back to a required, blocking gate. If this run is green, the next change
+  # should delete this whole waiver comment, fold `analyze` back into
+  # `merge-gate`'s `needs`, and treat any subsequent failure as a real
+  # unused-import finding again.
   analyze:
     name: Unused imports (swiftlint analyze)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     env:
       SWIFTLINT_VERSION: "0.63.2"
     steps:
       - uses: actions/checkout@v4
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Install pinned SwiftLint
         run: |
           curl -fsSL -o portable_swiftlint.zip \
@@ -222,7 +230,7 @@ jobs:
   # Fast feedback: everything that does not build another project.
   unit:
     name: Unit tests
-    runs-on: macos-15
+    runs-on: macos-26
     # A real, reproducible hang (this job's own `Test` step sitting for
     # 68+ minutes with no completion, versus ~15-20s for the identical
     # `swift test` locally) burned real Actions minutes on this account
@@ -551,7 +559,7 @@ jobs:
   # invisible to the unit tests and produced a confident, wrong score.
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
-    runs-on: macos-15
+    runs-on: macos-26
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit`'s own plain unit suite — but still bounded, per the same
     # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
@@ -693,6 +701,8 @@ jobs:
             wave: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
 
@@ -780,12 +790,14 @@ jobs:
   # zero disagreement — the real gate before that registration can happen.
   ror-schemata-differential:
     name: ROR schemata isolated-vs-schemata differential
-    runs-on: macos-15
+    runs-on: macos-26
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the schemata runtime static library
@@ -832,12 +844,14 @@ jobs:
   # laptop. This job is that wiring.
   ios-simulator-schemata-runtime:
     name: iOS-Simulator schemata runtime (build + link viability)
-    runs-on: macos-15
+    runs-on: macos-26
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the macOS schemata runtime static library (this suite's negative control)

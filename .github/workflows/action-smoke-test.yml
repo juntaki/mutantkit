@@ -60,7 +60,7 @@ jobs:
 
   install-mode:
     name: "mode: install (${{ matrix.version }})"
-    runs-on: macos-15
+    runs-on: macos-26
     strategy:
       fail-fast: false
       matrix:
@@ -152,7 +152,7 @@ jobs:
 
   mode-validation:
     name: "Unknown mode fails closed, before any download"
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: "mode: not-a-real-mode"
@@ -172,7 +172,7 @@ jobs:
 
   newline-in-input-rejected:
     name: "An input value containing a newline fails closed (GITHUB_OUTPUT / workflow-command injection)"
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -218,7 +218,7 @@ jobs:
 
   incompatible-cli-fails-closed:
     name: "mode: ci against a pre-P13 release fails at preflight, not mid-campaign"
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@v4
@@ -278,7 +278,7 @@ jobs:
 
   build-from-source:
     name: Build mutantkit from PR HEAD (shared by every mode:ci job below)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - run: swift build -c release --product mutantkit
@@ -297,7 +297,7 @@ jobs:
   ci-mode-happy-path:
     name: "mode: ci happy path — doctor/plan/run/gate/summary/artifacts, reporter preservation"
     needs: build-from-source
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@v4
@@ -425,7 +425,7 @@ jobs:
   ci-mode-quality-gate-failure:
     name: "mode: ci — an unmeetable threshold fails the job, artifacts still upload"
     needs: build-from-source
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@v4
@@ -516,7 +516,7 @@ jobs:
 
   ci-mode-gate-operational-failure:
     name: "gate operational failure (missing/malformed report) never reads as a pass"
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -615,7 +615,7 @@ jobs:
   ci-mode-diff:
     name: "diff: missing ref fails closed; a fetched ref succeeds"
     needs: build-from-source
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       # Shallow (default fetch-depth: 1): `origin/main` is not fetched, so
       # it must not resolve.
@@ -736,7 +736,7 @@ jobs:
   ci-mode-report-isolation:
     name: "multi-invocation isolation: a failed invocation never inherits or leaks a prior invocation's stale report/summary/artifact"
     needs: build-from-source
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       # Shallow (default fetch-depth: 1): `origin/main` is not fetched, so
       # invocation B below (diff: origin/main) is guaranteed to fail at the
@@ -854,7 +854,7 @@ jobs:
   ci-mode-input-hardening:
     name: "inputs are treated as data, never as shell source (a spaced project-root, an adversarial baseline-scope)"
     needs: build-from-source
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@v4
@@ -954,7 +954,7 @@ jobs:
   ci-mode-baseline:
     name: "baseline cache: fresh miss, same-SHA rerun has no save collision, scopes stay isolated"
     needs: build-from-source
-    runs-on: macos-15
+    runs-on: macos-26
     # action.yml's own baseline-save steps require `github.event_name !=
     # 'pull_request'` on purpose (a PR run must never write the target
     # branch's baseline before it has merged — see action.yml's own

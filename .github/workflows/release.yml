@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     permissions:
       contents: read
       id-token: write
@@ -32,8 +32,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+
       - name: Toolchain
-        run: swift --version
+        run: swift --version && xcodebuild -version
 
       - name: Determine version
         id: version
@@ -74,7 +77,7 @@ jobs:
 
   clean-machine-e2e:
     needs: build
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       # Deliberately no actions/checkout here — the point of this job is to
       # prove the quick-start path works with no repo present at all, the

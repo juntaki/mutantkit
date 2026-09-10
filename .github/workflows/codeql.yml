@@ -23,7 +23,7 @@ name: CodeQL
 # applies to the whole init call, but swift/c-cpp (compiled, need a real
 # build to trace) and python/actions (scanned directly, no build step ever
 # applies) need different values, so they cannot share one job:
-#   - analyze-compiled (macos-15, needs the real Xcode/Swift toolchain --
+#   - analyze-compiled (macos-26, needs the real Xcode/Swift toolchain --
 #     CodeQL's Swift extractor only runs on macOS): languages: swift, c-cpp,
 #     build-mode: manual. One `swift build` (the same invocation ci.yml's
 #     `unit` job already trusts to build the whole package, including the C
@@ -60,9 +60,12 @@ concurrency:
 jobs:
   analyze-compiled:
     name: Analyze (swift, c-cpp)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
 
       - name: Toolchain
         run: swift --version && xcodebuild -version

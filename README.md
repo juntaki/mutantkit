@@ -92,7 +92,12 @@ history, what "activation" actually means end to end — lives in
 
 ## Install
 
-Requires macOS 14+ on Apple Silicon, Xcode 16+.
+The release binary runs on macOS 14+ (Apple Silicon). The supported
+development/execution environment — what CI actually builds and tests
+against, and what a target project's own toolchain is verified with — is
+Xcode 26.x; see [apple-support-matrix.md](docs/apple-support-matrix.md)
+for the exact pinned version and what an older toolchain's status actually
+is.
 
 ```bash
 brew install juntaki/mutantkit/mutantkit

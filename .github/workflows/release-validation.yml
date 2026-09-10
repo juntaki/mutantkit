@@ -91,7 +91,7 @@ jobs:
   # deliberate decision that condition was approximating, so it is simply gone.
   release-package:
     name: Build release package (bundled schemata runtime)
-    runs-on: macos-15
+    runs-on: macos-26
     # A real `swift build -c release` of the whole CLI plus the schemata runtime
     # archives for every supported platform. Legitimately slow, but bounded, per
     # this project's own "nothing runs unbounded" rule.
@@ -99,31 +99,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Same gate as `ci.yml`'s `lint` job, for the same reason: the macos-15
-      # runner image drifts, and printing versions is not enforcing them. This
-      # workflow never runs alongside `ci.yml`, so it has to carry the floor
-      # itself or run without one. Placed before anything expensive, and in this
-      # job specifically — both jobs below `needs:` it, so a floor regression
-      # fails the whole workflow here rather than three times over.
-      - name: Toolchain floor (Xcode 16+, Swift 6+)
+      # v0.8: same pinned toolchain as ci.yml's `lint` job, for the same
+      # reason — a runner image update must not silently change what this
+      # workflow built/tested with. This workflow never runs alongside
+      # `ci.yml`, so it has to carry the pin itself. Placed before anything
+      # expensive, and in this job specifically — both jobs below `needs:`
+      # it, so a pin failure fails the whole workflow here rather than
+      # three times over.
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Toolchain (Xcode 26.6 pinned, Swift 6+)
         shell: bash
         run: |
           set -euo pipefail
           # `xcodebuild -version | head -n 1` aborts xcodebuild with SIGABRT on
-          # this runner image (Foundation turns the broken pipe into an uncaught
-          # NSFileHandleOperationException); capture to a variable first. See
-          # ci.yml's identical step for the full write-up.
+          # some runner images (Foundation turns the broken pipe into an
+          # uncaught NSFileHandleOperationException); capture to a variable
+          # first. See ci.yml's identical step for the full write-up.
           xcode_version_output="$(xcodebuild -version)"
-          xcode_major="$(head -n 1 <<<"$xcode_version_output" | awk '{print $2}' | cut -d. -f1)"
+          xcode_version="$(head -n 1 <<<"$xcode_version_output" | awk '{print $2}')"
           # `|| true` deliberately, and this diverges from ci.yml's copy of this
           # step: under `set -e` a `grep` that matches nothing kills the whole
           # step at the assignment, so the friendly `::error::Swift 6+ required,
           # found 'unknown'` branch below could never be reached. Both shapes
           # fail closed; only this one says why.
           swift_major="$(swift --version 2>&1 | grep -oE 'Apple Swift version [0-9]+' | grep -oE '[0-9]+' || true)"
-          echo "Xcode major: ${xcode_major:-unknown}, Swift major: ${swift_major:-unknown}"
-          if [ -z "$xcode_major" ] || [ "$xcode_major" -lt 16 ]; then
-            echo "::error::Xcode 16+ required, found '${xcode_major:-unknown}'. See docs/apple-support-matrix.md."
+          echo "Xcode: ${xcode_version:-unknown}, Swift major: ${swift_major:-unknown}"
+          if [ "$xcode_version" != "26.6" ]; then
+            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
             exit 1
           fi
           if [ -z "$swift_major" ] || [ "$swift_major" -lt 6 ]; then
@@ -342,7 +345,7 @@ jobs:
   # not merely a unit test against a synthetic fixture tree.
   release-bundled-schemata-macos:
     name: Release package's bundled schemata runtime (macOS, clean-machine E2E)
-    runs-on: macos-15
+    runs-on: macos-26
     needs: release-package
     # 35, not 25. This job inlines the work the private CI split into a separate
     # `build` job (`timeout-minutes: 15`) plus the acceptance job itself
@@ -369,6 +372,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
         run: swift --version
 
@@ -480,7 +485,7 @@ jobs:
   #   end to end on nothing but what it bundles.
   release-bundled-schemata-ios-simulator:
     name: Release package's bundled schemata runtime (iOS Simulator, clean-machine E2E)
-    runs-on: macos-15
+    runs-on: macos-26
     needs: release-package
     # 45, not 30 — same arithmetic as the macOS job: the private split was a
     # 15-minute shared `build` plus a 20-minute iOS acceptance job, and this one
@@ -501,6 +506,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
 

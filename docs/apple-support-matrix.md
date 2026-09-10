@@ -25,6 +25,18 @@ that already existed, cross-referenced in one place for the first time.
 
 ## Toolchain floor
 
+**v0.8 policy change (2026-09-11): current-toolchain-only.** MutantKit no
+longer aims to maximize compatibility with old Apple toolchains — it aims
+to strongly guarantee correctness on the *current* one. There is exactly
+one supported, continuously-verified toolchain baseline: **Xcode 26.x**,
+CI-pinned to the exact version below. Historical compatibility evidence
+against older toolchains (Xcode 16.x, Xcode 15.2) is retired from this
+public support contract — it recorded real, once-true facts about an
+earlier baseline, not claims about what is supported today. That evidence
+is preserved as a historical record internally (not part of this public
+repo), not deleted, but it no longer describes MutantKit's current
+contract.
+
 Two different questions get conflated under "what Swift/Xcode/macOS
 version does MutantKit need" — this matrix answers them separately.
 
@@ -32,38 +44,30 @@ version does MutantKit need" — this matrix answers them separately.
 
 | | Requirement | Status | Proof |
 |---|---|---|---|
-| macOS | 14+, Apple Silicon | **Supported** | `README.md`'s own `## Install`; `Package.swift`'s `platforms: [.macOS(.v14)]` |
-| Xcode | 16+ | **Supported** (documented; not asserted anywhere at build or run time) | `README.md`'s own `## Install` |
+| macOS (running the release binary) | 14+, Apple Silicon | **Supported** | `README.md`'s own `## Install`; `Package.swift`'s `platforms: [.macOS(.v14)]` — this is the compiled artifact's own deployment target, a separate claim from the row below |
+| macOS / Xcode (developing, building, and CI-testing MutantKit itself) | macOS 26 (Tahoe) + **Xcode 26.6**, pinned | **Supported**, CI-enforced | Every macOS job across `ci.yml`/`release.yml`/`release-validation.yml`/`codeql.yml` runs on the GitHub-hosted `macos-26` runner image and explicitly runs `sudo xcode-select -s /Applications/Xcode_26.6.app` before building — not the runner image's own implicit default, which could otherwise drift underneath this repo's CI without a single line here changing. `ci.yml`'s `lint` job additionally fails the build if the selected Xcode does not report exactly `26.6` or Swift's major version is below 6, so a broken pin (a runner image that drops that exact bundle) is a loud CI failure, not a silent fallback. |
 | Swift | 6.0+ | **Supported**, hard-enforced | `Package.swift:1` — `// swift-tools-version:6.0`, unchanged since the project's first commit; SwiftPM refuses to resolve a `6.0`-tools package on an older toolchain, so this floor cannot silently regress |
 | Intel Mac | building from source only, no prebuilt binary | **Supported** for source builds, **unsupported** for `brew install`'s prebuilt path | `README.md`'s own `### Building from source`: "platforms the prebuilt binary does not cover yet (Intel Macs, ...)" |
 
-The "Xcode 16+" line is CI-enforced, not just documented:
-`ci.yml`'s `lint` job runs a `Toolchain floor (Xcode 16+, Swift 6+)` step
-that fails the build if `xcodebuild -version` reports a major version below
-16 or `swift --version` reports an Apple Swift major version below 6.
-Every other job's own `Toolchain` step still only prints
-`swift --version && xcodebuild -version` for failure context — the `lint`
-job's floor check is the single gate, so a runner-image drift that drops
-below 16+/6.0+ fails fast instead of silently changing what CI proves.
-The GitHub-hosted `macos-15` runner image still ships whichever
-Xcode/Swift version it currently carries; this repo pins neither, it only
-refuses to run below the floor.
+The macOS 14+ deployment target (compiled-artifact compatibility) and the
+Xcode 26.6-pinned development/CI environment are deliberately two separate
+claims — a project built to run on older macOS does not imply MutantKit is
+developed, tested, or verified with an older Xcode. Bumping the pinned
+Xcode 26.6 reference to a newer 26.x patch/minor is a deliberate edit to
+every workflow's `xcode-select -s` path, not automatic; moving to Xcode 27
+is a separate, future support-contract decision, made only after it is
+independently verified, not implied by this policy.
 
 ### What toolchain a target project (the project under test) can use
 
-A separate, real question: once MutantKit is built (with a *current*
-toolchain), what is the oldest toolchain a project it mutates can itself
-require?
-
-| Target toolchain | Status | Proof |
-|---|---|---|
-| Xcode 15.2 / Swift 5.9.2 / macOS 14.2 SDK | **Tested** once, not continuously | A real GitHub Actions run (`github-actions macos-14`, internal and not part of this public repo — formerly `Benchmarks/results/compatibility/xcode-15.2-swift-5.9-macos-14/gate-result.json`) with `mutantKitBuildSucceeded: true`, `mutantKitRunSucceeded: true` against a real, minimal SwiftPM fixture (1 file, `relational-operator-replacement`, one mutant killed). MutantKit itself was built with Xcode 16.2 in that same run — this proves the *target project's* toolchain floor, not a lower build floor for MutantKit itself. |
-| Anything older than Xcode 15.2 / Swift 5.9.2 | **Unknown** | Never attempted; no claim either way. |
-
-That gate was built for a different purpose (a fair toolchain for comparing
-against another mutation-testing tool) and ran once via manual dispatch, not
-on every push — real evidence, correctly scoped as "tested once," not
-"supported" in the continuous sense every other table in this document uses.
+A separate, real question: once MutantKit is built (with the current
+Xcode 26.x baseline), what toolchain can a project it mutates itself use?
+**No specific older-toolchain claim is made.** A target project using an
+older Swift/Xcode than MutantKit's own build toolchain may well work —
+nothing in MutantKit deliberately rejects one — but this is explicitly
+**best-effort, untested**, not a supported, continuously-verified claim.
+Per this policy, no compatibility CI lane is maintained for an older
+target-project toolchain.
 
 ## Project kind × test framework (`isolated` mode)
 
@@ -272,8 +276,8 @@ every push (`ci.yml`) or before every release (`release-validation.yml`).
 | Axis | Status |
 |---|---|
 | Swift 6.0+ (build MutantKit) | Supported, hard-enforced by `Package.swift` |
-| Xcode 16+ / macOS 14+ Apple Silicon (build/run MutantKit) | Supported, documented, CI-enforced (`ci.yml` toolchain-floor step) |
-| Target project on Xcode 15.2 / Swift 5.9.2 / macOS 14.2 | Tested once, not continuous |
+| Xcode 26.6, pinned / macOS 14+ Apple Silicon runtime (develop, build, CI-test MutantKit) | Supported, CI-enforced (`xcode-select -s` pin in every macOS job; `ci.yml`'s `lint` job fails on drift) |
+| Target project's own toolchain (older than Xcode 26.x) | Best-effort, untested — no compatibility CI lane maintained (v0.8 policy) |
 | SwiftPM (macOS) × XCTest / Swift Testing | Supported, both modes |
 | Xcode project/workspace × XCTest / Swift Testing | Supported, `isolated`; `xcodeProject`+XCTest also `schemata`-supported |
 | iOS Simulator | Supported, both modes (per the table above) |
