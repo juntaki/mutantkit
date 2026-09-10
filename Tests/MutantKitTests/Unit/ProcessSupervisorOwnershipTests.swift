@@ -112,14 +112,19 @@ struct ProcessSupervisorOwnershipTests {
         // Named rather than repeated as literals, so the lower bound below
         // cannot drift away from the values actually passed in.
         //
-        // `timeout` was 1. It is also the fixture child's entire budget for
-        // python3 startup plus announcing its pid (see `runIgnoringSIGTERM`'s
-        // own comment): under a full-suite run that race is intermittently
-        // lost, and the test then fails on a setup error instead of on
-        // anything about escalation. What this test measures is that the
-        // grace period elapses *after* the timeout fires, which is
-        // independent of how large the timeout is.
-        let timeout: Double = 5
+        // `timeout` is also the fixture child's entire budget for python3
+        // startup plus announcing its pid (see `runIgnoringSIGTERM`'s own
+        // comment): under real CI load that race is intermittently lost,
+        // and the test then fails on a setup error instead of on anything
+        // about escalation. Raised 1 -> 5 once already for this reason,
+        // then real public CI evidence (2026-09-10,
+        // `ProcessSupervisorZeroBaseReviewFindingsTests`'s sibling use of
+        // the same fixture) showed 5s still insufficient under genuine
+        // runner load — raised again, with real headroom this time
+        // (5 -> 20), matching that test's own fix and reasoning. What this
+        // test measures is that the grace period elapses *after* the
+        // timeout fires, which is independent of how large the timeout is.
+        let timeout: Double = 20
         let grace: Double = 2
 
         let started = Date()

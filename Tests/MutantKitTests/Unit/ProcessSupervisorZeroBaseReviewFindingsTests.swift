@@ -129,16 +129,26 @@ struct ProcessSupervisorZeroBaseReviewFindingsTests {
 
         let log = EventLog()
 
-        // `timeoutSeconds` was 1. It is the fixture child's entire budget for
+        // `timeoutSeconds` is the fixture child's entire budget for
         // interpreter startup as well as announcing its pid (see
-        // `runIgnoringSIGTERM`'s own comment), and under a full-suite run
-        // python3 startup intermittently lost that race on unmodified `main`,
-        // failing this test with a setup error rather than a real finding.
-        // Nothing here measures the timeout's value — the assertions below
-        // are about signal *ordering* — so widening it costs one extra second
-        // of runtime and removes the race entirely.
+        // `runIgnoringSIGTERM`'s own comment), charged against the same
+        // clock that triggers this mode's TERM escalation — python3
+        // startup competes with the supervisor's own deadline for real.
+        // Raised 1 -> 5 once already for exactly this reason; **real public
+        // CI evidence (2026-09-10) showed 5s still insufficient** under
+        // genuine runner load, not merely a hypothetical margin concern.
+        // Raised again, this time with real headroom (5 -> 20, a 4x jump,
+        // not another incremental nudge) precisely because "just raise the
+        // number a little" already failed once — a rare full-suite CI run
+        // with unusually slow python3 startup is exactly the tail case a
+        // generous constant is supposed to absorb, not something to keep
+        // re-tuning by small increments. Nothing here measures the
+        // timeout's value — the assertions below are about signal
+        // *ordering* — so the added wall time is paid only in the (rare)
+        // case that startup is genuinely slow; the escalation and log
+        // assertions below are unaffected by the fixture's own budget.
         let outcome = try await ProcessSupervisorOwnershipFixture.runIgnoringSIGTERM(
-            timeoutSeconds: 5, terminationGracePeriodSeconds: 1,
+            timeoutSeconds: 20, terminationGracePeriodSeconds: 1,
             lifecycleEventHook: { log.record($0) }
         )
         defer { if ProcessTree.isAlive(outcome.descendantPID) { kill(outcome.descendantPID, SIGKILL) } }
