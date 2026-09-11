@@ -28,7 +28,7 @@ explicitly rather than estimating.
 | Baseline wall time | ≤ ~150s per mutant-1 baseline (build+test only) | the internal reference iOS app (not part of this public repo): build 57.34s + test 87.23s = 144.58s (`p12-coverage-profiling`). Per-test coverage profiling (976.15s in that same run) is a separate, intermittent, cacheable cost — budgeted separately, not folded into every run's baseline. |
 | Campaign time (100-mutant reference shape) | Recommended production profile (`workers:2`+`simulatorPool`) ≈ 2600s (~43 min); tuned `workers:1` reference ≈ 5624s (~94 min) is the ceiling any config change must stay under or must justify regressing past | The one real, outcome-parity-gated, production-recommendation-driving number in the whole evidence base (`docs/benchmarks.md`, 100/100 parity, 0 integrity violations) — anchor here, not on any provisional/n=1 number. |
 | Campaign time (940-mutant, real full-scale) | Optimized profile: 14h07m; hard ceiling: must not regress past the 23h37m untuned baseline | Internal benchmark evidence. |
-| PR-diff time | **undefined pending measurement** | The single largest real gap relative to what a daily-CI budget needs — most CI runs are diff-scoped, not full campaigns, and nothing has ever measured this. |
+| PR-diff time | ≈ 39s floor (measured, trivial scale) for a 2-mutation diff (`plan` 0.46s + `run` 38s, isolated strategy, 2 workers, real iPhone 17 Pro simulator); undefined at realistic PR scale | Real, timed measurement (2026-09-11) against a real, minimal (1-file, single-scheme) git-backed Xcode project fixture (`Fixtures/XcodeProject`, copied to a scratch git checkout), a genuinely semantics-preserving 1-line source diff. Taken under elevated background system load (`uptime` ~50x on an 8-core machine) — a real number, not a clean best-case floor, so treat the simulator-boot/build/baseline-run fixed overhead as real but possibly inflated versus a quiet machine; still closes the "zero measurement at all" gap this table previously called the single largest gap. |
 | Simulator cost ($ or CI-minute per mutant) | **undefined pending measurement** | No wall-clock number has ever been converted to a dollar or CI-minute figure. |
 | Build count | ≤ 1 build per mutant (isolated mode) | Gate 3A (internal, not part of this public repo), 14 mutants: 13 isolated builds vs. 7 schemata. |
 | Test invocation count | ≤ 1 test invocation per 3–4 mutants (batched-isolated target) | Same Gate 3A run: 4 (wave-batched) vs. 12 (schemata) invocations for 14 mutants. |
@@ -45,19 +45,20 @@ existing measurement anywhere in this project's benchmark history:
   nobody has yet converted the wall-clock evidence into a cost figure.
 
 **PR-diff / changed-files-only mutation time** (2026-09-11 update): a real
-floor is now measured for SwiftPM (see the table above) — a trivial,
-2-mutation diff completes in ≈11.5s end to end. This closes the "zero
-measurement at all" gap but not the underlying question: nothing yet times
+floor is now measured for both SwiftPM and Xcode + iOS Simulator (see the
+tables above) — a trivial, 2-mutation diff completes in ≈11.5s end to end
+for SwiftPM and ≈39s for Xcode/simulator (real device boot + build +
+baseline test run included). This closes the "zero measurement at all" gap
+that was previously the single largest gap in this document, for both
+project kinds. It does not close the underlying question: nothing yet times
 a *realistic-scale* PR diff (more changed lines, more candidate mutations,
-a non-trivial baseline), and the Xcode + iOS Simulator path — the one this
-document's own table calls "the single largest real gap relative to what a
-daily-CI budget needs" — remains completely unmeasured, since a
-diff-scoped Xcode/simulator run needs a real, git-backed Xcode project
-fixture this measurement pass did not have on hand.
+a non-trivial baseline) for either project kind, and the Xcode number was
+taken under elevated background system load, so treat it as a real but
+possibly-inflated floor, not a clean best case.
 
-Filling either remaining gap needs a dedicated measurement pass, not an
-estimate folded into this document. Until then, treat both as explicitly
-open next steps for v0.7, not as budgets with an assumed value of
+Filling the realistic-scale gap needs a dedicated measurement pass, not an
+estimate folded into this document. Until then, treat it as an explicitly
+open next step for v0.7, not a budget with an assumed value of
 "acceptable."
 
 ## Real, already-observed budget violations
