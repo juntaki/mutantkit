@@ -154,7 +154,8 @@ struct MutationRunnerTestSelectionTests {
     // whole-suite number. Gate 3's real-iOS-project run found it
     // uncalibrated for Xcode/Simulator's fixed per-invocation overhead (see
     // `TimeoutController.mutantLimitSeconds(selectedTests:)`'s own doc
-    // comment and `Research/benchmarks/gate3-ios-schemata-2026-08-23`), so a
+    // comment and the internal Gate 3 benchmark research, not part of this
+    // public repo), so a
     // known selection now resolves to the same whole-suite number an
     // unknown one always did — the three tests below assert that identical
     // outcome instead of a narrower one.

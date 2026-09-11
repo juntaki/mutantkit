@@ -5,7 +5,8 @@ import Testing
 
 /// `PrioritizingTestAdapter` had no dedicated test file before this project's
 /// own P7 self-mutation audit
-/// (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`) found it: a
+/// (this project's internal mutation-testing-hardening progress log, not
+/// part of this public repo) found it: a
 /// sampled self-mutation run against just this 159-line file scored 1/5
 /// (20%) — every other caller only ever type-checks that the adapter got
 /// constructed (`RunCommandTestAdapterResolutionTests`) or injects a fake

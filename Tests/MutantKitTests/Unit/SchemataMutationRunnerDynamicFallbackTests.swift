@@ -185,7 +185,8 @@ struct SchemataMutationRunnerDynamicFallbackTests {
         #expect(fallback.reason == .activation(.noHit))
     }
 
-    /// Gate 3 finding (`Research/benchmarks/gate3-ios-schemata-2026-08-23`):
+    /// Gate 3 finding (this project's internal benchmark research, not
+    /// part of this public repo):
     /// a mutation on a line the shared baseline's own coverage map already
     /// proves unreached previously still paid for a full schemata token
     /// attempt before discovering the identical fact via `noStartup` —

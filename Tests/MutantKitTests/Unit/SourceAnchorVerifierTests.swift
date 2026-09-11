@@ -141,7 +141,8 @@ struct SourceAnchorVerifierTests {
     }
 
     /// Found by this project's own P7 self-mutation audit
-    /// (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`):
+    /// (this project's internal mutation-testing-hardening progress log,
+    /// not part of this public repo):
     /// `matchedNode` re-implements `verify`'s own `range.end <= bytes.count`
     /// bounds guard independently (line 152 vs. line 86) rather than sharing
     /// it, and nothing exercised the boundary where a mutation's range ends

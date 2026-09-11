@@ -5,7 +5,8 @@ import Foundation
 /// instead of trusting `Process.waitUntilExit()` unconditionally.
 ///
 /// Part of the mutation-testing hardening program's CI-reliability
-/// follow-up (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`).
+/// follow-up (this project's internal mutation-testing-hardening progress
+/// log, not part of this public repo).
 /// Two independent, real public-CI stack samples this session caught a
 /// test process genuinely stuck inside `waitUntilExit()`'s own `mach_msg`
 /// wait — once for a long-lived bystander process after `.terminate()`

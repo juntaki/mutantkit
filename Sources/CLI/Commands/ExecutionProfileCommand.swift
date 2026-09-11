@@ -141,8 +141,8 @@ extension ExecutionProfileCommand {
             "Shared module cache (manual opt-in only — never enabled by optimized/experimental): " + (
                 characteristics.sharedModuleCacheSupported
                     ? "this project's build shape supports it (SwiftPackageMacOSAdapter). " +
-                    "Research/isolated-build-reuse-2026-09 measured 7.5s real / 3.9s user vs. 24.4s real / 13.4s " +
-                    "user cold on its own small fixture (not re-measured for this project — the saving scales " +
+                    "Internal measurement on a small fixture found 7.5s real / 3.9s user vs. 24.4s real / 13.4s " +
+                    "user cold (not re-measured for this project — the saving scales " +
                     "with how much Foundation/XCTest/SwiftShims compilation this project's own build pays for). " +
                     "Before setting execution.sharedModuleCache: true, read its own doc comment's warning against " +
                     "CI setups that run multiple concurrent destinations against this same project/scratch root."
@@ -158,7 +158,7 @@ extension ExecutionProfileCommand {
         lines.append(
             "`experimental` resolves identically to `optimized` today. The one real candidate looked at for its " +
                 "own bucket — mixing \"safe\" mutants into shared builds — has a real, found soundness " +
-                "counterexample (Research/safe-mutant-mixing-2026-09/DESIGN.md) and is deliberately not wired in " +
+                "counterexample (internal research, not part of this public repo) and is deliberately not wired in " +
                 "here under any profile."
         )
         return lines.joined(separator: "\n")

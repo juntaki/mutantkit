@@ -103,9 +103,9 @@ import SwiftSyntax
 ///    treating a thrown error as equivalent to a returned one for this
 ///    guard's purposes -- a second control-flow shape this v1 matcher
 ///    deliberately does not take on. Confirmed directly against this
-///    project's own real shape (see
-///    `Research/corpus-validation/post-await-cancellation-guard-removal-2026-09/`'s
-///    standalone fixture, modeled on this exact PR): discovery finds the
+///    project's own real shape (see the standalone fixture in this
+///    operator's internal corpus-validation research, not part of this
+///    public repo, modeled on this exact PR): discovery finds the
 ///    `do` block's guard and skips the `catch` block's, exactly as this
 ///    reasoning predicts.
 ///
@@ -201,8 +201,9 @@ import SwiftSyntax
 /// disclosed as such — not independent real-world evidence. Per this
 /// catalog's own promotion bar, "empirically useful" real-world signal
 /// requires a real project's real test to have actually caught a real
-/// instance of the mutation; that did not happen this round. See
-/// `Research/corpus-validation/post-await-cancellation-guard-removal-2026-09/`
+/// instance of the mutation; that did not happen this round. See the
+/// internal corpus-validation research for this operator (not part of
+/// this public repo)
 /// for the full per-candidate accounting, the search performed for a second
 /// real corpus, and the adversarial review that reached this conclusion.
 public struct PostAwaitCancellationGuardRemovalOperator: MutationOperator {
@@ -250,8 +251,8 @@ public struct PostAwaitCancellationGuardRemovalOperator: MutationOperator {
             kills, and "empirically useful real-world signal" (the bar continuation-resume-removal \
             and required-decode-introduction each cleared before their own promotion) was not met \
             this round. Full evidence, per-candidate accounting, the search performed for a second \
-            real corpus, and the adversarial review that reached this conclusion: \
-            Research/corpus-validation/post-await-cancellation-guard-removal-2026-09/.
+            real corpus, and the adversarial review that reached this conclusion: internal \
+            corpus-validation research for this operator (not part of this public repo).
             """
         ]
     )

@@ -61,8 +61,8 @@ import SwiftSyntax
 /// never registered a tap; the fix adds `.contentShape(Rectangle())` to each
 /// row's label content. Both PRs were verified to exist and merge on GitHub
 /// (diffs fetched directly from `patch-diff.githubusercontent.com`) as part
-/// of this operator's own research; see
-/// `Research/corpus-validation/hit-area-shape-removal-2026-09/README.md` for
+/// of this operator's own research; see the internal corpus-validation
+/// research for this operator (not part of this public repo) for
 /// this operator's own corpus evidence, including which parts of this
 /// evidence were externally re-verified (cloned/built/tested) versus cited
 /// from the diff alone.
@@ -197,8 +197,8 @@ public struct HitAreaShapeRemovalOperator: MutationOperator {
             own corpus-validation document for exactly which parts of this evidence were externally \
             re-verified end to end (clone/build/test) versus cited from the diff alone, the internal \
             Phase 5A fixture's operator-generated (not hand-applied) kill, survivor classification, \
-            and the adversarial self-review: \
-            Research/corpus-validation/hit-area-shape-removal-2026-09/.
+            and the adversarial self-review: internal \
+            corpus-validation research for this operator (not part of this public repo).
             """
         ]
     )

@@ -4,7 +4,7 @@ v0.7 Production Usability's own mandate: define what "fast enough for daily
 CI use" means, numerically, from real measured evidence — before optimizing
 anything further. This is that definition, drawn only from measurements
 that already exist (see [Benchmarks](benchmarks.md) and the internal
-`Research/benchmarks/` evidence it summarizes) plus one real, already-paid-
+benchmark evidence it summarizes, not part of this public repo) plus one real, already-paid-
 for CI run's own timing data. Where no measurement exists, this says so
 explicitly rather than estimating.
 

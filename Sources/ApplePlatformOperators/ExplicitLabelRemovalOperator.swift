@@ -38,8 +38,8 @@ import SwiftSyntax
 /// audit adds several more explicit `.accessibilityLabel(...)` calls (avatar
 /// edit button, pinned-items "view all" button, pinned-message button),
 /// independent evidence that missing explicit labels recur outside
-/// RevenueCat. See `Research/corpus-validation/explicit-label-removal-2026-09/`
-/// for this operator's own corpus evidence.
+/// RevenueCat. See the internal corpus-validation research for this
+/// operator (not part of this public repo) for the full evidence.
 ///
 /// **v1 matcher — SwiftUI modifier call only, symbol-blind by construction
 /// (matching every other operator in this catalog):**
@@ -140,7 +140,8 @@ public struct ExplicitLabelRemovalOperator: MutationOperator {
             real-fault evidence that missing explicit labels recur outside RevenueCat. Full \
             corpus evidence, including the internal Phase 5A fixture's operator-generated (not \
             hand-applied) kill, external-project preflights, survivor classification, and the \
-            adversarial self-review: Research/corpus-validation/explicit-label-removal-2026-09/.
+            adversarial self-review: internal corpus-validation research for this operator \
+            (not part of this public repo).
             """
         ]
     )

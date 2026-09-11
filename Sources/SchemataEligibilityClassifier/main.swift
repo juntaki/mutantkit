@@ -2,8 +2,9 @@ import ArgumentParser
 import Foundation
 import MutationPlanner
 
-/// Research-only, outcome-blind classification tool for
-/// `Research/adr-0008-validation/protocol.md`'s Protocol v3 addendum
+/// Research-only, outcome-blind classification tool for an internal
+/// adr-0008-validation protocol document's Protocol v3 addendum
+/// (not part of this public repo)
 /// (Corpus B calibration population selection rule) — see
 /// `EligibilityClassification.swift` for what "outcome-blind" and the
 /// `lowererEligible`/`plannerEmbedded` split actually mean. This file is

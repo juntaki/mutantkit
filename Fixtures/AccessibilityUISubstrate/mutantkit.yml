@@ -7,10 +7,12 @@
 # mutant (from an existing, already-registered built-in operator) can only
 # ever be killed by the UI test, proving a UI-test-only-covered mutation
 # flows end to end through a real `mutantkit plan` + `mutantkit run`
-# campaign — see Research/phase5a-ui-test-substrate-2026-09/README.md.
+# campaign — see the internal Phase 5A UI-test-substrate research record
+# (not part of this public repo).
 #
 # `timeouts.mutant.strategy: fixed` follows the same convention established
-# in Research/corpus-validation/continuation-resume-removal-2026-09/README.md:
+# in the internal continuation-resume-removal corpus-validation research
+# (not part of this public repo):
 # a UI test's baseline duration (Simulator boot + app launch + AX-tree
 # settle time) is not a representative multiplier base the way a unit test's
 # is, so an adaptive ceiling computed from it is exactly the reproducibility

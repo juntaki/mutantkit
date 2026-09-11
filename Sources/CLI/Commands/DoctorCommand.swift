@@ -83,8 +83,29 @@ struct DoctorCommand: AsyncParsableCommand {
             throw ExitCode(MutantKitExit.operationalError)
         }
         if !json {
-            print("\nReady. Next: `mutantkit init` to write a config, then `mutantkit plan`.")
+            // A `mutantkit.yml` that exists but is invalid/unreadable would
+            // already have produced a `.failure` `DiagnosisItem` above (see
+            // `ReadinessCheck.loadConfiguration`), which would have made
+            // `diagnosis.canProceed` false and thrown before this line ever
+            // runs. So reaching "Ready" with a config file present at
+            // `common.configPath`/the project root means that file loaded
+            // and validated successfully — recommending `mutantkit init`
+            // regardless, as this used to, told a user who had already run
+            // `setup` (or hand-wrote a working config) to redo work that is
+            // done, instead of naming the actually-next command.
+            let configExists = (try? ConfigurationLoader.locate(explicitPath: common.configPath, projectRoot: root)) != nil
+            print(Self.nextStepMessage(configExists: configExists))
         }
+    }
+
+    /// Factored out of `run()` so both branches — no config yet vs. an
+    /// already-valid one in active use — are directly testable without
+    /// capturing this command's stdout (no precedent for shared-fd capture
+    /// in this repo; see `DoctorCommandJSONTests`'s own note on that).
+    static func nextStepMessage(configExists: Bool) -> String {
+        configExists
+            ? "\nReady. Next: `mutantkit plan`."
+            : "\nReady. Next: `mutantkit init` to write a config, then `mutantkit plan`."
     }
 
     /// `Configuration.execution.sharedModuleCache`'s real status on this

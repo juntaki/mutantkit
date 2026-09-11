@@ -7,7 +7,8 @@
 #
 # This fixture validates Phase 5A's UI-test execution substrate itself (see
 # Tests/MutantKitTests/Acceptance/AccessibilityUISubstrateAcceptanceTests.swift
-# and Research/phase5a-ui-test-substrate-2026-09/). It intentionally carries
+# and the internal Phase 5A UI-test-substrate research record, not part of
+# this public repo). It intentionally carries
 # no mutation operator of its own — `isRowTapRegistered(currentCount:)` below
 # exists only so a real, already-existing built-in operator (a relational-
 # boundary mutation) has something to discover and kill exclusively via the

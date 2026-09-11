@@ -79,5 +79,6 @@ Conditional-clause deletion and side-effect-call removal remain separate design
 work because their safe syntax boundaries and exclusion policies need dedicated
 contracts rather than being bundled into this slice. Side-effect-call removal's
 design contract is now written — see
-`Research/operator-catalog/side-effect-call-removal-design.md` — but not yet
+this project's internal side-effect-call-removal operator-catalog design
+document (not part of this public repo) — but not yet
 implemented.

@@ -6,7 +6,8 @@ import Testing
 /// task briefing): prove the fault contract flows end to end through a real
 /// *operator-generated* mutant against `Fixtures/AccessibilityUISubstrate` —
 /// not a hand-applied edit, which Phase 5A itself already validated manually
-/// (`Research/phase5a-ui-test-substrate-2026-09/README.md`).
+/// (the internal Phase 5A UI-test-substrate research record, not part of
+/// this public repo).
 ///
 /// `apple.swiftui.hit-area-shape-removal` is `defaultEnabled: false`,
 /// `confidence: .experimental`, so it is explicitly enabled here;
@@ -17,8 +18,9 @@ import Testing
 /// one candidate this task is about.
 ///
 /// This proves pipeline correctness only, per the task briefing's own point
-/// 9 — it is explicitly NOT counted as promotion evidence. See
-/// `Research/corpus-validation/hit-area-shape-removal-2026-09/README.md` for
+/// 9 — it is explicitly NOT counted as promotion evidence. See this
+/// operator's internal corpus-validation research (not part of this
+/// public repo) for
 /// the real, external-project evidence that decides promotion.
 @Suite(
     "Acceptance: hit-area-shape-removal on Phase 5A UI-test substrate",

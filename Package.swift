@@ -16,8 +16,8 @@
 // here -- an overlay can only ADD/REPLACE files at the paths it contains,
 // it can't delete a private-tree directory this file doesn't mention):
 //
-//   - BudgetV2Eval             (Research/budget-selection-v2 evaluation tool)
-//   - PlanSubsetDerivation     (Research/budget-selection-v2 evaluation tool)
+//   - BudgetV2Eval             (internal budget-selection-v2 evaluation tool, not part of this public repo)
+//   - PlanSubsetDerivation     (internal budget-selection-v2 evaluation tool, not part of this public repo)
 //   - PlanStats                (TEMP muter-comparison diagnostic, not a frozen protocol)
 //   - SchemataChunkBuildProbe  (TEMP muter-comparison diagnostic, not a frozen protocol)
 //   - DirectXCTestInvokeProbe  (standalone prototype, not wired into any production path)
@@ -37,7 +37,8 @@
 // a separate, deliberately-written public doc, not by shipping this tool.
 //
 // `SchemataEligibilityClassifier` is also research-labeled in the private
-// manifest's own comment (Research/adr-0008-validation), but is
+// manifest's own comment (an internal adr-0008-validation research
+// document, not part of this public repo), but is
 // deliberately KEPT here: `Tests/MutantKitTests/Unit/SchemataEligibilityClassifierTests.swift`
 // (part of the shipped `MutantKitTests` target, which the public repo's
 // own CI builds and runs) does `@testable import SchemataEligibilityClassifier`
@@ -136,8 +137,9 @@ let package = Package(
             ]
         ),
 
-        // Research-only, outcome-blind classification tool for
-        // Research/adr-0008-validation/protocol.md's Protocol v3 addendum
+        // Research-only, outcome-blind classification tool for an internal
+        // adr-0008-validation protocol document's Protocol v3 addendum
+        // (not part of this public repo)
         // (Corpus B calibration population selection rule): actually runs
         // SchemataChunkPlanner.plan (the same target-resolution/registry
         // machinery a real formal run uses) to determine authoritative

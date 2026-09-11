@@ -5,7 +5,7 @@
 
 ## Context
 
-Gate 3 (`Research/benchmarks/gate3-ios-schemata-2026-08-23/GATE3-RESULT.md`) set out to answer whether a "schemata-first hybrid" execution strategy should become the default for Xcode/iOS-Simulator mutation testing, on the working hypothesis (carried from the schemata architecture's own original design intent) that one shared build embedding every mutation, selected at runtime, would out-perform isolated mode's one-rebuild-per-mutant baseline once the correctness and containment gaps found along the way were fixed.
+Gate 3 (an internal benchmark research record, not part of this public repo) set out to answer whether a "schemata-first hybrid" execution strategy should become the default for Xcode/iOS-Simulator mutation testing, on the working hypothesis (carried from the schemata architecture's own original design intent) that one shared build embedding every mutation, selected at runtime, would out-perform isolated mode's one-rebuild-per-mutant baseline once the correctness and containment gaps found along the way were fixed.
 
 Over roughly twenty phases against a real, frozen 940-mutant iOS project from an internal validation corpus, that gate fixed a real succession of genuine bugs and gaps on the way to a clean comparison: baseline-sharing duplication, a missing `noCoverage` pre-check, native-XCTest-timeout containment, a batch-hang-containment blocker in isolated mode's own wave-based early-abort path, an equivalent hang-containment story for schemata's own token dispatch, and — found only once measured at real, 100-mutant scale — a shared xcresult-bundle-attribution gap affecting both backends' batch execution paths alike. Every one of those fixes was real and is retained (see below). None of them changed the outcome this ADR records.
 
@@ -58,4 +58,4 @@ The performance gap **widened**, not narrowed, with corpus scale — the opposit
 
 Per Gate 3's own closing research direction: the next performance investment goes to **optimized isolated**, not schemata — specifically, whether XCTest/`xcodebuild` can support a PIT-style "one shared invocation, covering tests ordered by likely-killer, bail on first failure/timeout" scheme, which would combine PIT's own containment semantics with Xcode's real cost model (Phase H13 already showed the naive "one test = one `xcodebuild` invocation" version of this, `earlyAbortSelectedTests`, costs too much in fixed per-invocation overhead to be a free win). That investigation is its own future research theme, out of this ADR's scope.
 
-See `Research/benchmarks/gate3-ios-schemata-2026-08-23/GATE3-RESULT.md` for the full, phase-by-phase research record this decision is drawn from.
+See the internal Gate 3 benchmark research record (not part of this public repo) for the full, phase-by-phase research record this decision is drawn from.

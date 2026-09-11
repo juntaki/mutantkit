@@ -139,7 +139,8 @@ struct MutationVerdictVerifierTests {
     }
 
     /// Found by this project's own P7 self-mutation audit
-    /// (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`):
+    /// (this project's internal mutation-testing-hardening progress log,
+    /// not part of this public repo):
     /// `executionEvidenceProblem`'s own build-product-hash guard (the one
     /// right above the isolated-activation checks the three tests above
     /// exercise) had no dedicated test. Mutating its `return` to `return

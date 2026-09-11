@@ -118,6 +118,69 @@ struct PublicTreeConfigRegressionTests {
         )
     }
 
+    /// v0.6-v0.8 audit: `forbidden_strings` was an ad hoc list a human
+    /// only grew *after* a name had already leaked (one internal project's
+    /// name sat live in the public repo for ~4 weeks first, see
+    /// `knownLeakedNames` above) -- there was no artifact
+    /// enumerating "every local `~/work/*` project name that must never
+    /// appear." `Scripts/local-project-names.txt` is that artifact,
+    /// seeded from `ls ~/work` with a documented, judgment-based
+    /// exclusion list (names too generic to forbid literally, e.g.
+    /// `orca`/`phr` colliding with ordinary identifier/English
+    /// substrings already shipped in this repo's own source, plus a few
+    /// self-referential/already-public names -- see that file's own
+    /// header comment for the exact reasoning per exclusion).
+    ///
+    /// git-projector's `forbidden_strings` policy field has no mechanism
+    /// to read an external file at scan time (confirmed against
+    /// git_projector/config.py: it's a plain inline TOML array), so the
+    /// two files are kept in sync by
+    /// `Scripts/sync-local-project-name-forbidden-strings.py`, run by
+    /// hand after editing the `.txt` file. This test is the mechanical
+    /// gate that catches a forgotten sync: every non-excluded name in the
+    /// `.txt` file must already have a case-insensitive match somewhere
+    /// in `forbidden_strings`.
+    @Test(
+        "every non-excluded name in Scripts/local-project-names.txt is covered by forbidden_strings",
+        .enabled(if: PublicTreeConfigRegressionTests.isPrivateRepoCheckout)
+    )
+    func localProjectNamesAreSyncedToForbiddenStrings() throws {
+        let namesPath = Self.repositoryRoot.appendingPathComponent("Scripts/local-project-names.txt")
+        let namesText = try String(contentsOf: namesPath, encoding: .utf8)
+        let config = try String(contentsOf: Self.configPath, encoding: .utf8)
+
+        // Mirrors the sync script's own two passes over the .txt file:
+        // collect "#   - <name>: ..." exclusion bullets, then every
+        // non-comment, non-blank line as a real name to check for.
+        var excluded = Set<String>()
+        var names: [String] = []
+        for rawLine in namesText.components(separatedBy: .newlines) {
+            if let bulletRange = rawLine.range(of: #"^#\s+- ([\w.\-]+):"#, options: .regularExpression) {
+                let bullet = String(rawLine[bulletRange])
+                if let colonIndex = bullet.lastIndex(of: ":") {
+                    let dashIndex = bullet.range(of: "- ")!.upperBound
+                    excluded.insert(String(bullet[dashIndex ..< colonIndex]))
+                }
+                continue
+            }
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            names.append(trimmed)
+        }
+        #expect(!names.isEmpty, "could not parse any names from Scripts/local-project-names.txt -- did its format change?")
+
+        let forbiddenLower = Set(Self.stringLiterals(inTomlArrayNamed: "forbidden_strings", in: config).map {
+            $0.hasPrefix("(?i)") ? String($0.dropFirst(4)).lowercased() : $0.lowercased()
+        })
+
+        for name in names where !excluded.contains(name) {
+            #expect(
+                forbiddenLower.contains(name.lowercased()),
+                "\"\(name)\" is listed in Scripts/local-project-names.txt but has no case-insensitive match in forbidden_strings -- run Scripts/sync-local-project-name-forbidden-strings.py"
+            )
+        }
+    }
+
     /// Minimal TOML-array-of-strings reader, line-based rather than a raw
     /// substring search: this file's own comments include literal `[`/`]`
     /// characters (e.g. "the `[overlay]` manifest below", inside

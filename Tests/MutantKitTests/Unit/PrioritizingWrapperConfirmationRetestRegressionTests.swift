@@ -22,7 +22,8 @@ import Testing
 /// existential never looks inside a value a wrapper stores — so it failed
 /// even when the wrapped `SwiftPackageMacOSAdapter` genuinely conformed,
 /// silently reproducing the exact original bug
-/// (`Research/product-completeness-2026-08/F7-A-E-FREEZE-RELEASE-GATE.md`)
+/// (this project's internal product-completeness freeze-release-gate
+/// research, not part of this public repo)
 /// for every mutant in this real, default-off, but real and reachable
 /// configuration combination: safely (`.flaky`, never an over-claimed kill)
 /// but silently and completely untested.

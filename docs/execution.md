@@ -138,8 +138,9 @@ timeouts:
     strategy: fixed   # a UI test's own baseline duration (Simulator boot +
     maximum: 5m        # app launch + AX-tree settle time) is not a
                         # representative multiplier base for an adaptive
-                        # ceiling — see the fixed-timeout rationale in
-                        # Research/corpus-validation/continuation-resume-removal-2026-09/README.md.
+                        # ceiling — see the fixed-timeout rationale in the
+                        # internal continuation-resume-removal corpus-validation
+                        # research (not part of this public repo).
 ```
 
 Two things worth knowing before pointing this at a real UI-test target:
@@ -154,15 +155,17 @@ Two things worth knowing before pointing this at a real UI-test target:
   pass.** `XCResultAdapter.classify` already treats
   `summary.totalTestCount == 0` as `.infrastructureFailure`
   unconditionally — the same guard that would have caught the
-  hyphenated-test-target incident in
-  [`required-decode-introduction-2026-09`](../Research/corpus-validation/required-decode-introduction-2026-09/README.md)
+  hyphenated-test-target incident in the internal
+  `required-decode-introduction-2026-09` corpus-validation research (not
+  part of this public repo)
   had it been an Xcode run instead of a SwiftPM one. A UI-test target's own
   `-only-testing:` filter (a typo'd test method name, most commonly) is
   exactly as capable of silently narrowing to nothing as a regex-based
   SwiftPM filter is, so double-check the real count in a plain `xcodebuild
   test` run before trusting a mutation campaign's baseline.
 
-See `Research/phase5a-ui-test-substrate-2026-09/README.md` for the full
+See the internal Phase 5A UI-test-substrate research record (not part of
+this public repo) for the full
 RED/GREEN validation this was built and proven against, including the one
 real gap this closed (a UI test target's own `xcresulttool` bundle node is
 named `"UI test bundle"`, not `"Unit test bundle"` — a hardcoded check for

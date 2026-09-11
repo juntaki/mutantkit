@@ -104,9 +104,7 @@ struct DryRunCommand: AsyncParsableCommand {
                 throw ExitCode(MutantKitExit.operationalError)
             }
 
-            let counts = result.summary.map { "\($0.passed) passed, \($0.failed) failed of \($0.total)" }
-                ?? "test counts unavailable"
-            print("Dry run passed (\(counts)).")
+            print("Dry run passed (\(Self.countsDescription(for: result.summary))).")
             print("Build: \(artifact.command.displayString)")
             print("Test:  \(result.command.displayString)")
             try? await workspaces.destroySandbox(at: sandbox)
@@ -114,5 +112,30 @@ struct DryRunCommand: AsyncParsableCommand {
             try? await workspaces.destroySandbox(at: sandbox)
             throw error
         }
+    }
+
+    /// The confidence-building count `dry-run` exists to show, whenever the
+    /// adapter that ran the baseline actually has one.
+    ///
+    /// `result.summary` already carries a real, structured count whenever one
+    /// exists — every `.xcresult`-backed adapter run (Xcode/xcodebuild
+    /// destinations) always attaches one for a `.passed` result, since
+    /// `XCResultAdapter.Outcome.summary` is non-optional. SwiftPM's `swift
+    /// test` is the one case that can genuinely have none: SwiftPM only
+    /// writes an XCTest xunit report in `--parallel` mode (see
+    /// `SwiftPackageMacOSAdapter.runTests`'s own comment on why that stays
+    /// opt-in — a flaky parallel-unsafe suite would otherwise misclassify a
+    /// mutant as killed), so a passing, purely-XCTest, non-parallel package
+    /// run leaves no structured report of any kind to read a count from. That
+    /// is a real absence of data, not a missed extraction — reporting a count
+    /// there would mean inventing one from unstructured `swift test` stdout,
+    /// which this tool never treats as trustworthy data (see `XCResultAdapter`'s
+    /// and `XUnitParser`'s own doc comments). So the vaguer message is kept,
+    /// but only for that genuinely-unmeasured case.
+    static func countsDescription(for summary: TestOutcomeSummary?) -> String {
+        guard let summary else {
+            return "test counts unavailable — no structured test report was written for this run"
+        }
+        return "\(summary.passed) passed, \(summary.failed) failed of \(summary.total)"
     }
 }

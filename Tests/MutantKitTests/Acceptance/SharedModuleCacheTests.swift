@@ -7,7 +7,8 @@ import Testing
 /// Real, end-to-end coverage for `Configuration.execution.sharedModuleCache`
 /// — see that property's own doc comment, `WorkspaceManager
 /// .moduleCachePath(forSandbox:fingerprint:)`, `SharedModuleCacheNamespace`,
-/// and `Research/isolated-build-reuse-2026-09/README.md` for the
+/// and this project's internal isolated-build-reuse research (not part of
+/// this public repo) for the
 /// measurements and reasoning this flag rests on. Every test here spawns
 /// real `swift build`/`swift test` processes
 /// against a throwaway two-function SwiftPM fixture (`Fixture.write`,
@@ -125,7 +126,8 @@ struct SharedModuleCacheTests {
 
     // MARK: - Activation-evidence stability
 
-    /// Pins `Research/isolated-build-reuse-2026-09`'s own manual `otool -s`
+    /// Pins this project's internal isolated-build-reuse research's (not
+    /// part of this public repo) own manual `otool -s`
     /// comparison as a real regression test, through the actual production
     /// hash function (`MachOCodeHash.codeHash`, not a hand-rolled
     /// reimplementation): routing system-module compilation through an
@@ -329,7 +331,8 @@ struct SharedModuleCacheTests {
         // Whole-directory loss is the coarser version of the same question,
         // and this run-scoped design's own answer to it: `swift build`
         // recreates a missing `-module-cache-path` directory from nothing
-        // (confirmed empirically, `Research/isolated-build-reuse-2026-09`),
+        // (confirmed empirically in this project's internal isolated-build-reuse
+        // research, not part of this public repo),
         // so deleting it outright is expected to degrade to a plain cold
         // rebuild, never a wrong one — never a build failure either.
         try FileManager.default.removeItem(at: cachePath)

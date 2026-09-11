@@ -22,9 +22,9 @@ load-bearing, unresolved **schemata-supportability** prerequisite (one of
 the milestone's three readiness axes — isolated-readiness,
 schemata-supportability, current profile — where schemata-supportability is
 explicitly *not* closable by more corpus evidence, only by direct
-architecture work). The prerequisite, quoted from
-`mutantkit-private-operator-readiness/Research/operator-catalog/phase4-readiness-gate.md`
-(read-only, external worktree, for context only):
+architecture work). The prerequisite, quoted from an internal
+operator-catalog phase-4 readiness-gate record (a separate, private
+worktree, not part of this public repo; read-only, for context only):
 
 > "schemata batching (ADR-0003/0004) compiles many real mutants into one
 > binary with runtime selectors, so a hanging mutant selected mid-batch
@@ -1070,9 +1070,9 @@ blocking freeze under this milestone's standard).
   both round-1 findings (Critical=0/High=0/Medium=0/Low=1, the one
   remaining Low also fixed and not re-reviewed by a third round,
   consistent with this project's own Low/Medium-does-not-block-freeze
-  convention, §"Addendum 3"). Full review transcripts:
-  `Research/adr-0008-amendment-2026-08-19/codex-review-round1.log` and
-  `codex-review-round2.log` (this worktree). Written per this project's
+  convention, §"Addendum 3"). Full review transcripts: internal
+  round-1 and round-2 Codex review logs (this worktree, not part of this
+  public repo). Written per this project's
   standing revision policy (dated addenda only, never silent edits of
   frozen text) — see the two inline superseded-notes in §4(d) and §5 item
   8 for exactly what this addendum overrides.
@@ -1082,9 +1082,8 @@ blocking freeze under this milestone's standard).
   "Scope" below). Full findings, Codex review transcript, and preserved
   raw evidence (before/after `report.json`, the failing build's kept
   sandbox with its lowered source, and the build-only reproducer tool
-  used):
-  `Research/muter-comparison/diagnostics-2026-08-18/bool-literal-chunk-build-failure-findings.md`
-  (worktree `mutantkit-private-muter-comparison-protocol`).
+  used): an internal Muter-comparison diagnostics record (a separate,
+  private worktree, not part of this public repo).
 
 ### What was found
 

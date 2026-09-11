@@ -3,8 +3,8 @@ import XCTest
 /// Exercises faults that only exist in a realized UI/accessibility tree —
 /// exactly the gap Phase 5A's substrate exists to close. See
 /// `Sources/ContentView.swift` for what each test is really checking, and
-/// `Research/phase5a-ui-test-substrate-2026-09/README.md` for the substrate
-/// this fixture validates.
+/// the internal Phase 5A UI-test-substrate research record (not part of
+/// this public repo) for the substrate this fixture validates.
 final class AccessibilityUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false

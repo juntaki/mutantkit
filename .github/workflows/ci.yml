@@ -250,6 +250,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Same cache as release-validation.yml's jobs carry, for the same
+      # reason: the dependency resolve + checkout of swift-syntax is the
+      # bulk of the cold build this job pays on every run.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Toolchain
         shell: bash
         run: |
@@ -696,6 +709,20 @@ jobs:
             wave: "1"
     steps:
       - uses: actions/checkout@v4
+      # Same cache as release-validation.yml's jobs carry, for the same
+      # reason: the dependency resolve + checkout of swift-syntax is the
+      # bulk of the cold build this job pays on every run, across every
+      # fixture in the matrix.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Select pinned Xcode (26.6)
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
@@ -791,6 +818,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Same cache as release-validation.yml's jobs carry, for the same
+      # reason: the dependency resolve + checkout of swift-syntax is the
+      # bulk of the cold build this job pays on every run.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Select pinned Xcode (26.6)
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
@@ -845,6 +885,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Same cache as release-validation.yml's jobs carry, for the same
+      # reason: the dependency resolve + checkout of swift-syntax is the
+      # bulk of the cold build this job pays on every run.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
       - name: Select pinned Xcode (26.6)
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain

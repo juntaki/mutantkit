@@ -184,8 +184,9 @@ struct ElseClauseDeletionOperatorREDTests {
 
     /// `@ViewBuilder` specifically is a capability-proven exception (real
     /// SwiftUI confirmed, via a real `-typecheck` against the iOS SDK, to
-    /// implement `buildOptional` — see `Research/mutation-testing-
-    /// hardening-2026-08/PROGRESS.md`'s P2.3 entry for the fixture pair
+    /// implement `buildOptional` — see this project's internal
+    /// mutation-testing-hardening progress log's (not part of this public
+    /// repo) P2.3 entry for the fixture pair
     /// that established the boundary), so this candidate is now admitted —
     /// a real, targeted narrowing of what was previously a blanket
     /// exclusion, not the removal of the exclusion itself (see the sibling

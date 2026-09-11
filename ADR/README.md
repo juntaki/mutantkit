@@ -46,7 +46,8 @@ down here:
   `**Correction**:`/`**Overflow-safety (... correcting the bound's own
   derivation)**` notes fixing a spec derivation in place, keeping the
   original (now-corrected) reasoning visible alongside the fix.
-- `Research/mutation-testing-hardening-2026-08/PROGRESS.md` — a
+- The internal mutation-testing-hardening progress log (not part of this
+  public repo) — a
   `**Correction 2026-08-27 (R6):**` section reversing an earlier "likely
   a red herring" dismissal of a `Process.waitUntilExit()` hang, once a
   second, independent live stack sample showed it was real; and a

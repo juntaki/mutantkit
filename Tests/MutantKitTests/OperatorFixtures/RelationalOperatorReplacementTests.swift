@@ -130,8 +130,9 @@ struct RelationalOperatorReplacementTests {
     /// attribute is very often a `@propertyWrapper`/attached macro whose
     /// arguments are ordinary, runtime-evaluated expressions (see
     /// `OperatorExclusions.compileTimeOnlyAttributeNames`'s own doc comment,
-    /// and the real compiled fixture in `Research/mutation-testing-
-    /// hardening-2026-08/PROGRESS.md` that motivated narrowing this from a
+    /// and the real compiled fixture in this project's internal
+    /// mutation-testing-hardening progress log (not part of this public
+    /// repo) that motivated narrowing this from a
     /// blanket exclusion).
     @Test("Comparisons inside a non-compiler-builtin attribute's arguments are still mutated")
     func customAttributeArgumentsAreNotExcluded() throws {

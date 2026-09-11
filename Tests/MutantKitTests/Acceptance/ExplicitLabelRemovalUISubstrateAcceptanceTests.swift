@@ -6,7 +6,8 @@ import Testing
 /// task briefing): prove the fault contract flows end to end through a real
 /// *operator-generated* mutant against `Fixtures/AccessibilityUISubstrate` —
 /// not a hand-applied edit, which Phase 5A itself already validated
-/// manually (`Research/phase5a-ui-test-substrate-2026-09/README.md`, "2 —
+/// manually (the internal Phase 5A UI-test-substrate research record, not
+/// part of this public repo, "2 —
 /// RED: `.accessibilityLabel("Close")` removed").
 ///
 /// `apple.accessibility.explicit-label-removal` is `defaultEnabled: false`,

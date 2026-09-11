@@ -6,7 +6,8 @@ import Testing
 
 /// Pins `ArithmeticOperatorReplacementSchemataLowerer` — deliberately never
 /// registered in `SchemataLowererRegistry.builtIn` in this build (see that
-/// type's own doc comment, and `Research/adr-0008-validation/protocol.md`'s
+/// type's own doc comment, and an internal adr-0008-validation protocol
+/// document's (not part of this public repo)
 /// "Protocol v2" addendum): every test here constructs and calls the lowerer
 /// directly, the same seam a future validation-only registration commit will
 /// simply add to the registry, changing no lowering logic.

@@ -8,8 +8,9 @@ import Testing
 /// soundness gap 2) fields — `buildSDKIdentity`/`destinationRuntimeIdentity`
 /// — run against this machine's actual `xcrun`/`xcodebuild`, the same
 /// "ask the real environment" convention `ToolchainProbe` itself already
-/// follows for `swiftVersion`/`xcodeVersion`. See `Research/mutation-
-/// testing-hardening-2026-08/PROGRESS.md`'s P4 gap 2 entry for the
+/// follows for `swiftVersion`/`xcodeVersion`. See this project's internal
+/// mutation-testing-hardening progress log's (not part of this public
+/// repo) P4 gap 2 entry for the
 /// real-machine evidence (two iOS simulator runtimes/SDK builds coexisting
 /// under one Xcode install) this closes.
 @Suite("ToolchainProbe: build SDK / destination runtime identity")

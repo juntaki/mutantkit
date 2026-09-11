@@ -20,8 +20,8 @@ import Testing
 /// The two hand-applied faults this substrate exists to make observable at
 /// all (`.accessibilityLabel("Close")` and `.contentShape(Rectangle())`
 /// removal) are validated manually against `XCResultAdapter.classify`
-/// directly, not here — see
-/// `Research/phase5a-ui-test-substrate-2026-09/README.md` for that evidence.
+/// directly, not here — see the internal Phase 5A UI-test-substrate
+/// research record (not part of this public repo) for that evidence.
 /// Neither is a registered `MutationOperator`, so neither can be driven
 /// through `mutantkit plan`'s own discovery.
 @Suite(
@@ -98,8 +98,9 @@ struct AccessibilityUISubstrateAcceptanceTests {
     }
 
     /// The single most important lesson from Phase 5's own corpus-validation
-    /// work (see `Research/corpus-validation/required-decode-introduction-2026-09/README.md`'s
-    /// hyphenated-test-target incident): a test filter that silently matches
+    /// work (see the hyphenated-test-target incident in this project's
+    /// internal `required-decode-introduction-2026-09` corpus-validation
+    /// research, not part of this public repo): a test filter that silently matches
     /// zero tests must never be read as a pass. `-only-testing:` here narrows
     /// to a test method that does not exist, so the real suite's 3 tests
     /// become 0 — MutantKit must fail the whole run closed, not report a
@@ -163,7 +164,8 @@ struct AccessibilityUISubstrateAcceptanceTests {
     /// `survived` or `killedByCrash`. A real, slow boot-timeout reproduction
     /// (a Simulator whose data directory is deliberately unwritable) is
     /// recorded manually in
-    /// `Research/phase5a-ui-test-substrate-2026-09/README.md` instead of
+    /// the internal Phase 5A UI-test-substrate research record (not part
+    /// of this public repo) instead of
     /// here, since it legitimately takes several minutes (the same
     /// `bootTimeoutSeconds: 90` × `bootstatusRetries: 2` budget
     /// `SimulatorPool` always uses) — too slow to keep in the regular

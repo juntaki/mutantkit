@@ -124,7 +124,8 @@ No UI-automation DSL and no new project kind — an existing Xcode
 project/workspace UI test target/scheme is driven the same way any other
 `isolated`-mode test target is. Full account:
 `docs/execution.md`'s UI-test section and
-`Research/phase5a-ui-test-substrate-2026-09/README.md`. This row was
+the internal Phase 5A UI-test-substrate research record (not part of this
+public repo). This row was
 declared supported in `README.md`'s own "Supported today" table before
 v0.4 Trust Closure Workstream D but had no citation in this matrix — the
 underlying evidence was real and already existed, this closes the

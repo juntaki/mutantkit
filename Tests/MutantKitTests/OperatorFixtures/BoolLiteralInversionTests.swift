@@ -123,7 +123,8 @@ struct BoolLiteralInversionTests {
     /// evaluated at runtime like any other call, not compile-time metadata.
     ///
     /// Proven with a real, compiled, run fixture rather than assumed
-    /// (`Research/mutation-testing-hardening-2026-08/PROGRESS.md`, P2
+    /// (this project's internal mutation-testing-hardening progress log,
+    /// not part of this public repo, P2
     /// exclusion audit): a `@propertyWrapper` whose `init` branches on an
     /// `enabled: Bool` argument produced a genuinely different program
     /// output (`5` vs `0`) when that literal was flipped. Blanket-excluding

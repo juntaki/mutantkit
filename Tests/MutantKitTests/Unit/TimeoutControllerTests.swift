@@ -7,7 +7,8 @@ import Testing
 /// A `10...30`s, `selectedTests.count`-scaled clamp lived here previously;
 /// Gate 3's real-iOS-project run found it uncalibrated (see
 /// `TimeoutController.swift`'s doc comment and
-/// `Research/benchmarks/gate3-ios-schemata-2026-08-23`), so this now always
+/// the internal Gate 3 benchmark research, not part of this public repo),
+/// so this now always
 /// answers with the whole-suite-scaled `mutantLimitSeconds`, regardless of
 /// `selectedTests` — the same fallback `nil`/empty already used.
 @Suite("Timeout controller: selected-test-aware resolution")

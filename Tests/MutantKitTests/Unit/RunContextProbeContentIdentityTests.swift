@@ -12,7 +12,8 @@ import XCTest
 /// pointless miss — and because one class carrying both would exceed
 /// SwiftLint's type-body-length threshold.
 ///
-/// See `Research/cache-key-granularity/README.md` for the correctness
+/// See this project's internal cache-key-granularity research (not part
+/// of this public repo) for the correctness
 /// argument these tests pin.
 final class RunContextProbeContentIdentityTests: XCTestCase {
     // MARK: - The point of the exercise: surviving across commits
@@ -123,7 +124,8 @@ final class RunContextProbeContentIdentityTests: XCTestCase {
     /// be trading a provable answer for a plausible one, which is the exact
     /// failure mode this project exists to rule out. Narrowing this
     /// conservatively — per mutant, by a real dependency closure — is the
-    /// follow-on work described in `Research/cache-key-granularity/README.md`;
+    /// follow-on work described in this project's internal
+    /// cache-key-granularity research (not part of this public repo);
     /// until it exists, the answer is a miss, never a guess.
     func testTrackedNonSourceChangeStillMissesConservatively() async throws {
         let (repo, before) = try await committedBaseline()

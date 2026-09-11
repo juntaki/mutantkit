@@ -154,8 +154,8 @@ public struct TaskIDRemovalOperator: MutationOperator {
             Promotion decision: C, remain experimental -- 0 of the 4 real candidates ever executed \
             even once, a stronger and more definitive absence-of-signal than \
             apple.concurrency.post-await-cancellation-guard-removal's own 0/5-killed-but-covered \
-            result was held to before landing at the same decision. Full evidence: \
-            Research/corpus-validation/task-id-removal-2026-09/.
+            result was held to before landing at the same decision. Full evidence: internal \
+            corpus-validation research for this operator (not part of this public repo).
             """
         ]
     )

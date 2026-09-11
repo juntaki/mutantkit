@@ -169,7 +169,9 @@ struct SchemataConfirmationCrashTimeoutVerifierTests {
         #expect(record.outcome == .infrastructureFailure)
     }
 
-    /// Historical regression (`Research/known-issues/schemata-confirm-timeout-image-uuid-mismatch.md`,
+    /// Historical regression (this project's internal known-issues record
+    /// on a schemata-confirm-timeout image-UUID mismatch, not part of
+    /// this public repo,
     /// 2026-08-23): a real, production-scale-app `confirmTimeout` retry observed a runtime
     /// image UUID that did not match the build receipt's, and ended in
     /// `infrastructureFailure` rather than a wrong verdict. Live repro of
