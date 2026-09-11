@@ -1010,7 +1010,9 @@ jobs:
         with:
           name: experiment-shared-build-products
       - name: Extract build products
-        run: time tar -x -f build-products.tar -C .build
+        run: |
+          mkdir -p .build
+          time tar -x -f build-products.tar -C .build
       - name: Select pinned Xcode (26.6)
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Acceptance (no build step — relies entirely on extracted .build)
