@@ -18,7 +18,7 @@ name: Action smoke test
 #   - "CI-mode orchestration" (every other job) — this cannot be proven
 #     against a published release: the CLI surface `mode: ci` depends on
 #     (`gate --json`, `run --also-report`) postdates the latest release at
-#     the time this test suite was written (v0.2.0 has neither — see
+#     the time this test suite was written (v0.2.0 has neither — see  [historical-version-fixture, not a live pin]
 #     `Scripts/action/preflight-capabilities.sh`'s own doc comment). Every
 #     `ci-mode-*`/`build-from-source` job below instead builds `mutantkit`
 #     straight from this exact PR HEAD and feeds it to action.yml via
@@ -111,7 +111,7 @@ jobs:
           # Deliberately the *text* path, not `--json`: `mode: install` (this
           # job's matrix) can install any published release, and `doctor
           # --json` is itself part of the same P9-P12 CLI work `gate --json`/
-          # `run --also-report` came from — it does not exist on `v0.2.0`
+          # `run --also-report` came from — it does not exist on `v0.2.0`  [historical-version-fixture, not a live pin]
           # (confirmed: `mutantkit doctor --json` there exits 64,
           # ArgumentParser's own "unknown option," not this tool's
           # `operationalError`). The text path's exit code and prose have
@@ -244,18 +244,18 @@ jobs:
           reports: [console, json]
           YAML
 
-      # v0.2.0 is real: the latest published release at the time P13 was
+      # v0.2.0 is real: the latest published release at the time P13 was  [historical-version-fixture, not a live pin]
       # written, and confirmed (Scripts/action/preflight-capabilities.sh's
       # own doc comment) to have neither `gate --json` nor `run
       # --also-report`. `mode: ci` against it must refuse to even start
       # doctor, not fail confusingly deep into a real mutation campaign.
-      - name: "mode: ci, version: v0.2.0"
+      - name: "mode: ci, version: v0.2.0" # historical-version-fixture, not a live pin
         id: old-cli
         continue-on-error: true
         uses: ./mutantkit-src
         with:
           mode: ci
-          version: v0.2.0
+          version: v0.2.0 # historical-version-fixture, not a live pin
 
       - name: Assert it failed before doctor/plan ever ran
         shell: bash

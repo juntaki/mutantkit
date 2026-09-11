@@ -52,6 +52,25 @@ struct DocumentedVersionPinConsistencyTests {
     /// `skills/` are globbed rather than listed so a new document is
     /// covered the day it is added, which is exactly when a stale pin is
     /// most likely to be copied into it.
+    ///
+    /// Also globs the public CI workflow YAML — the exact file class this
+    /// project's own historical README/`action.yml` version-drift incident
+    /// recurred in once already (an `@v1`-style floating tag, and a
+    /// `version:` example naming a since-superseded release), in a place
+    /// the workflow linter itself never checks for a MutantKit version
+    /// string. Handles both trees this test file ships in unchanged: the
+    /// public projection's real `.github/workflows/`, and the private
+    /// repo's own source for that overlay, `oss-public/.github/workflows/`
+    /// (see `.public-tree.toml`'s `[overlay]` section).
+    ///
+    /// Deliberately checks for `oss-public/` itself, not `.github/workflows`'
+    /// own existence, to pick the right one: the private repo has a real
+    /// `.github/workflows/` of its own too (`codeql.yml`/`release.yml`,
+    /// unrelated internal CI, billing-blocked and never actually run —
+    /// see `.public-tree.toml`'s own `".github"` exclusion comment), which
+    /// looked like a false match for "we're in the public tree" and would
+    /// have silently scanned the wrong, unrelated 2-file set instead of the
+    /// real 5-file overlay source.
     private static var scannedFiles: [URL] {
         let root = repositoryRoot
         var files = [root.appendingPathComponent("README.md"), root.appendingPathComponent("action.yml")]
@@ -59,6 +78,14 @@ struct DocumentedVersionPinConsistencyTests {
             let base = root.appendingPathComponent(directory)
             guard let walker = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil) else { continue }
             for case let url as URL in walker where url.pathExtension == "md" {
+                files.append(url)
+            }
+        }
+        let privateWorkflowSource = root.appendingPathComponent("oss-public/.github/workflows")
+        let isPrivateRepoCheckout = FileManager.default.fileExists(atPath: root.appendingPathComponent("oss-public").path)
+        let workflowsDirectory = isPrivateRepoCheckout ? privateWorkflowSource : root.appendingPathComponent(".github/workflows")
+        if let walker = FileManager.default.enumerator(at: workflowsDirectory, includingPropertiesForKeys: nil) {
+            for case let url as URL in walker where ["yml", "yaml"].contains(url.pathExtension) {
                 files.append(url)
             }
         }
@@ -91,11 +118,44 @@ struct DocumentedVersionPinConsistencyTests {
     static func versionReferences(in text: String, file: String) -> [VersionReference] {
         var found: [VersionReference] = []
         for (index, rawLine) in text.components(separatedBy: .newlines).enumerated() {
-            for version in versionTokens(in: maskingForeignURLs(rawLine)) {
+            guard !rawLine.contains(historicalVersionFixtureMarker) else { continue }
+            let masked = maskingForeignActionReferences(maskingForeignURLs(rawLine))
+            for version in versionTokens(in: masked) {
                 found.append(VersionReference(version: version, file: file, line: index + 1, text: rawLine))
             }
         }
         return found
+    }
+
+    /// A line carrying this exact marker is a deliberate, historically-
+    /// scoped reference to an old MutantKit version — e.g. a CI job
+    /// proving the current CLI still correctly rejects/handles a real,
+    /// no-longer-latest release — never a live recommendation to a reader
+    /// about which version to use. `oss-public/.github/workflows/
+    /// action-smoke-test.yml` tests exactly this (an old-CLI-version
+    /// rejection path) against a real historical tag; added after this
+    /// scan grew to cover CI workflow YAML and correctly found those lines
+    /// disagreeing with the declared latest release, which they are not
+    /// meant to.
+    ///
+    /// A structural marker, not a value-keyed allowlist: the file's own
+    /// `maskingForeignURLs` doc comment explains why keying an exception on
+    /// the literal version value would silently permit a real future
+    /// problem sharing that same value.
+    static let historicalVersionFixtureMarker = "historical-version-fixture, not a live pin"
+
+    /// Blanks a `uses: <owner>/<repo>@<ref>` action reference's trailing
+    /// `# vX.Y.Z` comment when `<owner>/<repo>` is not this project's own —
+    /// a third-party GitHub Action's own pinned version (e.g. `uses:
+    /// codecov/codecov-action@<sha> # v7.0.0`) is not a MutantKit version
+    /// claim, the same reasoning `maskingForeignURLs` already applies to a
+    /// foreign URL.
+    static func maskingForeignActionReferences(_ line: String) -> String {
+        guard let usesRange = line.range(of: "uses: "), !line.contains("juntaki/mutantkit") else { return line }
+        var characters = Array(line)
+        let start = line.distance(from: line.startIndex, to: usesRange.upperBound)
+        for position in start ..< characters.count { characters[position] = " " }
+        return String(characters)
     }
 
     static func versionTokens(in line: String) -> [String] {
