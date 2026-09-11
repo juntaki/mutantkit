@@ -767,12 +767,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        if: matrix.fixture != 'xcode-project'
         with:
           name: acceptance-build-products
       - name: Extract build products
+        if: matrix.fixture != 'xcode-project'
         run: |
           mkdir -p .build
           tar -x -f build-products.tar -C .build
+
+      # xcode-project keeps its own independent build rather than the shared
+      # artifact every other fixture uses above. Live-CI evidence
+      # (2026-09-11, rollout to the real matrix): this fixture's own
+      # "Schemata runtime archives" step below layers a `-c release` build
+      # into the same `.build` tree right after extraction, and that
+      # corrupted the extracted debug config's incremental state badly
+      # enough that the `Acceptance` step's `swift test` silently
+      # recompiled MutantKitTests from scratch and then failed a real
+      # mutation assertion (exitCode 2, "0 of 0 tests" baseline) — not
+      # merely slower, a genuine functional break. Every other fixture in
+      # this matrix builds nothing further after extraction and is
+      # unaffected; this is the "needs care" schemata-adjacent case the
+      # original CI-caching finding predicted, confirmed by direct
+      # evidence rather than left as a hypothetical.
+      - name: Cache SwiftPM dependencies (xcode-project only — independent build, see above)
+        if: matrix.fixture == 'xcode-project'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Build (xcode-project only — independent build, see above)
+        if: matrix.fixture == 'xcode-project'
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+
       - name: Select pinned Xcode (26.6)
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
@@ -839,9 +874,13 @@ jobs:
         with:
           name: acceptance-${{ matrix.fixture }}-failure-logs
           if-no-files-found: ignore
-          # No build.log here: the build now happens once in acceptance-build
-          # (see acceptance-build-failure-log above for that job's own log).
-          path: acceptance.log
+          # build.log only exists for xcode-project (its own independent
+          # build, see above); every other fixture's build happens once in
+          # acceptance-build (see acceptance-build-failure-log for that
+          # job's own log) and never produces a build.log here.
+          path: |
+            build.log
+            acceptance.log
 
   # Separate from the `acceptance` matrix above because this suite links and
   # runs the real schemata runtime binary (SchemataMutationRunner drives a
