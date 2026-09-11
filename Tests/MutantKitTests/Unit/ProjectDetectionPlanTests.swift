@@ -15,6 +15,7 @@ struct ProjectDetectionPlanTests {
         kind: ProjectKind? = .swiftPackageMacOS,
         reason: String? = "Package.swift declares no Apple platform.",
         swiftPMTestTargets: [String] = [],
+        swiftPMSourcesInclude: [String] = [],
         scheme: String? = nil,
         schemeCandidates: [String] = [],
         xcodeTestTargets: [String] = [],
@@ -25,6 +26,7 @@ struct ProjectDetectionPlanTests {
             kind: kind,
             reason: reason,
             swiftPMTestTargets: swiftPMTestTargets,
+            swiftPMSourcesInclude: swiftPMSourcesInclude,
             scheme: scheme,
             schemeCandidates: schemeCandidates,
             xcodeTestTargets: xcodeTestTargets,
@@ -56,6 +58,40 @@ struct ProjectDetectionPlanTests {
         #expect(result.hasTestTargets)
         #expect(result.template.contains("PricingTests"))
         #expect(!result.template.contains("OtherTests"))
+    }
+
+    // MARK: - sources.include
+
+    /// Lane D external-proof discovery, root-caused 2026-09-10: a real,
+    /// independent SwiftPM package whose library source lived at a custom
+    /// path (`ExampleLib/Services`, not `Sources/<TargetName>`) got
+    /// `sources.include: [Sources/**]` unconditionally — `plan` then found
+    /// a plausible-looking non-zero mutation count entirely in one
+    /// unrelated, untested file that happened to live under `Sources/`,
+    /// and zero in any of the 35 real files the actual test target
+    /// covered. Worse than a zero-discovery warning, since nothing caught
+    /// the mismatch.
+    @Test("A custom, non-conventional source path is used verbatim, not the Sources/** convention")
+    func customSourcePathIsUsedVerbatim() {
+        let result = build(swiftPMTestTargets: ["ExampleLibTests"], swiftPMSourcesInclude: ["ExampleLib/Services"])
+        #expect(result.template.contains("- ExampleLib/Services/**"))
+        #expect(!result.template.contains("- Sources/**"))
+    }
+
+    @Test("More than one reachable production target's path is listed")
+    func multipleSourcePathsAreListed() {
+        let result = build(
+            swiftPMTestTargets: ["AppTests"],
+            swiftPMSourcesInclude: ["Sources/Core", "Sources/Networking"]
+        )
+        #expect(result.template.contains("- Sources/Core/**"))
+        #expect(result.template.contains("- Sources/Networking/**"))
+    }
+
+    @Test("No resolved SwiftPM source paths falls back to the Sources/** convention")
+    func fallsBackToConventionalSourcesPath() {
+        let result = build(swiftPMSourcesInclude: [])
+        #expect(result.template.contains("- Sources/**"))
     }
 
     @Test("No test targets from either source leaves hasTestTargets false")

@@ -22,6 +22,14 @@ enum ProjectDetectionPlan {
         let kind: ProjectKind?
         let reason: String?
         let swiftPMTestTargets: [String]
+        /// The real, resolved source paths of every production target
+        /// `swiftPMTestTargets` actually depends on — empty when detection
+        /// found nothing usable (not a SwiftPM kind, `swift package
+        /// describe` failed, or no test target resolved), in which case
+        /// `build(_:)` falls back to the `Sources` convention. See
+        /// `SwiftPMDependencyGraph.sourcePaths(reachableFrom:)`'s own doc
+        /// comment for why this must not just assume that convention.
+        let swiftPMSourcesInclude: [String]
         let scheme: String?
         let schemeCandidates: [String]
         let xcodeTestTargets: [String]
@@ -58,7 +66,9 @@ enum ProjectDetectionPlan {
         // config; it is a reason to write one the user has to finish, and to
         // say so.
         let detection = try? await ProjectDetector.detect(in: root)
-        let swiftPMTestTargets = await detectedSwiftPMTestTargets(kind: detection?.kind, projectRoot: root)
+        let (swiftPMTestTargets, swiftPMSourcesInclude) = await detectedSwiftPMTestTargetsAndSources(
+            kind: detection?.kind, projectRoot: root
+        )
 
         // Real Xcode/workspace scheme + destination detection —
         // `xcodeDetection` is `nil`-scheme/empty-testTargets/nil-destination
@@ -71,6 +81,7 @@ enum ProjectDetectionPlan {
             kind: detection?.kind,
             reason: detection?.reason,
             swiftPMTestTargets: swiftPMTestTargets,
+            swiftPMSourcesInclude: swiftPMSourcesInclude,
             scheme: xcodeDetection.scheme,
             schemeCandidates: xcodeDetection.schemeCandidates,
             xcodeTestTargets: xcodeDetection.testTargets,
@@ -133,11 +144,16 @@ enum ProjectDetectionPlan {
         }
 
         let testTargets = swiftPMTestTargets.isEmpty ? xcodeTestTargets : swiftPMTestTargets
+        let sourcesInclude = input.swiftPMSourcesInclude.isEmpty ? ["Sources"] : input.swiftPMSourcesInclude
+        if !input.swiftPMSourcesInclude.isEmpty {
+            lines.append("Detected source path(s): \(sourcesInclude.joined(separator: ", "))")
+        }
         let template = ConfigurationLoader.template(
             for: kind ?? .auto,
             scheme: scheme,
             destination: resolvedDestination,
-            testTargets: testTargets
+            testTargets: testTargets,
+            sourcesInclude: sourcesInclude
         )
 
         return Result(
@@ -184,7 +200,13 @@ enum ProjectDetectionPlan {
     /// package describe`'s own `"type": "test"` classification) — this used
     /// to be thrown away, leaving `tests.targets: []` in every generated
     /// `mutantkit.yml` regardless of project kind, with only a comment
-    /// telling the user to fill it in by hand.
+    /// telling the user to fill it in by hand. The same resolved graph also
+    /// gives the real source paths those test targets depend on
+    /// (`sourcePaths(reachableFrom:)`) — previously thrown away too, with
+    /// `sources.include` hardcoded to the `Sources/**` convention
+    /// regardless of a project's real, possibly custom layout (see that
+    /// function's own doc comment for the real project this was found
+    /// against).
     ///
     /// Xcode project/workspace kinds are handled separately, by
     /// `XcodeConfigDetector` — this function itself still only ever returns
@@ -197,9 +219,12 @@ enum ProjectDetectionPlan {
     /// `PATH`, or a timeout all degrade to the pre-existing empty-list
     /// behavior, never to a thrown error that would block `init`/`setup`
     /// entirely.
-    private static func detectedSwiftPMTestTargets(kind: ProjectKind?, projectRoot: URL) async -> [String] {
-        guard kind == .swiftPackageMacOS || kind == .swiftPackageApple else { return [] }
-        guard let graph = try? await SwiftPMTargetResolver.resolveDependencyGraph(projectRoot: projectRoot) else { return [] }
-        return graph.targets.keys.filter { graph.isTestTarget($0) }.sorted()
+    private static func detectedSwiftPMTestTargetsAndSources(
+        kind: ProjectKind?, projectRoot: URL
+    ) async -> (testTargets: [String], sourcesInclude: [String]) {
+        guard kind == .swiftPackageMacOS || kind == .swiftPackageApple else { return ([], []) }
+        guard let graph = try? await SwiftPMTargetResolver.resolveDependencyGraph(projectRoot: projectRoot) else { return ([], []) }
+        let testTargets = graph.targets.keys.filter { graph.isTestTarget($0) }.sorted()
+        return (testTargets, graph.sourcePaths(reachableFrom: testTargets))
     }
 }
