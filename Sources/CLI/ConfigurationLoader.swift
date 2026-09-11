@@ -134,12 +134,12 @@ enum ConfigurationLoader {
     /// The starting config `init` writes. Commented, because a config file the
     /// user cannot read is a config file the user will not maintain.
     /// The `$schema` URL matches `ConfigurationJSONSchema.document`'s own
-    /// `$id` exactly (see that type's doc comment for why this is pinned to
-    /// `main` rather than a release tag right now) — this is a real,
-    /// GitHub-hosted copy of the same JSON Schema, not a placeholder, so
-    /// editors that understand the `yaml-language-server` directive get live
-    /// completion and validation against it.
-    private static let schemaURL = "https://raw.githubusercontent.com/juntaki/mutantkit/main/Schema/mutantkit-v1.json"
+    /// `$id` exactly (see that type's doc comment for the tag-pinning
+    /// history) — this is a real, GitHub-hosted copy of the same JSON
+    /// Schema, not a placeholder, so editors that understand the
+    /// `yaml-language-server` directive get live completion and validation
+    /// against it.
+    private static let schemaURL = "https://raw.githubusercontent.com/juntaki/mutantkit/v0.3.0/Schema/mutantkit-v1.json"
 
     /// v0.5 Stable Contracts: this generator and `docs/configuration.md`'s
     /// own hand-written example are two independently-maintained "what does

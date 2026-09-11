@@ -39,7 +39,8 @@ struct FixPlanCommand: ParsableCommand {
             // v0.5 Stable Contracts: see NextCommand's identical fix — this
             // check ran before the `json` branch and always printed prose.
             guard json else {
-                print("Unknown --format '\(format ?? "")'. Expected: agent (or omit --format for text).")
+                // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+                FileHandle.standardError.write(Data("Unknown --format '\(format ?? "")'. Expected: agent (or omit --format for text).\n".utf8))
                 throw ExitCode(MutantKitExit.operationalError)
             }
             try JSONOutput.emitError(

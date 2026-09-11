@@ -11,11 +11,20 @@
 #       .github (or that every place it doesn't is already accounted for
 #       in (b)'s file list) -- so a publish can't silently rewrite/revert
 #       the public repo's CI
+#   (d2) run Scripts/assert-projection-workflow-invariants.sh, a stronger,
+#       structural check than (d): (d) only catches BYTE differences, so it
+#       flags an intended edit exactly like a silent regression and cannot
+#       tell a narrowed trigger, a dropped `needs:` edge, or a
+#       fixture-matrix drift from a harmless rewrite. This is the check
+#       that actually would have caught the 2026-09-01 incident (a stale
+#       oss-public/ silently reverting action-smoke-test.yml's
+#       pull_request trigger and losing four ci.yml jobs). It is additive
+#       to (d), not a replacement -- see the script's own header comment.
 #   (e) run `projector publish --message '...'`
 #   (f) review the resulting public commit before pushing
 #
 # What this script DOES:
-#   - Automates (a), (b), (d) as hard pre-publish gates: any of them
+#   - Automates (a), (b), (d), (d2) as hard pre-publish gates: any of them
 #     failing exits non-zero with a clear message and calls `projector
 #     publish` not at all.
 #   - Prints the projector-diff file list prominently before publishing,
@@ -140,7 +149,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '2,85p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         --)
@@ -174,7 +183,7 @@ cd "$REPO_ROOT"
 # cannot know "intended" on its own -- it can only make sure nothing
 # uncommitted sneaks into the snapshot, and put HEAD in front of you.
 
-section "Step 1/5: private repo git status (checklist step a)"
+section "Step 1/6: private repo git status (checklist step a)"
 
 dirty="$(git -C "$REPO_ROOT" status --porcelain)"
 if [[ -n "$dirty" ]]; then
@@ -193,7 +202,7 @@ echo "  -> confirm this is the commit you intend to publish."
 # operator the file list for step (c) and (2) use that same list as the
 # ground truth for step (d) and the post-publish check.
 
-section "Step 2/5: projector diff (checklist step b: leak scan + file list)"
+section "Step 2/6: projector diff (checklist step b: leak scan + file list)"
 
 diff_log="$(mktemp -t mutantkit-publish-diff.XXXXXX)"
 trap 'rm -f "$diff_log"' EXIT
@@ -256,7 +265,7 @@ predicted_contains() {
 # it in step (c)); it is exactly the silent-CI-revert failure mode this
 # check exists to catch when it is NOT.
 
-section "Step 3/5: oss-public/.github vs public repo .github (checklist step d)"
+section "Step 3/6: oss-public/.github vs public repo .github (checklist step d)"
 
 status_log="$("$PROJECTOR" --repo "$REPO_ROOT" status 2>&1 || true)"
 echo "$status_log"
@@ -322,13 +331,79 @@ else
     fi
 fi
 
+# ── Step (d2): assert-projection-workflow-invariants.sh ────────────────────
+# Strictly stronger than step (d) above, not a replacement for it: step (d)
+# is a byte-level diff of oss-public/.github against the public repo's
+# current .github, so it flags an intended, reviewed edit exactly the same
+# way it flags a silent regression, and it has no notion of "workflow",
+# "job", or "trigger" -- it cannot tell that a `needs:` edge was dropped, a
+# trigger was narrowed, or the ci-fixtures.json/matrix contract drifted.
+# This guard understands all of that, and is the check that actually would
+# have caught this project's own worst historical incident (2026-09-01: a
+# stale oss-public/ silently reverted action-smoke-test.yml's
+# `pull_request` trigger and dropped four ci.yml jobs -- a regression that,
+# once published, is invisible to `projector diff` forever after, because
+# both sides then match). See its own header comment
+# (Scripts/assert-projection-workflow-invariants.sh) for the full case and
+# its "WHERE TO CALL IT FROM" section for why it must run here and not as a
+# git-projector hook: by the time any hook runs, `projector publish` has
+# already mirrored the projection into the public repo's working tree, so
+# the "baseline" a hook would compare against IS the proposal.
+#
+# No overrides are passed. The guard's own defaults -- derived from
+# .public-tree.toml -- are exactly right for a real publish: the projected
+# tree is oss-public/ (the sole source of the projected .github/, per the
+# overlay rule), and the baseline is the public repo's HEAD, proven
+# identical to what `origin` is currently serving (not a stale clone, not a
+# local commit GitHub has never seen). Scripts/projection-workflow-waivers.json
+# is already a tracked file (empty today), so no waiver-related flag is
+# needed either. None of the four evidence-weakening flags
+# (--allow-dirty-public-workflows, --allow-stale-public-baseline,
+# --public-baseline-from-worktree, --allow-untracked-waivers) are passed --
+# per this codebase's own trust stance, a real publish must not loosen any
+# of them; that is deliberate, not an oversight.
+#
+# --receipt records what was actually approved (this guard's own sha256,
+# the baseline commit, a digest of the projected .github/ + fixtures) so a
+# publish that skipped this gate is distinguishable from one that passed
+# it. We additionally require the receipt to exist and say "pass" in code,
+# rather than trusting the exit status alone -- a check that reports 0 but
+# produces no evidence of what it approved has not, by this script's own
+# "a check that could not run has NOT passed" standard, actually passed.
+
+section "Step 4/6: pre-publish CI-invariant guard (checklist step d2)"
+
+guard_script="$REPO_ROOT/Scripts/assert-projection-workflow-invariants.sh"
+[[ -x "$guard_script" ]] || fail "$guard_script not found or not executable"
+
+guard_receipt="$(mktemp -t mutantkit-publish-guard-receipt.XXXXXX)"
+trap 'rm -f "$diff_log" "$guard_receipt"' EXIT
+
+guard_rc=0
+"$guard_script" --receipt "$guard_receipt" || guard_rc=$?
+
+if [[ "$guard_rc" -ne 0 ]]; then
+    fail "assert-projection-workflow-invariants.sh failed (exit $guard_rc) -- see its output above. Refusing to publish: this projection would silently change the public repo's CI. If a reduction it reports is real and reviewed, add a waiver to Scripts/projection-workflow-waivers.json exactly as the guard's own output instructs, then re-run this script."
+fi
+
+[[ -s "$guard_receipt" ]] || fail "assert-projection-workflow-invariants.sh exited 0 but wrote no receipt to $guard_receipt -- a pass with no evidence of what was approved is not a pass. Refusing to publish."
+
+guard_receipt_result="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("result", ""))
+except Exception:
+    print("")' "$guard_receipt" 2>/dev/null || true)"
+[[ "$guard_receipt_result" == "pass" ]] || fail "assert-projection-workflow-invariants.sh's receipt at $guard_receipt does not record result=pass (got '${guard_receipt_result:-<unreadable>}') -- refusing to publish without unambiguous evidence the guard actually passed."
+
+echo "pre-publish CI-invariant guard passed (receipt: $guard_receipt)."
+
 # ── Step (c) gate: pause for a human/agent go-ahead before the real ────────
 # publish. Skipped entirely for --dry-run (nothing is published) and for
 # --yes (an already-authorized, non-interactive caller).
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
     section "Dry run: stopping before publish/push (checklist steps e-g not run)"
-    echo "All pre-publish checks (a, b, d) passed, and the file list above is what a real run would predict for step (c)."
+    echo "All pre-publish checks (a, b, d, d2) passed, and the file list above is what a real run would predict for step (c)."
     echo "Nothing was published; the public repo was not touched."
     exit 0
 fi
@@ -348,7 +423,7 @@ fi
 # safety gate, and commits locally to the public repo clone. It does not
 # push, and neither do we.
 
-section "Step 4/5: projector publish (checklist step e)"
+section "Step 5/6: projector publish (checklist step e)"
 
 "$PROJECTOR" --repo "$REPO_ROOT" publish --message "$MESSAGE"
 
@@ -359,7 +434,7 @@ section "Step 4/5: projector publish (checklist step e)"
 # same policy `projector publish` itself documents for its own build/test
 # gate) -- but you will see this before pushing.
 
-section "Step 5/5: validating the resulting public commit (checklist step f)"
+section "Step 6/6: validating the resulting public commit (checklist step f)"
 
 public_files_log="$(git -C "$public_repo" show --name-only --format='' HEAD)"
 public_files=()

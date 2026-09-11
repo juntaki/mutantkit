@@ -100,7 +100,10 @@ extension RunCommand {
     static func resolvedReports(from raw: [String]) throws -> [ReportKind] {
         try raw.map { value in
             guard let kind = ReportKind(rawValue: value) else {
-                print("Unknown report '\(value)'. Expected one of: \(ReportKind.allCases.map(\.rawValue).joined(separator: ", ")).")
+                // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+                FileHandle.standardError.write(Data(
+                    "Unknown report '\(value)'. Expected one of: \(ReportKind.allCases.map(\.rawValue).joined(separator: ", ")).\n".utf8
+                ))
                 throw ExitCode(MutantKitExit.operationalError)
             }
             return kind

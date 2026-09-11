@@ -43,7 +43,8 @@ struct ReproduceCommand: AsyncParsableCommand {
         let id = MutationID(rawValue: mutationID)
 
         guard let point = loadedPlan.mutations.first(where: { $0.id == id }) else {
-            print("No mutation \(id) in \(plan).")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("No mutation \(id) in \(plan).\n".utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
 

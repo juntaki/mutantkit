@@ -49,7 +49,8 @@ struct ExecutionProfileCommand: AsyncParsableCommand {
 
         let planURL = URL(fileURLWithPath: plan)
         guard FileManager.default.fileExists(atPath: planURL.path) else {
-            print("No plan at \(planURL.path). Run `mutantkit plan` first.")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("No plan at \(planURL.path). Run `mutantkit plan` first.\n".utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
         let loadedPlan = try MutationPlan.decode(from: Data(contentsOf: planURL))

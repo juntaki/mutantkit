@@ -36,7 +36,8 @@ struct NextCommand: ParsableCommand {
             // of "--json still leaks text on an early-validation path" gap
             // fixed elsewhere in this pass (OperatorCatalogCommand).
             guard json else {
-                print("Unknown --format '\(format ?? "")'. Expected: agent (or omit --format for text).")
+                // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+                FileHandle.standardError.write(Data("Unknown --format '\(format ?? "")'. Expected: agent (or omit --format for text).\n".utf8))
                 throw ExitCode(MutantKitExit.operationalError)
             }
             try JSONOutput.emitError(

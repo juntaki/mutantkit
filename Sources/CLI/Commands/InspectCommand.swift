@@ -250,7 +250,8 @@ extension InspectCommand {
         if json {
             try JSONOutput.emit(ErrorJSON(error: "No mutation \(id) in \(plan)."))
         } else {
-            print("No mutation \(id) in \(plan).")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("No mutation \(id) in \(plan).\n".utf8))
         }
         throw ExitCode(MutantKitExit.operationalError)
     }

@@ -142,7 +142,8 @@ struct PlanCommand: AsyncParsableCommand {
     /// contract).
     static func validateDiffBaseAndSince(diffBase: String?, since: String?) throws {
         if diffBase != nil, since != nil, diffBase != since {
-            print("Pass either --diff-base or --since, not two different refs.")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("Pass either --diff-base or --since, not two different refs.\n".utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
     }
@@ -156,13 +157,14 @@ struct PlanCommand: AsyncParsableCommand {
     private func resolvedToolchain(root: URL) async throws -> ToolchainFingerprint {
         let toolchainProbe = await ToolchainProbe.fingerprint(workingDirectory: root)
         guard let toolchain = Self.toolchainForPlanning(from: toolchainProbe) else {
-            print("""
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("""
             Could not establish this machine's toolchain identity: a probe \
             (swift/xcodebuild/xcrun) failed, timed out, or produced no \
             parseable output. Writing a plan now would record an \
             under-evidenced toolchain identity in plan.json. Re-run \
-            `mutantkit plan` once the toolchain can be probed cleanly.
-            """)
+            `mutantkit plan` once the toolchain can be probed cleanly.\n
+            """.utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
         return toolchain

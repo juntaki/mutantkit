@@ -44,7 +44,8 @@ extension RunCommand {
                 packageRoot: root, timeoutSeconds: settings.timeouts.baselineSeconds
             )
         } catch {
-            print("Dependency resolution failed: \(error)")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("Dependency resolution failed: \(error)\n".utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
     }

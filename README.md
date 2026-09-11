@@ -112,6 +112,11 @@ shasum -a 256 -c SHA256SUMS
 tar xzf mutantkit-macos-arm64.tar.gz
 ```
 
+This confirms the download matches what was published — it protects against
+corruption or an incomplete transfer, not against tampering. The [CI Action
+path](#in-ci) below is stronger: it also verifies a `gh attestation`, which
+this manual/Homebrew path does not.
+
 ### Building from source
 
 For contributors, or platforms the prebuilt binary does not cover yet

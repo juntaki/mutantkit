@@ -65,7 +65,8 @@ struct RunCommand: AsyncParsableCommand {
 
         let planURL = URL(fileURLWithPath: plan)
         guard FileManager.default.fileExists(atPath: planURL.path) else {
-            print("No plan at \(planURL.path). Run `mutantkit plan` first.")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("No plan at \(planURL.path). Run `mutantkit plan` first.\n".utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
         let loadedPlan = try MutationPlan.decode(from: Data(contentsOf: planURL))
@@ -136,7 +137,10 @@ struct RunCommand: AsyncParsableCommand {
             if let remedy = item.remedy { print("  └─ \(remedy)") }
         }
         if requireHealthyHost, hostOnlyItems.contains(where: { $0.status != .ok }) {
-            print("Failing closed before the baseline: --require-healthy-host was set and the host does not look healthy.")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data(
+                "Failing closed before the baseline: --require-healthy-host was set and the host does not look healthy.\n".utf8
+            ))
             throw ExitCode(MutantKitExit.operationalError)
         }
 
@@ -162,12 +166,7 @@ struct RunCommand: AsyncParsableCommand {
         case .alreadyBooted, .prepared:
             print("Simulator ready (\(simulatorPreparation.outcome.rawValue)): \(simulatorPreparation.name ?? "unknown device").")
         case .failed:
-            print("Simulator \(simulatorPreparation.name ?? "(unknown)") did not pass bootstatus: \(simulatorPreparation.detail ?? "unknown failure").")
-            print(
-                "Failing closed before the baseline: a simulator that cannot be verified ready "
-                    + "would surface as infrastructure failures mid-run."
-            )
-            throw ExitCode(MutantKitExit.operationalError)
+            try Self.failClosedForSimulatorPreparationFailure(simulatorPreparation)
         }
 
         // Warn-only by default — the same signal `doctor` reports, checked
@@ -187,7 +186,10 @@ struct RunCommand: AsyncParsableCommand {
             if let remedy = item.remedy { print("  └─ \(remedy)") }
         }
         if requireHealthyHost, simulatorItems.contains(where: { $0.status != .ok }) {
-            print("Failing closed before the baseline: --require-healthy-host was set and the host does not look healthy.")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data(
+                "Failing closed before the baseline: --require-healthy-host was set and the host does not look healthy.\n".utf8
+            ))
             throw ExitCode(MutantKitExit.operationalError)
         }
 
@@ -222,6 +224,23 @@ struct RunCommand: AsyncParsableCommand {
             await poolProvision.cleanup()
             throw error
         }
+    }
+
+    /// v0.5 Stable Contracts: diagnostics go to stderr, not stdout — both
+    /// lines here are the failure report itself (why the simulator was not
+    /// ready, and the consequence of failing closed), not separate success
+    /// output, so both move together. Pulled out of `run()` purely to keep
+    /// that function under this project's `function_body_length` limit, the
+    /// same motive as `acquireRunLock`/`PostProvisioningInputs` nearby.
+    private static func failClosedForSimulatorPreparationFailure(_ preparation: SimulatorPreparationRecord) throws -> Never {
+        FileHandle.standardError.write(Data(
+            "Simulator \(preparation.name ?? "(unknown)") did not pass bootstatus: \(preparation.detail ?? "unknown failure").\n".utf8
+        ))
+        FileHandle.standardError.write(Data(
+            ("Failing closed before the baseline: a simulator that cannot be verified ready "
+                + "would surface as infrastructure failures mid-run.\n").utf8
+        ))
+        throw ExitCode(MutantKitExit.operationalError)
     }
 
     /// Everything `run()` does from this point on, given a (possibly

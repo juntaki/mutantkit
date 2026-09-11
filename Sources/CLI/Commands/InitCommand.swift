@@ -17,7 +17,8 @@ struct InitCommand: AsyncParsableCommand {
         let destination = root.appendingPathComponent(ConfigurationLoader.fileName)
 
         if FileManager.default.fileExists(atPath: destination.path), !force {
-            print("\(destination.path) already exists. Pass --force to overwrite it.")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data("\(destination.path) already exists. Pass --force to overwrite it.\n".utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
 

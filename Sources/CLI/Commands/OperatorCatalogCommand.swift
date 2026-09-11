@@ -59,7 +59,8 @@ struct OperatorCatalogCommand: ParsableCommand {
             guard let entry = Self.entry(for: operatorID, registry: registry) else {
                 let known = registry.allDescriptors.map(\.id).sorted().joined(separator: "\n  ")
                 guard json else {
-                    print("No operator '\(operatorID)'. Known operators:\n  \(known)")
+                    // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+                    FileHandle.standardError.write(Data("No operator '\(operatorID)'. Known operators:\n  \(known)\n".utf8))
                     throw ExitCode(MutantKitExit.operationalError)
                 }
                 // v0.5 Stable Contracts: this path used to print prose

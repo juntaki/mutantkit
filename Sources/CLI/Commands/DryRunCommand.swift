@@ -38,7 +38,11 @@ struct DryRunCommand: AsyncParsableCommand {
         case .alreadyBooted, .prepared:
             print("Simulator ready (\(simulatorPreparation.outcome.rawValue)): \(simulatorPreparation.name ?? "unknown device").")
         case .failed:
-            print("Simulator \(simulatorPreparation.name ?? "(unknown)") did not pass bootstatus: \(simulatorPreparation.detail ?? "unknown failure").")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            FileHandle.standardError.write(Data(
+                "Simulator \(simulatorPreparation.name ?? "(unknown)") did not pass bootstatus: \(simulatorPreparation.detail ?? "unknown failure").\n"
+                    .utf8
+            ))
             throw ExitCode(MutantKitExit.operationalError)
         }
 
@@ -76,8 +80,12 @@ struct DryRunCommand: AsyncParsableCommand {
             do {
                 artifact = try await resolution.adapter.build.buildBaseline(in: sandbox)
             } catch let failure as BuildFailure {
-                print("Dry run build failed: \(failure.diagnosis)")
-                print(failure.command.displayString)
+                // v0.5 Stable Contracts: diagnostics go to stderr, not
+                // stdout — both lines here are the failure report itself
+                // (why it failed, and the exact command that failed), not
+                // separate success output, so both move together.
+                FileHandle.standardError.write(Data("Dry run build failed: \(failure.diagnosis)\n".utf8))
+                FileHandle.standardError.write(Data("\(failure.command.displayString)\n".utf8))
                 throw ExitCode(MutantKitExit.operationalError)
             }
 
@@ -89,8 +97,10 @@ struct DryRunCommand: AsyncParsableCommand {
             )
 
             guard result.status == .passed else {
-                print("Dry run failed: \(result.status.rawValue) — \(result.diagnosis)")
-                print(result.command.displayString)
+                // v0.5 Stable Contracts: diagnostics go to stderr, not
+                // stdout — same reasoning as the build-failure case above.
+                FileHandle.standardError.write(Data("Dry run failed: \(result.status.rawValue) — \(result.diagnosis)\n".utf8))
+                FileHandle.standardError.write(Data("\(result.command.displayString)\n".utf8))
                 throw ExitCode(MutantKitExit.operationalError)
             }
 

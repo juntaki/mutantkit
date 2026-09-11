@@ -21,7 +21,12 @@ enum ConfigurationPreflight {
         // `ConfigurationPreflight.run`, which is out of scope here.
         let projectRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let issues = ConfigurationValidator.validate(configuration, projectRoot: projectRoot)
-        for issue in issues { print(issue.description) }
+        // v0.5 Stable Contracts: diagnostics go to stderr, not stdout — this
+        // gate is the first thing almost every command runs, on both the
+        // warning-only (still succeeds) and error (throws below) paths, so a
+        // caller parsing stdout (e.g. `--json`) must never see this prose
+        // either way.
+        for issue in issues { FileHandle.standardError.write(Data("\(issue.description)\n".utf8)) }
         guard !issues.contains(where: { $0.severity == .error }) else {
             throw ExitCode(MutantKitExit.operationalError)
         }

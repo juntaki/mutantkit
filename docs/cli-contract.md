@@ -35,17 +35,23 @@ reason `JSONOutput.emitError` exists: a command that cannot proceed still
 emits exactly one JSON document (a `JSONErrorEnvelope`), not an uncaught
 error that prints to stdout or stderr as unstructured text.
 
-This is enforced consistently for every command's early-validation paths as
-of the v0.5 Stable Contracts pass (`OperatorCatalogCommand`, `NextCommand`,
-`FixPlanCommand` were fixed in that pass; `OverrideOptions.apply` in
-`MutantKit.swift`, shared by five commands' `--profile`/
-`--execution-profile` validation, was fixed the same way). **This is not yet
-a fully audited, exhaustively-enforced invariant across every bare
-`print(...)`-then-`throw ExitCode` diagnostic in the codebase** — roughly a
-dozen instances outside the paths above have not been individually
-re-verified to route to stderr rather than stdout. Treat "diagnostics to
-stderr" as the intended and mostly-enforced contract, not as a guarantee
-that has been checked call site by call site.
+This is now audited exhaustively, not just mostly-enforced: every bare
+`print(...)`-then-`throw ExitCode` diagnostic in `Sources/CLI` (the `mutantkit`
+CLI itself — this does not extend to the separate `BenchmarkRunner` developer
+tool, which is not part of this contract) routes to `FileHandle
+.standardError` as of the v0.5 Stable Contracts pass. That covers
+`OperatorCatalogCommand`, `NextCommand`, `FixPlanCommand`,
+`OverrideOptions.apply` in `MutantKit.swift` (shared by five commands'
+`--profile`/`--execution-profile` validation), `ConfigurationPreflight`,
+`DoctorCommand`, `ExecutionProfileCommand`, `InspectCommand`, `DryRunCommand`,
+`InitCommand`, `RunCommand` (including a same-shape instance the original
+audit's grep missed, alongside the three it found), `PlanCommand`,
+`ReproduceCommand`, `MigrateCommand`, `RunCommand+Reports`, `SetupCommand`,
+and `RunCommand+DependencyResolutionPreflight`. A follow-up sweep re-grepped
+every `print(...)` within three lines of a `throw ExitCode` across all of
+`Sources/CLI` and found none left unconverted. Treat "diagnostics to stderr"
+as a checked, call-site-verified invariant for this command's own diagnostics,
+not just an intended one.
 
 ## `--json` vs. `--format agent`
 

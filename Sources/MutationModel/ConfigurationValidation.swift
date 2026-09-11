@@ -490,28 +490,29 @@ public enum ConfigurationValidator {
 /// `ConfigurationSchemaParityTests`'s drift guard fails the build the moment
 /// the two disagree (on the `$id` line or anything else).
 ///
-/// `$id` points at a `raw.githubusercontent.com` URL pinned to `main`, not to
-/// a release tag. This file (`Schema/mutantkit-v1.json`) is new in this same
-/// body of work and does not exist on the last cut tag (`v0.2.0`, predating
-/// it) — a tag-pinned `$id` would 404 for every consumer from the moment
-/// this merges, defeating the point of hosting an editor-facing schema at
-/// all. Pinning to `main` instead resolves immediately on merge, since
-/// `main` is served live: a branch URL's content can in principle drift out
-/// from under a consumer with no version bump to warn them, but that risk is
-/// accepted here because config format version 1 (`Configuration.version`)
-/// has never changed shape and drift would require an actual shape change to
-/// this document, not just any commit to `main`. Re-pin `$id` to the next
-/// real release tag once one ships that includes this file (bump both here
-/// and in `Schema/mutantkit-v1.json`, and in `ConfigurationLoader.schemaURL`)
-/// to regain the stronger, tag-pinned guarantee described above. If an
-/// incompatible version 2 ever ships, it gets its own file
-/// (`mutantkit-v2.json`) and its own `$id` rather than mutating this one out
-/// from under existing consumers.
+/// `$id` points at a `raw.githubusercontent.com` URL pinned to the `v0.3.0`
+/// release tag, not `main`. This file (`Schema/mutantkit-v1.json`) was new
+/// when introduced and did not exist on the last cut tag at the time
+/// (`v0.2.0`), so it was initially pinned to `main` instead — a tag pin
+/// would have 404'd for every consumer from the moment that work merged,
+/// defeating the point of hosting an editor-facing schema at all. Re-pinned
+/// to `v0.3.0` once that tag shipped and actually included this file
+/// (verified: `git show v0.3.0:Schema/mutantkit-v1.json` succeeds), per the
+/// plan this comment already laid out — regaining the stronger, citably
+/// stable guarantee a tag pin gives over a branch URL that can in principle
+/// drift out from under a consumer with no version bump to warn them.
+/// Re-pin again to the next release tag whenever this document's content
+/// actually changes (bump here, in `Schema/mutantkit-v1.json`, and in
+/// `ConfigurationLoader.schemaURL` together) — config format version 1
+/// (`Configuration.version`) has never changed shape, so there has been no
+/// occasion to do this yet. If an incompatible version 2 ever ships, it
+/// gets its own file (`mutantkit-v2.json`) and its own `$id` rather than
+/// mutating this one out from under existing consumers.
 public enum ConfigurationJSONSchema {
     public static let document = #"""
     {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/main/Schema/mutantkit-v1.json",
+      "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/v0.3.0/Schema/mutantkit-v1.json",
       "title": "MutantKit configuration",
       "type": "object",
       "additionalProperties": false,

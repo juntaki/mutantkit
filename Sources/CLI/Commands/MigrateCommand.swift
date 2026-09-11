@@ -48,7 +48,12 @@ struct MigrateCommand: AsyncParsableCommand {
             ?? common.resolvedProjectRoot.appendingPathComponent(ConfigurationLoader.fileName)
 
         if FileManager.default.fileExists(atPath: destination.path), !force {
-            print("\n\(destination.path) already exists. Pass --force to overwrite it.")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            // The leading "\n" is dropped here: it existed only to visually
+            // separate this message from the importer's report printed to
+            // stdout above, which no longer matters once this line moves to
+            // a different stream entirely.
+            FileHandle.standardError.write(Data("\(destination.path) already exists. Pass --force to overwrite it.\n".utf8))
             throw ExitCode(MutantKitExit.operationalError)
         }
 

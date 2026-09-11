@@ -77,7 +77,8 @@ struct DoctorCommand: AsyncParsableCommand {
 
         guard diagnosis.canProceed else {
             if !json {
-                print("\nNot ready. Fix the failures above, then run `mutantkit doctor` again.")
+                // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+                FileHandle.standardError.write(Data("\nNot ready. Fix the failures above, then run `mutantkit doctor` again.\n".utf8))
             }
             throw ExitCode(MutantKitExit.operationalError)
         }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/main/Schema/mutantkit-v1.json",
+  "$id": "https://raw.githubusercontent.com/juntaki/mutantkit/v0.3.0/Schema/mutantkit-v1.json",
   "title": "MutantKit configuration",
   "type": "object",
   "additionalProperties": false,
