@@ -188,34 +188,48 @@ struct SchemataSupportedMatrixXcodeProjectAcceptanceTests {
         return StagedEvidenceProject(directory: directory, program: program, entry: entry, token: token)
     }
 
-    /// Real public CI evidence (2026-09-10/11, twice): `xcodebuild -list
-    /// -json` on this freshly generated project reported "No schemes are
-    /// available here" immediately after `xcodegen generate` exited 0 —
+    /// Real public CI evidence (2026-09-10/11, three times): `xcodebuild
+    /// -list -json` on this freshly generated project reported "No schemes
+    /// are available here" immediately after `xcodegen generate` exited 0 —
     /// never reproduced locally across repeated attempts on the same
     /// project.yml, where the shared scheme is visible to `xcodebuild`
     /// instantly. `waitUntilExit()` only guarantees the xcodegen process
     /// itself has exited, not that its write of
     /// `xcshareddata/xcschemes/MatrixEvidenceLib.xcscheme` is visible to the
-    /// very next process to read this directory — a filesystem-visibility
-    /// race specific to the real CI runner's environment, not a MutantKit or
-    /// xcodegen correctness bug. Polling for the scheme file's own existence
-    /// directly (bounded, generous relative to a race the real CI evidence
-    /// suggests resolves well within a second once xcodegen had actually
-    /// exited) closes that window without masking a genuine xcodegen
-    /// failure, which `waitUntilExit` plus its own exit-status check above
-    /// already catch.
+    /// very next process to read this directory.
+    ///
+    /// A first fix (2026-09-11) polled for the scheme *file*'s own raw
+    /// existence — insufficient: a later real CI failure showed the file
+    /// existing (no timeout message from that check) while `xcodebuild
+    /// -list -json` still reported no schemes moments later. Raw
+    /// `FileManager` existence is not the same signal as "`xcodebuild` can
+    /// see it" on whatever real filesystem/caching layer this CI runner
+    /// exhibits — so this now polls `xcodebuild -list -json` itself, the
+    /// exact call the real production code path makes, until it actually
+    /// reports the scheme. A filesystem-visibility race specific to the
+    /// real CI runner's environment, not a MutantKit or xcodegen
+    /// correctness bug — closing it here keeps the fixture from being
+    /// stale/racy without touching the production adapter's own real
+    /// `xcodebuild -list -json` call.
     private static func awaitSharedScheme(inGeneratedProject directory: URL) async throws {
-        let schemeFile = directory
-            .appendingPathComponent("MatrixEvidenceLib.xcodeproj")
-            .appendingPathComponent("xcshareddata/xcschemes/MatrixEvidenceLib.xcscheme")
-        let deadline = Date().addingTimeInterval(10)
-        while !FileManager.default.fileExists(atPath: schemeFile.path), Date() < deadline {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        #expect(
-            FileManager.default.fileExists(atPath: schemeFile.path),
-            "xcodegen exited 0 but never wrote \(schemeFile.path) within 10s"
-        )
+        let projectPath = directory.appendingPathComponent("MatrixEvidenceLib.xcodeproj").path
+        let deadline = Date().addingTimeInterval(30)
+        var lastOutput = ""
+        repeat {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/xcodebuild")
+            process.arguments = ["-list", "-json", "-project", projectPath]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            lastOutput = String(decoding: data, as: UTF8.self)
+            if process.terminationStatus == 0, lastOutput.contains("MatrixEvidenceLib") { return }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        } while Date() < deadline
+        Issue.record("xcodebuild -list -json never reported the MatrixEvidenceLib scheme within 30s: \(lastOutput)")
     }
 
     @Test("A real iOS-Simulator run produces a genuine STARTUP/HIT pair whose image UUID matches the build receipt's own")
