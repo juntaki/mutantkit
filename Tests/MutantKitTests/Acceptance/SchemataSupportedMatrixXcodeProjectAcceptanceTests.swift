@@ -204,21 +204,29 @@ struct SchemataSupportedMatrixXcodeProjectAcceptanceTests {
     /// -list -json` still reported no schemes moments later. Raw
     /// `FileManager` existence is not the same signal as "`xcodebuild` can
     /// see it" on whatever real filesystem/caching layer this CI runner
-    /// exhibits — so this now polls `xcodebuild -list -json` itself, the
-    /// exact call the real production code path makes, until it actually
-    /// reports the scheme. A filesystem-visibility race specific to the
-    /// real CI runner's environment, not a MutantKit or xcodegen
-    /// correctness bug — closing it here keeps the fixture from being
-    /// stale/racy without touching the production adapter's own real
-    /// `xcodebuild -list -json` call.
+    /// exhibits.
+    ///
+    /// A second fix polled `xcodebuild -list -json -project <path>`
+    /// directly — still insufficient, and for a subtle reason: this test's
+    /// own `XcodeBuildAdapter` is constructed with `projectFile: nil`
+    /// (see `startupHitAndReceiptUUIDMatchOnIOSSimulator` below), so the
+    /// REAL production call (`projectArguments(in:)`, given a `nil`
+    /// `projectFileRelativePath`) never passes `-project` at all — it runs
+    /// bare `xcodebuild -list -json` with the staged directory as its
+    /// working directory, relying on `xcodebuild`'s own single-project
+    /// auto-discovery. An explicit `-project` is a *different* invocation
+    /// xcodebuild resolves through a different path, so polling it proved
+    /// nothing about whether the bare, CWD-based call — the one production
+    /// actually makes — would succeed. This now polls the exact bare
+    /// invocation, in the exact same working directory, production uses.
     private static func awaitSharedScheme(inGeneratedProject directory: URL) async throws {
-        let projectPath = directory.appendingPathComponent("MatrixEvidenceLib.xcodeproj").path
         let deadline = Date().addingTimeInterval(30)
         var lastOutput = ""
         repeat {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/xcodebuild")
-            process.arguments = ["-list", "-json", "-project", projectPath]
+            process.arguments = ["-list", "-json"]
+            process.currentDirectoryURL = directory
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe
