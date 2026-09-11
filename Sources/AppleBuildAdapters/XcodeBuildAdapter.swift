@@ -757,11 +757,19 @@ extension XcodeBuildAdapter: TestAdapter {
         for bundleID in Self.bundleIdentifiers(inXCTestRun: xctestrun) {
             let result: ProcessResult?
             do {
+                // `timeoutSeconds` was 30. Real public CI evidence
+                // (2026-09-11) showed this `simctl uninstall` call
+                // SIGTERM'd (exit 143) under real CI-load slowness —
+                // `ProcessSupervisor.run`'s own timeout escalation firing
+                // before `simctl` finished. Raised with real headroom
+                // (30 -> 120), matching this session's other CI-load
+                // timeout fixes (internal investigation notes, not part
+                // of this public repo, have the full accumulated evidence).
                 result = try await processRunner(
                     ToolPaths.xcrun,
                     ["simctl", "uninstall", lease.device.udid, bundleID],
                     FileManager.default.temporaryDirectory,
-                    30
+                    120
                 )
             } catch {
                 let detail = "\(error)"
