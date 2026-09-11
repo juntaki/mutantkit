@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import MutationExecution
 
 /// Chains the detection `mutantkit init` performs with the diagnostics
 /// `mutantkit doctor` performs, in one command, so a brand-new project can go
@@ -71,13 +72,6 @@ struct SetupCommand: AsyncParsableCommand {
         let plan = await ProjectDetectionPlan.detect(root: root)
         print(plan.summaryLines.joined(separator: "\n"))
 
-        if dryRun {
-            print("\n--- \(ConfigurationLoader.fileName) (preview; not written) ---\n\(plan.template)")
-        } else {
-            try Data(plan.template.utf8).write(to: destination, options: .atomic)
-            print("\nWrote \(destination.path)")
-        }
-
         // Same checks `doctor` runs, against the *exact* `Configuration` this
         // run just wrote, or — in --dry-run — the exact one it would write:
         // parsed from `plan.template` directly, never re-read from
@@ -88,14 +82,31 @@ struct SetupCommand: AsyncParsableCommand {
         // answer. This is what actually proves the golden path end to end: a
         // freshly-detected config that also passes the real
         // toolchain/build/host checks, not just one that looks plausible.
+        //
+        // Run readiness (and its trial build) BEFORE writing/previewing the
+        // final file: `Self.xctestrunTestTargets(in:)` below needs the real,
+        // post-build `.xctestrun` this check already produces when it finds
+        // none via the static `.xcscheme` parse `plan.hasTestTargets`
+        // reflects. A trial build's success does not depend on
+        // `tests.targets` being pre-populated, so diagnosing the
+        // not-yet-patched configuration first is safe.
         print("\nChecking readiness…\n")
         let configuration = try ConfigurationLoader.parse(plan.template)
         let readiness = await ReadinessCheck.run(root: root, configuration: configuration, skipBuild: skipBuild)
         print(ReadinessCheck.render(readiness.diagnosis))
 
+        let (finalTemplate, hasTestTargets) = Self.finalTemplate(for: plan, given: readiness.diagnosis)
+
+        if dryRun {
+            print("\n--- \(ConfigurationLoader.fileName) (preview; not written) ---\n\(finalTemplate)")
+        } else {
+            try Data(finalTemplate.utf8).write(to: destination, options: .atomic)
+            print("\nWrote \(destination.path)")
+        }
+
         let step = Self.nextStep(
             dryRun: dryRun,
-            hasTestTargets: plan.hasTestTargets,
+            hasTestTargets: hasTestTargets,
             schemeAmbiguous: plan.schemeAmbiguous,
             environmentReady: readiness.diagnosis.canProceed
         )
@@ -107,6 +118,47 @@ struct SetupCommand: AsyncParsableCommand {
         case .previewOnly, .needsManualCompletion, .ready:
             break
         }
+    }
+
+    /// Root-caused (2026-09-10, Lane D external-proof discovery): `setup`
+    /// writes `tests.targets: []` even when a real, already-run trial build
+    /// unambiguously found the test target(s) moments later. The static
+    /// `.xcscheme` XML parse `XcodeConfigDetector.testTargets(forScheme:)`
+    /// (which `plan.hasTestTargets` reflects) returns `[]`, correctly given
+    /// its own input, whenever no `.xcscheme` file exists on disk at all —
+    /// Xcode's normal, common "never explicitly shared or saved a scheme"
+    /// state, which `xcodebuild -scheme <x>` still resolves and runs fine via
+    /// its own auto-generated-scheme behavior, but which leaves nothing for a
+    /// static XML parse to read. `doctor`'s own test-target answer instead
+    /// comes from the real, post-build `.xctestrun` a trial `build-for-testing`
+    /// produces — a fundamentally different, more reliable source that
+    /// doesn't depend on a scheme file existing — captured in `diagnosis`'s
+    /// own `code: .testTargets` `DiagnosisItem` whenever `skipBuild` was not
+    /// passed and the trial build produced one.
+    ///
+    /// Only steps in when the static parse found nothing at all: a real,
+    /// resolved SwiftPM/`.xcscheme` test target list is never overridden or
+    /// second-guessed by this fallback.
+    static func finalTemplate(
+        for plan: ProjectDetectionPlan.Result, given diagnosis: BuildDiagnosis
+    ) -> (template: String, hasTestTargets: Bool) {
+        guard !plan.hasTestTargets else { return (plan.template, plan.hasTestTargets) }
+        guard let item = diagnosis.items.first(where: { item -> Bool in
+            item.code == DiagnosisItem.Code.testTargets && item.status == DiagnosisItem.Status.ok
+        }) else {
+            return (plan.template, plan.hasTestTargets)
+        }
+
+        let discovered: [String] = item.detail
+            .split(separator: ",")
+            .map { (piece: Substring) -> String in piece.trimmingCharacters(in: CharacterSet.whitespaces) }
+            .filter { (name: String) -> Bool in !name.isEmpty }
+        guard !discovered.isEmpty else { return (plan.template, plan.hasTestTargets) }
+
+        let template = ConfigurationLoader.template(
+            for: plan.kind, scheme: plan.scheme, destination: plan.resolvedDestination, testTargets: discovered
+        )
+        return (template, true)
     }
 
     /// What `setup` should tell the user to do next. Pure decision logic,

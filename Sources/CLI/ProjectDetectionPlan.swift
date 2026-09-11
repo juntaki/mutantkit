@@ -42,6 +42,14 @@ enum ProjectDetectionPlan {
         /// build.
         let schemeAmbiguous: Bool
         let destinationDiscoveryFailed: Bool
+        /// The exact `kind`/`scheme`/`destination` this result's `template`
+        /// was built from — exposed so `SetupCommand` can re-render `template`
+        /// with a different `testTargets` list (its own `.xctestrun`-based
+        /// fallback, see that command's own doc comment) without
+        /// reconstructing these from the template string.
+        let kind: ProjectKind
+        let scheme: String?
+        let resolvedDestination: String?
     }
 
     static func detect(root: URL) async -> Result {
@@ -137,7 +145,10 @@ enum ProjectDetectionPlan {
             summaryLines: lines,
             hasTestTargets: !testTargets.isEmpty,
             schemeAmbiguous: schemeAmbiguous,
-            destinationDiscoveryFailed: destinationDiscoveryFailed
+            destinationDiscoveryFailed: destinationDiscoveryFailed,
+            kind: kind ?? .auto,
+            scheme: scheme,
+            resolvedDestination: resolvedDestination
         )
     }
 

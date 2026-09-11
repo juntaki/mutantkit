@@ -372,12 +372,37 @@ extension Diagnostics {
         }
     }
 
-    /// Reads test target names out of the `.xctestrun` plist.
-    static func testTargets(inXCTestRun url: URL) -> DiagnosisItem {
+    /// Reads test target names out of the `.xctestrun` plist. `nil` means
+    /// the plist itself could not be read (missing, unreadable, not a
+    /// plist) — distinct from `[]`, a plist that read fine but named no
+    /// test targets. `SetupCommand` (see its own `testTargets(inXCTestRun:)`
+    /// wiring) reuses this exact parse to fall back to `.xctestrun`-based
+    /// discovery when the static `.xcscheme` parse `XcodeConfigDetector
+    /// .testTargets(forScheme:)` finds nothing — a real, post-build source
+    /// that doesn't depend on a scheme file existing at all, unlike the
+    /// static parse.
+    static func testTargetNames(inXCTestRun url: URL) -> [String]? {
         guard let data = try? Data(contentsOf: url),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
               let root = plist as? [String: Any]
-        else {
+        else { return nil }
+
+        // Format version 2 nests the targets under TestConfigurations; version 1
+        // puts them at the top level next to a metadata key.
+        if let configurations = root["TestConfigurations"] as? [[String: Any]] {
+            var names: [String] = []
+            for configuration in configurations {
+                guard let targets = configuration["TestTargets"] as? [[String: Any]] else { continue }
+                names.append(contentsOf: targets.compactMap { $0["BlueprintName"] as? String })
+            }
+            return names
+        }
+        return root.keys.filter { $0 != "__xctestrun_metadata__" }.sorted()
+    }
+
+    /// Reads test target names out of the `.xctestrun` plist.
+    static func testTargets(inXCTestRun url: URL) -> DiagnosisItem {
+        guard let names = testTargetNames(inXCTestRun: url) else {
             return DiagnosisItem(
                 name: "Test targets",
                 status: .warning,
@@ -385,18 +410,6 @@ extension Diagnostics {
                 detail: "Could not read \(url.lastPathComponent).",
                 remedy: "The file exists but is not a readable plist; try a clean build."
             )
-        }
-
-        // Format version 2 nests the targets under TestConfigurations; version 1
-        // puts them at the top level next to a metadata key.
-        var names: [String] = []
-        if let configurations = root["TestConfigurations"] as? [[String: Any]] {
-            for configuration in configurations {
-                guard let targets = configuration["TestTargets"] as? [[String: Any]] else { continue }
-                names.append(contentsOf: targets.compactMap { $0["BlueprintName"] as? String })
-            }
-        } else {
-            names = root.keys.filter { $0 != "__xctestrun_metadata__" }.sorted()
         }
 
         guard !names.isEmpty else {
