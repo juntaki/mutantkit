@@ -957,6 +957,103 @@ jobs:
   # A skipped or cancelled dependency fails this gate. That is intended: on
   # this workflow a skip is never intentional, so it is a signal that
   # something did not run, which is precisely what must not pass unnoticed.
+  # EXPERIMENT (not wired into merge-gate, safe to fail/be removed): real,
+  # live-CI evidence for the "share one debug build across the acceptance
+  # matrix" idea from Research/v0.6-v0.8-2026-09/AUDIT-FINDINGS.md's CI
+  # caching finding, before committing 17 real matrix legs to it. Builds
+  # once, uploads .build/arm64-apple-macosx as one artifact, and a sibling
+  # job downloads + extracts it and runs one acceptance filter with no
+  # `swift build` step of its own — timing this against an ordinary
+  # from-scratch build of the same filter is the actual open question: the
+  # audit's 60-80min estimate priced in compile time saved, not
+  # artifact-transfer time for a locally-measured 1.7GB debug build
+  # directory, which could plausibly erase some or all of the saving.
+  experiment-shared-build-producer:
+    name: "[experiment] shared build: producer"
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          time swift build --build-tests 2>&1 | tee build.log
+      - name: Archive build products
+        run: time tar -c -C .build -f build-products.tar arm64-apple-macosx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experiment-shared-build-products
+          path: build-products.tar
+          retention-days: 1
+
+  experiment-shared-build-consumer:
+    name: "[experiment] shared build: consumer (no build step)"
+    runs-on: macos-26
+    timeout-minutes: 15
+    needs: experiment-shared-build-producer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: experiment-shared-build-products
+      - name: Extract build products
+        run: time tar -x -f build-products.tar -C .build
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Acceptance (no build step — relies entirely on extracted .build)
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_ACCEPTANCE_SIMULATOR: "0"
+        run: |
+          set -o pipefail
+          time swift test --filter SwiftPackageMacOSAcceptanceTests 2>&1 | tee acceptance.log
+
+  experiment-fresh-build-baseline:
+    name: "[experiment] fresh build: baseline for comparison"
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          time swift build --build-tests 2>&1 | tee build.log
+      - name: Acceptance
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_ACCEPTANCE_SIMULATOR: "0"
+        run: |
+          set -o pipefail
+          time swift test --filter SwiftPackageMacOSAcceptanceTests 2>&1 | tee acceptance.log
+
   merge-gate:
     name: Merge gate
     runs-on: ubuntu-latest
