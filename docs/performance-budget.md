@@ -12,10 +12,10 @@ explicitly rather than estimating.
 
 | Category | Budget | Basis |
 | --- | --- | --- |
-| Planning wall time | **undefined pending measurement** | No isolated `mutantkit plan` timing exists in any benchmark to date — every measurement starts at baseline or execution. |
+| Planning wall time | ≥ 0.16s floor (measured, trivial scale); undefined at realistic scale | `mutantkit plan --diff-base` against a real, minimal (2-file, 1-target) git-backed SwiftPM package, timed with `/usr/bin/time` (2026-09-11). This is a real floor for the command's own fixed overhead (config load, git diff, AST parse of the one changed file), not a claim about planning time at a realistic project size — no measurement yet exists for a project with a large source tree behind an unchanged majority. |
 | Baseline wall time | ≤ ~2 min for a swift-numerics-sized project (70 tests, 3 targets) | Post-fix baseline-profiling mean 91.22s (internal `p12-coverage-profiling` benchmark); rounded up for build+test overhead not isolated in that measurement. |
 | Campaign time (full) | **undefined pending measurement at real-app scale** | Existing SwiftPM numbers are all small-corpus (48–65 mutants); no equivalent to the large-scale Xcode figures below exists for SwiftPM. |
-| PR-diff time | **undefined pending measurement** | No differential (changed-files-only) run has ever been timed, on either path. |
+| PR-diff time | ≈ 11.5s floor (measured, trivial scale) for a 2-mutation diff (`plan` 0.16s + `run` 11.38s, isolated strategy, 4 workers); undefined at realistic PR scale | Same real, timed measurement as above (2026-09-11), a real 2-changed-file/2-planned-mutation diff against a trivial package. Real evidence for a previously entirely-unmeasured category, but at a scale far below a realistic PR (typically more changed lines, more candidate mutations, and a non-trivial baseline build/test) — treat this as proof the command path itself has low fixed overhead, not as the number a realistic PR would see. |
 | Build count | Prefer a `--skip-build`-style per-test-loop skip (measured **−30%** per invocation) | Internal `p12-coverage-profiling` benchmark. |
 | Test invocation count | **undefined pending measurement** | No SwiftPM-specific count exists distinct from the Xcode-specific number below. |
 | CI acceptance-lane time (proxy for "fast enough daily") | 5–10 min | Real public CI run `34452854291`: `swift-package` 573s, `swift-package-coverage` 334s. |
@@ -36,21 +36,29 @@ explicitly rather than estimating.
 
 ## What this budget does not cover, and why
 
-Two categories the v0.7 mandate explicitly asks for have **zero** existing
-measurement anywhere in this project's benchmark history:
+One category the v0.7 mandate explicitly asks for still has **zero**
+existing measurement anywhere in this project's benchmark history:
 
-- **PR-diff / changed-files-only mutation time.** Every full-campaign number
-  above is a full run; nothing has ever timed a differential run scoped to
-  only changed files. This is likely the single most consequential gap,
-  since most real CI usage is diff-scoped.
 - **Simulator dollar/CI-minute cost.** Every simulator number above is
   wall-clock only. GitHub bills macOS runner-minutes at a 10x multiplier
   over Linux, so a wall-clock budget alone understates the real cost —
   nobody has yet converted the wall-clock evidence into a cost figure.
 
-Filling either gap needs a dedicated measurement pass, not an estimate
-folded into this document. Until then, treat both as explicitly open next
-steps for v0.7, not as budgets with an assumed value of "acceptable."
+**PR-diff / changed-files-only mutation time** (2026-09-11 update): a real
+floor is now measured for SwiftPM (see the table above) — a trivial,
+2-mutation diff completes in ≈11.5s end to end. This closes the "zero
+measurement at all" gap but not the underlying question: nothing yet times
+a *realistic-scale* PR diff (more changed lines, more candidate mutations,
+a non-trivial baseline), and the Xcode + iOS Simulator path — the one this
+document's own table calls "the single largest real gap relative to what a
+daily-CI budget needs" — remains completely unmeasured, since a
+diff-scoped Xcode/simulator run needs a real, git-backed Xcode project
+fixture this measurement pass did not have on hand.
+
+Filling either remaining gap needs a dedicated measurement pass, not an
+estimate folded into this document. Until then, treat both as explicitly
+open next steps for v0.7, not as budgets with an assumed value of
+"acceptable."
 
 ## Real, already-observed budget violations
 
