@@ -111,11 +111,13 @@ public enum AppleAdapterFactory {
     /// against, resolved once — `nil` for a kind that never launches a
     /// simulator at all.
     ///
-    /// Mirrors `XcodeBuildAdapter.destination()`'s own default so the
-    /// destination this resolves is the same one an adapter constructed
-    /// without a `resolvedDestination` would have derived on its own —
-    /// resolution changes *when* the answer is computed and how many times,
-    /// not what the answer is.
+    /// Shares `XcodeBuildAdapter.defaultDestination(for:)`'s last-resort
+    /// guess (not a separate copy of it — the two drifted apart once
+    /// before, a real cross-entry-point inconsistency; see that function's
+    /// own doc comment) so the destination this resolves is the same one an
+    /// adapter constructed without a `resolvedDestination` would have
+    /// derived on its own — resolution changes *when* the answer is
+    /// computed and how many times, not what the answer is.
     private static func resolveDestinationIfNeeded(
         for kind: ProjectKind,
         configuration: Configuration,
@@ -125,8 +127,7 @@ public enum AppleAdapterFactory {
         case .swiftPackageMacOS, .auto:
             return nil
         case .swiftPackageApple, .xcodeProject, .xcodeWorkspace:
-            let requested = configuration.project.destination
-                ?? (kind == .swiftPackageApple ? "platform=iOS Simulator,name=iPhone 16" : "platform=macOS")
+            let requested = configuration.project.destination ?? DestinationResolver.defaultDestination(for: kind)
             let pool = SimulatorPool(workingDirectory: directory)
             return try await DestinationResolver.resolve(requested, using: pool)
         }

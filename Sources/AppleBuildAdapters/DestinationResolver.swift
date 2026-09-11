@@ -1,4 +1,5 @@
 import Foundation
+import MutationModel
 
 /// One `-destination` specifier, resolved to a concrete device (or proven to
 /// need none), once, at run start.
@@ -286,5 +287,32 @@ public enum DestinationResolver {
         let right = versionComponents(of: rhs)
         for (a, b) in zip(left, right) where a != b { return a < b }
         return left.count < right.count
+    }
+
+    /// The destination guessed for an `xcodebuild`-based kind with no
+    /// configured `project.destination` at all — the same default
+    /// `ProjectDetectionPlan.defaultDestination(for:)` already uses when
+    /// `init`/`setup` write a fresh `mutantkit.yml`. Kept as one function
+    /// both `XcodeBuildAdapter.destination()` and `AppleAdapterFactory
+    /// .resolveDestinationIfNeeded` call, after a real-project inconsistency
+    /// (`doctor` run with no `mutantkit.yml` at all against an iOS-only
+    /// Xcode app picked `platform=macOS` here — wrong, and it failed
+    /// outright on a provisioning-profile error — while `setup` moments
+    /// later, on the identical project, correctly picked a real iOS
+    /// Simulator via `ProjectDetectionPlan`'s own default) showed this
+    /// literal had drifted to only special-case `.swiftPackageApple`,
+    /// leaving `.xcodeProject`/`.xcodeWorkspace` on the wrong default.
+    /// `.xcodeProject`/`.xcodeWorkspace` can genuinely be a macOS app too —
+    /// this is a last-resort guess for when nothing else (an explicit
+    /// destination, or `XcodeConfigDetector`'s own real per-scheme
+    /// discovery) has already answered the question, not a claim that
+    /// every Xcode project targets iOS.
+    public static func defaultDestination(for kind: ProjectKind) -> String {
+        switch kind {
+        case .swiftPackageApple, .xcodeProject, .xcodeWorkspace:
+            "platform=iOS Simulator,name=iPhone 16"
+        case .swiftPackageMacOS, .auto:
+            "platform=macOS"
+        }
     }
 }

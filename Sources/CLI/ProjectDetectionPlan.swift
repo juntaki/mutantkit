@@ -162,8 +162,19 @@ enum ProjectDetectionPlan {
     private static func defaultDestination(for kind: ProjectKind) -> String? {
         switch kind {
         case .swiftPackageApple, .xcodeProject, .xcodeWorkspace:
-            "platform=iOS Simulator,name=iPhone 16"
+            // Shares DestinationResolver.defaultDestination(for:)'s own
+            // literal rather than keeping a second copy — the two drifted
+            // apart once already (see that function's own doc comment for
+            // the real, cross-entry-point inconsistency this caused).
+            DestinationResolver.defaultDestination(for: kind)
         case .swiftPackageMacOS, .auto:
+            // `nil` here, unlike DestinationResolver's own "platform=macOS"
+            // for these kinds: this function decides what destination LINE
+            // a freshly written mutantkit.yml should contain, and macOS
+            // needs none written explicitly. DestinationResolver's version
+            // answers a different question — what xcodebuild should
+            // actually be told when nothing else configured a destination
+            // at all — where a real value, not an omission, is required.
             nil
         }
     }

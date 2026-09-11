@@ -340,7 +340,7 @@ public struct XcodeBuildAdapter: Sendable {
     func destination() -> String {
         if let resolvedDestination { return resolvedDestination.destinationArgument }
         if let configured = configuration.project.destination { return configured }
-        return kind == .swiftPackageApple ? "platform=iOS Simulator,name=iPhone 16" : "platform=macOS"
+        return DestinationResolver.defaultDestination(for: kind)
     }
 
     // MARK: - Scheme
