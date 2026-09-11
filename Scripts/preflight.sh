@@ -100,6 +100,18 @@ fi
 
 section "4/5: projection integrity (leak scan + oss-public/.github drift)"
 [[ -x "$PROJECTOR" ]] || fail "projector not found or not executable at $PROJECTOR"
+# `projector diff` materializes the projection from `git HEAD`, not the
+# working tree -- an uncommitted change (staged or not) that would trip the
+# leak scan or the drift check reports a false "up to date, nothing to
+# publish" pass instead of the real violation. Found the hard way
+# (2026-09-11): a real leak and a real internal_reference_patterns
+# violation both slipped past a "passing" preflight run because neither
+# had been committed yet. Warn loudly rather than silently trusting a
+# pass that may not have scanned anything real.
+if ! git -C "$REPO_ROOT" diff --quiet HEAD -- || ! git -C "$REPO_ROOT" diff --cached --quiet; then
+    echo "warning: uncommitted changes present -- this step compares against git HEAD, so it" \
+        "will NOT see your working-tree changes. Commit first for a meaningful leak scan." >&2
+fi
 diff_log="$(mktemp -t mutantkit-preflight-diff.XXXXXX)"
 trap 'rm -f "$diff_log"' EXIT
 diff_rc=0
