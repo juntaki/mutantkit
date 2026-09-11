@@ -29,20 +29,20 @@ explicitly rather than estimating.
 | Campaign time (100-mutant reference shape) | Recommended production profile (`workers:2`+`simulatorPool`) ≈ 2600s (~43 min); tuned `workers:1` reference ≈ 5624s (~94 min) is the ceiling any config change must stay under or must justify regressing past | The one real, outcome-parity-gated, production-recommendation-driving number in the whole evidence base (`docs/benchmarks.md`, 100/100 parity, 0 integrity violations) — anchor here, not on any provisional/n=1 number. |
 | Campaign time (940-mutant, real full-scale) | Optimized profile: 14h07m; hard ceiling: must not regress past the 23h37m untuned baseline | Internal benchmark evidence. |
 | PR-diff time | ≈ 39s floor (measured, trivial scale) for a 2-mutation diff (`plan` 0.46s + `run` 38s, isolated strategy, 2 workers, real iPhone 17 Pro simulator); undefined at realistic PR scale | Real, timed measurement (2026-09-11) against a real, minimal (1-file, single-scheme) git-backed Xcode project fixture (`Fixtures/XcodeProject`, copied to a scratch git checkout), a genuinely semantics-preserving 1-line source diff. Taken under elevated background system load (`uptime` ~50x on an 8-core machine) — a real number, not a clean best-case floor, so treat the simulator-boot/build/baseline-run fixed overhead as real but possibly inflated versus a quiet machine; still closes the "zero measurement at all" gap this table previously called the single largest gap. |
-| Simulator cost ($ or CI-minute per mutant) | **undefined pending measurement** | No wall-clock number has ever been converted to a dollar or CI-minute figure. |
+| Simulator cost ($ or CI-minute per mutant) | ≈ 2,477 billed macOS-minutes (~$198 at GitHub's published $0.08/macOS-minute on-demand rate) per full 25-job CI run, on GitHub's own 10x macOS-vs-Linux billing multiplier | Real conversion (2026-09-11), not a new timed run: summed real wall-clock job durations from already-completed run `34452854291`'s own Jobs API data (25 jobs, 247.7 macOS-minutes wall-clock total, nearly all `macos-26`), ×10 per GitHub's documented per-minute multiplier. This repo's own CI runs free under GitHub's public-repo Actions minutes, so no bill is actually issued — this number exists to make the true relative cost visible (what a private mirror or a metered plan would pay), not because MutantKit's own CI has a bill. Per-mutant figure not computed: this run's own mutant count varies by job and was not isolated in the API data used here. |
 | Build count | ≤ 1 build per mutant (isolated mode) | Gate 3A (internal, not part of this public repo), 14 mutants: 13 isolated builds vs. 7 schemata. |
 | Test invocation count | ≤ 1 test invocation per 3–4 mutants (batched-isolated target) | Same Gate 3A run: 4 (wave-batched) vs. 12 (schemata) invocations for 14 mutants. |
 | CI acceptance-lane time (proxy) | ≤ 17 min per job; a job that fails near a 30-minute ceiling, or never completes, is a budget violation requiring investigation before a release | Real successful Xcode-backed jobs in run `34452854291` ranged 6m39s–16m20s; that same run also surfaced a genuine violation (`xcode-project` failed at 28m09s) and a job that never completed (`xcode-wave-early-kill`) — both real, motivating examples, not hypothetical. |
 
 ## What this budget does not cover, and why
 
-One category the v0.7 mandate explicitly asks for still has **zero**
-existing measurement anywhere in this project's benchmark history:
-
-- **Simulator dollar/CI-minute cost.** Every simulator number above is
-  wall-clock only. GitHub bills macOS runner-minutes at a 10x multiplier
-  over Linux, so a wall-clock budget alone understates the real cost —
-  nobody has yet converted the wall-clock evidence into a cost figure.
+**Simulator dollar/CI-minute cost** (2026-09-11 update): a real conversion
+now exists (see the Xcode table above) — real wall-clock job durations
+from an already-completed CI run, converted via GitHub's own published 10x
+macOS billing multiplier, ≈2,477 billed macOS-minutes (~$198 at the
+on-demand rate) per full 25-job run. This closes the "zero conversion at
+all" gap; what remains open is a genuine per-mutant figure, since this
+run's own wall-clock evidence was not broken down by mutant count per job.
 
 **PR-diff / changed-files-only mutation time** (2026-09-11 update): a real
 floor is now measured for both SwiftPM and Xcode + iOS Simulator (see the
