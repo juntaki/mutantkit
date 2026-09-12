@@ -54,7 +54,12 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "mutantkit", targets: ["CLI"]),
-        .executable(name: "muter-config-fuzzer", targets: ["MuterConfigFuzzer"]),
+        // Exposed so Fuzz/Package.swift (a separate SwiftPM package -- see
+        // its own header comment for why) can depend on it by path without
+        // a plain `swift build`/`swift build --build-tests` here pulling
+        // libFuzzer's own executable (and its `main()`-less driver target)
+        // into this package's normal build graph.
+        .library(name: "MuterCompatibility", targets: ["MuterCompatibility"]),
         .library(name: "MutationModel", targets: ["MutationModel"]),
         .library(name: "SwiftFrontend", targets: ["SwiftFrontend"]),
         .library(name: "SwiftCoreOperators", targets: ["SwiftCoreOperators"]),
@@ -136,20 +141,6 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Yams", package: "Yams")
             ]
-        ),
-
-        // The Swift harness is a library target so SwiftPM does not synthesize
-        // an executable `main`; libFuzzer supplies that entry point through
-        // the tiny C executable target below.
-        .target(
-            name: "MuterConfigFuzzHarness",
-            dependencies: ["MuterCompatibility"],
-            path: "Fuzz/MuterConfigFuzzer"
-        ),
-        .executableTarget(
-            name: "MuterConfigFuzzer",
-            dependencies: ["MuterConfigFuzzHarness"],
-            path: "Fuzz/MuterConfigFuzzerDriver"
         ),
 
         // Research-only, outcome-blind classification tool for an internal

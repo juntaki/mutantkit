@@ -30,9 +30,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            .build/checkouts
-            .build/repositories
-          key: fuzz-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
+            Fuzz/.build/checkouts
+            Fuzz/.build/repositories
+          key: fuzz-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Fuzz/Package.resolved') }}
           restore-keys: |
             fuzz-${{ runner.os }}-${{ runner.arch }}-
 
@@ -47,6 +47,7 @@ jobs:
           fuzzer_runtime="$(find "$llvm_prefix/lib/clang" -name libclang_rt.fuzzer_osx.a -print -quit)"
           test -n "$fuzzer_runtime"
           swift build \
+            --package-path Fuzz \
             --product muter-config-fuzzer \
             --sanitize address \
             -Xswiftc -sanitize-coverage=edge,inline-8bit-counters,pc-table \
@@ -57,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p fuzz-artifacts
-          bin_path="$(swift build --show-bin-path --sanitize address -Xswiftc -sanitize-coverage=edge,inline-8bit-counters,pc-table)"
+          bin_path="$(swift build --package-path Fuzz --show-bin-path --sanitize address -Xswiftc -sanitize-coverage=edge,inline-8bit-counters,pc-table)"
           duration=30
           if [ "${{ github.event_name }}" = "schedule" ]; then
             duration=300
