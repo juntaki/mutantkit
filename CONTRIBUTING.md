@@ -1,5 +1,27 @@
 # Contributing
 
+## How to propose a change
+
+Changes are proposed through GitHub pull requests. Fork the repository,
+push a topic branch, and open a PR against `main` — `merge-gate`
+(`.github/workflows/ci.yml`) must pass before it can be merged.
+
+## Acceptance requirements
+
+Major new functionality and bug fixes must include appropriate automated
+tests: a unit test for isolated logic, an acceptance test (see below) for
+anything on the execution path, and a regression test for a fixed bug —
+the same standard this project holds its own history to (see `Tests/
+MutantKitTests/Regression/` for examples of turning a one-time audit
+finding into a permanent, mechanical check).
+
+Before opening a PR: run `swift test`. If your change touches the
+execution path — building, running, or classifying a mutant, not just
+planning or reporting one — also run `MUTANTKIT_ACCEPTANCE=1 swift test`
+(see below for what that covers and why it isn't optional there). New
+SwiftLint/SwiftFormat violations must not be introduced — `merge-gate`'s
+`Lint & format` job runs the same checks and blocks the PR on a new one.
+
 ## Tests
 
 ```bash

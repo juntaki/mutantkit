@@ -8,6 +8,7 @@ so that the guarantees can be tested rather than assumed.
 
 Open a [private GitHub Security Advisory](https://github.com/juntaki/mutantkit/security/advisories/new)
 on the repository. Please do not open a public issue for anything exploitable.
+Expect an acknowledgement within 14 days.
 
 ## Guarantees
 
@@ -68,9 +69,18 @@ version, Xcode version, plan schema version and report schema version. `mutantki
 --version` prints them, and every plan and report records them, so an artifact
 can always be traced to the toolchain that produced it.
 
-Signed releases and an SBOM are planned but not yet implemented for v0.1. Until
-then, verify a release by its embedded commit SHA and toolchain versions, or
-build from source at a tagged commit.
+Every release's `mutantkit-macos-arm64.tar.gz` and `SHA256SUMS` carry a
+[GitHub Artifact Attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
+— Sigstore-backed build provenance, not code signing — proving they were
+built by this repository's `release.yml` from the tagged commit, not
+hand-assembled or substituted afterward. Verify with:
+
+```bash
+gh attestation verify mutantkit-macos-arm64.tar.gz --repo juntaki/mutantkit
+```
+
+An SBOM is planned but not yet implemented. Until it lands, verify a
+release's dependency set from `Package.resolved` at the tagged commit.
 
 See [docs/public-quality-badges.md](docs/public-quality-badges.md) for the
 external quality/supply-chain signals (Codecov, SonarCloud, OpenSSF

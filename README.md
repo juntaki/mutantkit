@@ -446,8 +446,11 @@ know what to fix, not what already passed.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for running tests, the acceptance
-suite, and the architecture sketch.
+- [Report a bug or request an enhancement](https://github.com/juntaki/mutantkit/issues)
+- [Contributing guide](CONTRIBUTING.md) — running tests, the acceptance
+  suite, and the architecture sketch
+- Security vulnerabilities: see [SECURITY.md](SECURITY.md) rather than a
+  public issue
 
 ## Licence
 
