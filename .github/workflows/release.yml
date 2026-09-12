@@ -227,6 +227,19 @@ jobs:
           fi
           echo "Latest release-validation.yml run for commit ${sha} (run ${latest_id}, ${latest_created}) succeeded."
 
+  # v1 contract (2026-09-12): a GitHub Release is not the end of this
+  # pipeline's job, only the point where the real download/install/
+  # Homebrew paths *become testable* -- none of them can be exercised
+  # against a tag that does not exist yet. Publishing straight to "latest"
+  # here would mean a consumer could pick this release up (via `@vX.Y.Z`,
+  # `latest`, or `brew install`) before this workflow has actually proven
+  # any of those paths works, and a failure two jobs from now (the real
+  # Action install, or the Homebrew tap sync) would leave a broken release
+  # sitting there looking exactly as done as a good one. Publishing as a
+  # `--prerelease` closes that gap: the tag and assets exist (so
+  # downstream jobs have something real to install from) but the release
+  # is not yet "Latest" and a consumer who asks for `latest` will not get
+  # it. `finalize-release` below is the only place that promotes it.
   publish-release:
     if: github.ref_type == 'tag'
     needs: [build, clean-machine-e2e, require-validation]
@@ -239,7 +252,7 @@ jobs:
           name: mutantkit-macos-arm64
           path: dist
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (prerelease -- promoted only after downstream verification, see finalize-release)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -248,7 +261,57 @@ jobs:
             dist/mutantkit-macos-arm64.tar.gz dist/SHA256SUMS \
             --repo "${{ github.repository }}" \
             --title "mutantkit ${{ needs.build.outputs.version }}" \
-            --generate-notes
+            --generate-notes \
+            --prerelease
+
+  # The real consumer path, not a simulation of it -- but invoked directly
+  # via `Scripts/action/install.sh` (the exact script `action.yml`'s own
+  # "Install mutantkit" step calls) rather than a dynamic
+  # `uses: juntaki/mutantkit@${{ github.ref_name }}`, since `uses:`
+  # resolving a ref built from workflow context inside the very workflow
+  # that ref points at is unproven, higher-risk syntax to stake the release
+  # gate on -- a plain script invocation is not. Setting `MUTANTKIT_ACTION_REF`
+  # to this run's own tag and leaving the version input empty reproduces
+  # exactly what a real `uses: juntaki/mutantkit@${{ github.ref_name }}`
+  # consumer's install step does internally (see install.sh's own version-
+  # resolution comment). `action-smoke-test.yml` (part of `ci.yml`, runs on
+  # every PR) already covers `mode: install`/`mode: ci` behavior against a
+  # scripted binary seam -- what it structurally cannot cover is whether
+  # *this exact just-published release* is actually fetchable, checksum-
+  # verifiable, and attestation-verifiable from the outside, because
+  # nothing under that tag exists until `publish-release` runs. This job
+  # is that missing proof, gating whether the release ever leaves
+  # prerelease status.
+  verify-published-action-install:
+    if: github.ref_type == 'tag'
+    needs: [build, publish-release]
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install mutantkit exactly as a real `uses: juntaki/mutantkit@<tag>` consumer's install step would"
+        shell: bash
+        env:
+          MUTANTKIT_ACTION_VERSION_INPUT: ""
+          MUTANTKIT_ACTION_REF: ${{ github.ref_name }}
+          MUTANTKIT_ACTION_GH_TOKEN: ${{ github.token }}
+          MUTANTKIT_ACTION_TEST_BINARY_DIR: ""
+        run: "${{ github.workspace }}/Scripts/action/install.sh"
+
+      - name: Confirm the published release's binary actually installed and runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          installed_version="$(mutantkit --version | head -n 1)"
+          echo "Installed: $installed_version"
+          case "$installed_version" in
+            *"${{ needs.build.outputs.version }}"*) ;;
+            *)
+              echo "::error::mutantkit --version reported '$installed_version', expected it to name version '${{ needs.build.outputs.version }}' -- the published release tag may not have resolved to the release this run just built."
+              exit 1
+              ;;
+          esac
 
   # v1 contract (2026-09-12): the Homebrew tap is a first-class install
   # path, so it must not drift from the latest release the way it once
@@ -301,3 +364,31 @@ jobs:
 
           echo "Waiting on juntaki/homebrew-mutantkit sync-release run $run_id..."
           gh run watch "$run_id" --repo juntaki/homebrew-mutantkit --exit-status
+
+  # The only place this release stops being a `--prerelease`. Both
+  # downstream consumer paths this release promises -- the GitHub Action
+  # (`verify-published-action-install`) and Homebrew
+  # (`dispatch-homebrew-sync`, which only returns success once the tap's
+  # own sync-release.yml has actually finished) -- must have succeeded
+  # first. If either failed, this job never runs, and the release stays a
+  # prerelease indefinitely: visible and inspectable (the tag, assets, and
+  # attestation are all real), but not the one `latest` resolves to and
+  # not what a `version: latest` consumer receives. That is the fail-
+  # closed property `publish-release`'s own comment promises -- enforced
+  # here, not merely asserted there.
+  finalize-release:
+    if: github.ref_type == 'tag'
+    needs: [verify-published-action-install, dispatch-homebrew-sync]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Promote from prerelease to the final, latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --prerelease=false \
+            --latest

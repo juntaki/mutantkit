@@ -6,7 +6,7 @@
 #   signing), no Homebrew, no repo checkout required beyond this action
 #   itself, and adds it to PATH. A consumer who only ever wrote
 #
-#     - uses: juntaki/mutantkit@v0.3.0
+#     - uses: juntaki/mutantkit@v1.0.0
 #
 #   for the binary keeps getting exactly that after adopting this version —
 #   see the P13 review this action.yml was rebuilt from: an earlier
@@ -20,7 +20,7 @@
 #   baseline for gate's regression checks, a job summary, and a report
 #   artifact upload:
 #
-#     - uses: juntaki/mutantkit@v0.3.0
+#     - uses: juntaki/mutantkit@v1.0.0
 #       with:
 #         mode: ci
 #         diff: origin/main   # optional — see README "CI" section
@@ -68,7 +68,7 @@ inputs:
 
   version:
     description: >-
-      MutantKit release to install, e.g. "v0.3.0", or the literal "latest".
+      MutantKit release to install, e.g. "v1.0.0", or the literal "latest".
       Always wins when set, including the literal "latest" typed out loud.
       Left unset (the default), the resolution is: if this action itself was
       invoked at a release-tag ref (`uses: juntaki/mutantkit@vX.Y.Z`), that
