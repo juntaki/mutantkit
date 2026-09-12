@@ -608,8 +608,35 @@ jobs:
           - fixture: swift-package-ios
             filter: SwiftPackageIOSAcceptanceTests
             simulator: "1"
-          - fixture: xcode-project
+          # Split from a single `xcode-project` entry (2026-09-12): its
+          # `XcodeProjectAcceptanceTests` filter used to be a substring of
+          # `SchemataSupportedMatrixXcodeProjectAcceptanceTests`'s own name,
+          # so the two, quite different, suites always ran together as one
+          # job -- an ordinary isolated-mutation suite (including the real
+          # "did this actually mutate the sandbox, not the original
+          # `.xcodeproj`" activation-evidence checks) alongside a much
+          # heavier one that installs xcodegen, builds a release schemata
+          # runtime, and drives a real iOS Simulator to verify the
+          # "Xcode project + iOS Simulator + schemata = Supported" contract
+          # end to end (STARTUP/HIT pairing, Mach-O image UUID matching the
+          # build receipt). Real CI evidence showed the combined job
+          # failing under extreme resource pressure in three different
+          # shapes across three attempts on the same commit (a scheme-
+          # visibility flake, a baseline-mismatch, and a full 30-minute
+          # timeout) -- diagnosing any one of those requires knowing which
+          # of the two very different suites was actually running, which a
+          # single job's log conflates. The schemata suite was renamed to
+          # `SchemataMatrixIOSSimulatorAcceptanceTests` (no longer a
+          # superstring of the other suite's name) rather than switching
+          # this filter to an anchored regex, so each fixture's `filter`
+          # stays a plain, unambiguous suite name --
+          # `Tests/MutantKitTests/Unit/CIAcceptanceMatrixClassificationTests.swift`
+          # enforces that every filter here names a real, existing suite.
+          - fixture: xcode-project-isolated
             filter: XcodeProjectAcceptanceTests
+            simulator: "1"
+          - fixture: xcode-project-schemata
+            filter: SchemataMatrixIOSSimulatorAcceptanceTests
             simulator: "1"
           - fixture: xcode-workspace
             filter: XcodeWorkspaceAcceptanceTests
@@ -740,9 +767,8 @@ jobs:
           set -o pipefail
           swift build --build-tests 2>&1 | tee build.log
 
-      # Fixture-scoped environment for the `xcode-project` entry only: its
-      # filter (`XcodeProjectAcceptanceTests`) also matches
-      # `SchemataSupportedMatrixXcodeProjectAcceptanceTests`, whose two
+      # Fixture-scoped environment for the `xcode-project-schemata` entry
+      # only — `SchemataSupportedMatrixXcodeProjectAcceptanceTests`'s two
       # provenance/evidence tests need more than a plain build+test —
       # without both steps below they fail deterministically (not flakily):
       #
@@ -761,11 +787,11 @@ jobs:
       #   (release macOS archive + `build-schemata-runtime.sh` iPhoneSimulator
       #   slice), exported via $GITHUB_ENV so the `Acceptance` step below —
       #   and only the runs on this entry — see it.
-      - name: Install xcodegen (xcode-project only)
-        if: matrix.fixture == 'xcode-project'
+      - name: Install xcodegen (xcode-project-schemata only)
+        if: matrix.fixture == 'xcode-project-schemata'
         run: brew install xcodegen
-      - name: Schemata runtime archives (xcode-project only)
-        if: matrix.fixture == 'xcode-project'
+      - name: Schemata runtime archives (xcode-project-schemata only)
+        if: matrix.fixture == 'xcode-project-schemata'
         shell: bash
         run: |
           set -euo pipefail
@@ -781,7 +807,7 @@ jobs:
           MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
         run: |
           set -o pipefail
-          swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
+          swift test --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
           test_exit=$?
           # P8: a filter matching zero tests must fail this job, not pass it
           # silently -- see scripts/assert-tests-ran.sh. A real test failure
@@ -789,9 +815,10 @@ jobs:
           scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
 
           # A single, narrowly-scoped, documented retry -- not "rerun until
-          # green". xcode-project only, and only for the exact known
-          # signature `xcodebuild -list -json` reporting zero schemes for a
-          # project whose scheme a real product-level retry
+          # green". xcode-project-schemata only (the xcodegen-staged
+          # fixture this signature is specific to), and only for the exact
+          # known signature `xcodebuild -list -json` reporting zero schemes
+          # for a project whose scheme a real product-level retry
           # (`XcodeBuildAdapter.discoverSchemes`'s own
           # `emptyResultRetryCount`) already tries twice more before giving
           # up -- this is the one-more-chance CI-gate mitigation for when
@@ -800,19 +827,30 @@ jobs:
           # fails for real: this never masks a genuine regression, it only
           # gives one documented, bounded second attempt to a single known,
           # product-level-mitigated flake.
-          if [ "$test_exit" -ne 0 ] && [ "${{ matrix.fixture }}" = "xcode-project" ] \
+          if [ "$test_exit" -ne 0 ] && [ "${{ matrix.fixture }}" = "xcode-project-schemata" ] \
              && grep -q "No schemes are available here" acceptance.log; then
-            echo "::warning::xcode-project hit the documented xcodebuild scheme-visibility flake -- retrying once."
+            echo "::warning::xcode-project-schemata hit the documented xcodebuild scheme-visibility flake -- retrying once."
             mv acceptance.log acceptance-first-attempt.log
-            swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
+            swift test --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
             test_exit=$?
             scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
           fi
 
           exit $test_exit
 
+      # `failure()` alone misses a job-level `timeout-minutes` hang: that
+      # ends the job `cancelled`, not `failed`, so a real, in-progress
+      # `swift test` run that simply ran out the clock would previously
+      # leave this step's own `if: failure()` skipped, discarding
+      # `acceptance.log` (and, worse, `build.log` if the hang happened
+      # during the build) at exactly the moment there is the most to learn
+      # from them. `cancelled()` also fires for infrastructure-initiated
+      # cancellations unrelated to this job's own timeout (e.g. cancelling
+      # the whole workflow run) -- harmless to upload logs for those too,
+      # since `if-no-files-found: ignore` means there is nothing to upload
+      # if the job never reached this fixture's own steps at all.
       - name: Upload acceptance failure logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: acceptance-${{ matrix.fixture }}-failure-logs

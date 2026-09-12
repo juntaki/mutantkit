@@ -161,7 +161,7 @@ case "$event_name" in
         fi
         if echo "$changed_files" | grep -qE "$xcode_adapter"; then
           matched_any="true"
-          fixtures+=("xcode-project" "xcode-workspace" "xcode-app-debug-dylib" "xcode-unlinked-source" "xcode-config-detector" "xcode-batch-testing" "xcode-batch-testing-ui-target" "xcode-coverage-selection" "xcode-incremental-batch-testing" "xcode-wave-early-kill" "cli-commands")
+          fixtures+=("xcode-project-isolated" "xcode-project-schemata" "xcode-workspace" "xcode-app-debug-dylib" "xcode-unlinked-source" "xcode-config-detector" "xcode-batch-testing" "xcode-batch-testing-ui-target" "xcode-coverage-selection" "xcode-incremental-batch-testing" "xcode-wave-early-kill" "cli-commands")
         fi
         if echo "$changed_files" | grep -qE "$swift_package"; then
           matched_any="true"

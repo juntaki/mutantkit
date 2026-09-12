@@ -148,7 +148,7 @@ struct ReleaseBundledSchemataRuntimeAcceptanceTests {
 /// released binary can actually *run* schemata mode against a real Xcode
 /// project on a real simulator using nothing but its own bundled runtime.
 /// This suite closes that gap, driving the same fully-covered fixture
-/// (`Fixtures/SchemataMatrixXcodeProject`) `SchemataSupportedMatrixXcodeProjectAcceptanceTests`
+/// (`Fixtures/SchemataMatrixXcodeProject`) `SchemataMatrixIOSSimulatorAcceptanceTests`
 /// already proves works via the developer override — here through the
 /// packaged release executable instead, with no
 /// `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` anywhere in this process's

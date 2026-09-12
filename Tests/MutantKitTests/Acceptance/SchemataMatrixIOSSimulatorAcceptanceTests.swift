@@ -19,8 +19,24 @@ import Testing
 /// own image UUID matches the runtime's own reported UUID — the same
 /// proof `MutationVerdictVerifier.verifySchemataChain` requires in
 /// production before it will ever trust a schemata verdict.
+///
+/// Renamed from `SchemataSupportedMatrixXcodeProjectAcceptanceTests`
+/// (2026-09-12): that name was a literal substring of
+/// `XcodeProjectAcceptanceTests`, so `swift test --filter
+/// XcodeProjectAcceptanceTests` matched both suites at once, running two
+/// very different Acceptance jobs (an ordinary isolated-mutation suite and
+/// this much heavier, xcodegen + real-simulator + release-runtime one) as
+/// a single CI job whose combined log conflated which suite a given
+/// failure actually came from. Splitting the CI matrix entry required
+/// each filter to name exactly one suite
+/// (`Tests/MutantKitTests/Unit/CIAcceptanceMatrixClassificationTests.swift`
+/// enforces that every fixture's filter is a real, unambiguous suite
+/// name); renaming here, rather than switching the CI filter to an
+/// anchored regex, keeps that enforcement simple and keeps `swift test
+/// --filter SchemataMatrixIOSSimulatorAcceptanceTests` doing exactly what
+/// it looks like it does.
 @Suite("Schemata supported matrix: Xcode project + iOS Simulator", .enabled(if: Acceptance.simulatorEnabled))
-struct SchemataSupportedMatrixXcodeProjectAcceptanceTests {
+struct SchemataMatrixIOSSimulatorAcceptanceTests {
     private static func configuration() throws -> String {
         """
         version: 1

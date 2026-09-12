@@ -254,8 +254,8 @@ struct CIRouteClassificationTests {
         )
         #expect(!result.runFull)
         #expect(Set(result.selectedFixtures) == [
-            "xcode-project", "xcode-workspace", "xcode-app-debug-dylib", "xcode-unlinked-source",
-            "xcode-config-detector", "xcode-batch-testing", "xcode-batch-testing-ui-target",
+            "xcode-project-isolated", "xcode-project-schemata", "xcode-workspace", "xcode-app-debug-dylib",
+            "xcode-unlinked-source", "xcode-config-detector", "xcode-batch-testing", "xcode-batch-testing-ui-target",
             "xcode-coverage-selection", "xcode-incremental-batch-testing", "xcode-wave-early-kill",
             "cli-commands"
         ])
