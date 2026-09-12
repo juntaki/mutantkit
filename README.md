@@ -1,10 +1,10 @@
 # MutantKit
 
 [![CI](https://github.com/juntaki/mutantkit/actions/workflows/ci.yml/badge.svg)](https://github.com/juntaki/mutantkit/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/juntaki/mutantkit/actions/workflows/codeql.yml/badge.svg)](https://github.com/juntaki/mutantkit/actions/workflows/codeql.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/juntaki/mutantkit/badge)](https://securityscorecards.dev/viewer/?uri=github.com/juntaki/mutantkit)
 [![codecov](https://codecov.io/gh/juntaki/mutantkit/graph/badge.svg)](https://codecov.io/gh/juntaki/mutantkit)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=juntaki_mutantkit&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=juntaki_mutantkit)
+[![CodeQL](https://github.com/juntaki/mutantkit/actions/workflows/codeql.yml/badge.svg)](https://github.com/juntaki/mutantkit/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/juntaki/mutantkit/badge)](https://securityscorecards.dev/viewer/?uri=github.com/juntaki/mutantkit)
 [![GitHub release](https://img.shields.io/github/v/release/juntaki/mutantkit)](https://github.com/juntaki/mutantkit/releases)
 [![License](https://img.shields.io/github/license/juntaki/mutantkit)](LICENSE)
 
