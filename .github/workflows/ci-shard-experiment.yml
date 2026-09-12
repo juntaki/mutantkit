@@ -9,11 +9,15 @@ permissions:
   actions: read
 
 # Experimental only: this workflow is added on a topic branch and is not intended
-# to be merged as-is.  It waits for the ordinary CI workflow for the same PR SHA
-# to finish before allocating any macOS runners, so the baseline and experiment
-# do not contend with each other for the account's macOS concurrency slots.
+# to be merged as-is. It waits for the ordinary CI workflow for the same PR SHA
+# to reach its Merge gate before allocating any macOS runners, so the baseline
+# and experiment do not contend for the account's macOS concurrency slots.
+#
+# Keep this one-off PR on the original run's concurrency key so this update
+# cancels the stale run that was already waiting under that key. Any further
+# update to this experiment branch will cancel the preceding experiment too.
 concurrency:
-  group: ci-shard-experiment-${{ github.event.pull_request.head.sha }}
+  group: ci-shard-experiment-b634b9289eb195f2a99c06aa2deff5199cb493ce
   cancel-in-progress: true
 
 jobs:
@@ -22,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Wait for CI workflow on this exact PR SHA
+      - name: Wait for CI Merge gate on this exact PR SHA
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.pull_request.head.sha }}
@@ -30,19 +34,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Waiting for ordinary CI on $SHA; no macOS runner is allocated by this job."
+          echo "Waiting for ordinary CI Merge gate on $SHA; no macOS runner is allocated by this job."
           while true; do
             runs="$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request&per_page=100" --jq '[.workflow_runs[] | select(.name == "CI")]')"
             count="$(jq 'length' <<<"$runs")"
             if [ "$count" -gt 0 ]; then
               latest="$(jq 'sort_by(.created_at) | last' <<<"$runs")"
-              status="$(jq -r '.status' <<<"$latest")"
-              conclusion="$(jq -r '.conclusion // "pending"' <<<"$latest")"
               run_id="$(jq -r '.id' <<<"$latest")"
-              echo "baseline CI run $run_id: status=$status conclusion=$conclusion"
-              if [ "$status" = "completed" ]; then
-                echo "Ordinary CI baseline completed with conclusion=$conclusion. Starting the isolated shard experiment."
-                break
+              run_status="$(jq -r '.status' <<<"$latest")"
+              run_conclusion="$(jq -r '.conclusion // "pending"' <<<"$latest")"
+
+              jobs="$(gh api "repos/$REPO/actions/runs/$run_id/jobs?filter=latest&per_page=100" --jq '.jobs')"
+              merge_gate="$(jq '[.[] | select(.name == "Merge gate")] | last // empty' <<<"$jobs")"
+
+              if [ -n "$merge_gate" ]; then
+                gate_status="$(jq -r '.status' <<<"$merge_gate")"
+                gate_conclusion="$(jq -r '.conclusion // "pending"' <<<"$merge_gate")"
+                echo "baseline CI run $run_id: run=$run_status/$run_conclusion merge-gate=$gate_status/$gate_conclusion"
+                if [ "$gate_status" = "completed" ]; then
+                  echo "Ordinary CI Merge gate completed with conclusion=$gate_conclusion. Starting the isolated shard experiment."
+                  break
+                fi
+              else
+                echo "baseline CI run $run_id: run=$run_status/$run_conclusion; Merge gate not scheduled yet"
               fi
             else
               echo "ordinary CI run not visible yet"
@@ -52,8 +66,8 @@ jobs:
 
   # The 18 ordinary acceptance fixtures are balanced from the latest main run's
   # measured Acceptance-step wall times (~38 minutes of acceptance work per
-  # shard).  Each runner builds MutantKit tests exactly once and then runs all of
-  # its filters with --skip-build against the same checkout/.build tree.  No
+  # shard). Each runner builds MutantKit tests exactly once and then runs all of
+  # its filters with --skip-build against the same checkout/.build tree. No
   # build artifact crosses a job boundary, deliberately avoiding #43's mtime and
   # SwiftPM incremental-state failure mode.
   acceptance-shard:
@@ -154,7 +168,7 @@ jobs:
 
   # xcode-project remains isolated because its extra release-config schemata
   # runtime build has already been proven to perturb the debug SwiftPM build
-  # state.  Keeping this one fixture independent makes the experiment about
+  # state. Keeping this one fixture independent makes the experiment about
   # in-runner sharing only where that sharing has no known cross-config hazard.
   acceptance-xcode-project:
     name: Acceptance xcode-project (isolated control)
