@@ -253,25 +253,51 @@ jobs:
   # v1 contract (2026-09-12): the Homebrew tap is a first-class install
   # path, so it must not drift from the latest release the way it once
   # did (the formula stayed pinned two releases behind, unbumped, with
-  # nothing here or in the tap noticing). This only
-  # dispatches the tap's own idempotent sync-release.yml -- it never
-  # writes to the tap repo directly, and the token it uses is scoped to
-  # triggering that one workflow, not to the tap's contents (the tap's own
-  # workflow commits with its own repo-scoped GITHUB_TOKEN instead).
+  # nothing here or in the tap noticing). This dispatches the tap's own
+  # idempotent sync-release.yml and waits for it to actually succeed --
+  # fail-closed on both halves: a missing token, or the tap's own sync
+  # failing/timing out, fails this release's workflow run rather than
+  # silently leaving the tap behind. It never writes to the tap repo
+  # directly; the token it uses is scoped to triggering and reading that
+  # one workflow's runs, not to the tap's contents (the tap's own workflow
+  # commits with its own repo-scoped GITHUB_TOKEN instead).
   dispatch-homebrew-sync:
     if: github.ref_type == 'tag'
     needs: publish-release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Trigger juntaki/homebrew-mutantkit's sync-release workflow
+      - name: Trigger and wait for juntaki/homebrew-mutantkit's sync-release workflow
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::warning::HOMEBREW_TAP_DISPATCH_TOKEN is not set -- skipping the Homebrew tap sync dispatch. Create a fine-grained PAT scoped only to juntaki/homebrew-mutantkit with Actions: write, and set it as this repo's HOMEBREW_TAP_DISPATCH_TOKEN secret, to re-enable this."
-            exit 0
+            echo "::error::HOMEBREW_TAP_DISPATCH_TOKEN is not set. The Homebrew tap is a first-class, v1 install path and must not silently drift from this release -- create a fine-grained PAT scoped only to juntaki/homebrew-mutantkit with Actions: write (and default Metadata: read), and set it as this repo's HOMEBREW_TAP_DISPATCH_TOKEN secret."
+            exit 1
           fi
+
+          before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           gh workflow run sync-release.yml \
             --repo juntaki/homebrew-mutantkit \
             -f version="${{ github.ref_name }}"
+
+          # workflow_dispatch does not hand back a run ID directly -- poll
+          # for the run it just created (created strictly after `before`,
+          # for this exact workflow) rather than trusting "the most recent
+          # run", which could otherwise race a concurrent manual dispatch.
+          run_id=""
+          for _ in $(seq 1 30); do
+            sleep 5
+            run_id="$(gh run list --repo juntaki/homebrew-mutantkit --workflow sync-release.yml \
+              --json databaseId,createdAt --jq \
+              "[.[] | select(.createdAt > \"$before\")] | sort_by(.createdAt) | first | .databaseId // empty")"
+            [ -n "$run_id" ] && break
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::Dispatched juntaki/homebrew-mutantkit's sync-release.yml but could not find the resulting run within 150s."
+            exit 1
+          fi
+
+          echo "Waiting on juntaki/homebrew-mutantkit sync-release run $run_id..."
+          gh run watch "$run_id" --repo juntaki/homebrew-mutantkit --exit-status

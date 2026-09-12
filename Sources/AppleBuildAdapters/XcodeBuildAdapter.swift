@@ -403,17 +403,31 @@ public struct XcodeBuildAdapter: Sendable {
     /// (`init`/`doctor` auto-detection) needs this exact same real
     /// `xcodebuild -list -json` discovery, before any `Configuration` exists
     /// to construct a full adapter for a real run.
-    public func discoverSchemes(in workspace: URL) async -> [String] {
+    ///
+    /// Retries a *clean, fast, empty* result up to `emptyResultRetryCount`
+    /// additional times before giving up — real CI evidence (2026-09-12,
+    /// `xcode-project`'s own recurring "No schemes are available here"
+    /// flake, reproduced identically 4 times) showed this exact call
+    /// reporting zero schemes for a project whose shared scheme a
+    /// *separate*, immediately preceding poll of the identical invocation
+    /// had just confirmed visible — i.e. `xcodebuild`'s own scheme-visibility state can
+    /// genuinely flicker under real resource pressure, not merely lag
+    /// once and then stay caught up. This is a real robustness gap for
+    /// any user on a loaded machine, not only a CI artifact, so the fix
+    /// belongs here rather than in a test's own pre-flight wait. Only a
+    /// clean empty result is retried, never a timeout or a crash — those
+    /// already have their own, larger `timeoutSeconds` budget and retrying
+    /// them here would only compound a real hang.
+    public func discoverSchemes(in workspace: URL, emptyResultRetryCount: Int = 2) async -> [String] {
         let arguments = projectArguments(in: workspace) + ["-list", "-json"]
-        let result = try? await ProcessSupervisor.run(
-            executable: ToolPaths.xcodebuild,
-            arguments: arguments,
-            workingDirectory: workspace,
-            timeoutSeconds: 120
-        )
-
-        guard let result, result.succeeded else { return [] }
-        return SchemeListJSON.schemes(from: result.standardOutput)
+        for attempt in 0 ... emptyResultRetryCount {
+            let result = try? await processRunner(ToolPaths.xcodebuild, arguments, workspace, 120)
+            guard let result, result.succeeded else { return [] }
+            let schemes = SchemeListJSON.schemes(from: result.standardOutput)
+            if !schemes.isEmpty || attempt == emptyResultRetryCount { return schemes }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return []
     }
 }
 

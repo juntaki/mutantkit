@@ -787,6 +787,28 @@ jobs:
           # silently -- see scripts/assert-tests-ran.sh. A real test failure
           # above must still win even if the count check itself passes.
           scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
+
+          # A single, narrowly-scoped, documented retry -- not "rerun until
+          # green". xcode-project only, and only for the exact known
+          # signature `xcodebuild -list -json` reporting zero schemes for a
+          # project whose scheme a real product-level retry
+          # (`XcodeBuildAdapter.discoverSchemes`'s own
+          # `emptyResultRetryCount`) already tries twice more before giving
+          # up -- this is the one-more-chance CI-gate mitigation for when
+          # even that is not enough under the most extreme observed load.
+          # Any other failure, or a second occurrence of this same one,
+          # fails for real: this never masks a genuine regression, it only
+          # gives one documented, bounded second attempt to a single known,
+          # product-level-mitigated flake.
+          if [ "$test_exit" -ne 0 ] && [ "${{ matrix.fixture }}" = "xcode-project" ] \
+             && grep -q "No schemes are available here" acceptance.log; then
+            echo "::warning::xcode-project hit the documented xcodebuild scheme-visibility flake -- retrying once."
+            mv acceptance.log acceptance-first-attempt.log
+            swift test --filter ${{ matrix.filter }} 2>&1 | tee acceptance.log
+            test_exit=$?
+            scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
+          fi
+
           exit $test_exit
 
       - name: Upload acceptance failure logs
@@ -798,6 +820,7 @@ jobs:
           path: |
             build.log
             acceptance.log
+            acceptance-first-attempt.log
 
   # Separate from the `acceptance` matrix above because this suite links and
   # runs the real schemata runtime binary (SchemataMutationRunner drives a
