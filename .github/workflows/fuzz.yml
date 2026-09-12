@@ -1,0 +1,79 @@
+name: Fuzz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  muter-config:
+    name: Muter config fuzz smoke
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+          key: fuzz-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            fuzz-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install libFuzzer runtime
+        run: brew install llvm@18
+
+      - name: Build fuzzer
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm_prefix="$(brew --prefix llvm@18)"
+          fuzzer_runtime="$(find "$llvm_prefix/lib/clang" -name libclang_rt.fuzzer_osx.a -print -quit)"
+          test -n "$fuzzer_runtime"
+          swift build \
+            --product muter-config-fuzzer \
+            --sanitize address \
+            -Xswiftc -sanitize-coverage=edge,inline-8bit-counters,pc-table \
+            -Xlinker "$fuzzer_runtime"
+
+      - name: Run fuzzer
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz-artifacts
+          bin_path="$(swift build --show-bin-path --sanitize address -Xswiftc -sanitize-coverage=edge,inline-8bit-counters,pc-table)"
+          duration=30
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            duration=300
+          fi
+          "$bin_path/muter-config-fuzzer" \
+            Fuzz/Corpus/MuterConfig \
+            -artifact_prefix=fuzz-artifacts/ \
+            -max_len=65536 \
+            -max_total_time="$duration" \
+            -print_final_stats=1 \
+            -timeout=10
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: muter-config-fuzz-failures
+          if-no-files-found: ignore
+          path: fuzz-artifacts/
