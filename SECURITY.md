@@ -6,8 +6,8 @@ so that the guarantees can be tested rather than assumed.
 
 ## Reporting a vulnerability
 
-Open a private security advisory on the repository. Please do not open a public
-issue for anything exploitable.
+Open a [private GitHub Security Advisory](https://github.com/juntaki/mutantkit/security/advisories/new)
+on the repository. Please do not open a public issue for anything exploitable.
 
 ## Guarantees
 

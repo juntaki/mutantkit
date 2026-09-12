@@ -66,7 +66,7 @@ jobs:
       matrix:
         version: ["latest"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install mutantkit via this repo's own action.yml
         id: mutantkit
@@ -154,7 +154,7 @@ jobs:
     name: "Unknown mode fails closed, before any download"
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: "mode: not-a-real-mode"
         id: bogus-mode
         continue-on-error: true
@@ -174,7 +174,7 @@ jobs:
     name: "An input value containing a newline fails closed (GITHUB_OUTPUT / workflow-command injection)"
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # `mode: install` on purpose — the newline-rejection step runs
       # unconditionally, first, before anything else in the composite,
@@ -221,7 +221,7 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
 
@@ -280,7 +280,7 @@ jobs:
     name: Build mutantkit from PR HEAD (shared by every mode:ci job below)
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: swift build -c release --product mutantkit
       - name: Stage the built binary for other jobs
         shell: bash
@@ -288,7 +288,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist-bin
           cp .build/release/mutantkit dist-bin/mutantkit
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutantkit-from-source
           path: dist-bin/mutantkit
@@ -300,11 +300,11 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-from-source
           path: test-binary
@@ -406,7 +406,7 @@ jobs:
 
       - name: Download the artifact action.yml uploaded, under its custom name
         if: always()
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-report-happy-path
           path: downloaded-artifact
@@ -428,10 +428,10 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-from-source
           path: test-binary
@@ -504,7 +504,7 @@ jobs:
             || { echo "::error::job summary did not list the effectiveScore violation"; exit 1; }
 
       - name: Artifacts must still be uploaded on a failing gate
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-report-gate-failure
           path: downloaded-artifact
@@ -518,7 +518,7 @@ jobs:
     name: "gate operational failure (missing/malformed report) never reads as a pass"
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Drives Scripts/action/summarize-gate.sh directly, against
       # hand-crafted gate-result.json fixtures — the operational-failure and
@@ -620,11 +620,11 @@ jobs:
       # Shallow (default fetch-depth: 1): `origin/main` is not fetched, so
       # it must not resolve.
       - name: "Checkout (shallow — origin/main is NOT fetched)"
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-from-source
           path: test-binary
@@ -690,7 +690,7 @@ jobs:
       # fixture too: a fresh `actions/checkout` with the same `path:`
       # replaces mutantkit-src wholesale, taking smoke-fixture with it.
       - name: "Checkout (fetch-depth: 0 — origin/main now resolves)"
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
           fetch-depth: 0
@@ -746,11 +746,11 @@ jobs:
       # anything, against a project-root a *previous*, successful invocation
       # already wrote real report.json/gate-result.json/.mutantkit/* into.
       - name: "Checkout (shallow — origin/main is NOT fetched)"
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-from-source
           path: test-binary
@@ -857,11 +857,11 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Checkout mutantkit (action.yml)
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-from-source
           path: test-binary
@@ -967,10 +967,10 @@ jobs:
     if: github.event_name != 'pull_request'
     steps:
       - name: Checkout mutantkit (action.yml)
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: mutantkit-src
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-from-source
           path: test-binary
