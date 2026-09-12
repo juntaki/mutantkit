@@ -63,6 +63,21 @@ public enum ProjectDetector {
         in directory: URL,
         timeoutSeconds: Double = 60
     ) async throws -> ProjectDetection {
+        try await detect(in: directory, timeoutSeconds: timeoutSeconds, processRunner: defaultProcessRunner)
+    }
+
+    /// - Parameter processRunner: `AdapterSupport.swift`'s `ProcessRunner`
+    ///   seam, letting a test force `outputComplete == false` deterministically
+    ///   (mirrors `XcodeBuildAdapter.uninstallStaleApp`'s identical use of it).
+    ///   `internal`, not `public` (like `ProcessRunner`/`defaultProcessRunner`
+    ///   themselves) — every real caller outside this module goes through
+    ///   the public overload above; no default value here, so the two
+    ///   overloads never read as ambiguous at a call site.
+    static func detect(
+        in directory: URL,
+        timeoutSeconds: Double,
+        processRunner: @escaping ProcessRunner
+    ) async throws -> ProjectDetection {
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil
@@ -90,16 +105,21 @@ public enum ProjectDetector {
             throw ProjectDetectionError.nothingRecognized(directory: directory.path)
         }
 
-        return try await detectPackage(manifest: manifest, in: directory, timeoutSeconds: timeoutSeconds)
+        return try await detectPackage(
+            manifest: manifest, in: directory, timeoutSeconds: timeoutSeconds, processRunner: processRunner
+        )
     }
 
     /// Classifies a Swift package by the platforms its manifest declares.
     private static func detectPackage(
         manifest: URL,
         in directory: URL,
-        timeoutSeconds: Double
+        timeoutSeconds: Double,
+        processRunner: @escaping ProcessRunner
     ) async throws -> ProjectDetection {
-        let platforms = try await declaredPlatforms(in: directory, timeoutSeconds: timeoutSeconds)
+        let platforms = try await declaredPlatforms(
+            in: directory, timeoutSeconds: timeoutSeconds, processRunner: processRunner
+        )
 
         // No `platforms:` means SwiftPM's defaults, which include macOS.
         guard !platforms.isEmpty else {
@@ -144,13 +164,35 @@ public enum ProjectDetector {
     /// `if #available`, or a constant defined elsewhere in the file. Only SwiftPM
     /// can say what it evaluates to, so we ask it instead of pattern-matching text
     /// that only looks like a literal.
-    static func declaredPlatforms(in directory: URL, timeoutSeconds: Double) async throws -> [String] {
-        let result = try await ProcessSupervisor.run(
-            executable: ToolPaths.xcrun,
-            arguments: ["swift", "package", "dump-package"],
-            workingDirectory: directory,
-            timeoutSeconds: timeoutSeconds
-        )
+    static func declaredPlatforms(
+        in directory: URL,
+        timeoutSeconds: Double,
+        processRunner: @escaping ProcessRunner = defaultProcessRunner
+    ) async throws -> [String] {
+        var result = try await processRunner(ToolPaths.xcrun, ["swift", "package", "dump-package"], directory, timeoutSeconds)
+
+        // A truncated capture (`outputComplete == false`) has reached this
+        // point on real CI with an empty stderr under extreme resource
+        // pressure (available memory in the low single-digit GB, system load
+        // many multiples of the core count) -- indistinguishable from a
+        // genuine "manifest is broken" failure without this signal, and the
+        // identical invocation has been observed to succeed immediately
+        // afterward once pressure eases. See `ProcessResult.outputComplete`'s
+        // own doc comment for the general incident class this guards
+        // against (the same shape that hit `simctl uninstall` for real). One
+        // bounded retry, not an open-ended loop: a manifest that is
+        // genuinely unreadable fails the same way on the retry too.
+        if !result.outputComplete {
+            result = try await processRunner(ToolPaths.xcrun, ["swift", "package", "dump-package"], directory, timeoutSeconds)
+        }
+
+        guard result.outputComplete else {
+            throw ProjectDetectionError.manifestUnreadable(
+                directory: directory.path,
+                detail: "swift package dump-package exited (status \(result.exitCode)) but its output could not be " +
+                    "fully captured before the subprocess ended, even after one retry"
+            )
+        }
 
         guard result.succeeded else {
             throw ProjectDetectionError.manifestUnreadable(

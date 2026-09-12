@@ -560,62 +560,6 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
-  # Builds the debug test products ONCE and shares them across every leg of
-  # the `acceptance` matrix below, instead of each of 17 legs independently
-  # paying for the same `swift build --build-tests`. Live-CI-validated
-  # (2026-09-11, throwaway experiment branch, public PR #42, closed without
-  # merge) against the `swift-package` fixture before rolling out to the
-  # real matrix: producer (build + archive + upload) 5m20s, consumer
-  # (download + extract, zero build step) 7m58s vs a fresh-build baseline of
-  # 13m6s for the same fixture — ~5m8s saved per consuming job, with the
-  # real 1.7GB artifact taking only ~10s to round-trip (not the transfer-
-  # cost bottleneck this idea was worried it might be).
-  #
-  # A failed/skipped build here fails every `acceptance` leg via `needs:`
-  # below, which `merge-gate` already treats as "did not run to completion"
-  # — the same fail-closed shape as any other required job, not a new
-  # silent-skip surface.
-  acceptance-build:
-    name: "Acceptance: shared build"
-    runs-on: macos-26
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/checkouts
-            .build/repositories
-            ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
-      - name: Build
-        shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
-      # Only arm64-apple-macosx/debug is archived — no acceptance leg builds
-      # a release configuration through this shared path (xcode-project's
-      # own release build below is separate and untouched by this).
-      - name: Archive build products
-        run: tar -c -C .build -f build-products.tar arm64-apple-macosx
-      - uses: actions/upload-artifact@v4
-        with:
-          name: acceptance-build-products
-          path: build-products.tar
-          retention-days: 1
-      - name: Upload build failure log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: acceptance-build-failure-log
-          if-no-files-found: ignore
-          path: build.log
-
   # The suites that build and mutate real projects. Slow, and the only thing that
   # proves the tool works rather than merely compiles: every wiring bug this
   # project has had — a sandbox handed the wrong excludes, xcodebuild pointed at
@@ -623,7 +567,6 @@ jobs:
   # invisible to the unit tests and produced a confident, wrong score.
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
-    needs: acceptance-build
     runs-on: macos-26
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit`'s own plain unit suite — but still bounded, per the same
@@ -766,32 +709,11 @@ jobs:
             wave: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        if: matrix.fixture != 'xcode-project'
-        with:
-          name: acceptance-build-products
-      - name: Extract build products
-        if: matrix.fixture != 'xcode-project'
-        run: |
-          mkdir -p .build
-          tar -x -f build-products.tar -C .build
-
-      # xcode-project keeps its own independent build rather than the shared
-      # artifact every other fixture uses above. Live-CI evidence
-      # (2026-09-11, rollout to the real matrix): this fixture's own
-      # "Schemata runtime archives" step below layers a `-c release` build
-      # into the same `.build` tree right after extraction, and that
-      # corrupted the extracted debug config's incremental state badly
-      # enough that the `Acceptance` step's `swift test` silently
-      # recompiled MutantKitTests from scratch and then failed a real
-      # mutation assertion (exitCode 2, "0 of 0 tests" baseline) — not
-      # merely slower, a genuine functional break. Every other fixture in
-      # this matrix builds nothing further after extraction and is
-      # unaffected; this is the "needs care" schemata-adjacent case the
-      # original CI-caching finding predicted, confirmed by direct
-      # evidence rather than left as a hypothetical.
-      - name: Cache SwiftPM dependencies (xcode-project only — independent build, see above)
-        if: matrix.fixture == 'xcode-project'
+      # Same cache as release-validation.yml's jobs carry, for the same
+      # reason: the dependency resolve + checkout of swift-syntax is the
+      # bulk of the cold build this job pays on every run, across every
+      # fixture in the matrix.
+      - name: Cache SwiftPM dependencies
         uses: actions/cache@v4
         with:
           path: |
@@ -801,13 +723,6 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
-      - name: Build (xcode-project only — independent build, see above)
-        if: matrix.fixture == 'xcode-project'
-        shell: bash
-        run: |
-          set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
-
       - name: Select pinned Xcode (26.6)
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Toolchain
@@ -818,6 +733,12 @@ jobs:
       - name: Available simulators
         if: matrix.simulator == '1'
         run: xcrun simctl list devices available | grep -i iphone || true
+
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
 
       # Fixture-scoped environment for the `xcode-project` entry only: its
       # filter (`XcodeProjectAcceptanceTests`) also matches
@@ -874,10 +795,6 @@ jobs:
         with:
           name: acceptance-${{ matrix.fixture }}-failure-logs
           if-no-files-found: ignore
-          # build.log only exists for xcode-project (its own independent
-          # build, see above); every other fixture's build happens once in
-          # acceptance-build (see acceptance-build-failure-log for that
-          # job's own log) and never produces a build.log here.
           path: |
             build.log
             acceptance.log
@@ -1049,7 +966,6 @@ jobs:
       - analyze
       - complexity
       - unit
-      - acceptance-build
       - acceptance
       - ror-schemata-differential
       - ios-simulator-schemata-runtime
@@ -1074,7 +990,6 @@ jobs:
           check "analyze" "${{ needs.analyze.result }}"
           check "complexity" "${{ needs.complexity.result }}"
           check "unit" "${{ needs.unit.result }}"
-          check "acceptance-build" "${{ needs.acceptance-build.result }}"
           check "acceptance" "${{ needs.acceptance.result }}"
           check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}"
           check "ios-simulator-schemata-runtime" "${{ needs.ios-simulator-schemata-runtime.result }}"
