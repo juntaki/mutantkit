@@ -349,7 +349,7 @@ runs:
     - name: Restore mutation baseline
       id: restore-baseline
       if: inputs.mode == 'ci' && inputs.diff == ''
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
         key: mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::${{ github.sha }}
@@ -421,7 +421,7 @@ runs:
     # check passed (P13 review, item 11).
     - name: Save mutation baseline
       if: inputs.mode == 'ci' && inputs.diff == '' && success() && github.event_name != 'pull_request' && steps.restore-baseline.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.resolve-paths.outputs.baseline-dir }}/report.json
         key: mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::${{ github.sha }}
@@ -452,7 +452,7 @@ runs:
 
     - name: Upload mutation report artifacts
       if: inputs.mode == 'ci' && always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ runner.temp }}/mutantkit-artifact-staging

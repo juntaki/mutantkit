@@ -97,7 +97,7 @@ jobs:
     # this project's own "nothing runs unbounded" rule.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # v0.8: same pinned toolchain as ci.yml's `lint` job, for the same
       # reason — a runner image update must not silently change what this
@@ -135,7 +135,7 @@ jobs:
           fi
 
       - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .build/checkouts
@@ -322,7 +322,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-package
           # SHA256SUMS travels with the tarball so the two consumers below can
@@ -356,13 +356,13 @@ jobs:
     # reliably red gate with no evidence rather than a false green.
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Same cache as the private `build` job carried, for the same reason: the
       # dependency resolve + checkout of swift-syntax is the bulk of the cold
       # build this job now pays on its own.
       - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .build/checkouts
@@ -386,7 +386,7 @@ jobs:
         run: swift build --build-tests 2>&1 | tee build.log
 
       - name: Download release package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-package
 
@@ -458,7 +458,7 @@ jobs:
 
       - name: Upload failure logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-bundled-schemata-macos-failure-logs
           if-no-files-found: ignore
@@ -493,10 +493,10 @@ jobs:
     # slower of the two, hence the wider budget.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .build/checkouts
@@ -521,7 +521,7 @@ jobs:
         run: swift build --build-tests 2>&1 | tee build.log
 
       - name: Download release package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-package
 
@@ -574,7 +574,7 @@ jobs:
 
       - name: Upload failure logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-bundled-schemata-ios-simulator-failure-logs
           if-no-files-found: ignore
