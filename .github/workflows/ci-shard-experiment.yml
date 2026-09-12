@@ -1,0 +1,247 @@
+name: CI shard experiment
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+# Experimental only: this workflow is added on a topic branch and is not intended
+# to be merged as-is. It waits for the ordinary CI workflow for the same PR SHA
+# to reach its Merge gate before allocating any macOS runners, so the baseline
+# and experiment do not contend for the account's macOS concurrency slots.
+#
+# Keep this one-off PR on the original run's concurrency key so this update
+# cancels the stale run that was already waiting under that key. Any further
+# update to this experiment branch will cancel the preceding experiment too.
+concurrency:
+  group: ci-shard-experiment-b634b9289eb195f2a99c06aa2deff5199cb493ce
+  cancel-in-progress: true
+
+jobs:
+  wait-for-baseline:
+    name: Wait for ordinary CI baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Wait for CI Merge gate on this exact PR SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Waiting for ordinary CI Merge gate on $SHA; no macOS runner is allocated by this job."
+          while true; do
+            runs="$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request&per_page=100" --jq '[.workflow_runs[] | select(.name == "CI")]')"
+            count="$(jq 'length' <<<"$runs")"
+            if [ "$count" -gt 0 ]; then
+              latest="$(jq 'sort_by(.created_at) | last' <<<"$runs")"
+              run_id="$(jq -r '.id' <<<"$latest")"
+              run_status="$(jq -r '.status' <<<"$latest")"
+              run_conclusion="$(jq -r '.conclusion // "pending"' <<<"$latest")"
+
+              jobs="$(gh api "repos/$REPO/actions/runs/$run_id/jobs?filter=latest&per_page=100" --jq '.jobs')"
+              merge_gate="$(jq '[.[] | select(.name == "Merge gate")] | last // empty' <<<"$jobs")"
+
+              if [ -n "$merge_gate" ]; then
+                gate_status="$(jq -r '.status' <<<"$merge_gate")"
+                gate_conclusion="$(jq -r '.conclusion // "pending"' <<<"$merge_gate")"
+                echo "baseline CI run $run_id: run=$run_status/$run_conclusion merge-gate=$gate_status/$gate_conclusion"
+                if [ "$gate_status" = "completed" ]; then
+                  echo "Ordinary CI Merge gate completed with conclusion=$gate_conclusion. Starting the isolated shard experiment."
+                  break
+                fi
+              else
+                echo "baseline CI run $run_id: run=$run_status/$run_conclusion; Merge gate not scheduled yet"
+              fi
+            else
+              echo "ordinary CI run not visible yet"
+            fi
+            sleep 30
+          done
+
+  # The 18 ordinary acceptance fixtures are balanced from the latest main run's
+  # measured Acceptance-step wall times (~38 minutes of acceptance work per
+  # shard). Each runner builds MutantKit tests exactly once and then runs all of
+  # its filters with --skip-build against the same checkout/.build tree. No
+  # build artifact crosses a job boundary, deliberately avoiding #43's mtime and
+  # SwiftPM incremental-state failure mode.
+  acceptance-shard:
+    name: Acceptance shard ${{ matrix.shard }}
+    needs: wait-for-baseline
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: A
+            cases: |
+              xcode-workspace|XcodeWorkspaceAcceptanceTests|1|
+              xcode-app-debug-dylib|XcodeAppDebugDylibAcceptanceTests|1|
+              xcode-incremental-batch-testing|XcodeIncrementalBatchTestingAcceptanceTests|1|
+              shard-merge|ShardMergeAcceptanceTests|0|
+              golden-path-onboarding|GoldenPathOnboardingAcceptanceTests|0|
+              process-supervision|ProcessSupervisionAcceptanceTests|0|
+          - shard: B
+            cases: |
+              xcode-wave-early-kill|XcodeWaveEarlyKillAcceptanceTests|1|1
+              swift-package-ios|SwiftPackageIOSAcceptanceTests|1|
+              xcode-coverage-selection|XcodeCoverageSelectionAcceptanceTests|1|
+              xcode-batch-testing-swift-testing|XcodeBatchTestingSwiftTestingAcceptanceTests|1|
+              swift-package-coverage|SwiftPackageMacOSCoverageAcceptanceTests|0|
+              xcode-config-detector|XcodeConfigDetectorAcceptanceTests|1|
+          - shard: C
+            cases: |
+              swift-package|SwiftPackageMacOSAcceptanceTests|0|
+              xcode-batch-testing-ui-target|XcodeBatchTestingUITargetAcceptanceTests|1|
+              xcode-batch-testing|XcodeBatchTestingAcceptanceTests|1|
+              xcode-unlinked-source|XcodeUnlinkedSourceAcceptanceTests|1|
+              cli-commands|CLICommandsAcceptanceTests|1|
+              ror-schemata-compile|RORSchemataCompileViabilityAcceptanceTests|0|
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Available simulators
+        run: xcrun simctl list devices available | grep -i iphone || true
+      - name: Build tests once for this shard
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      - name: Run shard fixtures without rebuilding
+        shell: bash
+        env:
+          CASES: ${{ matrix.cases }}
+        run: |
+          set -uo pipefail
+          failed=0
+          mkdir -p shard-logs
+          while IFS='|' read -r fixture filter simulator wave; do
+            [ -z "${fixture:-}" ] && continue
+            log="shard-logs/${fixture}.log"
+            echo "::group::fixture=$fixture filter=$filter simulator=$simulator wave=${wave:-<unset>}"
+            set +e
+            MUTANTKIT_ACCEPTANCE=1 \
+            MUTANTKIT_ACCEPTANCE_SIMULATOR="$simulator" \
+            MUTANTKIT_WAVE_ACCEPTANCE="${wave:-}" \
+              swift test --skip-build --filter "$filter" >"$log" 2>&1
+            test_exit=$?
+            set -e
+            cat "$log"
+            if ! scripts/assert-tests-ran.sh "$log" "fixture $fixture (filter $filter)"; then
+              test_exit=1
+            fi
+            if [ "$test_exit" -ne 0 ]; then
+              echo "::error::fixture $fixture failed with exit code $test_exit"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done <<< "$CASES"
+          exit "$failed"
+      - name: Upload shard failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-shard-${{ matrix.shard }}-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            shard-logs/
+
+  # xcode-project remains isolated because its extra release-config schemata
+  # runtime build has already been proven to perturb the debug SwiftPM build
+  # state. Keeping this one fixture independent makes the experiment about
+  # in-runner sharing only where that sharing has no known cross-config hazard.
+  acceptance-xcode-project:
+    name: Acceptance xcode-project (isolated control)
+    needs: wait-for-baseline
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Available simulators
+        run: xcrun simctl list devices available | grep -i iphone || true
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Schemata runtime archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build -c release --product MutantKitSchemataRuntime
+          scripts/build-schemata-runtime.sh "$GITHUB_WORKSPACE/.build/release"
+          echo "MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE=$GITHUB_WORKSPACE/.build/release" >> "$GITHUB_ENV"
+      - name: Acceptance
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_ACCEPTANCE_SIMULATOR: "1"
+        run: |
+          set -o pipefail
+          swift test --filter XcodeProjectAcceptanceTests 2>&1 | tee acceptance.log
+          test_exit=$?
+          scripts/assert-tests-ran.sh acceptance.log "fixture xcode-project (filter XcodeProjectAcceptanceTests)" || test_exit=1
+          exit $test_exit
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-xcode-project-experiment-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance.log
+
+  experiment-gate:
+    name: Shard experiment gate
+    runs-on: ubuntu-latest
+    needs: [acceptance-shard, acceptance-xcode-project]
+    if: always()
+    steps:
+      - name: Require every experimental acceptance job to succeed
+        env:
+          SHARDS: ${{ needs.acceptance-shard.result }}
+          XCODE_PROJECT: ${{ needs.acceptance-xcode-project.result }}
+        run: |
+          set -euo pipefail
+          echo "acceptance-shard -> $SHARDS"
+          echo "acceptance-xcode-project -> $XCODE_PROJECT"
+          if [ "$SHARDS" != success ] || [ "$XCODE_PROJECT" != success ]; then
+            exit 1
+          fi
