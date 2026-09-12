@@ -237,8 +237,8 @@ jobs:
     # but bounded so a recurrence (this exact class of bug, or a new one)
     # fails fast and visibly instead of silently burning an hour+ again.
     # Raised from 15 to 25 when the coverage lane was added: a cold build
-    # with `--enable-code-coverage` plus the lcov export/Sonar/Codecov
-    # steps measured ~15m35s on this runner (every step individually
+    # with `--enable-code-coverage` plus the Sonar/profile-upload steps
+    # measured ~15m35s on this runner (every step individually
     # succeeded, but the job as a whole was reported `cancelled` at the
     # old 15-minute mark) — still an order of magnitude below the 68+
     # minute hang this ceiling exists to catch, not a loosening of it.
@@ -272,7 +272,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+          swift build --build-tests --enable-code-coverage 2>&1 | tee build.log
       # Diagnostic instrumentation for the same real CI hang this job's
       # own `timeout-minutes` above exists for. `swift test` runs in the
       # background, writing straight to a file (never through a pipe
@@ -364,7 +364,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p samples
-          swift test --enable-code-coverage > test.log 2>&1 &
+          swift test --enable-code-coverage --skip-build > test.log 2>&1 &
           test_pid=$!
           echo "swift test started, pid=$test_pid"
           last_lines=0
@@ -431,58 +431,36 @@ jobs:
           # to 1, never clear it.
           Scripts/assert-tests-ran.sh test.log "unit (all suites)" || exit_code=1
           exit $exit_code
-      # Coverage-lane scope, v0 (this round) vs. later:
-      #   v0:    Codecov coverage (project + patch, informational) and
-      #          Sonar static analysis/duplication (no coverage import,
-      #          informational). Test Analytics / JUnit output is explicitly
-      #          NOT a goal of this round — SwiftPM's `--xunit-output`
-      #          fidelity with Swift Testing was never independently
-      #          verified, so it is left out rather than wired on trust.
-      #   later: Codecov Test Analytics (once JUnit output is verified
-      #          reliable), Sonar coverage import (generic coverage XML
-      #          converted from this same lcov, once a converter is worth
-      #          the added scope), and promoting either gate to blocking
-      #          (once a few real runs show what the noise/denominator
-      #          actually look like).
-      #
-      # One test execution (the `swift test --enable-code-coverage` above)
-      # feeds both Sonar and Codecov — deliberately not a second `swift
-      # test` invocation just to collect coverage. SwiftPM writes raw
-      # profile data to `<bin path>/codecov/default.profdata`, keyed to the
-      # test binary at `<bin path>/<Package>PackageTests.xctest/Contents/
-      # MacOS/<Package>PackageTests`; `llvm-cov export` turns that pair into
-      # a single portable lcov.info that both tools consume. The bin path
-      # itself is resolved via `swift build --show-bin-path` rather than
-      # hardcoded as `.build/debug` — it actually varies by toolchain/SDK
-      # (verified: a local Xcode 26.6/Swift 6.3.3 run and this job's own
-      # macos-15/Xcode 16.4 runner resolved to different paths, and a
-      # hardcoded guess silently no-op'd here on the very first live run).
-      # `always()`: coverage is informational, so still attempt it (and let
-      # the step no-op if the earlier build never got far enough to produce
-      # profile data) even when the Test step above reported a failure.
-      - name: Export coverage (lcov)
+      # Preserve this job's raw profile for the one coverage aggregation job
+      # below. `always()` retains partial diagnostic value after a test
+      # failure; absence is tolerated here and rejected by the aggregator
+      # when the required test jobs themselves succeeded.
+      - name: Collect unit coverage profile
         if: always()
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           bin_path="$(swift build --show-bin-path)"
-          profdata="$bin_path/codecov/default.profdata"
-          test_bundle="$(find "$bin_path" -maxdepth 1 -name '*.xctest' -type d | head -n1)"
-          if [ -z "$test_bundle" ] || [ ! -f "$profdata" ]; then
-            echo "No coverage profile data found under $bin_path (profdata=$profdata, test bundle=${test_bundle:-<none>}) — skipping lcov export."
+          profile="$bin_path/codecov/default.profdata"
+          if [ ! -s "$profile" ]; then
+            echo "No unit coverage profile found at $profile."
             exit 0
           fi
-          test_bin="$test_bundle/Contents/MacOS/$(basename "$test_bundle" .xctest)"
-          if [ ! -f "$test_bin" ]; then
-            echo "Found test bundle $test_bundle but no binary at $test_bin — skipping lcov export."
-            exit 0
-          fi
-          xcrun llvm-cov export "$test_bin" -instr-profile "$profdata" -format=lcov > lcov.info
-          wc -l lcov.info
-      # Sonar/Codecov are informational-only at this stage (point 8 of the
-      # coverage-lane plan): `continue-on-error: true` on both so a Sonar
-      # outage, a missing SONAR_TOKEN (see below), or a Codecov upload
-      # hiccup never fails this job or blocks merge-gate.
+          mkdir -p coverage-profile
+          cp "$profile" coverage-profile/unit.profdata
+      - name: Upload unit coverage profile
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-profile-unit
+          path: coverage-profile/unit.profdata
+          if-no-files-found: ignore
+          retention-days: 1
+
+      # Sonar remains informational-only at this stage: a Sonar outage or a
+      # missing SONAR_TOKEN must not change the unit-test verdict. Codecov is
+      # uploaded once, from the aggregation job after every acceptance leg
+      # has contributed its profile.
       #
       # This workflow triggers on plain `pull_request`, not
       # `pull_request_target` — GitHub already withholds repository secrets
@@ -510,14 +488,6 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      - name: Upload coverage to Codecov
-        if: always()
-        continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          fail_ci_if_error: false
       # `always()`, not `failure()`: a job that hits its own
       # `timeout-minutes` is reported as *cancelled*, not failed, and
       # `if: failure()` does not run for a cancelled job's steps — the
@@ -765,7 +735,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          swift build --build-tests 2>&1 | tee build.log
+          swift build --build-tests --enable-code-coverage 2>&1 | tee build.log
 
       # Fixture-scoped environment for the `xcode-project-schemata` entry
       # only — `SchemataSupportedMatrixXcodeProjectAcceptanceTests`'s two
@@ -807,7 +777,7 @@ jobs:
           MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
         run: |
           set -o pipefail
-          swift test --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
+          swift test --enable-code-coverage --skip-build --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
           test_exit=$?
           # P8: a filter matching zero tests must fail this job, not pass it
           # silently -- see scripts/assert-tests-ran.sh. A real test failure
@@ -831,12 +801,34 @@ jobs:
              && grep -q "No schemes are available here" acceptance.log; then
             echo "::warning::xcode-project-schemata hit the documented xcodebuild scheme-visibility flake -- retrying once."
             mv acceptance.log acceptance-first-attempt.log
-            swift test --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
+            swift test --enable-code-coverage --skip-build --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
             test_exit=$?
             scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
           fi
 
           exit $test_exit
+
+      - name: Collect acceptance coverage profile
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin_path="$(swift build --show-bin-path)"
+          profile="$bin_path/codecov/default.profdata"
+          if [ ! -s "$profile" ]; then
+            echo "No coverage profile found for fixture ${{ matrix.fixture }} at $profile."
+            exit 0
+          fi
+          mkdir -p coverage-profile
+          cp "$profile" "coverage-profile/${{ matrix.fixture }}.profdata"
+      - name: Upload acceptance coverage profile
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-profile-${{ matrix.fixture }}
+          path: coverage-profile/${{ matrix.fixture }}.profdata
+          if-no-files-found: ignore
+          retention-days: 1
 
       # `failure()` alone misses a job-level `timeout-minutes` hang: that
       # ends the job `cancelled`, not `failed`, so a real, in-progress
@@ -859,6 +851,75 @@ jobs:
             build.log
             acceptance.log
             acceptance-first-attempt.log
+
+  # Merge the independently-produced unit and acceptance profiles before
+  # exporting once. Every producer builds the same commit with the same
+  # pinned Xcode and `--enable-code-coverage`, so LLVM function hashes and
+  # coverage mappings are compatible across matrix runners. Keeping Codecov
+  # informational here lets us validate the expanded denominator and noise
+  # over real runs before making either project or patch coverage blocking.
+  coverage:
+    name: Coverage aggregation (unit + acceptance)
+    runs-on: macos-26
+    timeout-minutes: 20
+    continue-on-error: true
+    needs:
+      - unit
+      - acceptance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Download coverage profiles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-profile-*
+          path: coverage-profiles
+      - name: Build coverage mapping and export merged LCOV
+        shell: bash
+        run: |
+          set -euo pipefail
+          profiles=()
+          while IFS= read -r profile; do
+            profiles+=("$profile")
+          done < <(find coverage-profiles -type f -name '*.profdata' -print | sort)
+          expected_profiles="$(( $(jq '.fixtures | length' Scripts/ci-fixtures.json) + 1 ))"
+          if [ "${#profiles[@]}" -ne "$expected_profiles" ]; then
+            echo "::error::Expected $expected_profiles coverage profiles (unit plus every acceptance fixture), found ${#profiles[@]}."
+            exit 1
+          fi
+          swift build --build-tests --enable-code-coverage
+          bin_path="$(swift build --show-bin-path)"
+          test_bundle="$(find "$bin_path" -maxdepth 1 -name '*.xctest' -type d | head -n1)"
+          if [ -z "$test_bundle" ]; then
+            echo "::error::No test bundle found under $bin_path."
+            exit 1
+          fi
+          test_bin="$test_bundle/Contents/MacOS/$(basename "$test_bundle" .xctest)"
+          xcrun llvm-profdata merge -sparse "${profiles[@]}" -o merged.profdata
+          xcrun llvm-cov export "$test_bin" -instr-profile merged.profdata -format=lcov > lcov.info
+          test -s lcov.info
+          echo "Merged ${#profiles[@]} coverage profiles."
+          wc -l lcov.info
+      - name: Upload merged coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: false
 
   # Separate from the `acceptance` matrix above because this suite links and
   # runs the real schemata runtime binary (SchemataMutationRunner drives a
