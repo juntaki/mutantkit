@@ -72,6 +72,11 @@ Signed releases and an SBOM are planned but not yet implemented for v0.1. Until
 then, verify a release by its embedded commit SHA and toolchain versions, or
 build from source at a tagged commit.
 
+See [docs/public-quality-badges.md](docs/public-quality-badges.md) for the
+external quality/supply-chain signals (Codecov, SonarCloud, OpenSSF
+Scorecard) run against this repository, and the disposition of any known
+gap on one of them.
+
 ## Threat model — what is *not* guaranteed
 
 MutantKit runs your project's build and test commands. Those commands can do

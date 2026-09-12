@@ -20,15 +20,16 @@ import Testing
 struct TestProductHasherTests {
     @Test("A loose debug dylib inside a .app changes the product hash")
     func looseDylibChangesProductHash() throws {
-        let stub = try fixtureBinaryData()
-        var mutatedDylib = stub
-        // Offset 808 is inside this fixture's `__TEXT,__text` (offset 808,
-        // size 0x14), which is allow-listed — a flip outside any allow-listed
-        // section would leave the code hash, and this test, unchanged.
-        mutatedDylib[810] ^= 0xFF
+        let stub = try fixtureBinary()
+        var mutatedDylib = stub.data
+        // Inside this fixture's own `__TEXT,__text` (computed from its real
+        // layout, not a hardcoded magic offset), which is allow-listed — a
+        // flip outside any allow-listed section would leave the code hash,
+        // and this test, unchanged.
+        mutatedDylib[stub.textOffset + 2] ^= 0xFF
 
-        let baselineRoot = try makeProductsDirectory(appExecutable: stub, debugDylib: stub)
-        let mutantRoot = try makeProductsDirectory(appExecutable: stub, debugDylib: mutatedDylib)
+        let baselineRoot = try makeProductsDirectory(appExecutable: stub.data, debugDylib: stub.data)
+        let mutantRoot = try makeProductsDirectory(appExecutable: stub.data, debugDylib: mutatedDylib)
 
         let baselineHash = try #require(TestProductHasher.hash(productsDirectory: baselineRoot))
         let mutantHash = try #require(TestProductHasher.hash(productsDirectory: mutantRoot))
@@ -38,7 +39,7 @@ struct TestProductHasherTests {
 
     @Test("Two products with an identical debug dylib hash the same")
     func identicalLooseDylibsHashTheSame() throws {
-        let stub = try fixtureBinaryData()
+        let stub = try fixtureBinary().data
 
         let first = try makeProductsDirectory(appExecutable: stub, debugDylib: stub)
         let second = try makeProductsDirectory(appExecutable: stub, debugDylib: stub)
@@ -51,7 +52,7 @@ struct TestProductHasherTests {
 
     @Test("A .app with no debug dylib still hashes its own executable")
     func appWithoutDylibStillHashes() throws {
-        let stub = try fixtureBinaryData()
+        let stub = try fixtureBinary().data
         let root = try makeProductsDirectory(appExecutable: stub, debugDylib: nil)
 
         #expect(TestProductHasher.hash(productsDirectory: root) != nil)
@@ -65,10 +66,12 @@ struct TestProductHasherTests {
 
     // MARK: - Helpers
 
-    private func fixtureBinaryData() throws -> Data {
-        let resourceURL = try #require(Bundle.module.resourceURL)
-        let url = resourceURL.appendingPathComponent("Fixtures/macho-test-binary")
-        return try Data(contentsOf: url)
+    /// A generic real Mach-O to use as a stand-in app executable/debug
+    /// dylib — `MinimalMachO` (`Tests/MutantKitTests/Support/MinimalMachO.swift`)
+    /// replaced a checked-in binary fixture here, the same rationale
+    /// `MachOCodeHashTests` gives for its own use of it.
+    private func fixtureBinary() throws -> MinimalMachO.Built {
+        try MinimalMachO.build(stubBoundToSymbolIndex: 0)
     }
 
     private func makeTempDirectory() throws -> URL {

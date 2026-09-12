@@ -33,7 +33,7 @@ drift apart; update both together.
 | `swiftPackageMacOS` | XCTest | host (macOS) | **Supported** | `SchemataSupportedMatrixSwiftPMMacOSAcceptanceTests.xcTestFullyActivates` |
 | `swiftPackageMacOS` | Swift Testing | host (macOS) | **Supported** | `SchemataSupportedMatrixSwiftPMMacOSAcceptanceTests.swiftTestingFullyActivates` |
 | `swiftPackageMacOS` | XCTest + Swift Testing, mixed in one bundle | host (macOS) | **Supported** | `SchemataSupportedMatrixSwiftPMMacOSAcceptanceTests.mixedFrameworksFullyActivate` |
-| `xcodeProject` | XCTest | iOS Simulator | **Supported** | `SchemataSupportedMatrixXcodeProjectAcceptanceTests.fullyActivatesNoFallback` + `startupHitAndReceiptUUIDMatchOnIOSSimulator` (override) + `ReleaseBundledSchemataXcodeIOSSimulatorAcceptanceTests.xcodeProjectSchemataRunSucceedsFromBundledRuntimeAlone` (bundled release runtime, no override) |
+| `xcodeProject` | XCTest | iOS Simulator | **Supported** | `SchemataMatrixIOSSimulatorAcceptanceTests.fullyActivatesNoFallback` + `startupHitAndReceiptUUIDMatchOnIOSSimulator` (override) + `ReleaseBundledSchemataXcodeIOSSimulatorAcceptanceTests.xcodeProjectSchemataRunSucceedsFromBundledRuntimeAlone` (bundled release runtime, no override) |
 | `swiftPackageApple` (SwiftPM package for a non-host Apple platform) | XCTest | iOS Simulator | **Unsupported** | `SchemataSupportedMatrixSwiftPackageAppleAcceptanceTests` — pinned, see below |
 | `xcodeWorkspace` | XCTest | iOS Simulator | **Unsupported** | `SchemataSupportedMatrixXcodeWorkspaceAcceptanceTests` — pinned, see below |
 
