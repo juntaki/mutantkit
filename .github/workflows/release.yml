@@ -252,6 +252,22 @@ jobs:
           name: mutantkit-macos-arm64
           path: dist
 
+      - name: Require a human-written release-notes file for this tag
+        # A tag that reaches this job with no matching notes file would
+        # otherwise fall through to `--generate-notes` alone: a bare PR-
+        # title list with no highlights, upgrade impact, or breaking-
+        # change summary for a human reader -- the exact gap a release-
+        # notes audit found in this project's own early releases. Failing
+        # closed here means a missing file blocks the release instead of
+        # shipping a thinner one silently.
+        run: |
+          set -euo pipefail
+          notes_file="Release-Notes/${{ github.ref_name }}.md"
+          if [ ! -s "$notes_file" ]; then
+            echo "::error::$notes_file is missing or empty -- add Highlights/Upgrade impact/Breaking changes before tagging ${{ github.ref_name }}."
+            exit 1
+          fi
+
       - name: Create GitHub Release (prerelease -- promoted only after downstream verification, see finalize-release)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -261,6 +277,7 @@ jobs:
             dist/mutantkit-macos-arm64.tar.gz dist/SHA256SUMS \
             --repo "${{ github.repository }}" \
             --title "mutantkit ${{ needs.build.outputs.version }}" \
+            --notes-file "Release-Notes/${{ github.ref_name }}.md" \
             --generate-notes \
             --prerelease
 

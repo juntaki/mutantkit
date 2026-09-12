@@ -1,0 +1,10 @@
+executable: /usr/bin/xcodebuild
+arguments:
+  - -project
+  - App.xcodeproj
+  - -scheme
+  - App
+  - -destination
+  - platform=macOS
+exclude:
+  - Generated
