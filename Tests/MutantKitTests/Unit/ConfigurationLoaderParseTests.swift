@@ -42,6 +42,69 @@ struct ConfigurationLoaderParseTests {
         }
     }
 
+    /// v1 config precedence contract (2026-09-12): CLI > project config file
+    /// > environment > built-in defaults, with no exception for
+    /// `operators.profile`. Before this fix, `MUTANTKIT_OPERATOR_PROFILE`
+    /// unconditionally overwrote `configuration.operators.profile` because
+    /// the decoded value (`.default`) is indistinguishable from "the file
+    /// never mentioned profile at all" without checking the raw YAML.
+    @Test("An explicit operators.profile in the config file wins over MUTANTKIT_OPERATOR_PROFILE, even matching the default")
+    func explicitOperatorProfileBeatsEnvironment() throws {
+        let configuration = try ConfigurationLoader.parse(
+            "version: 1\nproject:\n  kind: auto\noperators:\n  profile: default\n",
+            environment: ["MUTANTKIT_OPERATOR_PROFILE": "experimental"]
+        )
+        #expect(configuration.operators.profile == .default)
+    }
+
+    @Test("MUTANTKIT_OPERATOR_PROFILE fills the gap when the config file never mentions operators.profile")
+    func environmentOperatorProfileFillsAnUnsetGap() throws {
+        let configuration = try ConfigurationLoader.parse(
+            "version: 1\nproject:\n  kind: auto\n",
+            environment: ["MUTANTKIT_OPERATOR_PROFILE": "experimental"]
+        )
+        #expect(configuration.operators.profile == .experimental)
+    }
+
+    @Test("An unrecognized MUTANTKIT_OPERATOR_PROFILE value fails closed instead of silently keeping the default")
+    func unknownEnvironmentOperatorProfileFailsClosed() {
+        #expect(throws: ConfigurationError.self) {
+            try ConfigurationLoader.parse(
+                "version: 1\nproject:\n  kind: auto\n",
+                environment: ["MUTANTKIT_OPERATOR_PROFILE": "not-a-real-profile"]
+            )
+        }
+    }
+
+    @Test("A non-numeric MUTANTKIT_WORKERS fails closed instead of silently keeping the default")
+    func nonNumericEnvironmentWorkersFailsClosed() {
+        #expect(throws: ConfigurationError.self) {
+            try ConfigurationLoader.parse(
+                "version: 1\nproject:\n  kind: auto\n",
+                environment: ["MUTANTKIT_WORKERS": "abc"]
+            )
+        }
+    }
+
+    @Test("A zero or negative MUTANTKIT_WORKERS fails closed instead of silently keeping the default")
+    func nonPositiveEnvironmentWorkersFailsClosed() {
+        #expect(throws: ConfigurationError.self) {
+            try ConfigurationLoader.parse(
+                "version: 1\nproject:\n  kind: auto\n",
+                environment: ["MUTANTKIT_WORKERS": "0"]
+            )
+        }
+    }
+
+    @Test("execution.workers explicitly set in the config file wins over MUTANTKIT_WORKERS")
+    func explicitWorkersBeatsEnvironment() throws {
+        let configuration = try ConfigurationLoader.parse(
+            "version: 1\nproject:\n  kind: auto\nexecution:\n  workers: 3\n",
+            environment: ["MUTANTKIT_WORKERS": "9"]
+        )
+        #expect(configuration.execution.workers == 3)
+    }
+
     /// v0.5 Stable Contracts: an unrecognized key, at any level, is
     /// currently ignored rather than rejected by the decoder itself — the
     /// JSON Schema's `additionalProperties: false` is only ever advertised

@@ -25,11 +25,9 @@ struct MergeCommand: AsyncParsableCommand {
         let loadedPlan = try MutantKitExit.onFailure {
             try MutationPlan.decode(from: Data(contentsOf: URL(fileURLWithPath: plan)))
         }
-        let decoder = MutationPlan.decoder()
-
         let loaded = try MutantKitExit.onFailure {
             try reports.map { path in
-                try decoder.decode(RunReport.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+                try RunReport.decode(from: Data(contentsOf: URL(fileURLWithPath: path)))
             }
         }
 

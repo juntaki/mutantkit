@@ -354,6 +354,16 @@ Either source produces the same audit trail: a suppressed mutant stays in
 `plan.skipped` with `reason: userRequested` and a `detail` naming the exact
 rule that matched, so `discovered == planned + skipped` always holds.
 
+**`file:`'s glob and `sources.exclude`'s glob are not quite the same
+contract.** Both use the same underlying grammar (`*`/`?` bounded to one
+path segment, never crossing `/`; a whole-segment `**` for zero or more
+segments) — but `sources.exclude` additionally treats naming a directory
+as covering everything inside it (`exclude: ["Sources/Generated"]` drops
+the whole tree, the same convenience a `.gitignore` entry gives you).
+`.mutantkitignore`'s `file:` rule does not: it matches the grammar alone,
+so suppressing a directory's contents needs the explicit `Sources/Generated/**`
+shown above, not the bare directory name.
+
 ## What a surviving mutant means
 
 - **`survived`** — the tests ran, covered the mutated line, and all passed

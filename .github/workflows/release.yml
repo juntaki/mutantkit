@@ -249,3 +249,29 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "mutantkit ${{ needs.build.outputs.version }}" \
             --generate-notes
+
+  # v1 contract (2026-09-12): the Homebrew tap is a first-class install
+  # path, so it must not drift from the latest release the way it once
+  # did (the formula stayed pinned two releases behind, unbumped, with
+  # nothing here or in the tap noticing). This only
+  # dispatches the tap's own idempotent sync-release.yml -- it never
+  # writes to the tap repo directly, and the token it uses is scoped to
+  # triggering that one workflow, not to the tap's contents (the tap's own
+  # workflow commits with its own repo-scoped GITHUB_TOKEN instead).
+  dispatch-homebrew-sync:
+    if: github.ref_type == 'tag'
+    needs: publish-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger juntaki/homebrew-mutantkit's sync-release workflow
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_DISPATCH_TOKEN is not set -- skipping the Homebrew tap sync dispatch. Create a fine-grained PAT scoped only to juntaki/homebrew-mutantkit with Actions: write, and set it as this repo's HOMEBREW_TAP_DISPATCH_TOKEN secret, to re-enable this."
+            exit 0
+          fi
+          gh workflow run sync-release.yml \
+            --repo juntaki/homebrew-mutantkit \
+            -f version="${{ github.ref_name }}"

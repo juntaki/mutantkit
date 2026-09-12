@@ -124,7 +124,17 @@ killed, reporting them as `timedOut` and dropping them from the score
 entirely. Budget generously: a `timedOut` should mean "this mutant hangs",
 not "the limit was tight", because the result cannot tell you which.
 
-Precedence: CLI > project config > environment > defaults.
+Precedence: CLI > project config > environment > defaults, with no
+exception for any field, `operators.profile` included: an environment
+override is only consulted for a value the project config file left
+unset, no matter how it compares to that field's own built-in default.
+
+**An environment override this tool recognizes fails closed if its value
+cannot be interpreted.** `MUTANTKIT_WORKERS=abc` or an unrecognized
+`MUTANTKIT_OPERATOR_PROFILE` value refuses to run rather than silently
+falling back to the config file's or the built-in default — the same
+"fail loud, not quiet" contract a malformed `mutantkit.yml` itself
+already gets.
 
 ## Configuration versioning
 

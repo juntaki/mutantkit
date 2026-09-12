@@ -161,7 +161,7 @@ enum ReadinessCheck {
             switch error {
             case .notFound:
                 break
-            case .unreadable, .malformed, .unsupportedVersion:
+            case .unreadable, .malformed, .unsupportedVersion, .invalidEnvironmentValue:
                 configStatus = DiagnosisItem(
                     name: "Configuration",
                     status: .failure,

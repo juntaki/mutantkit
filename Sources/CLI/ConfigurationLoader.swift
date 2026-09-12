@@ -7,6 +7,14 @@ enum ConfigurationError: Error, CustomStringConvertible {
     case unreadable(path: String, underlying: String)
     case malformed(path: String, underlying: String)
     case unsupportedVersion(path: String, found: Int, expected: Int)
+    /// v1 contract: an environment variable in `ConfigurationLoader`'s own
+    /// namespace, once set, must be interpretable or the run must refuse to
+    /// guess. Falling back to a default when `MUTANTKIT_WORKERS=abc` or an
+    /// unknown `MUTANTKIT_OPERATOR_PROFILE` value silently discards a value
+    /// the user deliberately set — a `mutantkit.yml` typo fails loudly via
+    /// `.malformed` above; the environment path must fail exactly as
+    /// loudly, not more quietly just because it is easier to satisfy.
+    case invalidEnvironmentValue(variable: String, value: String, reason: String)
 
     var description: String {
         switch self {
@@ -22,6 +30,8 @@ enum ConfigurationError: Error, CustomStringConvertible {
             "\(path) is not valid configuration: \(underlying)"
         case let .unsupportedVersion(path, found, expected):
             "\(path) declares version \(found); this tool understands version \(expected)."
+        case let .invalidEnvironmentValue(variable, value, reason):
+            "\(variable)=\(value) is not valid: \(reason)"
         }
     }
 }
@@ -75,7 +85,7 @@ enum ConfigurationLoader {
         }
 
         var configuration = try decode(data, sourceDescription: url.path)
-        applyEnvironment(environment, to: &configuration)
+        try applyEnvironment(environment, rawYAML: data, to: &configuration)
         return configuration
     }
 
@@ -90,8 +100,9 @@ enum ConfigurationLoader {
         _ text: String,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> Configuration {
-        var configuration = try decode(Data(text.utf8), sourceDescription: "<generated mutantkit.yml preview>")
-        applyEnvironment(environment, to: &configuration)
+        let data = Data(text.utf8)
+        var configuration = try decode(data, sourceDescription: "<generated mutantkit.yml preview>")
+        try applyEnvironment(environment, rawYAML: data, to: &configuration)
         return configuration
     }
 
@@ -115,20 +126,74 @@ enum ConfigurationLoader {
     /// Environment sits *below* the config file, so it only fills gaps the file
     /// left. A CI variable must not silently redirect a run that the checked-in
     /// config already pinned.
-    private static func applyEnvironment(_ environment: [String: String], to configuration: inout Configuration) {
+    ///
+    /// v1 contract (2026-09-12): fail closed, not just "sit below the file."
+    /// An env var this loader recognizes is a deliberate user action once
+    /// set — `MUTANTKIT_WORKERS=abc` or an unknown
+    /// `MUTANTKIT_OPERATOR_PROFILE` value must not be silently discarded in
+    /// favor of a default, the same way a typo in `mutantkit.yml` itself is
+    /// `.malformed`, not a quiet fallback.
+    ///
+    /// `operators.profile` needed a second fix on top of that: unlike
+    /// `scheme`/`destination`/`workers` (all `Optional` in `Configuration`,
+    /// so `== nil` alone distinguishes "the file left this gap" from "the
+    /// file set it"), `OperatorSettings.profile` decodes to `.default`
+    /// whether the file wrote `profile: default` explicitly or omitted the
+    /// key entirely (`OperatorSettings.init(from:)`'s own
+    /// `decodeIfPresent(...) ?? .default`). Comparing the decoded value
+    /// against `.default` cannot tell those two cases apart, so this reads
+    /// `rawYAML` a second time, structurally, only for that one presence
+    /// question — never for the value itself, which still comes from the
+    /// strongly-typed `Configuration` the normal decode already produced.
+    private static func applyEnvironment(
+        _ environment: [String: String], rawYAML: Data, to configuration: inout Configuration
+    ) throws {
         if configuration.project.scheme == nil, let scheme = environment[EnvironmentKey.scheme] {
             configuration.project.scheme = scheme
         }
         if configuration.project.destination == nil, let destination = environment[EnvironmentKey.destination] {
             configuration.project.destination = destination
         }
-        if configuration.execution.workers == nil,
-           let workers = environment[EnvironmentKey.workers].flatMap(Int.init) {
+        if configuration.execution.workers == nil, let raw = environment[EnvironmentKey.workers] {
+            guard let workers = Int(raw), workers > 0 else {
+                throw ConfigurationError.invalidEnvironmentValue(
+                    variable: EnvironmentKey.workers, value: raw,
+                    reason: "expected a positive integer"
+                )
+            }
             configuration.execution.workers = workers
         }
-        if let raw = environment[EnvironmentKey.profile], let profile = OperatorProfile(rawValue: raw) {
-            configuration.operators.profile = profile
+        if let raw = environment[EnvironmentKey.profile] {
+            guard let profile = OperatorProfile(rawValue: raw) else {
+                throw ConfigurationError.invalidEnvironmentValue(
+                    variable: EnvironmentKey.profile, value: raw,
+                    reason: "expected one of: \(OperatorProfile.allCases.map(\.rawValue).joined(separator: ", "))"
+                )
+            }
+            if !configurationExplicitlySetOperatorProfile(rawYAML) {
+                configuration.operators.profile = profile
+            }
         }
+    }
+
+    /// Whether `mutantkit.yml`'s own text names `operators.profile`
+    /// explicitly, independent of what value `Configuration`'s strongly-typed
+    /// decode produced for it. A structural (not string-search) check: walks
+    /// the same YAML `Yams.compose` already parses into a `Node` tree,
+    /// looking only for the key's presence under `operators:`. Malformed or
+    /// unparsable YAML here is never an error condition on its own — `decode`
+    /// above already ran the real, error-surfacing decode against the same
+    /// bytes, so if that succeeded, this structural walk failing to confirm
+    /// presence is treated as "not present" rather than duplicating that
+    /// error path.
+    private static func configurationExplicitlySetOperatorProfile(_ rawYAML: Data) -> Bool {
+        guard let yamlText = String(data: rawYAML, encoding: .utf8),
+              let root = try? Yams.compose(yaml: yamlText),
+              case let .mapping(topLevel) = root,
+              let operatorsNode = topLevel["operators"],
+              case let .mapping(operatorsMapping) = operatorsNode
+        else { return false }
+        return operatorsMapping["profile"] != nil
     }
 
     /// The starting config `init` writes. Commented, because a config file the

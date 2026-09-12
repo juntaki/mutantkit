@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import MutationModel
 
@@ -38,7 +37,16 @@ public enum MutationSuppressionRule: Sendable, Hashable {
         case let .operatorID(id):
             point.operatorID == id
         case let .fileGlob(pattern):
-            fnmatch(pattern, point.file, 0) == 0
+            // v1 contract (2026-09-12): MutantKit's own `Glob` grammar
+            // (`SourceFileWalker.swift`), not POSIX `fnmatch` — a bare `*`
+            // never crosses a `/` here, unlike `fnmatch(pattern, path, 0)`
+            // without `FNM_PATHNAME`. Deliberately `Glob.matches`, not
+            // `Glob.matchesAny`: naming a directory in `file:` does not
+            // implicitly cover its contents the way `sources.exclude`'s
+            // ancestor convenience does — that is a distinct, additive
+            // source-selection-layer semantic this rule does not opt into,
+            // so a descendant must be named explicitly (`Sources/Generated/**`).
+            Glob.matches(pattern: pattern, path: point.file)
         case let .fileLine(file, line):
             point.file == file && point.line == line
         case let .fileLineOperator(file, line, operatorID):
