@@ -1,0 +1,116 @@
+name: Backfill release signatures
+
+# Historical releases (historical-version-fixture, not a live pin -- tags up through v0.3.0) were
+# published before this project had a signing story at all, and `release.yml`'s pipeline starting
+# from v1.0.0 treats that release as
+# the trust boundary: it attests build provenance for the artifact it
+# itself just built, in the same run. Re-running that same provenance
+# attestation against an already-published historical artifact would claim
+# something false -- that this run's workflow produced/vouches for a file
+# it did not build -- so this workflow deliberately does not do that, and
+# never will for these tags.
+#
+# What it DOES do, and only this: sign the *existing, untouched* bytes of
+# an already-published release with cosign, keyless, right now. That is a
+# real, verifiable cryptographic signature, but it can only honestly mean
+# "the maintainer confirmed and signed this exact artifact today" -- not
+# "this came out of a trusted build pipeline at release time". Every run
+# appends a dated disclaimer saying exactly that to the release's own
+# notes, so nobody downstream mistakes a retroactive signature for
+# original build provenance. Re-running for the same tag is safe: signing
+# is idempotent (`--clobber` on upload) and the disclaimer append is
+# skipped if already present.
+#
+# Provenance (not just a signature) for a pre-v1.0.0 tag is deliberately
+# out of scope here. It would only be honest to add if that tag's exact
+# source were rebuilt today, in isolated CI, and the result matched the
+# original artifact's SHA-256 byte-for-byte -- a reproducible-build claim
+# this workflow does not attempt. Absent that, the original artifact
+# stays exactly as published: unsigned-at-release-time, now additionally
+# signed-in-retrospect, and nothing more.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to sign, e.g. a historical vX.Y.Z tag"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Download the release's existing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --dir dist \
+            --clobber
+          echo "Downloaded assets:"
+          ls -la dist
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign each existing asset (keyless), skipping any signature/provenance files already present
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in dist/*; do
+            case "$f" in
+              *.sigstore.json|*.intoto.jsonl|*.asc|*.sig|*.sign|*.minisig)
+                continue
+                ;;
+            esac
+            echo "Signing $f"
+            cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
+          done
+
+      - name: Upload signatures to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sigs=(dist/*.sigstore.json)
+          if [ "${#sigs[@]}" -eq 0 ]; then
+            echo "::error::No signatures were produced for ${{ inputs.tag }}."
+            exit 1
+          fi
+          gh release upload "${{ inputs.tag }}" "${sigs[@]}" \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+      # Fail-closed disclaimer, not an afterthought: a signature with no
+      # note explaining when/why it was added would read to a downstream
+      # verifier as if it had always been there. Idempotent -- checks the
+      # release's current notes for its own marker text before appending,
+      # so re-dispatching this workflow for the same tag never duplicates
+      # the disclaimer.
+      - name: Append a retroactive-signature disclaimer to the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          marker="Signature added retroactively"
+          notes="$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json body -q .body)"
+          if grep -qF "$marker" <<<"$notes"; then
+            echo "Disclaimer already present on ${{ inputs.tag }}; not appending again."
+            exit 0
+          fi
+          today="$(date -u +%Y-%m-%d)"
+          # shellcheck disable=SC2016
+          disclaimer=$'\n\n---\n\n**Signature added retroactively on '"$today"' (UTC).** The original release artifacts above were not signed at release time; a maintainer has since signed the exact, unmodified bytes with cosign (keyless, Sigstore) and attached the resulting `*.sigstore.json` bundle(s) to this release. This is a retroactive confirmation of these exact bytes, not build provenance from the original release pipeline -- v1.0.0 and later releases carry both a signature and real, in-run build provenance.'
+          printf '%s%s' "$notes" "$disclaimer" >notes.txt
+          gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --notes-file notes.txt
