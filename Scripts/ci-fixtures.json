@@ -20,6 +20,7 @@
     { "fixture": "xcode-coverage-selection", "filter": "XcodeCoverageSelectionAcceptanceTests", "simulator": "1" },
     { "fixture": "xcode-incremental-batch-testing", "filter": "XcodeIncrementalBatchTestingAcceptanceTests", "simulator": "1" },
     { "fixture": "ror-schemata-compile", "filter": "RORSchemataCompileViabilityAcceptanceTests", "simulator": "0" },
-    { "fixture": "xcode-wave-early-kill", "filter": "XcodeWaveEarlyKillAcceptanceTests", "simulator": "1", "wave": "1" }
+    { "fixture": "xcode-wave-early-kill", "filter": "XcodeWaveEarlyKillAcceptanceTests", "simulator": "1", "wave": "1" },
+    { "fixture": "swiftpm-direct-coverage-runner", "filter": "SwiftPMDirectCoverageRunnerAcceptanceTests", "simulator": "0" }
   ]
 }
