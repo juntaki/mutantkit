@@ -24,25 +24,20 @@ hotspots) against every push/PR. `continue-on-error: true` in `ci.yml`,
 and not part of `merge-gate` — a Sonar outage or a missing `SONAR_TOKEN`
 never blocks a merge.
 
-**Known gap, not yet fixed:** SonarCloud's own Quality Gate on this
-project currently reports `ERROR`, but not for a code-quality reason —
-Bugs, Vulnerabilities, and Security Hotspots are all clean; the failing
-condition is a **New Code coverage** threshold (default "Sonar way" gate,
-80%) that Sonar cannot evaluate because it never receives coverage data at
-all (`0.0%` reported, not a real low measurement). `sonar-project.properties`
-documents why: SwiftPM's `llvm-cov`-produced `lcov.info` is fed to Codecov
-directly, but SonarCloud's Swift analyzer has no first-party lcov importer,
-and wiring a converted "Generic Test Coverage" XML report was deliberately
-left undone rather than shipped silently broken.
-
-Disposition: fix, not ignore — the plan is to convert the same
-`lcov.info` already produced for Codecov into Sonar's Generic Coverage XML
-format and wire `sonar.coverageReportPaths` to it, so Sonar's own gate
-reflects the same real, measured coverage Codecov already reports rather
-than an artifact of missing data. Tracked as a real fix because an
-externally-visible quality dashboard that reads "ERROR" for a reason that
-has nothing to do with code quality is exactly the kind of confusing
-signal this page exists to prevent — not merely a cosmetic badge concern.
+**Fixed.** SonarCloud's Quality Gate previously reported `ERROR` for a
+**New Code coverage** threshold (default "Sonar way" gate, 80%) that
+Sonar could never evaluate, because it never received coverage data at
+all (`0.0%` reported, not a real low measurement) — Bugs, Vulnerabilities,
+and Security Hotspots were always clean; only the coverage condition was
+the problem. `ci.yml`'s `coverage` aggregation job now converts the same
+merged `lcov.info` already produced for Codecov into Sonar's Generic Test
+Coverage XML format (`Scripts/lcov-to-sonar-coverage.py`) and passes it to
+the scanner via `-Dsonar.coverageReportPaths=sonar-coverage.xml`, so
+Sonar's own gate reflects the same real, measured coverage Codecov
+already reports. The Sonar scan itself moved from the `unit` job to the
+`coverage` job for this — only the merged unit+acceptance lcov is a real
+coverage number; `unit`'s own profile alone was exactly the "0.0%, not a
+real measurement" shape this fix closes.
 
 ## OpenSSF Scorecard
 
