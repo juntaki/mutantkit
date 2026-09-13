@@ -679,6 +679,15 @@ jobs:
             filter: XcodeWaveEarlyKillAcceptanceTests
             simulator: "1"
             wave: "1"
+          # Substrate for a not-yet-wired-in coverage backend (see
+          # `SwiftPMDirectCoverageRunner`'s own doc comment), but the suite
+          # itself is real, deterministic, and fast (~10s, no simulator) —
+          # left out of this matrix since introduction, which is exactly
+          # why `Sources/AppleBuildAdapters/SwiftPMDirectCoverageRunner.swift`
+          # had 0% measured coverage despite already having tests.
+          - fixture: swiftpm-direct-coverage-runner
+            filter: SwiftPMDirectCoverageRunnerAcceptanceTests
+            simulator: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Same cache as release-validation.yml's jobs carry, for the same
