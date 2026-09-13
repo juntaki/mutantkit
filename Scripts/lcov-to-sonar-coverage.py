@@ -13,16 +13,27 @@ already gets -- one coverage measurement, two consumers, not a second
 Path handling: llvm-cov's `SF:` lines are absolute (e.g.
 `/Users/runner/work/mutantkit/mutantkit/Sources/Foo/Bar.swift`). Sonar's
 generic format wants a path relative to the project base directory
-matching `sonar.sources`/`sonar.tests` (`Sources/Foo/Bar.swift`). A file
-is kept only when stripping the given repo-root prefix leaves a path that
-itself starts with `Sources/` or `Tests/` -- anchored to the root, not a
-bare substring search, because a third-party dependency checked out under
+matching `sonar.sources` (`Sources/Foo/Bar.swift`). A file is kept only
+when stripping the given repo-root prefix leaves a path that itself
+starts with `Sources/` -- anchored to the root, not a bare substring
+search, because a third-party dependency checked out under
 `.build/checkouts/<dep>/Sources/<dep>/...` (e.g. Yams) has its own
 `/Sources/` component that a substring match would wrongly mistake for
-this project's own `Sources/` root. Everything else -- every dependency
-checkout and every SwiftPM-generated file under `.build/` -- is skipped:
-none of it is named by `sonar.sources`/`sonar.tests`, so a report entry
-for it would be noise Sonar can't place, not a real gap.
+this project's own `Sources/` root.
+
+`Tests/` is deliberately excluded, not merely unmatched: `codecov.yml`
+explicitly ignores `Tests/**` so Codecov measures only production code
+(its own comment states the intent that Sonar match that same
+denominator), but Sonar's Generic Coverage Report sensor imports
+whatever file paths a report gives it regardless of `sonar.tests`
+classification -- an earlier version of this script included `Tests/`
+paths and inflated Sonar's `lines_to_cover` by tens of thousands of test
+lines Codecov never counts, which is exactly why the two dashboards'
+percentages stopped being comparable. Every other production-code
+exclusion (`Fixtures/`, `Research/`, the probe-only executable targets,
+...) does not need duplicating here: `sonar.coverage.exclusions` already
+applies to Sonar's coverage metric regardless of which sensor supplied
+the raw data.
 """
 from __future__ import annotations
 
@@ -36,7 +47,7 @@ def relative_sonar_path(absolute_path: str, repo_root: str) -> str | None:
     if not absolute_path.startswith(prefix):
         return None
     relative = absolute_path[len(prefix) :]
-    if relative.startswith("Sources/") or relative.startswith("Tests/"):
+    if relative.startswith("Sources/"):
         return relative
     return None
 
