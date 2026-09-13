@@ -13,6 +13,15 @@ import Testing
 struct MutationRegistryTests {
     // MARK: - Built-in registry
 
+    /// Exact list, not membership: this is also the mechanical backstop for
+    /// `docs/operators.md`'s "v1.x default-operator `id` stability"
+    /// contract — the first five `swift.core.*` IDs below
+    /// (bool-literal-inversion, logical-connector-replacement,
+    /// relational-operator-replacement, ternary-branch-swap,
+    /// unary-not-removal) plus return-value-replacement are promised not
+    /// to be renamed or removed within `v1.x`. A rename/removal there fails
+    /// this exact-array comparison immediately, rather than silently
+    /// passing as "the registry just has different contents now."
     @Test("The built-in registry exposes every default operator, sorted by ID")
     func builtInRegistryContents() {
         let ids = MutationRegistry.builtIn.map(\.descriptor.id)
