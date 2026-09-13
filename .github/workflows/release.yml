@@ -60,11 +60,33 @@ jobs:
       # this workflow, which had left action.yml's "signed release
       # tarball" wording pointing at nothing.
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/mutantkit-macos-arm64.tar.gz
             dist/SHA256SUMS
+
+      # `attest-build-provenance` above already published a verifiable,
+      # Rekor-logged Sigstore attestation to GitHub's own attestation
+      # store (checked with `gh attestation verify`) -- a real signature
+      # over these exact bytes AND real build provenance (which workflow
+      # run/commit produced them), from one keyless Sigstore identity.
+      # OpenSSF Scorecard's Signed-Releases check does not query that
+      # store, though -- it only recognizes a release *asset* whose
+      # filename ends in a fixed set of suffixes (signature:
+      # `.sigstore.json`; provenance: `.intoto.jsonl`; see ossf/scorecard's
+      # releasesAreSigned/releasesHaveProvenance probes). `bundle-path` is
+      # that same attestation, written locally before upload -- staging it
+      # under both suffixes and attaching both as release assets below
+      # makes the one real attestation visible to both probes. It is not
+      # two different claims, and no second signing identity (e.g. cosign)
+      # is introduced only to satisfy a scanner.
+      - name: Stage the real attestation bundle under both Scorecard-recognized names
+        run: |
+          set -euo pipefail
+          cp "${{ steps.attest.outputs.bundle-path }}" dist/attestation.sigstore.json
+          cp "${{ steps.attest.outputs.bundle-path }}" dist/attestation.intoto.jsonl
 
       - name: Upload build artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -73,6 +95,8 @@ jobs:
           path: |
             dist/mutantkit-macos-arm64.tar.gz
             dist/SHA256SUMS
+            dist/attestation.sigstore.json
+            dist/attestation.intoto.jsonl
           retention-days: 30
 
   clean-machine-e2e:
@@ -275,6 +299,8 @@ jobs:
           set -euo pipefail
           gh release create "${{ github.ref_name }}" \
             dist/mutantkit-macos-arm64.tar.gz dist/SHA256SUMS \
+            dist/attestation.sigstore.json \
+            dist/attestation.intoto.jsonl \
             --repo "${{ github.repository }}" \
             --title "mutantkit ${{ needs.build.outputs.version }}" \
             --notes-file "Release-Notes/${{ github.ref_name }}.md" \

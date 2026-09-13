@@ -79,6 +79,24 @@ hand-assembled or substituted afterward. Verify with:
 gh attestation verify mutantkit-macos-arm64.tar.gz --repo juntaki/mutantkit
 ```
 
+Starting with `v1.0.0`, the exact same attestation bundle is also attached
+directly to the release as `attestation.sigstore.json` and
+`attestation.intoto.jsonl` — not a second, different claim, just the one
+real bundle under the two filename suffixes third-party scanners (e.g.
+OpenSSF Scorecard's Signed-Releases check) look for on a release asset
+rather than in GitHub's attestation store.
+
+**`v1.0.0` is this project's supply-chain trust boundary.** Releases from
+`v1.0.0` onward carry both a signature and real, in-run build provenance
+for the exact artifact published. Releases before `v1.0.0`
+(`v0.1.0-alpha.1` through `v0.3.0`) were published before this project had
+a signing story and remain historical, unsigned releases — their original
+artifacts are unchanged. A maintainer may, after the fact, sign an older
+release's unmodified bytes with cosign (keyless, Sigstore) and attach the
+resulting `*.sigstore.json`; when that happens, the release's own notes
+carry a dated disclaimer stating the signature was added retroactively and
+is not build provenance from the original release pipeline.
+
 An SBOM is planned but not yet implemented. Until it lands, verify a
 release's dependency set from `Package.resolved` at the tagged commit.
 
