@@ -167,6 +167,24 @@ struct ExitCodeConsistencyTests {
         }
     }
 
+    /// Distinct from the malformed-plan test above: this plan decodes just
+    /// fine, but contains no mutation with the requested ID — the "not
+    /// found" branch, never reached by a plan that fails to decode at all.
+    @Test("reproduce against a well-formed plan with no matching mutation ID exits with MutantKitExit.operationalError")
+    func reproduceMissingMutationIDExitsOperationally() async throws {
+        let dir = try makeScratchDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let planPath = dir.appendingPathComponent("plan.json")
+        try makePlan(mutations: []).encoded().write(to: planPath, options: .atomic)
+        try Data(Self.minimalConfiguration.utf8).write(to: dir.appendingPathComponent("mutantkit.yml"), options: .atomic)
+
+        let command = try ReproduceCommand.parse(["mut_nonexistent", "--plan", planPath.path, "--project-root", dir.path])
+
+        await #expect(throws: ExitCode(MutantKitExit.operationalError)) {
+            try await command.run()
+        }
+    }
+
     @Test("merge against a malformed plan file exits with MutantKitExit.operationalError")
     func mergeMalformedPlanExitsOperationally() async throws {
         let dir = try makeScratchDirectory()
