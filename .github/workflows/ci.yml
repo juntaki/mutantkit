@@ -153,7 +153,7 @@ jobs:
       # version is asserted after installing rather than pinned at install
       # time — an upstream release then surfaces as an explicit, reviewable
       # CI failure instead of a quietly different verdict.
-      SWIFT_COMPLEXITY_VERSION: "1.4.0"
+      SWIFT_COMPLEXITY_VERSION: "1.5.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned swift-complexity
@@ -457,37 +457,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-      # Sonar remains informational-only at this stage: a Sonar outage or a
-      # missing SONAR_TOKEN must not change the unit-test verdict. Codecov is
-      # uploaded once, from the aggregation job after every acceptance leg
-      # has contributed its profile.
+      # Sonar itself now runs from the `coverage` job instead of here (see
+      # its own comment there): it needs the *merged* unit+acceptance lcov
+      # to import real coverage, not just this job's own unit-only profile,
+      # and this job's Test step above can fail while `always()` on Sonar's
+      # step still lets it run informationally either way.
       #
-      # This workflow triggers on plain `pull_request`, not
-      # `pull_request_target` — GitHub already withholds repository secrets
-      # from fork-PR runs under `pull_request`. Codecov's action supports a
-      # tokenless upload for public repos, so it stays unconditional and
-      # just uploads without a token on a fork PR. Sonar has no such
-      # fallback — it hard-requires SONAR_TOKEN — so on a fork PR the step
-      # is skipped outright rather than left to run as an expected,
-      # continue-on-error'd failure every time. Do not switch this workflow
-      # to `pull_request_target` to give forks a token instead — that would
-      # hand fork-controlled code execution access to a real secret.
-      #
-      # `always()` is required here, not implied: unless a step's own `if`
-      # uses one of always()/failure()/cancelled(), GitHub Actions silently
-      # ANDs it with success() — so without this, the earlier Test step
-      # failing (which coverage/Sonar/Codecov are meant to survive) would
-      # skip this step even on a same-repo push/PR. Verified live: the
-      # first real run on this branch had exactly that happen.
-      - name: SonarCloud Scan
-        if: >
-          always() &&
-          (github.event_name != 'pull_request' ||
-           github.event.pull_request.head.repo.full_name == github.repository)
-        continue-on-error: true
-        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       # `always()`, not `failure()`: a job that hits its own
       # `timeout-minutes` is reported as *cancelled*, not failed, and
       # `if: failure()` does not run for a cancelled job's steps — the
@@ -920,6 +895,37 @@ jobs:
           files: lcov.info
           disable_search: true
           fail_ci_if_error: false
+
+      # SonarCloud's Swift analyzer has no first-party lcov importer (see
+      # sonar-project.properties's own long-standing TODO), so the same
+      # merged lcov.info Codecov just received above is converted to
+      # Sonar's Generic Test Coverage XML here -- one coverage measurement,
+      # two consumers, not a second `swift test` run. Runs from this job
+      # rather than `unit` specifically because only the *merged*
+      # unit+acceptance lcov is a real, non-misleading coverage number;
+      # `unit`'s own profile alone is exactly the "0.0%, not a real
+      # measurement" shape docs/public-quality-badges.md describes fixing.
+      - name: Convert merged coverage to Sonar's Generic Test Coverage format
+        run: python3 Scripts/lcov-to-sonar-coverage.py lcov.info sonar-coverage.xml "$GITHUB_WORKSPACE"
+      # This workflow triggers on plain `pull_request`, not
+      # `pull_request_target` — GitHub already withholds repository secrets
+      # from fork-PR runs under `pull_request`. Sonar hard-requires
+      # SONAR_TOKEN with no tokenless fallback, so on a fork PR the step is
+      # skipped outright rather than left to run as an expected,
+      # continue-on-error'd failure every time. Do not switch this workflow
+      # to `pull_request_target` to give forks a token instead — that would
+      # hand fork-controlled code execution access to a real secret.
+      - name: SonarCloud Scan
+        if: >
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.coverageReportPaths=sonar-coverage.xml
 
   # Separate from the `acceptance` matrix above because this suite links and
   # runs the real schemata runtime binary (SchemataMutationRunner drives a
