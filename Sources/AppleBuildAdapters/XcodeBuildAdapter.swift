@@ -418,20 +418,7 @@ public struct XcodeBuildAdapter: Sendable {
     /// clean empty result is retried, never a timeout or a crash — those
     /// already have their own, larger `timeoutSeconds` budget and retrying
     /// them here would only compound a real hang.
-    ///
-    /// `emptyResultRetryCount` raised from 2 to 8 (2026-09-14): 2 retries
-    /// at a 500ms interval gives at most ~1s of tolerance for the flicker
-    /// above, far short of the ~30s a test-side pre-flight poll
-    /// (`SchemataMatrixIOSSimulatorAcceptanceTests.awaitSharedScheme`)
-    /// needed to reliably observe the identical bare invocation succeed
-    /// under real CI resource pressure — and that test's own poll
-    /// succeeding immediately before this call still failed here,
-    /// confirming 1s was not enough. 8 retries keeps the same 500ms
-    /// interval (~4s worst-case added latency for a project with a
-    /// genuinely empty scheme list, negligible next to this method's
-    /// 120s per-call timeout) while covering far more of the observed
-    /// flicker window.
-    public func discoverSchemes(in workspace: URL, emptyResultRetryCount: Int = 8) async -> [String] {
+    public func discoverSchemes(in workspace: URL, emptyResultRetryCount: Int = 2) async -> [String] {
         let arguments = projectArguments(in: workspace) + ["-list", "-json"]
         for attempt in 0 ... emptyResultRetryCount {
             let result = try? await processRunner(ToolPaths.xcodebuild, arguments, workspace, 120)
