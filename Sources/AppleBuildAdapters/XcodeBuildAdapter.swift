@@ -355,7 +355,8 @@ public struct XcodeBuildAdapter: Sendable {
     func resolveScheme(in workspace: URL) async throws -> String {
         if let configured = configuration.project.scheme { return configured }
 
-        let schemes = await discoverSchemes(in: workspace)
+        let discovery = await discoverSchemesWithDiagnostics(in: workspace)
+        let schemes = discovery.schemes
 
         guard !schemes.isEmpty else {
             throw BuildFailure(
@@ -364,8 +365,8 @@ public struct XcodeBuildAdapter: Sendable {
                 No schemes are available here. Open the project in Xcode and mark a \
                 scheme shared, or set project.scheme in mutantkit.yml.
                 """,
-                command: listCommand(in: workspace, result: nil),
-                output: ""
+                command: listCommand(in: workspace, result: discovery.lastResult),
+                output: discovery.lastResult?.combinedOutput ?? ""
             )
         }
 
@@ -376,8 +377,8 @@ public struct XcodeBuildAdapter: Sendable {
                 \(schemes.count) schemes are available (\(schemes.joined(separator: ", "))) \
                 and mutantkit will not choose for you. Set project.scheme in mutantkit.yml.
                 """,
-                command: listCommand(in: workspace, result: nil),
-                output: ""
+                command: listCommand(in: workspace, result: discovery.lastResult),
+                output: discovery.lastResult?.combinedOutput ?? ""
             )
         }
 
@@ -419,15 +420,38 @@ public struct XcodeBuildAdapter: Sendable {
     /// already have their own, larger `timeoutSeconds` budget and retrying
     /// them here would only compound a real hang.
     public func discoverSchemes(in workspace: URL, emptyResultRetryCount: Int = 2) async -> [String] {
+        await discoverSchemesWithDiagnostics(in: workspace, emptyResultRetryCount: emptyResultRetryCount).schemes
+    }
+
+    /// A discovery attempt's raw last `ProcessResult`, alongside the
+    /// resolved scheme list — `resolveScheme`'s own thrown `BuildFailure`
+    /// needs the real exit code/stdout/stderr for a genuine "no schemes"
+    /// diagnosis (previously always `nil`, since `discoverSchemes`
+    /// discarded the underlying `ProcessResult` entirely); `discoverSchemes`
+    /// itself stays a plain `[String]` for its two other call sites
+    /// (`XcodeConfigDetector`, `Diagnostics`), which have never needed more
+    /// than the scheme list.
+    struct SchemeDiscoveryResult {
+        let schemes: [String]
+        let lastResult: ProcessResult?
+    }
+
+    func discoverSchemesWithDiagnostics(
+        in workspace: URL, emptyResultRetryCount: Int = 2
+    ) async -> SchemeDiscoveryResult {
         let arguments = projectArguments(in: workspace) + ["-list", "-json"]
         for attempt in 0 ... emptyResultRetryCount {
             let result = try? await processRunner(ToolPaths.xcodebuild, arguments, workspace, 120)
-            guard let result, result.succeeded else { return [] }
+            guard let result, result.succeeded else {
+                return SchemeDiscoveryResult(schemes: [], lastResult: result)
+            }
             let schemes = SchemeListJSON.schemes(from: result.standardOutput)
-            if !schemes.isEmpty || attempt == emptyResultRetryCount { return schemes }
+            if !schemes.isEmpty || attempt == emptyResultRetryCount {
+                return SchemeDiscoveryResult(schemes: schemes, lastResult: result)
+            }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
-        return []
+        return SchemeDiscoveryResult(schemes: [], lastResult: nil)
     }
 }
 

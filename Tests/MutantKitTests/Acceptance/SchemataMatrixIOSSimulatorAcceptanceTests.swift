@@ -235,9 +235,19 @@ struct SchemataMatrixIOSSimulatorAcceptanceTests {
     /// nothing about whether the bare, CWD-based call — the one production
     /// actually makes — would succeed. This now polls the exact bare
     /// invocation, in the exact same working directory, production uses.
+    /// Requires two consecutive successful reads, not one (2026-09-14):
+    /// real CI evidence showed this exact poll succeed once, immediately
+    /// followed by production's own `discoverSchemes` — a *separate*
+    /// process launch of the identical invocation, moments later —
+    /// reporting no schemes at all. A single success here proved only
+    /// that scheme visibility exists at one instant, not that it is
+    /// stable across the next process launch a caller actually makes;
+    /// requiring it twice in a row, 250ms apart, does not eliminate that
+    /// race but narrows the window this pre-flight wait misses.
     private static func awaitSharedScheme(inGeneratedProject directory: URL) async throws {
         let deadline = Date().addingTimeInterval(30)
         var lastOutput = ""
+        var consecutiveSuccesses = 0
         repeat {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/xcodebuild")
@@ -250,10 +260,16 @@ struct SchemataMatrixIOSSimulatorAcceptanceTests {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             lastOutput = String(decoding: data, as: UTF8.self)
-            if process.terminationStatus == 0, lastOutput.contains("MatrixEvidenceLib") { return }
+            if process.terminationStatus == 0, lastOutput.contains("MatrixEvidenceLib") {
+                consecutiveSuccesses += 1
+                if consecutiveSuccesses == 2 { return }
+                try await Task.sleep(nanoseconds: 250_000_000)
+                continue
+            }
+            consecutiveSuccesses = 0
             try await Task.sleep(nanoseconds: 200_000_000)
         } while Date() < deadline
-        Issue.record("xcodebuild -list -json never reported the MatrixEvidenceLib scheme within 30s: \(lastOutput)")
+        Issue.record("xcodebuild -list -json never reported the MatrixEvidenceLib scheme twice in a row within 30s: \(lastOutput)")
     }
 
     @Test("A real iOS-Simulator run produces a genuine STARTUP/HIT pair whose image UUID matches the build receipt's own")
