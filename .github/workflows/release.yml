@@ -271,6 +271,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Without this, `Release-Notes/${{ github.ref_name }}.md` below
+      # never exists (this job has no other source of the repo tree) and
+      # the "missing" branch of the very next step fires on every tag,
+      # real notes file or not -- caught only once a real tag was pushed,
+      # because nothing before v1.0.0 had ever reached this job with the
+      # gate in place.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: mutantkit-macos-arm64
