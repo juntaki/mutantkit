@@ -93,7 +93,7 @@ Full depth — integrity violation kinds, the `noCoverage` fast path's own
 history, what "activation" actually means end to end — lives in
 [docs/evidence-model.md](docs/evidence-model.md).
 
-> **v1.0.0 (latest release).** SwiftPM and Xcode projects, isolated and
+> **v1.0.1 (latest release).** SwiftPM and Xcode projects, isolated and
 > schemata execution, CI gating, coverage-based test selection, caching,
 > sharding, and resumable runs. Six operators are enabled by default;
 > more remain experimental pending further validation — see
