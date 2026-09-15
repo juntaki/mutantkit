@@ -105,4 +105,45 @@ struct XcodeBuildAdapterSchemeDiscoveryRetryTests {
         #expect(schemes.isEmpty)
         await #expect(tracker.count == 1)
     }
+
+    // MARK: - resolveScheme: real diagnostics on failure (2026-09-14)
+
+    /// `resolveScheme` used to pass `result: nil` unconditionally into its
+    /// thrown `BuildFailure`, so a "no schemes" failure's own `command`/
+    /// `output` were always empty regardless of what `xcodebuild` actually
+    /// returned — indistinguishable from a genuine process failure in the
+    /// failure's own diagnosis. It now threads the real last `ProcessResult`
+    /// through, so a caller reading the thrown error sees the real exit
+    /// code and combined stdout/stderr.
+    @Test("resolveScheme with zero schemes throws with the real exit code and combined output, not nil/empty")
+    func resolveSchemeWithZeroSchemesCarriesRealDiagnostics() async throws {
+        let failure = ProcessResult(
+            exitCode: 66, standardOutput: Data("{\"project\":{\"name\":\"Demo\",\"schemes\":[]}}".utf8),
+            standardError: Data("xcodebuild: note: transient scheme cache miss".utf8),
+            durationSeconds: 0.2, timedOut: false, terminatingSignal: nil, outputComplete: true
+        )
+        let runner: ProcessRunner = { _, _, _, _ in failure }
+
+        do {
+            _ = try await adapter(processRunner: runner).resolveScheme(in: FileManager.default.temporaryDirectory)
+            Issue.record("expected resolveScheme to throw")
+        } catch let error as BuildFailure {
+            #expect(error.command.exitCode == 66)
+            #expect(error.output.contains("transient scheme cache miss"))
+        }
+    }
+
+    @Test("resolveScheme with more than one scheme throws with the real exit code and combined output")
+    func resolveSchemeWithMultipleSchemesCarriesRealDiagnostics() async throws {
+        let success = result(schemes: ["A", "B"])
+        let runner: ProcessRunner = { _, _, _, _ in success }
+
+        do {
+            _ = try await adapter(processRunner: runner).resolveScheme(in: FileManager.default.temporaryDirectory)
+            Issue.record("expected resolveScheme to throw")
+        } catch let error as BuildFailure {
+            #expect(error.command.exitCode == 0)
+            #expect(error.output.contains("\"A\""))
+        }
+    }
 }
