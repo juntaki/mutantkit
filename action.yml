@@ -45,14 +45,12 @@
 # runs, and `runs.using: composite` requires every `run` step to declare its
 # own `shell`.
 name: "Setup MutantKit"
-description: >-
-  Installs the MutantKit Swift mutation-testing CLI from a release tarball
-  with GitHub artifact attestation (no Homebrew, no repo checkout) and adds
-  it to PATH (mode: install, the default) — or does that, then runs the
-  project's own mutation campaign end to end: doctor, plan, run, a
-  regression-aware quality gate, a job summary, and a report artifact
-  upload (mode: ci).
+description: "Installs MutantKit or runs Swift mutation testing with integrity checks and quality gates"
 author: "juntaki"
+
+branding:
+  icon: "git-branch"
+  color: "purple"
 
 inputs:
   mode:
