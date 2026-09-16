@@ -2,7 +2,7 @@ name: Backfill release signatures
 
 # Historical releases (historical-version-fixture, not a live pin -- tags up through v0.3.0) were
 # published before this project had a signing story at all, and `release.yml`'s pipeline starting
-# from v1.0.0 treats that release as
+# from v1.0.0 treats that release as (historical-version-fixture, not a live pin)
 # the trust boundary: it attests build provenance for the artifact it
 # itself just built, in the same run. Re-running that same provenance
 # attestation against an already-published historical artifact would claim
@@ -21,7 +21,7 @@ name: Backfill release signatures
 # is idempotent (`--clobber` on upload) and the disclaimer append is
 # skipped if already present.
 #
-# Provenance (not just a signature) for a pre-v1.0.0 tag is deliberately
+# Provenance (not just a signature) for a pre-v1.0.0 tag is deliberately (historical-version-fixture, not a live pin)
 # out of scope here. It would only be honest to add if that tag's exact
 # source were rebuilt today, in isolated CI, and the result matched the
 # original artifact's SHA-256 byte-for-byte -- a reproducible-build claim
@@ -111,6 +111,6 @@ jobs:
           fi
           today="$(date -u +%Y-%m-%d)"
           # shellcheck disable=SC2016
-          disclaimer=$'\n\n---\n\n**Signature added retroactively on '"$today"' (UTC).** The original release artifacts above were not signed at release time; a maintainer has since signed the exact, unmodified bytes with cosign (keyless, Sigstore) and attached the resulting `*.sigstore.json` bundle(s) to this release. This is a retroactive confirmation of these exact bytes, not build provenance from the original release pipeline -- v1.0.0 and later releases carry both a signature and real, in-run build provenance.'
+          disclaimer=$'\n\n---\n\n**Signature added retroactively on '"$today"' (UTC).** The original release artifacts above were not signed at release time; a maintainer has since signed the exact, unmodified bytes with cosign (keyless, Sigstore) and attached the resulting `*.sigstore.json` bundle(s) to this release. This is a retroactive confirmation of these exact bytes, not build provenance from the original release pipeline -- v1.0.0 and later releases carry both a signature and real, in-run build provenance.'  # historical-version-fixture, not a live pin
           printf '%s%s' "$notes" "$disclaimer" >notes.txt
           gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --notes-file notes.txt

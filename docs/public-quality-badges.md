@@ -15,7 +15,7 @@ Project + patch coverage, uploaded from the same `lcov.info` the `unit`
 job's own coverage-lane comment describes generating once per CI run.
 `informational: true` on both statuses — not yet wired as a blocking
 check, and `main` is not branch-protected on it. Coverage as of the
-v1.0.0 cycle: **76.13%** project-wide.
+v1.0.0 cycle: **76.13%** project-wide. <!-- historical-version-fixture, not a live pin -->
 
 ## SonarCloud
 
@@ -42,7 +42,7 @@ real measurement" shape this fix closes.
 ## OpenSSF Scorecard
 
 Supply-chain posture, scored dimension by dimension against the public
-repo. One real, actionable finding closed during the v1.0.0 cycle:
+repo. One real, actionable finding closed during the v1.0.0 cycle: <!-- historical-version-fixture, not a live pin -->
 
 - **Binary-Artifacts.** `Tests/MutantKitTests/Fixtures/macho-test-binary`
   was a checked-in, opaque Mach-O binary used by `MachOCodeHashTests`/
