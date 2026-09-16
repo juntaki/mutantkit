@@ -215,16 +215,16 @@ jobs:
   # it refuses to let publish-release proceed unless this exact commit SHA
   # has at least one completed, successful release-validation.yml run.
   #
-  # v1.0.2 (2026-09-16): originally this job only checked and failed closed,
-  # requiring a maintainer to have manually dispatched release-validation.yml
-  # against the commit *before* pushing the tag -- a step nothing enforced or
-  # reminded of, so a tag pushed without it always failed here (v1.0.1 hit
-  # exactly this). Auto-dispatching on a miss removes that footgun without
-  # weakening the gate: a tag push still cannot publish without a genuine,
-  # successful run for its own commit, it just no longer requires a separate
-  # manual step first. The existing-success fast path is unchanged, so a
-  # commit already validated (e.g. re-dispatched during investigation) still
-  # publishes immediately.
+  # 2026-09-16: originally this job only checked and failed closed, requiring
+  # a maintainer to have manually dispatched release-validation.yml against
+  # the commit *before* pushing the tag -- a step nothing enforced or
+  # reminded of, so a tag pushed without it always failed here (an abandoned
+  # patch-release attempt hit exactly this). Auto-dispatching on a miss
+  # removes that footgun without weakening the gate: a tag push still cannot
+  # publish without a genuine, successful run for its own commit, it just no
+  # longer requires a separate manual step first. The existing-success fast
+  # path is unchanged, so a commit already validated (e.g. re-dispatched
+  # during investigation) still publishes immediately.
   require-validation:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
