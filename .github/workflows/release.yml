@@ -214,42 +214,80 @@ jobs:
   # true if something here actually checks it landed. This job is that check:
   # it refuses to let publish-release proceed unless this exact commit SHA
   # has at least one completed, successful release-validation.yml run.
+  #
+  # v1.0.2 (2026-09-16): originally this job only checked and failed closed,
+  # requiring a maintainer to have manually dispatched release-validation.yml
+  # against the commit *before* pushing the tag -- a step nothing enforced or
+  # reminded of, so a tag pushed without it always failed here (v1.0.1 hit
+  # exactly this). Auto-dispatching on a miss removes that footgun without
+  # weakening the gate: a tag push still cannot publish without a genuine,
+  # successful run for its own commit, it just no longer requires a separate
+  # manual step first. The existing-success fast path is unchanged, so a
+  # commit already validated (e.g. re-dispatched during investigation) still
+  # publishes immediately.
   require-validation:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    timeout-minutes: 100
     permissions:
-      actions: read
+      actions: write
     steps:
-      - name: Require the *latest* release-validation run for this commit to have succeeded
+      - name: Require a successful release-validation run for this commit, dispatching one if none exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           sha="${{ github.sha }}"
-          runs="$(gh api "repos/${{ github.repository }}/actions/workflows/release-validation.yml/runs?head_sha=${sha}&status=completed" --jq '.workflow_runs')"
-          run_count="$(echo "$runs" | jq 'length')"
-          if [ "$run_count" -eq 0 ]; then
-            echo "::error::No completed release-validation.yml run found for commit ${sha}. Dispatch release-validation.yml against this commit and wait for release-validation-gate to pass before tagging a release."
-            exit 1
-          fi
+
           # v0.6 Distribution Trust: the *latest* completed run for this
-          # exact commit must have succeeded -- not "any run ever did".
-          # This SHA can only be validated by re-dispatching against it
-          # (its own commit content, including this workflow file, is
-          # fixed by the SHA), but a flaky pass followed by a genuine
-          # investigative re-run that failed must not leave the earlier
-          # lucky pass permanently satisfying this gate. Sort by
-          # created_at, not array order, since the API's own ordering is
-          # not part of its documented contract.
-          latest="$(echo "$runs" | jq 'sort_by(.created_at) | last')"
-          latest_conclusion="$(echo "$latest" | jq -r '.conclusion')"
-          latest_id="$(echo "$latest" | jq -r '.id')"
-          latest_created="$(echo "$latest" | jq -r '.created_at')"
-          if [ "$latest_conclusion" != "success" ]; then
-            echo "::error::The most recent completed release-validation.yml run for commit ${sha} (run ${latest_id}, ${latest_created}) concluded '${latest_conclusion}', not 'success' -- an earlier successful run for this same commit, if any, does not count. Dispatch release-validation.yml again and wait for a genuine success before tagging a release."
+          # exact commit must have succeeded -- not "any run ever did". A
+          # flaky pass followed by a genuine investigative re-run that
+          # failed must not leave the earlier lucky pass permanently
+          # satisfying this gate. Sort by created_at, not array order,
+          # since the API's own ordering is not part of its documented
+          # contract.
+          latest_conclusion() {
+            local runs run_count
+            runs="$(gh api "repos/${{ github.repository }}/actions/workflows/release-validation.yml/runs?head_sha=${sha}&status=completed" --jq '.workflow_runs')"
+            run_count="$(echo "$runs" | jq 'length')"
+            if [ "$run_count" -eq 0 ]; then
+              echo "none"
+              return
+            fi
+            echo "$runs" | jq -r 'sort_by(.created_at) | last | .conclusion'
+          }
+
+          conclusion="$(latest_conclusion)"
+          if [ "$conclusion" = "success" ]; then
+            echo "An existing completed release-validation.yml run for commit ${sha} already succeeded -- not re-dispatching."
+            exit 0
+          fi
+
+          echo "No successful release-validation.yml run found for commit ${sha} (latest completed run: ${conclusion}). Dispatching one now against ${{ github.ref_name }} (~80min)..."
+          before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run release-validation.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"
+
+          # workflow_dispatch does not hand back a run ID directly -- poll
+          # for the run it just created against this exact commit (not
+          # merely "the most recent run"), which could otherwise race a
+          # concurrent manual dispatch. release-validation.yml's own
+          # concurrency group (workflow+ref) means a second dispatch for
+          # this same tag queues behind this one rather than racing it.
+          run_id=""
+          for _ in $(seq 1 30); do
+            sleep 5
+            run_id="$(gh run list --repo "${{ github.repository }}" --workflow release-validation.yml \
+              --json databaseId,createdAt,headSha --jq \
+              "[.[] | select(.createdAt > \"$before\" and .headSha == \"$sha\")] | sort_by(.createdAt) | first | .databaseId // empty")"
+            [ -n "$run_id" ] && break
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::Dispatched release-validation.yml for commit ${sha} but could not find the resulting run within 150s."
             exit 1
           fi
-          echo "Latest release-validation.yml run for commit ${sha} (run ${latest_id}, ${latest_created}) succeeded."
+
+          echo "Waiting on release-validation.yml run $run_id for commit ${sha}..."
+          gh run watch "$run_id" --repo "${{ github.repository }}" --exit-status
 
   # v1 contract (2026-09-12): a GitHub Release is not the end of this
   # pipeline's job, only the point where the real download/install/
