@@ -275,7 +275,7 @@ jobs:
       # never exists (this job has no other source of the repo tree) and
       # the "missing" branch of the very next step fires on every tag,
       # real notes file or not -- caught only once a real tag was pushed,
-      # because nothing before v1.0.0 had ever reached this job with the
+      # because nothing before v1.0.0 had ever reached this job with the (historical-version-fixture, not a live pin)
       # gate in place.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
