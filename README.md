@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="assets/logo.png" alt="MutantKit logo" width="160">
-</p>
+<img src="assets/logo.png" alt="MutantKit logo" width="96">
 
 # MutantKit
 
