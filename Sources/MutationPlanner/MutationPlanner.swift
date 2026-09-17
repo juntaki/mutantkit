@@ -71,16 +71,29 @@ public struct MutationPlanner: Sendable {
     /// contents, and the diff.
     ///
     /// - Parameters:
-    ///   - configuration: the resolved user configuration.
+    ///   - configuration: the resolved user configuration — `mutantkit.yml`
+    ///     exactly as loaded. `configuration.configurationHash` (recorded
+    ///     in the plan, and what `run`'s `PlanCompatibilityValidator` later
+    ///     recomputes and compares against) is always derived from *this*
+    ///     value, never from `sourcesOverride`, so a config file that did
+    ///     not change never reports a spurious compatibility mismatch just
+    ///     because live SwiftPM resolution expanded its scope this time.
     ///   - projectRoot: the directory every path in the plan is relative to.
     ///   - toolchain: gathered by the caller; the planner runs no subprocesses.
     ///   - diffScope: required when `execution.diffBase` is set, ignored otherwise.
+    ///   - sourcesOverride: when present, used in place of
+    ///     `configuration.sources` for the actual file walk only —
+    ///     `SwiftPMLiveSourceResolution`'s live-resolved scope for a
+    ///     SwiftPM project, so the walk sees SwiftPM's real, current
+    ///     compiled set while the recorded configuration hash still
+    ///     reflects the config file the user actually wrote.
     ///   - createdAt: recorded in the plan; excluded from `planID`.
     public func makePlan(
         configuration: Configuration,
         projectRoot: URL,
         toolchain: ToolchainFingerprint,
         diffScope: DiffScope? = nil,
+        sourcesOverride: SourceSettings? = nil,
         createdAt: Date = Date()
     ) async throws -> MutationPlan {
         let resolution = try registry.resolve(configuration.operators)
@@ -90,7 +103,7 @@ public struct MutationPlanner: Sendable {
         }
 
         let root = projectRoot.standardizedFileURL
-        let files = try SourceFileWalker(root: root, settings: configuration.sources).walk()
+        let files = try SourceFileWalker(root: root, settings: sourcesOverride ?? configuration.sources).walk()
         let discovery = try await discoverConcurrently(
             files: files,
             root: root,

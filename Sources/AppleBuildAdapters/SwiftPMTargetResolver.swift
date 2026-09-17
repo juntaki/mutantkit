@@ -123,7 +123,8 @@ public enum SwiftPMTargetResolver {
         var targets: [String: SwiftPMDependencyGraph.TargetInfo] = [:]
         for target in decoded.targets {
             targets[target.name] = SwiftPMDependencyGraph.TargetInfo(
-                name: target.name, type: target.type, path: target.path, dependencies: Set(target.targetDependencies ?? [])
+                name: target.name, type: target.type, path: target.path,
+                sources: target.sources, dependencies: Set(target.targetDependencies ?? [])
             )
         }
         var products: [String: Set<String>] = [:]
@@ -153,9 +154,19 @@ public struct SwiftPMDependencyGraph: Sendable {
         /// Project-root-relative, e.g. `"Sources/MutationModel"` or a real
         /// custom layout like `"ExampleLib/Services"` — SwiftPM's own
         /// resolved `path:`, not a `Sources/<name>` convention guess. See
-        /// `sourcePaths(reachableFrom:)`'s own doc comment for why this
+        /// `sourceFiles(reachableFrom:)`'s own doc comment for why this
         /// matters.
         public let path: String
+        /// Target-relative filenames, straight from `swift package
+        /// describe`'s own `sources` list for this target — e.g.
+        /// `"CoreTypes.swift"`. Kept alongside `path` so
+        /// `sourceFiles(reachableFrom:)` can name the exact files SwiftPM
+        /// compiles, not just the directory they live in: a target whose
+        /// manifest lists an explicit `sources:` allow-list narrower than
+        /// its own directory (a real, not hypothetical, layout — a target
+        /// directory holding one file deliberately left out of the
+        /// product) makes `path` alone over-include that file.
+        public let sources: [String]
         public let dependencies: Set<String>
     }
 
@@ -192,22 +203,59 @@ public struct SwiftPMDependencyGraph: Sendable {
     /// warning, since `plan` still found a plausible-looking non-zero
     /// mutation count and nothing caught the mismatch.
     ///
-    /// Deliberately test targets' own paths are never included here — a
-    /// test target's own path is not production code to mutate, and
+    /// Named per file, not per target directory (`sourceFiles`, not
+    /// `sourcePaths`): `Package.swift` can give a target an explicit
+    /// `sources:` allow-list narrower than its own directory — a file
+    /// physically present under that directory but never listed there is
+    /// never compiled into any build product. A directory-level answer
+    /// would still hand that file to `plan` as part of one glob, `mutantkit`
+    /// would still discover mutations in it, and every one of those mutants
+    /// would fail identically with `buildProductIdenticalToBaseline` — the
+    /// build genuinely never changes, because the mutated file was never
+    /// part of it. This is `plan`'s own live source of truth for a SwiftPM
+    /// project's real, resolved compilation scope
+    /// (`SwiftPMLiveSourceResolution`, `Sources/CLI`) — queried fresh on
+    /// every `plan`, the same way Stryker.NET treats an MSBuild project's own
+    /// `Compile` item list as authoritative rather than asking a separately
+    /// maintained config file to duplicate it, rather than being snapshotted
+    /// once into `mutantkit.yml` and left to drift from `Package.swift`.
+    ///
+    /// Deliberately test targets' own files are never included here — a
+    /// test target's own source is not production code to mutate, and
     /// excluding it this way, by construction, is simpler and more direct
     /// than relying on `SourceSettings.defaultExcludes`' own glob patterns
     /// to happen to rule it out.
-    public func sourcePaths(reachableFrom testTargets: [String]) -> [String] {
+    public func sourceFiles(reachableFrom testTargets: [String]) -> [String] {
         var visited: Set<String> = []
-        var paths: [String] = []
+        var files: [String] = []
         var queue = testTargets
         while let name = queue.popLast() {
             guard !visited.contains(name), let info = targets[name] else { continue }
             visited.insert(name)
-            if info.type != "test" { paths.append(info.path) }
+            if info.type != "test" {
+                // Only `.swift` files: a mixed-language target's `sources`
+                // list can include `.c`/`.h`/`.m` siblings SwiftPM compiles
+                // but `SourceFileWalker`/the mutation planner never can —
+                // returning those here would write `sources.include`
+                // entries that can never match anything the planner walks,
+                // and would show up as spurious "under-included" noise on
+                // every subsequent `plan`.
+                files.append(contentsOf: info.sources
+                    .filter { $0.hasSuffix(".swift") }
+                    .map { Self.joinedSourcePath(targetPath: info.path, source: $0) })
+            }
             queue.append(contentsOf: info.dependencies)
         }
-        return paths.sorted()
+        return files.sorted()
+    }
+
+    /// `swift package describe` reports a target rooted at the package root
+    /// itself as `path: "."` — joining that naively (`"./Foo.swift"`) never
+    /// matches `SourceFileWalker`'s own repository-relative output
+    /// (`"Foo.swift"`, no leading `./`), which would make a freshly
+    /// generated `sources.include` match nothing at all.
+    private static func joinedSourcePath(targetPath: String, source: String) -> String {
+        targetPath == "." ? source : "\(targetPath)/\(source)"
     }
 
     private func reaches(_ info: TargetInfo, target: String, visited: Set<String> = []) -> Bool {

@@ -149,4 +149,23 @@ struct ConfigurationLoaderParseTests {
             #expect(configuration.project.kind == kind)
         }
     }
+
+    /// Caught by `codex review` before this shipped: an unquoted `- **`
+    /// (the "no additional narrowing" marker a resolved SwiftPM detection
+    /// writes for `sources.include`, see `ConfigurationLoader
+    /// .sourceIncludeEntry`'s own doc comment) parses in YAML as an alias
+    /// reference, not a literal string — `Yams.compose` throws on it, so
+    /// every freshly `setup`-generated SwiftPM config would have failed to
+    /// load at all. `detectionPlanTemplateRoundTrips` above never exercised
+    /// this because it only ever calls `template(...)` with the default
+    /// `sourcesInclude`, never `["**"]` — this closes exactly that gap,
+    /// through the real Yams parser, not a string-containment check.
+    @Test("The \"**\" sources.include marker parses back as a real, literal string, not a YAML alias")
+    func doubleStarMarkerRoundTrips() throws {
+        let template = ConfigurationLoader.template(
+            for: .swiftPackageMacOS, scheme: nil, destination: nil, testTargets: [], sourcesInclude: ["**"]
+        )
+        let configuration = try ConfigurationLoader.parse(template, environment: [:])
+        #expect(configuration.sources.include == ["**"])
+    }
 }

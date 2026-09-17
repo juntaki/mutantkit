@@ -35,6 +35,14 @@ struct PlanCommand: AsyncParsableCommand {
         try overrides.apply(to: &settings)
 
         try ConfigurationPreflight.run(settings)
+        // Resolved separately from `settings.sources`, never assigned back
+        // into it: `settings.configurationHash` (recorded in the plan, and
+        // what `run` later recomputes from its own freshly-loaded
+        // `mutantkit.yml` to check compatibility) must keep reflecting the
+        // config file exactly as written, not this run's live-expanded
+        // scope — see `MutationPlanner.makePlan`'s own doc comment on
+        // `sourcesOverride`.
+        let liveSwiftPMSources = await SwiftPMLiveSourceResolution.resolve(configuration: settings, root: root)
 
         try Self.validateDiffBaseAndSince(diffBase: diffBase, since: since)
         if let base = diffBase ?? since {
@@ -55,7 +63,8 @@ struct PlanCommand: AsyncParsableCommand {
             configuration: settings,
             projectRoot: root,
             toolchain: toolchain,
-            diffScope: scope
+            diffScope: scope,
+            sourcesOverride: liveSwiftPMSources
         )
 
         let defaultIgnore = root.appendingPathComponent(".mutantkitignore")
@@ -181,6 +190,7 @@ struct PlanCommand: AsyncParsableCommand {
     /// matches no real file." Both are real possibilities; only the second
     /// is almost always a misconfiguration, and it is the overwhelmingly
     /// more likely one for any project with actual production code.
+
     private static func warnIfNothingDiscovered(_ plan: MutationPlan) {
         guard plan.discoveredCount == 0 else { return }
         FileHandle.standardError.write(Data("""
