@@ -22,13 +22,15 @@ enum ProjectDetectionPlan {
         let kind: ProjectKind?
         let reason: String?
         let swiftPMTestTargets: [String]
-        /// The real, resolved source paths of every production target
-        /// `swiftPMTestTargets` actually depends on — empty when detection
-        /// found nothing usable (not a SwiftPM kind, `swift package
-        /// describe` failed, or no test target resolved), in which case
-        /// `build(_:)` falls back to the `Sources` convention. See
-        /// `SwiftPMDependencyGraph.sourcePaths(reachableFrom:)`'s own doc
-        /// comment for why this must not just assume that convention.
+        /// `["**"]` when a SwiftPM test target actually resolved — a marker
+        /// meaning "no additional narrowing", since `plan` resolves this
+        /// project's real compilation scope live from SwiftPM's own build
+        /// graph every time it runs (`SwiftPMLiveSourceResolution`) rather
+        /// than trusting a list snapshotted once by `setup`. Empty when
+        /// detection found nothing usable (not a SwiftPM kind, `swift
+        /// package describe` failed, or no test target resolved), in which
+        /// case `build(_:)` falls back to the literal `Sources` directory
+        /// convention.
         let swiftPMSourcesInclude: [String]
         let scheme: String?
         let schemeCandidates: [String]
@@ -146,7 +148,10 @@ enum ProjectDetectionPlan {
         let testTargets = swiftPMTestTargets.isEmpty ? xcodeTestTargets : swiftPMTestTargets
         let sourcesInclude = input.swiftPMSourcesInclude.isEmpty ? ["Sources"] : input.swiftPMSourcesInclude
         if !input.swiftPMSourcesInclude.isEmpty {
-            lines.append("Detected source path(s): \(sourcesInclude.joined(separator: ", "))")
+            lines.append("""
+            Mutation scope: resolved live from SwiftPM's build graph on every \
+            `plan` (sources.include applies no additional narrowing).
+            """)
         }
         let template = ConfigurationLoader.template(
             for: kind ?? .auto,
@@ -200,13 +205,25 @@ enum ProjectDetectionPlan {
     /// package describe`'s own `"type": "test"` classification) — this used
     /// to be thrown away, leaving `tests.targets: []` in every generated
     /// `mutantkit.yml` regardless of project kind, with only a comment
-    /// telling the user to fill it in by hand. The same resolved graph also
-    /// gives the real source paths those test targets depend on
-    /// (`sourcePaths(reachableFrom:)`) — previously thrown away too, with
-    /// `sources.include` hardcoded to the `Sources/**` convention
-    /// regardless of a project's real, possibly custom layout (see that
-    /// function's own doc comment for the real project this was found
-    /// against).
+    /// telling the user to fill it in by hand.
+    ///
+    /// Deliberately does *not* also resolve and write real source
+    /// paths/files here the way earlier revisions did. Two shapes were
+    /// tried and both drift from `Package.swift` in opposite ways: a
+    /// directory-level `sources.include` over-includes a file a target's
+    /// `sources:` allow-list deliberately excludes (the real bug this whole
+    /// area was root-caused against, 2026-09), while a file-exact list
+    /// under-includes a file added to the target's directory after `setup`
+    /// last ran. `sources.include: ["**"]` sidesteps both: it is a marker,
+    /// not a snapshot, and `plan` resolves the real, current scope live
+    /// from SwiftPM's own build graph on every run
+    /// (`SwiftPMLiveSourceResolution`, `Sources/CLI`) — the same principle
+    /// Stryker.NET uses an MSBuild project's own `Compile` item list for,
+    /// rather than a separately maintained config file. `sources.include`,
+    /// for a SwiftPM project, is therefore an *optional additional filter*
+    /// over that live scope, not the list of what exists — narrowing it to
+    /// a real glob still works exactly as before, for a deliberate
+    /// partial-scope run.
     ///
     /// Xcode project/workspace kinds are handled separately, by
     /// `XcodeConfigDetector` — this function itself still only ever returns
@@ -225,6 +242,6 @@ enum ProjectDetectionPlan {
         guard kind == .swiftPackageMacOS || kind == .swiftPackageApple else { return ([], []) }
         guard let graph = try? await SwiftPMTargetResolver.resolveDependencyGraph(projectRoot: projectRoot) else { return ([], []) }
         let testTargets = graph.targets.keys.filter { graph.isTestTarget($0) }.sorted()
-        return (testTargets, graph.sourcePaths(reachableFrom: testTargets))
+        return (testTargets, testTargets.isEmpty ? [] : ["**"])
     }
 }

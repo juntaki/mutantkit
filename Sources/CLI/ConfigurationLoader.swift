@@ -206,6 +206,30 @@ enum ConfigurationLoader {
     /// against it.
     private static let schemaURL = "https://raw.githubusercontent.com/juntaki/mutantkit/v0.3.0/Schema/mutantkit-v1.json"
 
+    /// `sourcesInclude` mixes two real shapes: a plain directory name
+    /// (`"Sources"`, or an Xcode target's containing folder) that needs its
+    /// own `/**` glob suffix to match every file beneath it, and an already
+    /// glob-shaped entry — `"**"`, the marker a SwiftPM detection with a
+    /// resolved test target writes (`ProjectDetectionPlan
+    /// .detectedSwiftPMTestTargetsAndSources`'s own doc comment) meaning "no
+    /// additional narrowing; `plan` resolves the real scope live" — that
+    /// must be written as-is. Appending `/**` to `"**"` would produce
+    /// `"**/​**"`, a needlessly confusing way to spell the same "match
+    /// everything" pattern. Any entry already containing `*` is left
+    /// untouched on that basis; a plain name never does.
+    ///
+    /// A leading `*` additionally needs YAML quoting: `*` is YAML's alias
+    /// indicator, valid only at the start of a plain scalar, so an
+    /// unquoted `- **` parses as a reference to an anchor named `*` that
+    /// was never defined — not the literal two-character string this
+    /// generator means. Caught by `codex review` before this shipped: an
+    /// unquoted `sources.include: [**]` made every freshly `setup`-
+    /// generated SwiftPM `mutantkit.yml` fail to parse at all.
+    private static func sourceIncludeEntry(_ entry: String) -> String {
+        if entry.hasPrefix("*") { return "    - \"\(entry)\"" }
+        return entry.contains("*") ? "    - \(entry)" : "    - \(entry)/**"
+    }
+
     /// v0.5 Stable Contracts: this generator and `docs/configuration.md`'s
     /// own hand-written example are two independently-maintained "what does
     /// a real config look like" documents with no test comparing them
@@ -230,7 +254,15 @@ enum ConfigurationLoader {
         if let destination { lines.append("  destination: \(destination)") }
 
         lines.append(contentsOf: ["", "sources:", "  include:"])
-        lines.append(contentsOf: sourcesInclude.map { "    - \($0)/**" })
+        if sourcesInclude == ["**"] {
+            lines.append(contentsOf: [
+                "    # SwiftPM's own build graph resolves which files this project really",
+                "    # compiles, live, on every `plan` — \"**\" applies no additional narrowing",
+                "    # on top of that. Replace it with a real glob or file list only to",
+                "    # deliberately mutate a subset."
+            ])
+        }
+        lines.append(contentsOf: sourcesInclude.map(Self.sourceIncludeEntry))
         lines.append("  exclude:")
         lines.append(contentsOf: SourceSettings.defaultExcludes.map { "    - \"\($0)\"" })
 

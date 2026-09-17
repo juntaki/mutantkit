@@ -71,24 +71,34 @@ struct ProjectDetectionPlanTests {
     /// and zero in any of the 35 real files the actual test target
     /// covered. Worse than a zero-discovery warning, since nothing caught
     /// the mismatch.
-    @Test("A custom, non-conventional source path is used verbatim, not the Sources/** convention")
-    func customSourcePathIsUsedVerbatim() {
-        let result = build(swiftPMTestTargets: ["ExampleLibTests"], swiftPMSourcesInclude: ["ExampleLib/Services"])
-        #expect(result.template.contains("- ExampleLib/Services/**"))
+    ///
+    /// A later revision (2026-09-17, root-caused against a different real
+    /// project) found the opposite drift in a *directory-level* fix for
+    /// this: a target whose `Package.swift` declares an explicit `sources:`
+    /// allow-list narrower than its own directory got a sibling file
+    /// over-included, and a subsequent *file-exact* fix for that then
+    /// under-included any file added after `setup` last ran. Both were the
+    /// same mistake — a config file duplicating a fact the build system
+    /// already knows — so `sources.include` for a SwiftPM project is no
+    /// longer where that fact lives at all: `detectedSwiftPMTestTargetsAndSources`
+    /// now only ever writes `["**"]` (a resolved test target) or `[]` (none
+    /// resolved), never a real path. `SwiftPMLiveSourceResolution`
+    /// (`Sources/CLI`) is what actually resolves the scope, live, at `plan`
+    /// time — these tests only cover what `build(_:)` writes into the
+    /// template for each of those two possible inputs.
+    @Test("A resolved SwiftPM test target writes the \"**\" no-narrowing marker, not a real path")
+    func resolvedSwiftPMTestTargetWritesNoNarrowingMarker() {
+        let result = build(swiftPMTestTargets: ["ExampleLibTests"], swiftPMSourcesInclude: ["**"])
+        // Quoted, not bare `- **`: an unquoted leading `*` is YAML's alias
+        // indicator, not a literal character (see `ConfigurationLoader
+        // .sourceIncludeEntry`'s own doc comment) — `ConfigurationLoaderParseTests
+        // .doubleStarMarkerRoundTrips` proves this actually parses back correctly.
+        #expect(result.template.contains("    - \"**\"\n"))
         #expect(!result.template.contains("- Sources/**"))
+        #expect(!result.template.contains("**/**"))
     }
 
-    @Test("More than one reachable production target's path is listed")
-    func multipleSourcePathsAreListed() {
-        let result = build(
-            swiftPMTestTargets: ["AppTests"],
-            swiftPMSourcesInclude: ["Sources/Core", "Sources/Networking"]
-        )
-        #expect(result.template.contains("- Sources/Core/**"))
-        #expect(result.template.contains("- Sources/Networking/**"))
-    }
-
-    @Test("No resolved SwiftPM source paths falls back to the Sources/** convention")
+    @Test("No resolved SwiftPM source scope falls back to the Sources/** convention")
     func fallsBackToConventionalSourcesPath() {
         let result = build(swiftPMSourcesInclude: [])
         #expect(result.template.contains("- Sources/**"))
