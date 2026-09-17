@@ -104,17 +104,10 @@ struct DryRunCommand: AsyncParsableCommand {
                 throw ExitCode(MutantKitExit.operationalError)
             }
 
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
             let passed = Self.passedOutput(for: result.summary)
             print(passed.stdoutLine)
-            if let warning = passed.stderrWarning {
-                // v0.5 Stable Contracts: diagnostics go to stderr, not
-                // stdout. The baseline itself did pass — this only says
-                // structured counts were not available, which needs its
-                // own line rather than living inside a "passed (...)"
-                // clause easy to read as good news with a minor caveat,
-                // not a real reporting gap.
-                FileHandle.standardError.write(Data(warning.utf8))
-            }
+            if let warning = passed.stderrWarning { FileHandle.standardError.write(Data(warning.utf8)) }
             print("Build: \(artifact.command.displayString)")
             print("Test:  \(result.command.displayString)")
             try? await workspaces.destroySandbox(at: sandbox)
@@ -131,6 +124,12 @@ struct DryRunCommand: AsyncParsableCommand {
     /// previously left this branching logic effectively untested — a real
     /// gap `SonarCloud`'s new-code coverage gate on this PR actually
     /// caught (20% on this file, 12 of 15 new lines uncovered).
+    ///
+    /// `stderrWarning`, when present, is its own separate line rather than
+    /// folded into `stdoutLine`: the baseline itself did pass, so burying
+    /// "structured counts were not available" inside a "passed (...)"
+    /// clause reads as a minor caveat on good news, not the real reporting
+    /// gap it is.
     struct PassedOutput: Equatable {
         let stdoutLine: String
         let stderrWarning: String?
