@@ -140,7 +140,7 @@ struct DryRunCommand: AsyncParsableCommand {
         guard let summary else {
             return PassedOutput(
                 stdoutLine: "Dry run passed.",
-                stderrWarning: "warning: \(Self.countsDescription(for: nil)). Mutation execution can " +
+                stderrWarning: "warning: \(countsDescription(for: nil)). Mutation execution can " +
                     "proceed, but test-count reporting will be unavailable for this run.\n"
             )
         }
