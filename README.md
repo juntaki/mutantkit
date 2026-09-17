@@ -1,3 +1,5 @@
+<img src="assets/logo.png" alt="MutantKit logo" width="96">
+
 # MutantKit
 
 [![CI](https://github.com/juntaki/mutantkit/actions/workflows/ci.yml/badge.svg)](https://github.com/juntaki/mutantkit/actions/workflows/ci.yml)

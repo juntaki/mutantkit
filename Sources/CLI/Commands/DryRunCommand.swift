@@ -104,7 +104,10 @@ struct DryRunCommand: AsyncParsableCommand {
                 throw ExitCode(MutantKitExit.operationalError)
             }
 
-            print("Dry run passed (\(Self.countsDescription(for: result.summary))).")
+            // v0.5 Stable Contracts: diagnostics go to stderr, not stdout.
+            let passed = Self.passedOutput(for: result.summary)
+            print(passed.stdoutLine)
+            if let warning = passed.stderrWarning { FileHandle.standardError.write(Data(warning.utf8)) }
             print("Build: \(artifact.command.displayString)")
             print("Test:  \(result.command.displayString)")
             try? await workspaces.destroySandbox(at: sandbox)
@@ -112,6 +115,35 @@ struct DryRunCommand: AsyncParsableCommand {
             try? await workspaces.destroySandbox(at: sandbox)
             throw error
         }
+    }
+
+    /// What `run()` prints/warns for a passed baseline — pulled out as a
+    /// pure function (mirroring `countsDescription` just below) so the
+    /// decision itself is directly unit-testable. `run()`'s own body talks
+    /// to real adapters/sandboxes and cannot be unit-tested at all, which
+    /// previously left this branching logic effectively untested — a real
+    /// gap `SonarCloud`'s new-code coverage gate on this PR actually
+    /// caught (20% on this file, 12 of 15 new lines uncovered).
+    ///
+    /// `stderrWarning`, when present, is its own separate line rather than
+    /// folded into `stdoutLine`: the baseline itself did pass, so burying
+    /// "structured counts were not available" inside a "passed (...)"
+    /// clause reads as a minor caveat on good news, not the real reporting
+    /// gap it is.
+    struct PassedOutput: Equatable {
+        let stdoutLine: String
+        let stderrWarning: String?
+    }
+
+    static func passedOutput(for summary: TestOutcomeSummary?) -> PassedOutput {
+        guard let summary else {
+            return PassedOutput(
+                stdoutLine: "Dry run passed.",
+                stderrWarning: "warning: \(countsDescription(for: nil)). Mutation execution can " +
+                    "proceed, but test-count reporting will be unavailable for this run.\n"
+            )
+        }
+        return PassedOutput(stdoutLine: "Dry run passed (\(Self.countsDescription(for: summary))).", stderrWarning: nil)
     }
 
     /// The confidence-building count `dry-run` exists to show, whenever the
