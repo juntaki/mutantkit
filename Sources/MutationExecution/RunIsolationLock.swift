@@ -50,10 +50,27 @@ public enum RunIsolationLockError: Error, CustomStringConvertible {
             """
             Found an unreadable MutantKit run lock at \(path). Refusing to delete it automatically:
             without owner metadata MutantKit cannot prove that no active run owns the lock.
+
+            If you have confirmed no MutantKit run is currently active against this project,
+            remove the file yourself and retry:
+              rm \(Self.shellQuoted(path))
             """
         case let .cannotCreate(path, detail):
             "Could not create MutantKit run lock at \(path): \(detail)"
         }
+    }
+
+    /// Standard POSIX single-quote escaping (`codex review` flagged
+    /// `CommandRecord.displayString`'s own space/`"`-only heuristic as
+    /// insufficient here, since this is presented as a command to actually
+    /// copy-paste and run): always wraps in `'...'`, and every embedded `'`
+    /// becomes `'\''` — end the quoted string, an escaped literal quote,
+    /// resume quoting. Correct for any path, not just ones without a `'`,
+    /// `;`, `$`, `*`, or other shell metacharacter — the `rm` command above
+    /// must never itself be the thing that turns a stale-lock cleanup into
+    /// unintended shell execution.
+    private static func shellQuoted(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 

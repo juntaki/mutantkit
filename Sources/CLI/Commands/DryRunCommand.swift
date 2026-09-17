@@ -104,7 +104,21 @@ struct DryRunCommand: AsyncParsableCommand {
                 throw ExitCode(MutantKitExit.operationalError)
             }
 
-            print("Dry run passed (\(Self.countsDescription(for: result.summary))).")
+            if let summary = result.summary {
+                print("Dry run passed (\(Self.countsDescription(for: summary))).")
+            } else {
+                print("Dry run passed.")
+                // v0.5 Stable Contracts: diagnostics go to stderr, not
+                // stdout. The baseline itself did pass — this only says
+                // structured counts were not available, which needs its
+                // own line rather than living inside a "passed (...)"
+                // clause easy to read as good news with a minor caveat,
+                // not a real reporting gap.
+                FileHandle.standardError.write(Data("""
+                warning: \(Self.countsDescription(for: nil)). Mutation execution can \
+                proceed, but test-count reporting will be unavailable for this run.\n
+                """.utf8))
+            }
             print("Build: \(artifact.command.displayString)")
             print("Test:  \(result.command.displayString)")
             try? await workspaces.destroySandbox(at: sandbox)
