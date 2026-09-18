@@ -800,7 +800,21 @@ public struct SchemataMutationRunner: Sendable {
             }
         }
 
-        return BaselineEstablishment(record: record, perTestCoverage: perTestCoverage, coverage: perTestCoverage?.aggregate())
+        // Reported to stderr only: this runner has no `OperationalIssueLog`
+        // of its own, and this path runs only when no baseline was
+        // pre-established for it — the `SharedBaselineEstablisher` that
+        // normally establishes a schemata run's baseline reports the same
+        // fact into `RunReport.operationalIssues` itself.
+        if let perTestCoverage { await PerTestCoverageAttribution.report(perTestCoverage, to: nil) }
+        // `flatMap`, not `?.`: `aggregate()` is itself optional now, and
+        // returns `nil` for a partial attribution precisely so the
+        // `.noCoverage` fast path cannot be driven by one (see its own doc
+        // comment). Flattening keeps "no map at all" and "a map that cannot
+        // answer the uncovered question" as the one value every caller
+        // already handles.
+        return BaselineEstablishment(
+            record: record, perTestCoverage: perTestCoverage, coverage: perTestCoverage.flatMap { $0.aggregate() }
+        )
     }
 
     // MARK: - Per chunk

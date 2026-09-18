@@ -32,7 +32,8 @@ public enum SharedBaselineEstablisher {
         configuration: Configuration,
         projectRoot: URL,
         coverageCache: CoverageProfileCache?,
-        coverageCacheKey: CoverageProfileCache.Key?
+        coverageCacheKey: CoverageProfileCache.Key?,
+        operationalIssues: OperationalIssueLog? = nil
     ) async -> Outcome {
         let started = Date()
         let timeouts = TimeoutController(settings: configuration.timeouts)
@@ -89,30 +90,17 @@ public enum SharedBaselineEstablisher {
             )
         }
 
-        var perTestCoverage: PerTestCoverageMap?
-        var coverage: CoverageMap?
-        var profilingDurationSeconds: Double?
-        if configuration.execution.selectCoveringTests {
-            if let key = coverageCacheKey, let cached = await coverageCache?.load(key) {
-                perTestCoverage = cached
-                coverage = cached.aggregate()
-            } else if let selecting = test as? any TestSelecting {
-                let profilingStarted = Date()
-                perTestCoverage = await selecting.measurePerTestCoverage(
-                    artifact: artifact, in: sandbox, timeoutSeconds: timeouts.baselineLimitSeconds
-                )
-                coverage = perTestCoverage?.aggregate()
-                profilingDurationSeconds = (profilingDurationSeconds ?? 0) + Date().timeIntervalSince(profilingStarted)
-                if let measured = perTestCoverage, let key = coverageCacheKey {
-                    await coverageCache?.store(measured, for: key)
-                }
-            }
-        }
-        if coverage == nil, configuration.execution.measureCoverage, let measuring = test as? any CoverageMeasuring {
-            let profilingStarted = Date()
-            coverage = await measuring.readCoverage(in: sandbox, projectRoot: projectRoot)
-            profilingDurationSeconds = (profilingDurationSeconds ?? 0) + Date().timeIntervalSince(profilingStarted)
-        }
+        // The one step this establisher does *not* implement in parallel with
+        // `MutationRunner.establishBaseline` -- see
+        // `BaselineCoverageMeasurement`'s own doc comment for why this
+        // particular step must not have two copies.
+        let measured = await BaselineCoverageMeasurement(
+            configuration: configuration, cache: coverageCache, cacheKey: coverageCacheKey,
+            operationalIssues: operationalIssues
+        ).measure(
+            with: test, against: artifact, in: sandbox, projectRoot: projectRoot,
+            timeoutSeconds: timeouts.baselineLimitSeconds
+        )
 
         let recordWithProfiling = BaselineRecord(
             passed: record.passed,
@@ -123,14 +111,14 @@ public enum SharedBaselineEstablisher {
             testCommand: record.testCommand,
             buildDurationSeconds: record.buildDurationSeconds,
             testDurationSeconds: record.testDurationSeconds,
-            profilingDurationSeconds: profilingDurationSeconds
+            profilingDurationSeconds: measured.profilingDurationSeconds
         )
 
         return .established(EstablishedBaseline(
             record: recordWithProfiling,
             testDurationSeconds: testDuration,
-            perTestCoverage: perTestCoverage,
-            coverage: coverage
+            perTestCoverage: measured.perTestCoverage,
+            coverage: measured.coverage
         ))
     }
 

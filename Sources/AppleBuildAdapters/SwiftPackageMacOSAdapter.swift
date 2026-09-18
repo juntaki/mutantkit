@@ -611,20 +611,10 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         in workspace: URL,
         timeoutSeconds: Double
     ) async -> PerTestCoverageMap? {
-        switch await measurePerTestCoverageFast(
-            artifact: artifact,
-            in: workspace,
-            timeoutSeconds: timeoutSeconds
-        ) {
-        case let .complete(map):
-            return map
-        case .unavailable:
-            return await measurePerTestCoverageSerial(
-                artifact: artifact,
-                in: workspace,
-                timeoutSeconds: timeoutSeconds
-            )
-        }
+        await PerTestCoverageProfileAttempt.resolve(
+            fast: { await measurePerTestCoverageFast(artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds) },
+            serial: { await measurePerTestCoverageSerial(artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds) }
+        )
     }
 
     private func measurePerTestCoverageFast(
@@ -657,19 +647,16 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
     /// dominates every mutant's wall clock regardless of how few tests
     /// actually exercise the mutated line.
     ///
-    /// All-or-nothing (P12-B Finding D): a test whose isolated run cannot be
-    /// proven — order-dependent and failing alone, crashed, timed out, or a
-    /// selection SwiftPM silently ran zero of (Finding A/B/C, before this
-    /// adapter's own filter and `classify` fixes) — invalidates the whole
-    /// map, not just that one test's own entry. A previous version of this
-    /// method `continue`d past such a test, returning whatever the
-    /// *successful* tests alone had built; confirmed live (P12-B B1) that
-    /// this produces a map that still looks complete and usable while
-    /// silently missing the unprovable test's real coverage, which can turn
-    /// a mutant that test alone would have killed into a false survivor. A
-    /// test that legitimately covers nothing (a genuine, successfully-read
-    /// empty `CoverageMap`) is not this case — that test's own turn simply
-    /// contributes no lines, same as before, and the loop continues.
+    /// The retry, and what becomes of a test that still cannot be proven,
+    /// are `PerTestCoverageAttribution.attribute`'s — see its doc comment,
+    /// and `PerTestCoverageMap`'s, for the policy and why it is safe. Two
+    /// things specific to this adapter. The failure class includes a
+    /// selection SwiftPM silently ran zero of (P12-B Finding A/B/C, before
+    /// this adapter's own filter and `classify` fixes), which is why
+    /// `reliableExpectedTestCount` is passed below. And a test that
+    /// legitimately covers nothing — a genuine, successfully-read empty
+    /// `CoverageMap` — is *not* that failure class here, unlike in
+    /// `XcodeBuildAdapter`: it is fully attributed, contributing no lines.
     /// - Parameter artifact: `runBaseline`'s own, uninstrumented artifact —
     ///   unused here beyond satisfying the protocol; test identifiers come
     ///   from `swift test list`, not from the artifact, and per-test
@@ -688,17 +675,22 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         let tests = Self.scope(enumerated, toConfiguredTargets: configuration.tests.targets)
         guard !tests.isEmpty else { return nil }
 
-        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
-        // Set only once a coverage-enabled run has actually completed *and*
-        // its coverage was actually read — not merely after the first
-        // iteration's status check — so a failed first invocation (build
-        // error, infra failure, unreadable coverage) can never leave a later
-        // iteration skipping the build against an artifact that may not
-        // exist or may be stale. Moot in practice: any failure here already
-        // returns `nil` below, ending the loop, but this ordering is the
-        // contract this field exists to guarantee, not an incidental detail.
+        // Set only once a coverage-enabled run has completed *and* its
+        // coverage was actually read -- not merely after an attempt
+        // finished. A failed attempt (build error, infra failure, unreadable
+        // coverage) must never leave a later iteration skipping the build
+        // against an artifact that may not exist or may be stale, and that
+        // matters in practice rather than only in principle: unlike the
+        // all-or-nothing predecessor, the loop keeps going after a failure.
         var coverageArtifactBuilt = false
-        for test in tests {
+
+        // The loop, the retry policy and what becomes of a test that cannot
+        // be proven are all `PerTestCoverageAttribution.attribute`'s -- see
+        // its doc comment. What is adapter-specific, and all that is left
+        // here, is how one test is run and how its coverage is read back.
+        return await PerTestCoverageAttribution.attribute(
+            tests: tests, source: "swiftpm-codecov-per-test"
+        ) { test, _ in
             guard let run = try? await runTests(
                 in: workspace,
                 timeoutSeconds: timeoutSeconds,
@@ -714,16 +706,13 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
             // project with many discovered tests would otherwise accumulate
             // one report pair per test, for the lifetime of this whole
             // method's loop, inside one sandbox.
-            defer { Self.removeXUnitReports(at: run.resultArtifactPath) }
+            Self.removeXUnitReports(at: run.resultArtifactPath)
             guard run.status == .passed else { return nil }
 
             guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { return nil }
             coverageArtifactBuilt = true
-            Self.invert(map, coveredBy: test, into: &coveringTests)
+            return map
         }
-
-        guard !coveringTests.isEmpty else { return nil }
-        return PerTestCoverageMap(coveringTests: coveringTests, source: "swiftpm-codecov-per-test")
     }
 
     /// Removes the xunit report(s) one `measurePerTestCoverage` iteration's
@@ -737,23 +726,6 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         guard let resultArtifactPath else { return }
         for candidate in XUnitParser.candidatePaths(for: resultArtifactPath) {
             try? fileManager.removeItem(at: candidate)
-        }
-    }
-
-    /// Merges one test's whole-run coverage map into the running per-line
-    /// reverse index, in place. Pulled out of `measurePerTestCoverage`'s loop
-    /// so the inversion itself — the part with no toolchain or process
-    /// involved — can be driven directly from hand-built `CoverageMap`
-    /// fixtures in tests, without spawning `swift test`.
-    static func invert(
-        _ map: CoverageMap,
-        coveredBy test: TestIdentifier,
-        into coveringTests: inout [String: [Int: Set<TestIdentifier>]]
-    ) {
-        for (file, lines) in map.executedLines {
-            for line in lines {
-                coveringTests[file, default: [:]][line, default: []].insert(test)
-            }
         }
     }
 

@@ -281,8 +281,17 @@ extension RunCommand {
         let coverageCache = CoverageProfileCache(root: coverageCacheRoot)
         let coverageCacheKey: CoverageProfileCache.Key?
         do {
+            // "coverageProfileCache2", not "coverageProfileCache": the
+            // scope of the configuration this digest is computed over
+            // changed (see `ConfigurationScope.coverageAttribution`), so
+            // every pre-existing entry on disk was keyed by a scheme this
+            // build no longer implements. Bumping this purpose's own tag
+            // rather than the shared `v4` marker is exact — the result
+            // cache's scheme is untouched, and its entries are far cheaper
+            // to lose anyway.
             let digest = try await RunContextProbe.computeContextDigest(
-                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache",
+                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache2",
+                configurationScope: .coverageAttribution,
                 toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
             )
             coverageCacheKey = CoverageProfileCache.Key(contextDigest: digest)

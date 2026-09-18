@@ -129,6 +129,69 @@ enum RunContextProbe {
         return RunContextFingerprint(value: ContentHash.of(components.joined(separator: "\u{1F}")))
     }
 
+    /// How much of the `Configuration` a given cached artifact's identity
+    /// depends on. See `computeContextDigest`'s "Configuration scope"
+    /// section for why this is not one answer for both caches.
+    enum ConfigurationScope {
+        /// Everything (bar `execution.workers`, and `qualityGate`, which
+        /// `configurationHash` zeroes itself). The conservative default: a
+        /// setting added later is folded in without anyone having to
+        /// remember to, and an input that turns out not to matter costs only
+        /// a missed cache hit.
+        case wholeConfiguration
+        /// Only what a baseline's per-test coverage attribution is actually
+        /// a function of — which is far less than the whole configuration,
+        /// and provably so, because the measurement's own inputs are
+        /// enumerable: `TestSelecting.measurePerTestCoverage` receives the
+        /// baseline artifact, the sandbox, and a timeout, and the adapter it
+        /// is called on is constructed from `project` and `tests`.
+        ///
+        /// Kept, therefore: `project` (which scheme/destination/derived data
+        /// the tests run under), `tests` (which targets are enumerated and
+        /// run at all), plus the worktree content digest and the toolchain
+        /// components the caller folds in separately.
+        ///
+        /// Dropped, each for a stated reason rather than as a batch:
+        /// - `operators`, `reports`, `qualityGate`: inputs to planning,
+        ///   reporting and merge policy. The baseline is unmutated; none of
+        ///   them is an input to what a test executes.
+        /// - `sources`: narrows which files get *mutants*. The map records
+        ///   what each test executed, over whatever the suite reaches; it is
+        ///   not filtered by source scope, so narrowing `sources.include`
+        ///   cannot remove an entry from it.
+        /// - `execution`: `selectCoveringTests` gates whether the pass runs
+        ///   at all, `strategy` decides which backend consumes the map, and
+        ///   the rest (`workers`, `testBatchSize`, the re-test/confirm
+        ///   flags, `incrementalBuild`, `simulatorPool`) govern how *mutants*
+        ///   are built and run. A schemata run and an isolated run both
+        ///   measure this against `buildBaseline`'s own unmutated artifact —
+        ///   which is what `SchemataRunOrchestration` already relies on when
+        ///   it hands one cache key to both backends within a single run.
+        /// - `timeouts`: bounds each isolated test run. It cannot silently
+        ///   shrink a map, because a test that times out is not partially
+        ///   attributed — it lands in `PerTestCoverageMap.unattributedTests`
+        ///   and is then run for every mutant regardless.
+        ///
+        /// Section-granular, which leaves one obligation: a *new field*
+        /// added inside one of the dropped sections that does change what
+        /// the baseline measures must bump this purpose's own tag, exactly
+        /// as `resultCache2` had to.
+        case coverageAttribution
+
+        func narrow(_ configuration: inout Configuration) {
+            switch self {
+            case .wholeConfiguration:
+                break
+            case .coverageAttribution:
+                configuration.sources = SourceSettings()
+                configuration.operators = OperatorSettings()
+                configuration.execution = ExecutionSettings()
+                configuration.timeouts = TimeoutSettings()
+                configuration.reports = []
+            }
+        }
+    }
+
     /// A digest of everything a cached, per-mutation-independent artifact
     /// depends on — used for both `CoverageProfileCache` (baseline per-test
     /// coverage attribution) and `MutationResultCache` (a mutant's
@@ -165,11 +228,29 @@ enum RunContextProbe {
     /// marker rather than each `purpose` tag is exact — the change is to the
     /// scheme both purposes share, not to what makes either one's payload
     /// trustworthy.
+    ///
+    /// ## Configuration scope
+    ///
+    /// `configurationScope` exists because the two purposes do not depend on
+    /// the same configuration. A mutant's evaluated outcome can depend on
+    /// nearly all of it, so `.wholeConfiguration` is the default and the
+    /// conservative one — a setting added later is folded in automatically,
+    /// and the cost of an input that turns out not to matter is only a
+    /// missed hit. Baseline per-test coverage attribution genuinely depends
+    /// on far less, and scoping it down is not a hit-rate nicety: measured
+    /// on a real iOS project, the pass costs ~100 minutes, and keying it on
+    /// the whole configuration meant that comparing `strategy: isolated`
+    /// against `strategy: schemata`, or raising `budget.maxMutants` from 50
+    /// to 150, re-measured all 100 minutes each time — while every one of
+    /// those runs measured a provably identical map. See
+    /// `ConfigurationScope.coverageAttribution` for what it keeps and the
+    /// argument for each thing it drops.
     static func computeContextDigest(
         projectRoot: URL,
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
         purpose: String,
+        configurationScope: ConfigurationScope = .wholeConfiguration,
         toolchainCacheIdentityComplete: Bool = true,
         processRunner: ProcessRunner = defaultProcessRunner
     ) async throws -> String {
@@ -192,6 +273,7 @@ enum RunContextProbe {
         // measures/produces the identical thing.
         var scopedConfiguration = configuration
         scopedConfiguration.execution.workers = nil
+        configurationScope.narrow(&scopedConfiguration)
 
         let components = [
             "\(purpose)=v4",

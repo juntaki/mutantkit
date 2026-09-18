@@ -1379,20 +1379,10 @@ extension XcodeBuildAdapter: TestSelecting {
         in workspace: URL,
         timeoutSeconds: Double
     ) async -> PerTestCoverageMap? {
-        switch await measurePerTestCoverageFast(
-            artifact: artifact,
-            in: workspace,
-            timeoutSeconds: timeoutSeconds
-        ) {
-        case let .complete(map):
-            return map
-        case .unavailable:
-            return await measurePerTestCoverageSerial(
-                artifact: artifact,
-                in: workspace,
-                timeoutSeconds: timeoutSeconds
-            )
-        }
+        await PerTestCoverageProfileAttempt.resolve(
+            fast: { await measurePerTestCoverageFast(artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds) },
+            serial: { await measurePerTestCoverageSerial(artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds) }
+        )
     }
 
     private func measurePerTestCoverageFast(
@@ -1416,26 +1406,17 @@ extension XcodeBuildAdapter: TestSelecting {
     /// leased devices concurrently is a further optimisation, not attempted
     /// here.
     ///
-    /// All-or-nothing (parity with `SwiftPackageMacOSAdapter.measurePerTestCoverage`):
-    /// a test whose isolated run cannot be proven —
-    /// order-dependent and failing alone, crashed, timed out, or its
-    /// coverage export could not be read — invalidates the whole map, not
-    /// just that one test's own entry. A version of this method that
-    /// `continue`d past such a test, returning whatever the *successful*
-    /// tests alone had built, produces a map that still looks complete and
-    /// usable while silently missing the unprovable test's real coverage —
-    /// if another test also covers the same line, that line stays
-    /// non-empty and never falls back to the full suite, so a mutant only
-    /// the unprovable test would have killed can be scored against the
-    /// wrong, narrower selection and turn into a false survivor. A test that
-    /// legitimately covers nothing is not this failure class, but is not
-    /// distinguished from it today either: `XccovCoverageReader.read` itself
-    /// conservatively folds a validly-parsed, genuinely-empty export into
-    /// the same `nil` a malformed one produces (see its own doc comment),
-    /// so this loop's `guard ... let map = ... else { return nil }` below
-    /// invalidates the whole map for that test too — safe (a fallback to
-    /// the full suite is never wrong, only slower), just not the narrowest
-    /// correct behavior; sharpening it is a performance question for later.
+    /// The retry, and what becomes of a test that still cannot be proven,
+    /// are `PerTestCoverageAttribution.attribute`'s — see its doc comment,
+    /// and `PerTestCoverageMap`'s, for the policy and why it is safe. One
+    /// thing specific to this adapter: a test that legitimately covers
+    /// nothing is not distinguished from one that could not be measured,
+    /// because `XccovCoverageReader.read` conservatively folds a
+    /// validly-parsed, genuinely-empty export into the same `nil` a
+    /// malformed one produces (see its own doc comment). Such a test is
+    /// therefore treated as unattributed — safe, since that only means it is
+    /// always run, but not the narrowest correct behaviour; sharpening it is
+    /// a performance question for later.
     /// - Parameter artifact: `runBaseline`'s own, uninstrumented artifact —
     ///   kept only to enumerate test identifiers from its already-produced
     ///   bundle; never built or tested against directly. Per-test coverage
@@ -1455,28 +1436,30 @@ extension XcodeBuildAdapter: TestSelecting {
 
         guard let coverageArtifact = try? await build(in: workspace, enableCoverage: true) else { return nil }
 
-        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
-        for test in tests {
+        // The loop, the retry policy and what becomes of a test that cannot
+        // be proven are all `PerTestCoverageAttribution.attribute`'s — see
+        // its doc comment. What is adapter-specific, and all that is left
+        // here, is how one test is run and how its coverage is read back.
+        return await PerTestCoverageAttribution.attribute(
+            tests: tests, source: "xcodebuild-xccov-per-test"
+        ) { test, attempt in
             guard let run = try? await runTests(
                 artifact: coverageArtifact,
                 in: workspace,
-                label: "pertest-\(test.onlyTestingArgument)",
+                // Distinct per attempt: a retry that reused the first
+                // attempt's bundle path would be read against whatever the
+                // failed attempt left behind, which is precisely the
+                // half-written state being retried past.
+                label: attempt == 1
+                    ? "pertest-\(test.onlyTestingArgument)"
+                    : "pertest-retry\(attempt)-\(test.onlyTestingArgument)",
                 timeoutSeconds: timeoutSeconds,
                 testFilters: [test.onlyTestingArgument],
                 enableCoverage: true
             ) else { return nil }
             guard run.status == .passed, let bundle = run.resultArtifactPath else { return nil }
-
-            guard let map = await XccovCoverageReader.read(archive: bundle, projectRoot: workspace) else { return nil }
-            for (file, lines) in map.executedLines {
-                for line in lines {
-                    coveringTests[file, default: [:]][line, default: []].insert(test)
-                }
-            }
+            return await XccovCoverageReader.read(archive: bundle, projectRoot: workspace)
         }
-
-        guard !coveringTests.isEmpty else { return nil }
-        return PerTestCoverageMap(coveringTests: coveringTests, source: "xcodebuild-xccov-per-test")
     }
 
     /// Walks `xcresulttool get test-results tests` for one bundle, pulling
