@@ -20,7 +20,7 @@
       "location": {
         "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift",
         "character": 12,
-        "line": 1650
+        "line": 1657
       },
       "ruleIdentifier": "function_body_length",
       "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 87 lines",
@@ -33,11 +33,11 @@
     "text": "}",
     "violation": {
       "location": {
-        "line": 2136,
+        "line": 2119,
         "character": 1,
         "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"
       },
-      "reason": "File should contain 1000 lines or less: currently contains 2136",
+      "reason": "File should contain 1000 lines or less: currently contains 2119",
       "ruleIdentifier": "file_length",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
@@ -93,7 +93,7 @@
     "text": "enum SchemataRunOrchestration {",
     "violation": {
       "severity": "warning",
-      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 342 lines",
+      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 355 lines",
       "ruleIdentifier": "type_body_length",
       "ruleName": "Type Body Length",
       "location": {
@@ -102,21 +102,6 @@
         "line": 27
       },
       "ruleDescription": "Type bodies should not span too many lines"
-    }
-  },
-  {
-    "text": "    private static func merge(",
-    "violation": {
-      "ruleDescription": "Number of function parameters should be low.",
-      "location": {
-        "character": 20,
-        "line": 451,
-        "file": "Sources/CLI/Commands/SchemataRunOrchestration.swift"
-      },
-      "ruleIdentifier": "function_parameter_count",
-      "ruleName": "Function Parameter Count",
-      "severity": "warning",
-      "reason": "Function should have 6 parameters or less: it currently has 7"
     }
   },
   {
@@ -146,7 +131,7 @@
         "file": "Sources/MutationExecution/MutationRunner.swift",
         "character": 8
       },
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1381 lines"
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1366 lines"
     }
   },
   {
@@ -240,21 +225,6 @@
     }
   },
   {
-    "text": "    private func establishBaseline(in sandbox: URL, startedAt: Date) async -> BaselineAttempt {",
-    "violation": {
-      "ruleName": "Function Body Length",
-      "ruleDescription": "Function bodies should not span too many lines",
-      "severity": "warning",
-      "location": {
-        "line": 1799,
-        "character": 13,
-        "file": "Sources/MutationExecution/MutationRunner.swift"
-      },
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 91 lines",
-      "ruleIdentifier": "function_body_length"
-    }
-  },
-  {
     "text": "                timeouts: TimeoutController(settings: configuration.timeouts).recordingBaseline(durationSeconds: shared.testDurationSeconds),",
     "violation": {
       "ruleDescription": "Lines should not span too many characters.",
@@ -264,7 +234,7 @@
       "ruleName": "Line Length",
       "location": {
         "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 1963,
+        "line": 1948,
         "character": 1
       }
     }
@@ -274,7 +244,7 @@
     "violation": {
       "ruleDescription": "Function bodies should not span too many lines",
       "location": {
-        "line": 2140,
+        "line": 2125,
         "file": "Sources/MutationExecution/MutationRunner.swift",
         "character": 13
       },
@@ -291,7 +261,7 @@
       "severity": "warning",
       "location": {
         "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 2603,
+        "line": 2588,
         "character": 1
       },
       "reason": "Line should be 140 characters or less; currently it has 142 characters",
@@ -306,12 +276,12 @@
       "ruleIdentifier": "file_length",
       "ruleName": "File Length",
       "location": {
-        "line": 2802,
+        "line": 2787,
         "file": "Sources/MutationExecution/MutationRunner.swift",
         "character": 1
       },
       "ruleDescription": "Files should not span too many lines.",
-      "reason": "File should contain 1000 lines or less: currently contains 2802"
+      "reason": "File should contain 1000 lines or less: currently contains 2787"
     }
   },
   {
@@ -341,7 +311,7 @@
         "character": 8,
         "line": 32
       },
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 985 lines"
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 988 lines"
     }
   },
   {
@@ -351,7 +321,7 @@
       "ruleName": "Function Parameter Count",
       "severity": "warning",
       "location": {
-        "line": 877,
+        "line": 891,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 13
       },
@@ -367,7 +337,7 @@
       "ruleName": "Function Parameter Count",
       "location": {
         "character": 13,
-        "line": 1184,
+        "line": 1198,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
       },
       "severity": "warning"
@@ -380,7 +350,7 @@
       "ruleName": "Line Length",
       "ruleIdentifier": "line_length",
       "location": {
-        "line": 1556,
+        "line": 1570,
         "character": 1,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
       },
@@ -393,7 +363,7 @@
     "violation": {
       "severity": "warning",
       "location": {
-        "line": 1644,
+        "line": 1658,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 49
       },
@@ -412,7 +382,7 @@
       "ruleDescription": "Lines should not span too many characters.",
       "severity": "warning",
       "location": {
-        "line": 1829,
+        "line": 1843,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1
       }
@@ -425,7 +395,7 @@
       "ruleIdentifier": "line_length",
       "ruleDescription": "Lines should not span too many characters.",
       "location": {
-        "line": 1831,
+        "line": 1845,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1
       },
@@ -440,7 +410,7 @@
       "ruleDescription": "Number of function parameters should be low.",
       "ruleName": "Function Parameter Count",
       "location": {
-        "line": 2043,
+        "line": 2057,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 5
       },
@@ -453,31 +423,16 @@
     "violation": {
       "ruleIdentifier": "file_length",
       "severity": "warning",
-      "reason": "File should contain 1000 lines or less: currently contains 2160",
+      "reason": "File should contain 1000 lines or less: currently contains 2174",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
       "location": {
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1,
-        "line": 2160
+        "line": 2174
       }
     },
     "text": "}"
-  },
-  {
-    "violation": {
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 87 lines",
-      "ruleIdentifier": "function_body_length",
-      "severity": "warning",
-      "ruleDescription": "Function bodies should not span too many lines",
-      "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/MutationExecution/SharedBaselineEstablisher.swift",
-        "line": 28,
-        "character": 19
-      }
-    },
-    "text": "    public static func establish("
   },
   {
     "violation": {
@@ -610,7 +565,7 @@
       "location": {
         "file": "Sources/MutationPlanner/MutationPlanner.swift",
         "character": 17,
-        "line": 301
+        "line": 314
       }
     }
   },
@@ -623,7 +578,7 @@
       "location": {
         "file": "Sources/MutationPlanner/MutationPlanner.swift",
         "character": 17,
-        "line": 380
+        "line": 393
       },
       "ruleName": "Large Tuple",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead."

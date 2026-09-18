@@ -69,7 +69,18 @@ execution:
   # line, measured once against the unmutated baseline. A mutant on a line no
   # test reaches is `noCoverage` without ever being built. The single largest
   # speedup available before touching incrementalBuild/simulatorPool below —
-  # cached across runs against an unchanged source tree and test suite.
+  # cached against an unchanged source tree, test suite, scheme, test targets
+  # and toolchain, and reused across runs that differ in anything else
+  # (strategy, budget, operators, timeouts, reports), since none of those
+  # changes what the unmutated baseline measures.
+  #
+  # Measuring it means running every test once on its own, which is the most
+  # expensive thing a baseline does. A test that cannot be proven in isolation
+  # (order-dependent, crashed, timed out) is retried once, and if it still
+  # cannot be proven it is simply included in every mutant's selection instead
+  # — the rest of the measurement is kept and cached. When that happens the
+  # run says so, on stderr and in `report.json`'s `operationalIssues`, and no
+  # mutant is classified `noCoverage` from that map.
   selectCoveringTests: true
   # Reuses one persistent, incrementally-recompiled sandbox per worker across
   # its mutants instead of a fresh build for each — real Swift incremental

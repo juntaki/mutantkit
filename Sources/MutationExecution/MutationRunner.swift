@@ -1890,30 +1890,15 @@ public struct MutationRunner: Sendable {
         // The baseline build and test above have already run either way —
         // the suite-must-pass gate and the timeout calibration cannot be
         // served from a cache.
-        var perTestCoverage: PerTestCoverageMap?
-        var coverage: CoverageMap?
-        var profilingDurationSeconds: Double?
-        if configuration.execution.selectCoveringTests {
-            if let key = coverageCacheKey, let cached = await coverageCache?.load(key) {
-                perTestCoverage = cached
-                coverage = cached.aggregate()
-            } else if let selecting = test as? any TestSelecting {
-                let profilingStarted = Date()
-                perTestCoverage = await selecting.measurePerTestCoverage(
-                    artifact: artifact, in: sandbox, timeoutSeconds: timeouts.baselineLimitSeconds
-                )
-                coverage = perTestCoverage?.aggregate()
-                profilingDurationSeconds = (profilingDurationSeconds ?? 0) + Date().timeIntervalSince(profilingStarted)
-                if let measured = perTestCoverage, let key = coverageCacheKey {
-                    await coverageCache?.store(measured, for: key)
-                }
-            }
-        }
-        if coverage == nil, configuration.execution.measureCoverage, let measuring = test as? any CoverageMeasuring {
-            let profilingStarted = Date()
-            coverage = await measuring.readCoverage(in: sandbox, projectRoot: projectRoot)
-            profilingDurationSeconds = (profilingDurationSeconds ?? 0) + Date().timeIntervalSince(profilingStarted)
-        }
+        let measured = await BaselineCoverageMeasurement(
+            configuration: configuration, cache: coverageCache, cacheKey: coverageCacheKey,
+            operationalIssues: operationalIssues
+        ).measure(
+            with: test, against: artifact, in: sandbox, projectRoot: projectRoot,
+            timeoutSeconds: timeouts.baselineLimitSeconds
+        )
+        let perTestCoverage = measured.perTestCoverage
+        let coverage = measured.coverage
 
         // `record` above already carries everything but `profilingDurationSeconds`
         // — needed for the failure-path `guard` above, before coverage
@@ -1929,7 +1914,7 @@ public struct MutationRunner: Sendable {
             testCommand: record.testCommand,
             buildDurationSeconds: record.buildDurationSeconds,
             testDurationSeconds: record.testDurationSeconds,
-            profilingDurationSeconds: profilingDurationSeconds
+            profilingDurationSeconds: measured.profilingDurationSeconds
         )
 
         return .established(BaselineContext(

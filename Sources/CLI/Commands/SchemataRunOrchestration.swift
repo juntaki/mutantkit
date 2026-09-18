@@ -106,7 +106,12 @@ enum SchemataRunOrchestration {
         // embeddable run likewise, so there is no case where this is
         // wasted relative to before.
         let sharedBaselineStart = GateTimingRecorder.shared.now()
-        let sharedBaseline = await establishSharedBaseline(context, workspaces: workspaces)
+        // Neither portion establishes this baseline, so neither portion's
+        // own issue log can record what establishing it observed. This one
+        // is handed to the establisher and merged into the final report
+        // below.
+        let baselineIssues = OperationalIssueLog()
+        let sharedBaseline = await establishSharedBaseline(context, workspaces: workspaces, operationalIssues: baselineIssues)
         await GateTimingRecorder.shared.record("sharedBaseline.total", start: sharedBaselineStart)
 
         let schemataPortionStart = GateTimingRecorder.shared.now()
@@ -143,20 +148,34 @@ enum SchemataRunOrchestration {
         let mergeStart = GateTimingRecorder.shared.now()
         let report = merge(
             context, startedAt: startedAt, schemataPortion: schemataPortion, fallbackReport: fallbackReport,
-            // Effective counts, not planner-time ones (ADR-0006 Group 2):
-            // a mutation counted among `classification.embeddedIDs` that
-            // then dynamically fell back is no longer schemata-scored, so
-            // it must not still be counted in `effectiveCount` — it is
-            // already folded into `fallbackIDs.count` above instead.
-            embeddedCount: classification.embeddedIDs.count - dynamicFallbackIDs.count, fallbackCount: fallbackIDs.count,
-            // Gate 3 Phase H19: `classification.plannerFallbackReasons`'
-            // keys are already exactly the planner-time fallback set (every
-            // `MutationID` not in `embeddedIDs`) — never overlaps
-            // `dynamicFallbackIDs`, so no further filtering is needed here.
-            plannerFallbackReasonCounts: Self.plannerFallbackReasonCounts(Array(classification.plannerFallbackReasons.values))
+            counts: PortionCounts(
+                // Effective counts, not planner-time ones (ADR-0006 Group 2):
+                // a mutation counted among `classification.embeddedIDs` that
+                // then dynamically fell back is no longer schemata-scored, so
+                // it must not still be counted in `effectiveCount` — it is
+                // already folded into `fallbackIDs.count` above instead.
+                embedded: classification.embeddedIDs.count - dynamicFallbackIDs.count, fallback: fallbackIDs.count,
+                // Gate 3 Phase H19: `classification.plannerFallbackReasons`'
+                // keys are already exactly the planner-time fallback set (every
+                // `MutationID` not in `embeddedIDs`) — never overlaps
+                // `dynamicFallbackIDs`, so no further filtering is needed here.
+                plannerFallbackReasonCounts: Self.plannerFallbackReasonCounts(Array(classification.plannerFallbackReasons.values))
+            ),
+            baselineIssues: await baselineIssues.snapshot()
         )
         await GateTimingRecorder.shared.record("merge", start: mergeStart)
         return report
+    }
+
+    /// How many of the plan's mutations each backend actually accounted for,
+    /// and why the planner sent the ones it did to the fallback — the three
+    /// values `merge` turns into `ExecutionStrategyReport`, grouped so that
+    /// adding the shared baseline's own issues to `merge` did not push it
+    /// past the parameter count this repo lints for.
+    private struct PortionCounts {
+        let embedded: Int
+        let fallback: Int
+        let plannerFallbackReasonCounts: [String: Int]
     }
 
     /// Establishes the one baseline both passes below share — see
@@ -166,7 +185,7 @@ enum SchemataRunOrchestration {
     /// already returns for a build/test failure, so every caller has
     /// exactly one shape to handle regardless of which step failed.
     private static func establishSharedBaseline(
-        _ context: Context, workspaces: WorkspaceManager
+        _ context: Context, workspaces: WorkspaceManager, operationalIssues: OperationalIssueLog
     ) async -> SharedBaselineEstablisher.Outcome {
         let started = Date()
         let sandbox: URL
@@ -184,7 +203,8 @@ enum SchemataRunOrchestration {
         let outcome = await SharedBaselineEstablisher.establish(
             build: context.adapter.build, test: context.testAdapter, in: sandbox,
             configuration: context.configuration, projectRoot: context.projectRoot,
-            coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey
+            coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey,
+            operationalIssues: operationalIssues
         )
         try? await workspaces.destroySandbox(at: sandbox)
         return outcome
@@ -450,8 +470,10 @@ enum SchemataRunOrchestration {
     /// passing runs.
     private static func merge(
         _ context: Context, startedAt: Date, schemataPortion: SchemataPortionResult, fallbackReport: RunReport?,
-        embeddedCount: Int, fallbackCount: Int, plannerFallbackReasonCounts: [String: Int]
+        counts: PortionCounts, baselineIssues: [OperationalIssue]
     ) -> RunReport {
+        let (embeddedCount, fallbackCount) = (counts.embedded, counts.fallback)
+        let plannerFallbackReasonCounts = counts.plannerFallbackReasonCounts
         let schemataOutcome: SchemataMutationRunner.Outcome? = if case let .succeeded(outcome) = schemataPortion { outcome } else { nil }
 
         var ledger = ResultLedger<MutationResult>()
@@ -501,12 +523,17 @@ enum SchemataRunOrchestration {
             planID: context.plan.planID, startedAt: startedAt, finishedAt: Date(), projectRoot: context.projectRoot.path,
             toolchain: context.toolchain, baseline: baseline, ledger: ledger, integrity: integrity,
             executionStrategy: executionStrategy,
-            // The schemata portion's own issues first, then the isolated
-            // pass's — a shared-chunk build failure is a run-level, many-
-            // mutant event, and it must not be buried under whatever
-            // per-mutation issues the fallback pass it caused went on to
-            // produce.
-            operationalIssues: sharedChunkBuildFailureIssues(schemataOutcome?.sharedChunkBuildFailureEvents ?? [])
+            // The one shared baseline's own issues first of all — it is the
+            // most run-level event there is, established once before either
+            // portion existed, and nothing below it would carry the fact:
+            // neither portion establishes its own baseline, so neither
+            // portion's issue log ever sees it. Then the schemata portion's
+            // own issues, then the isolated pass's — a shared-chunk build
+            // failure is a run-level, many-mutant event, and it must not be
+            // buried under whatever per-mutation issues the fallback pass it
+            // caused went on to produce.
+            operationalIssues: baselineIssues
+                + sharedChunkBuildFailureIssues(schemataOutcome?.sharedChunkBuildFailureEvents ?? [])
                 + schemataInfrastructureFallbackIssues(schemataOutcome?.infrastructureFallbackEvents ?? [])
                 + (fallbackReport?.operationalIssues ?? [])
         )

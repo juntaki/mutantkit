@@ -127,75 +127,120 @@ struct SwiftPackageMacOSTestEnumerationScopingTests {
     }
 }
 
-/// The per-line reverse index `measurePerTestCoverage` builds up across every
-/// individually-run test — pulled into `SwiftPackageMacOSAdapter.invert` so
-/// it can be exercised directly from hand-built `CoverageMap` fixtures, the
-/// same way `PerTestCoverageMapTests` pins the map's own read side, without
-/// spawning `swift test` or reading real codecov JSON.
-@Suite("SwiftPM per-test coverage inversion")
-struct SwiftPackageMacOSPerTestCoverageInversionTests {
+/// The loop both adapters run across every individually-run test:
+/// `PerTestCoverageAttribution.attribute`. Driven here from hand-built
+/// `CoverageMap` fixtures and a stub attempt, so the inversion, the retry, and
+/// the unproven-test bookkeeping — the parts with no toolchain or process
+/// involved — are exercised without spawning `swift test` or `xcodebuild`.
+///
+/// This is the real production path, not an extracted copy of it: both
+/// `SwiftPackageMacOSAdapter` and `XcodeBuildAdapter` supply only "run one
+/// test and read its coverage" and get everything below from here.
+@Suite("Per-test coverage attribution loop")
+struct PerTestCoverageAttributionLoopTests {
     private let addTest = TestIdentifier(target: "FooTests", qualifiedName: "AddTests/testAdd")
     private let subTest = TestIdentifier(target: "FooTests", qualifiedName: "SubTests/testSub")
 
+    private func attribute(
+        _ tests: [TestIdentifier],
+        attempts: Int = 2,
+        measuring coverage: [TestIdentifier: CoverageMap]
+    ) async -> PerTestCoverageMap? {
+        await PerTestCoverageAttribution.attribute(
+            tests: tests, source: "swiftpm-codecov-per-test", attempts: attempts
+        ) { test, _ in coverage[test] }
+    }
+
     @Test("One test's covered lines are attributed to that test")
-    func oneTestAttributesItsOwnLines() {
-        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
-        let map = CoverageMap(executedLines: ["Sources/Foo.swift": [1, 2]], source: "swift-package-codecov")
+    func oneTestAttributesItsOwnLines() async throws {
+        let map = try #require(await attribute(
+            [addTest],
+            measuring: [addTest: CoverageMap(executedLines: ["Sources/Foo.swift": [1, 2]], source: "codecov")]
+        ))
 
-        SwiftPackageMacOSAdapter.invert(map, coveredBy: addTest, into: &coveringTests)
-
-        #expect(coveringTests["Sources/Foo.swift"]?[1] == [addTest])
-        #expect(coveringTests["Sources/Foo.swift"]?[2] == [addTest])
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest])
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 2) == [addTest])
+        #expect(map.isComplete)
     }
 
     @Test("A second test covering the same line joins the first, rather than replacing it")
-    func secondTestJoinsRatherThanReplaces() {
-        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
-        let addMap = CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "swift-package-codecov")
-        let subMap = CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "swift-package-codecov")
+    func secondTestJoinsRatherThanReplaces() async throws {
+        let line1 = CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "codecov")
+        let map = try #require(await attribute(
+            [addTest, subTest], measuring: [addTest: line1, subTest: line1]
+        ))
 
-        SwiftPackageMacOSAdapter.invert(addMap, coveredBy: addTest, into: &coveringTests)
-        SwiftPackageMacOSAdapter.invert(subMap, coveredBy: subTest, into: &coveringTests)
-
-        #expect(coveringTests["Sources/Foo.swift"]?[1] == [addTest, subTest])
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest, subTest])
     }
 
     @Test("Lines only one test touches stay attributed to only that test")
-    func disjointLinesStayDisjoint() {
-        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
-        let addMap = CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "swift-package-codecov")
-        let subMap = CoverageMap(executedLines: ["Sources/Foo.swift": [2]], source: "swift-package-codecov")
+    func disjointLinesStayDisjoint() async throws {
+        let map = try #require(await attribute([addTest, subTest], measuring: [
+            addTest: CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "codecov"),
+            subTest: CoverageMap(executedLines: ["Sources/Foo.swift": [2]], source: "codecov")
+        ]))
 
-        SwiftPackageMacOSAdapter.invert(addMap, coveredBy: addTest, into: &coveringTests)
-        SwiftPackageMacOSAdapter.invert(subMap, coveredBy: subTest, into: &coveringTests)
-
-        #expect(coveringTests["Sources/Foo.swift"]?[1] == [addTest])
-        #expect(coveringTests["Sources/Foo.swift"]?[2] == [subTest])
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest])
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 2) == [subTest])
     }
 
     @Test("Multiple files from the same test's run are all attributed")
-    func multipleFilesAreAllAttributed() {
-        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
-        let map = CoverageMap(
-            executedLines: ["Sources/Foo.swift": [1], "Sources/Bar.swift": [10]],
-            source: "swift-package-codecov"
-        )
+    func multipleFilesAreAllAttributed() async throws {
+        let map = try #require(await attribute([addTest], measuring: [
+            addTest: CoverageMap(
+                executedLines: ["Sources/Foo.swift": [1], "Sources/Bar.swift": [10]], source: "codecov"
+            )
+        ]))
 
-        SwiftPackageMacOSAdapter.invert(map, coveredBy: addTest, into: &coveringTests)
-
-        #expect(coveringTests["Sources/Foo.swift"]?[1] == [addTest])
-        #expect(coveringTests["Sources/Bar.swift"]?[10] == [addTest])
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest])
+        #expect(map.testsCovering(file: "Sources/Bar.swift", line: 10) == [addTest])
     }
 
-    @Test("The resulting map feeds PerTestCoverageMap.testsCovering directly")
-    func feedsPerTestCoverageMapLookup() {
-        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
-        let map = CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "swift-package-codecov")
-        SwiftPackageMacOSAdapter.invert(map, coveredBy: addTest, into: &coveringTests)
+    /// The whole point of the rewrite this suite came from: one unmeasurable
+    /// test used to discard every other test's measurement.
+    @Test("A test that cannot be measured is carried as unproven, not allowed to discard the rest")
+    func unmeasurableTestDoesNotDiscardTheRest() async throws {
+        let map = try #require(await attribute([addTest, subTest], measuring: [
+            addTest: CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "codecov")
+        ]))
 
-        let perTest = PerTestCoverageMap(coveringTests: coveringTests, source: "swiftpm-codecov-per-test")
+        #expect(!map.isComplete)
+        #expect(map.unattributedTests == [subTest])
+        // Attributed and unproven together — never the attributed set alone.
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest, subTest])
+    }
 
-        #expect(perTest.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest])
+    @Test("Nothing measurable at all is still 'no attribution', so every mutant runs the full suite")
+    func nothingMeasurableIsNoAttribution() async {
+        #expect(await attribute([addTest, subTest], measuring: [:]) == nil)
+    }
+
+    @Test("A test is retried before it is given up on, and a retry that succeeds is attributed normally")
+    func aFailedFirstAttemptIsRetried() async throws {
+        let flaky = CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "codecov")
+        var observedAttempts: [Int] = []
+
+        let map = try #require(await PerTestCoverageAttribution.attribute(
+            tests: [addTest], source: "swiftpm-codecov-per-test"
+        ) { _, attempt in
+            observedAttempts.append(attempt)
+            return attempt == 1 ? nil : flaky
+        })
+
+        #expect(observedAttempts == [1, 2])
+        #expect(map.isComplete)
+        #expect(map.testsCovering(file: "Sources/Foo.swift", line: 1) == [addTest])
+    }
+
+    @Test("A test that succeeds first time is not run a second time")
+    func aSucceedingAttemptIsNotRetried() async {
+        var calls = 0
+        _ = await PerTestCoverageAttribution.attribute(tests: [addTest], source: "s") { _, _ in
+            calls += 1
+            return CoverageMap(executedLines: ["Sources/Foo.swift": [1]], source: "codecov")
+        }
+
+        #expect(calls == 1)
     }
 }
 

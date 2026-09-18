@@ -10,7 +10,8 @@ public struct OperationalIssue: Codable, Sendable, Hashable {
         case error
     }
 
-    /// Five cases today: `MutationRunner.finalize`'s checkpoint write, a
+    /// Five cases today, plus a partial per-test coverage attribution:
+    /// `MutationRunner.finalize`'s checkpoint write, a
     /// shared schemata chunk build that genuinely failed to compile
     /// (ADR-0008 Addendum 4's fan-out/observability requirement — one issue
     /// per failed chunk, never one per affected `MutationID`), a chunk whose
@@ -39,6 +40,18 @@ public struct OperationalIssue: Codable, Sendable, Hashable {
         /// same reason `schemataChunkBuildFailed` does not.
         case schemataChunkReceiptUnavailable
         case noOpCanaryUnexpectedOutcome
+        /// The baseline's per-test coverage pass finished, but one or more
+        /// individual tests could not be proven in isolation, so nothing is
+        /// known about what they cover. Every mutant's selection still
+        /// includes those tests (see `PerTestCoverageMap`), and the
+        /// `.noCoverage` fast path is switched off for the run, so score and
+        /// integrity are unaffected — but the narrowing is coarser and the
+        /// pass that produced it is the most expensive thing a baseline
+        /// does, which makes this exactly the cost/health signal
+        /// `operationalIssues` exists to keep from vanishing. Emitted for the
+        /// pass as a whole, never per affected test, mirroring
+        /// `schemataChunkBuildFailed`'s one-per-chunk rule.
+        case perTestCoverageIncomplete
     }
 
     public let severity: Severity
