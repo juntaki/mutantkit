@@ -20,7 +20,7 @@
       "location": {
         "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift",
         "character": 12,
-        "line": 1657
+        "line": 1658
       },
       "ruleIdentifier": "function_body_length",
       "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 87 lines",
@@ -33,11 +33,11 @@
     "text": "}",
     "violation": {
       "location": {
-        "line": 2119,
+        "line": 2120,
         "character": 1,
         "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"
       },
-      "reason": "File should contain 1000 lines or less: currently contains 2119",
+      "reason": "File should contain 1000 lines or less: currently contains 2120",
       "ruleIdentifier": "file_length",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
@@ -93,7 +93,7 @@
     "text": "enum SchemataRunOrchestration {",
     "violation": {
       "severity": "warning",
-      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 355 lines",
+      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 357 lines",
       "ruleIdentifier": "type_body_length",
       "ruleName": "Type Body Length",
       "location": {
@@ -311,7 +311,7 @@
         "character": 8,
         "line": 32
       },
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 988 lines"
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 992 lines"
     }
   },
   {
@@ -321,7 +321,7 @@
       "ruleName": "Function Parameter Count",
       "severity": "warning",
       "location": {
-        "line": 891,
+        "line": 899,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 13
       },
@@ -337,7 +337,7 @@
       "ruleName": "Function Parameter Count",
       "location": {
         "character": 13,
-        "line": 1198,
+        "line": 1206,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
       },
       "severity": "warning"
@@ -350,7 +350,7 @@
       "ruleName": "Line Length",
       "ruleIdentifier": "line_length",
       "location": {
-        "line": 1570,
+        "line": 1578,
         "character": 1,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
       },
@@ -363,7 +363,7 @@
     "violation": {
       "severity": "warning",
       "location": {
-        "line": 1658,
+        "line": 1666,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 49
       },
@@ -382,7 +382,7 @@
       "ruleDescription": "Lines should not span too many characters.",
       "severity": "warning",
       "location": {
-        "line": 1843,
+        "line": 1851,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1
       }
@@ -395,7 +395,7 @@
       "ruleIdentifier": "line_length",
       "ruleDescription": "Lines should not span too many characters.",
       "location": {
-        "line": 1845,
+        "line": 1853,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1
       },
@@ -410,7 +410,7 @@
       "ruleDescription": "Number of function parameters should be low.",
       "ruleName": "Function Parameter Count",
       "location": {
-        "line": 2057,
+        "line": 2065,
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 5
       },
@@ -423,13 +423,13 @@
     "violation": {
       "ruleIdentifier": "file_length",
       "severity": "warning",
-      "reason": "File should contain 1000 lines or less: currently contains 2174",
+      "reason": "File should contain 1000 lines or less: currently contains 2182",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
       "location": {
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1,
-        "line": 2174
+        "line": 2182
       }
     },
     "text": "}"

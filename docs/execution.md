@@ -57,6 +57,18 @@ execution:
   see `ExecutionProfile`'s own doc comment for the one real candidate that
   was looked at and deliberately left out.
 
+A profile resolves into concrete settings, which means it can replace a
+value you wrote yourself. `run` says so as it happens, naming each setting
+it changed and both values, so a config file that was not honoured never
+looks like one that was:
+
+```
+Execution profile: optimized — enabled schemata, incrementalBuild.
+  overrides: execution.strategy: isolated → schemata
+```
+
+`mutantkit execution-profile` reports the same thing before anything runs.
+
 **Two things `optimized`/`experimental` deliberately never bundle in, and
 one thing they used to that was wrong to:**
 

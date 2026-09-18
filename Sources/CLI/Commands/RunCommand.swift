@@ -343,7 +343,14 @@ struct RunCommand: AsyncParsableCommand {
             isolatedOptions: IsolatedRunOptions(
                 checkpoints: checkpoints, artifactsRoot: artifacts, coverageCache: coverageCache, coverageCacheKey: coverageCacheKey,
                 resultCache: resultCache, resultCacheDigest: resultCacheDigest, priorityStore: runnerPriorityStore,
-                progress: ProgressReporter(total: loadedPlan.mutations.count)
+                // Labelled, and only ever handed to the `.isolated` branch of
+                // `execute` below, where the whole plan really is what this
+                // one runner will work through. A schemata run's own
+                // isolated-fallback portion gets a separate reporter totalled
+                // on the *fallback* plan (see `runFallbackPortion`) — this
+                // total would stall short of completion there, since most of
+                // the plan never reaches that portion.
+                progress: ProgressReporter(total: loadedPlan.mutations.count, label: "mutants")
             )
         )
 

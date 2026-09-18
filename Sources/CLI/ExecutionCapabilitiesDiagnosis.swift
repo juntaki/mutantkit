@@ -122,8 +122,23 @@ enum ExecutionCapabilitiesDiagnosis {
             detail: supported
                 ? "available — execution.selectCoveringTests: true narrows each mutant to its covering tests"
                 : "not available for this project's resolved test adapter",
+            // The remedy field carries a cost warning in the *supported*
+            // case, which reads oddly until you have paid the cost once: a
+            // first run measures the attribution by running every test on
+            // its own, and on a real suite that is routinely the single
+            // largest line item in the whole run — larger than every mutant
+            // put together. Measured on a 647-test iOS project: ~100
+            // minutes, against ~36 minutes for 50 mutants. Saying so here is
+            // the only chance to say it *before* someone budgets a "quick
+            // try" with a small `budget.maxMutants` and finds the mutant
+            // count made almost no difference. No estimate in minutes is
+            // offered, because it depends entirely on this project's own
+            // suite; `run` reports a live count and ETA once measuring
+            // starts.
             remedy: supported
-                ? nil
+                ? "First run only: measuring this runs every test once in isolation, which on a large suite can " +
+                "exceed the mutant run itself. It is cached and reused while the source tree, test suite and " +
+                "toolchain are unchanged."
                 : "Every mutant will run the full configured test list; execution.selectCoveringTests would have no effect."
         )
     }
