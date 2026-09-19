@@ -115,7 +115,7 @@ struct XcodeBuildAdapterSchemeDiscoveryRetryTests {
     /// failure's own diagnosis. It now threads the real last `ProcessResult`
     /// through, so a caller reading the thrown error sees the real exit
     /// code and combined stdout/stderr.
-    @Test("resolveScheme with zero schemes throws with the real exit code and combined output, not nil/empty")
+    @Test("resolveScheme on a failed discovery throws with the real exit code and combined output, not nil/empty")
     func resolveSchemeWithZeroSchemesCarriesRealDiagnostics() async throws {
         let failure = ProcessResult(
             exitCode: 66, standardOutput: Data("{\"project\":{\"name\":\"Demo\",\"schemes\":[]}}".utf8),
@@ -144,6 +144,113 @@ struct XcodeBuildAdapterSchemeDiscoveryRetryTests {
         } catch let error as BuildFailure {
             #expect(error.command.exitCode == 0)
             #expect(error.output.contains("\"A\""))
+        }
+    }
+
+    // MARK: - An unanswered question is not an answer of "none" (2026-09-19)
+
+    /// The real CI failure `SchemeResolutionDiagnosis` was written for:
+    /// `xcodebuild -list -json` killed at its own 120-second budget, output
+    /// empty, reported to the user as "No schemes are available here. Open
+    /// the project in Xcode and mark a scheme shared" — a claim about the
+    /// user's project that the evidence in hand positively did not support.
+    @Test("A discovery killed at its timeout is not reported as the project having no schemes")
+    func timedOutDiscoveryIsNotReportedAsNoSchemes() async throws {
+        let killed = ProcessResult(
+            exitCode: 143, standardOutput: Data(), standardError: Data(),
+            durationSeconds: 120.056, timedOut: true, terminatingSignal: 15, outputComplete: false
+        )
+        let runner: ProcessRunner = { _, _, _, _ in killed }
+
+        do {
+            _ = try await adapter(processRunner: runner).resolveScheme(in: FileManager.default.temporaryDirectory)
+            Issue.record("expected resolveScheme to throw")
+        } catch let error as BuildFailure {
+            #expect(!error.diagnosis.contains("No schemes are available here"))
+            #expect(error.diagnosis.contains("killed after 120.1s"))
+            #expect(error.diagnosis.contains("120.0s budget"))
+            #expect(error.diagnosis.contains("still unknown"))
+        }
+    }
+
+    /// The other half, and the reason this is a split rather than a
+    /// softening: a project that genuinely has no shared scheme must still
+    /// be told so, with the remedy that actually fixes it.
+    @Test("A discovery that really did answer 'none' keeps the original diagnosis")
+    func answeredEmptyDiscoveryKeepsNoSchemesDiagnosis() async throws {
+        let empty = result(schemes: [])
+        let runner: ProcessRunner = { _, _, _, _ in empty }
+
+        do {
+            _ = try await adapter(processRunner: runner).resolveScheme(in: FileManager.default.temporaryDirectory)
+            Issue.record("expected resolveScheme to throw")
+        } catch let error as BuildFailure {
+            #expect(error.diagnosis.contains("No schemes are available here"))
+            #expect(error.diagnosis.contains("mark a scheme shared"))
+        }
+    }
+
+    /// `ProcessResult.outputComplete`'s own contract: a consumer deriving a
+    /// failure classification from a result must fail closed when the
+    /// supervisor could not confirm it had drained the process's output.
+    /// "This project has no schemes" is exactly such a classification, and
+    /// it was being read straight out of possibly-truncated bytes.
+    @Test("A clean exit whose output was never confirmed complete is not an answer of 'none'")
+    func incompleteOutputIsNotReportedAsNoSchemes() async throws {
+        let truncated = ProcessResult(
+            exitCode: 0, standardOutput: Data(), standardError: Data(),
+            durationSeconds: 0.3, timedOut: false, terminatingSignal: nil, outputComplete: false
+        )
+        let tracker = CallCountTracker()
+        let runner: ProcessRunner = { _, _, _, _ in
+            _ = await tracker.increment()
+            return truncated
+        }
+
+        do {
+            _ = try await adapter(processRunner: runner).resolveScheme(in: FileManager.default.temporaryDirectory)
+            Issue.record("expected resolveScheme to throw")
+        } catch let error as BuildFailure {
+            #expect(!error.diagnosis.contains("No schemes are available here"))
+            #expect(error.diagnosis.contains("never confirmed complete"))
+        }
+        await #expect(tracker.count == 1, "an unconfirmed empty result is not the clean empty result the retry is for")
+    }
+
+    /// A discovery that could not be started at all — `processRunner` itself
+    /// threw, so there is no `ProcessResult` to reason from. Still not a
+    /// statement about the project.
+    @Test("A discovery that never ran points at the toolchain, not at the project's schemes")
+    func unstartedDiscoveryPointsAtTheToolchain() async throws {
+        struct SpawnFailure: Error {}
+        let runner: ProcessRunner = { _, _, _, _ in throw SpawnFailure() }
+
+        do {
+            _ = try await adapter(processRunner: runner).resolveScheme(in: FileManager.default.temporaryDirectory)
+            Issue.record("expected resolveScheme to throw")
+        } catch let error as BuildFailure {
+            #expect(!error.diagnosis.contains("No schemes are available here"))
+            #expect(error.diagnosis.contains("xcode-select -p"))
+        }
+    }
+
+    /// A non-zero exit that is not a signal and not a timeout: `xcodebuild`
+    /// ran, refused, and said why. The remedy is to read what it said.
+    @Test("A non-zero exit reports the status and points at the command's own output")
+    func failedExitReportsStatusAndOutput() async throws {
+        let refused = ProcessResult(
+            exitCode: 66, standardOutput: Data(), standardError: Data("xcodebuild: error: no project".utf8),
+            durationSeconds: 0.4, timedOut: false, terminatingSignal: nil, outputComplete: true
+        )
+        let runner: ProcessRunner = { _, _, _, _ in refused }
+
+        do {
+            _ = try await adapter(processRunner: runner).resolveScheme(in: FileManager.default.temporaryDirectory)
+            Issue.record("expected resolveScheme to throw")
+        } catch let error as BuildFailure {
+            #expect(!error.diagnosis.contains("No schemes are available here"))
+            #expect(error.diagnosis.contains("exited with status 66"))
+            #expect(error.output.contains("no project"))
         }
     }
 }
