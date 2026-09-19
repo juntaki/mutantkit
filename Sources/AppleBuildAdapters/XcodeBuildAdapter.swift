@@ -361,10 +361,11 @@ public struct XcodeBuildAdapter: Sendable {
         guard !schemes.isEmpty else {
             throw BuildFailure(
                 kind: .infrastructure,
-                diagnosis: """
-                No schemes are available here. Open the project in Xcode and mark a \
-                scheme shared, or set project.scheme in mutantkit.yml.
-                """,
+                diagnosis: SchemeResolutionDiagnosis.noSchemeResolved(
+                    answered: discovery.answered,
+                    lastResult: discovery.lastResult,
+                    timeoutSeconds: Self.schemeListTimeoutSeconds
+                ),
                 command: listCommand(in: workspace, result: discovery.lastResult),
                 output: discovery.lastResult?.combinedOutput ?? ""
             )
@@ -396,9 +397,14 @@ public struct XcodeBuildAdapter: Sendable {
 
     /// Discovered schemes, or an empty list when discovery itself failed.
     ///
-    /// Non-throwing because every caller treats "could not ask" and "there are
-    /// none" the same way: both mean no scheme can be resolved, and both are
-    /// reported with the same remedy.
+    /// Non-throwing because the two callers that take this plain `[String]`
+    /// form (`XcodeConfigDetector`, `Diagnostics`) genuinely treat "could not
+    /// ask" and "there are none" the same way: both mean no scheme can be
+    /// resolved here and now, and neither caller is reporting a failure to a
+    /// user. `resolveScheme` is the one that *is*, and it deliberately does
+    /// not use this form — see `SchemeDiscoveryResult.answered`, and
+    /// `SchemeResolutionDiagnosis` for the real CI failure that proved the
+    /// two must not share one remedy.
     ///
     /// `public`, not just used internally by `resolveScheme`: `XcodeConfigDetector`
     /// (`init`/`doctor` auto-detection) needs this exact same real
@@ -434,24 +440,55 @@ public struct XcodeBuildAdapter: Sendable {
     struct SchemeDiscoveryResult {
         let schemes: [String]
         let lastResult: ProcessResult?
+        /// Whether `xcodebuild` actually produced a scheme list to read.
+        ///
+        /// `schemes.isEmpty` alone cannot answer that, and conflating the
+        /// two is precisely how a 120-second timeout with empty output got
+        /// reported to a user as "no schemes are available here" — see
+        /// `SchemeResolutionDiagnosis`. `false` means the emptiness is an
+        /// absence of evidence; `true` means `xcodebuild` was asked, it
+        /// answered, and the answer was none.
+        let answered: Bool
     }
+
+    /// `xcodebuild -list -json`'s own budget. Named rather than inlined so
+    /// the diagnosis for a run killed at this deadline can quote the number
+    /// the run was actually held to, instead of a second copy of it.
+    static let schemeListTimeoutSeconds: Double = 120
 
     func discoverSchemesWithDiagnostics(
         in workspace: URL, emptyResultRetryCount: Int = 2
     ) async -> SchemeDiscoveryResult {
         let arguments = projectArguments(in: workspace) + ["-list", "-json"]
         for attempt in 0 ... emptyResultRetryCount {
-            let result = try? await processRunner(ToolPaths.xcodebuild, arguments, workspace, 120)
+            let result = try? await processRunner(
+                ToolPaths.xcodebuild, arguments, workspace, Self.schemeListTimeoutSeconds
+            )
             guard let result, result.succeeded else {
-                return SchemeDiscoveryResult(schemes: [], lastResult: result)
+                return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: false)
             }
             let schemes = SchemeListJSON.schemes(from: result.standardOutput)
-            if !schemes.isEmpty || attempt == emptyResultRetryCount {
-                return SchemeDiscoveryResult(schemes: schemes, lastResult: result)
+            if !schemes.isEmpty {
+                return SchemeDiscoveryResult(schemes: schemes, lastResult: result, answered: true)
+            }
+            // An empty list read out of output the supervisor never confirmed
+            // it had fully drained is not an answer: `ProcessResult
+            // .outputComplete`'s own contract requires every consumer that
+            // derives a failure classification to fail closed here, and the
+            // classification this feeds ("the project has no schemes") is
+            // exactly the kind that must not rest on possibly-truncated
+            // bytes. A *non-empty* list needs no such guard — truncated JSON
+            // does not parse, so any scheme name read out at all came from
+            // a complete document.
+            guard result.outputComplete else {
+                return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: false)
+            }
+            if attempt == emptyResultRetryCount {
+                return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: true)
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
-        return SchemeDiscoveryResult(schemes: [], lastResult: nil)
+        return SchemeDiscoveryResult(schemes: [], lastResult: nil, answered: false)
     }
 }
 

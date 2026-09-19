@@ -410,8 +410,22 @@ jobs:
               exit 124
             fi
           done
-          wait "$test_pid"
-          exit_code=$?
+          # `|| exit_code=$?`, never a bare status read -- see the
+          # `Acceptance` step's own comment for the mechanism and the
+          # evidence that proved it. `shell: bash` runs with errexit on, so
+          # a bare `wait` on a failing test process would end the step right
+          # here: `cat test.log` -- the ONLY place this job's test output is
+          # ever printed, since `swift test` writes to a file -- would not
+          # run, and neither would the zero-tests guard or the final
+          # `exit $exit_code`. A failing unit run would report a failure
+          # with no test output attached to it.
+          #
+          # Deduced from the mechanism proven on the `Acceptance` step, not
+          # separately observed: no failed `Unit tests` job exists in recent
+          # history to check it against. The fix costs nothing if the
+          # deduction is wrong.
+          exit_code=0
+          wait "$test_pid" || exit_code=$?
           echo "=== swift test exited with code $exit_code ==="
           cat test.log
           # A `swift test` that matched and ran nothing exits 0. Without this
@@ -422,13 +436,17 @@ jobs:
           # acceptance and schemata jobs below have had this since P8; the
           # `unit` job never did.
           #
-          # `|| exit_code=1`, never a bare call: the step sets `set -o
-          # pipefail` but NOT `set -e` (see the top of this run block), so a
-          # bare invocation's non-zero status is discarded and the trailing
-          # `exit $exit_code` would hand back the green it already had. Same
-          # idiom as the acceptance job's own call. A real test failure above
-          # must still win, which it does — this can only ever set the code
-          # to 1, never clear it.
+          # `|| exit_code=1`, never a bare call: the point is to *record* a
+          # zero-test run in `exit_code` and still reach the `exit` below,
+          # rather than let the script end wherever the check happens to
+          # fail. Same idiom as the acceptance job's own call. A real test
+          # failure above must still win, which it does — this can only ever
+          # set the code to 1, never clear it.
+          #
+          # (This block's own comment used to justify the `||` by claiming
+          # errexit was off here. It is not, and never was — GitHub supplies
+          # it. The idiom was right; the reason given for it was wrong, and
+          # the `wait` above was written on that wrong reason.)
           Scripts/assert-tests-ran.sh test.log "unit (all suites)" || exit_code=1
           exit $exit_code
       # Preserve this job's raw profile for the one coverage aggregation job
@@ -760,9 +778,33 @@ jobs:
           MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
           MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
         run: |
+          # `|| test_exit=$?`, never a bare status read. GitHub runs a
+          # `shell: bash` step as `bash --noprofile --norc -eo pipefail {0}`,
+          # so errexit is on: a bare `swift test ... | tee` that fails ends
+          # the step at that line, before the status is captured, before
+          # `assert-tests-ran.sh` runs, and before the documented retry
+          # below is ever reached.
+          #
+          # That is measured, not argued. On juntaki/mutantkit PR #66's
+          # `Acceptance (xcode-project-schemata)` failure (head f198959),
+          # all three of the retry's conditions held, no `::warning::` was
+          # emitted, and `assert-tests-ran.sh`'s unconditional "-- OK" line
+          # was absent from the log entirely -- the script never got past
+          # the pipeline. The retry had never fired, on any run, since the
+          # day it was written.
+          #
+          # The left side of `||` is exempt from errexit, so the status is
+          # captured while errexit stays on for every other command in this
+          # block. `set +e` would fix this one bug and open another: an
+          # unexpected `mv`/`cat`/anything failure would then pass silently.
+          #
+          # `pipefail` is load-bearing here, not decoration: without it
+          # `swift test | tee` reports *tee's* status, so a real test
+          # failure would be captured as success.
           set -o pipefail
-          swift test --enable-code-coverage --skip-build --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
-          test_exit=$?
+          test_exit=0
+          swift test --enable-code-coverage --skip-build --filter "${{ matrix.filter }}" 2>&1 \
+            | tee acceptance.log || test_exit=$?
           # P8: a filter matching zero tests must fail this job, not pass it
           # silently -- see scripts/assert-tests-ran.sh. A real test failure
           # above must still win even if the count check itself passes.
@@ -770,23 +812,29 @@ jobs:
 
           # A single, narrowly-scoped, documented retry -- not "rerun until
           # green". xcode-project-schemata only (the xcodegen-staged
-          # fixture this signature is specific to), and only for the exact
-          # known signature `xcodebuild -list -json` reporting zero schemes
-          # for a project whose scheme a real product-level retry
-          # (`XcodeBuildAdapter.discoverSchemes`'s own
-          # `emptyResultRetryCount`) already tries twice more before giving
-          # up -- this is the one-more-chance CI-gate mitigation for when
-          # even that is not enough under the most extreme observed load.
-          # Any other failure, or a second occurrence of this same one,
-          # fails for real: this never masks a genuine regression, it only
-          # gives one documented, bounded second attempt to a single known,
-          # product-level-mitigated flake.
+          # fixture this signature is specific to), and only for the two
+          # known ways `xcodebuild -list -json` fails to yield a scheme for
+          # a project that has one: reporting zero schemes (a real
+          # product-level retry, `XcodeBuildAdapter.discoverSchemes`'s own
+          # `emptyResultRetryCount`, already tries twice more before giving
+          # up), and being killed at its own 120s budget without answering
+          # at all. Both are matched here because both were observed on
+          # this fixture and neither is a product defect; until
+          # `SchemeResolutionDiagnosis` landed they were indistinguishable
+          # in the log, which is exactly why this grep named only the
+          # first. This is the one-more-chance CI-gate mitigation for when
+          # the product-level retry is not enough under the most extreme
+          # observed load. Any other failure, or a second occurrence of
+          # this same one, fails for real: this never masks a genuine
+          # regression, it only gives one documented, bounded second
+          # attempt to a single known, product-level-mitigated flake.
           if [ "$test_exit" -ne 0 ] && [ "${{ matrix.fixture }}" = "xcode-project-schemata" ] \
-             && grep -q "No schemes are available here" acceptance.log; then
+             && grep -qE 'No schemes are available here|-list -json` was killed after' acceptance.log; then
             echo "::warning::xcode-project-schemata hit the documented xcodebuild scheme-visibility flake -- retrying once."
             mv acceptance.log acceptance-first-attempt.log
-            swift test --enable-code-coverage --skip-build --filter "${{ matrix.filter }}" 2>&1 | tee acceptance.log
-            test_exit=$?
+            test_exit=0
+            swift test --enable-code-coverage --skip-build --filter "${{ matrix.filter }}" 2>&1 \
+              | tee acceptance.log || test_exit=$?
             scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }})" || test_exit=1
           fi
 
@@ -985,9 +1033,16 @@ jobs:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
         run: |
+          # `|| test_exit=$?` for the reason spelled out on the `Acceptance`
+          # step above: `shell: bash` runs with errexit on, which would end
+          # the step at the pipeline and skip `assert-tests-ran.sh`
+          # entirely. The job still fails either way, so nothing was
+          # visibly wrong here -- which is exactly why it is worth fixing
+          # before something that does depend on running is added below.
           set -o pipefail
-          swift test --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 | tee acceptance.log
-          test_exit=$?
+          test_exit=0
+          swift test --filter RORSchemataIsolatedDifferentialAcceptanceTests 2>&1 \
+            | tee acceptance.log || test_exit=$?
           # P8: see scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
           scripts/assert-tests-ran.sh acceptance.log "RORSchemataIsolatedDifferentialAcceptanceTests" || test_exit=1
           exit $test_exit
@@ -1054,9 +1109,13 @@ jobs:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE: ${{ github.workspace }}/.build/release
         run: |
+          # `|| test_exit=$?` for the reason spelled out on the `Acceptance`
+          # step above: `shell: bash` runs with errexit on, which would end
+          # the step at the pipeline and skip `assert-tests-ran.sh`.
           set -o pipefail
-          swift test --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 | tee acceptance.log
-          test_exit=$?
+          test_exit=0
+          swift test --filter "SchemataIOSSimulatorRuntimeArtifactAcceptanceTests|SchemataIOSSimulatorRuntimeLinkAcceptanceTests" 2>&1 \
+            | tee acceptance.log || test_exit=$?
           # P8: see scripts/assert-tests-ran.sh -- zero matched tests must fail this job.
           scripts/assert-tests-ran.sh acceptance.log "SchemataIOSSimulatorRuntime*AcceptanceTests" || test_exit=1
           exit $test_exit

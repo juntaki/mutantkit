@@ -438,9 +438,16 @@ jobs:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
         run: |
-          set +e
-          swift test --skip-build --filter "macOSArchiveResolvesFromBundle" 2>&1 | tee acceptance-archive.log
-          test_exit=$?
+          # `|| test_exit=$?`, never a bare status read, and `pipefail`
+          # explicitly rather than left to the runner -- see `ci.yml`'s
+          # `Acceptance` step for the mechanism and the evidence. `set +e`
+          # would work here too and is what this said before, but it also
+          # silences every other command in the block; `||` exempts only the
+          # one line whose failure is being inspected.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build --filter "macOSArchiveResolvesFromBundle" 2>&1 \
+            | tee acceptance-archive.log || test_exit=$?
           Scripts/assert-tests-ran.sh acceptance-archive.log "ReleaseBundledSchemataRuntimeAcceptanceTests (macOS archive inspection)" || test_exit=1
           exit $test_exit
 
@@ -450,9 +457,16 @@ jobs:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
         run: |
-          set +e
-          swift test --skip-build --filter "schemataRunSucceedsFromBundledRuntimeAlone" 2>&1 | tee acceptance-run.log
-          test_exit=$?
+          # `|| test_exit=$?`, never a bare status read, and `pipefail`
+          # explicitly rather than left to the runner -- see `ci.yml`'s
+          # `Acceptance` step for the mechanism and the evidence. `set +e`
+          # would work here too and is what this said before, but it also
+          # silences every other command in the block; `||` exempts only the
+          # one line whose failure is being inspected.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build --filter "schemataRunSucceedsFromBundledRuntimeAlone" 2>&1 \
+            | tee acceptance-run.log || test_exit=$?
           Scripts/assert-tests-ran.sh acceptance-run.log "ReleaseBundledSchemataRuntimeAcceptanceTests (macOS real E2E run)" || test_exit=1
           exit $test_exit
 
@@ -553,9 +567,16 @@ jobs:
           MUTANTKIT_ACCEPTANCE_SIMULATOR: "1"
           MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
         run: |
-          set +e
-          swift test --skip-build --filter "iOSSimulatorArchiveResolvesFromBundle" 2>&1 | tee acceptance-archive.log
-          test_exit=$?
+          # `|| test_exit=$?`, never a bare status read, and `pipefail`
+          # explicitly rather than left to the runner -- see `ci.yml`'s
+          # `Acceptance` step for the mechanism and the evidence. `set +e`
+          # would work here too and is what this said before, but it also
+          # silences every other command in the block; `||` exempts only the
+          # one line whose failure is being inspected.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build --filter "iOSSimulatorArchiveResolvesFromBundle" 2>&1 \
+            | tee acceptance-archive.log || test_exit=$?
           Scripts/assert-tests-ran.sh acceptance-archive.log "ReleaseBundledSchemataRuntimeAcceptanceTests (iOS Simulator archive inspection)" || test_exit=1
           exit $test_exit
 
@@ -566,9 +587,16 @@ jobs:
           MUTANTKIT_ACCEPTANCE_SIMULATOR: "1"
           MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
         run: |
-          set +e
-          swift test --skip-build --filter "xcodeProjectSchemataRunSucceedsFromBundledRuntimeAlone" 2>&1 | tee acceptance-run.log
-          test_exit=$?
+          # `|| test_exit=$?`, never a bare status read, and `pipefail`
+          # explicitly rather than left to the runner -- see `ci.yml`'s
+          # `Acceptance` step for the mechanism and the evidence. `set +e`
+          # would work here too and is what this said before, but it also
+          # silences every other command in the block; `||` exempts only the
+          # one line whose failure is being inspected.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build --filter "xcodeProjectSchemataRunSucceedsFromBundledRuntimeAlone" 2>&1 \
+            | tee acceptance-run.log || test_exit=$?
           Scripts/assert-tests-ran.sh acceptance-run.log "ReleaseBundledSchemataXcodeIOSSimulatorAcceptanceTests (iOS Simulator real E2E run)" || test_exit=1
           exit $test_exit
 
