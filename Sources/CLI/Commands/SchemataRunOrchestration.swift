@@ -286,7 +286,7 @@ enum SchemataRunOrchestration {
 
         let backend = SchemataBackendInfo(
             backendID: backendID, backendVersion: 1,
-            toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: context.configuration.configurationHash
+            toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: context.configuration.buildIdentityHash
         )
         do {
             let registry = try SchemataLowererRegistry()
@@ -365,7 +365,7 @@ enum SchemataRunOrchestration {
             // — never one pre-resolved number standing in for both (see
             // `SchemataMutationRunner.timeouts`).
             timeouts: context.configuration.timeouts,
-            toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: context.configuration.configurationHash,
+            toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: context.configuration.buildIdentityHash,
             policy: inputs.policy,
             selectCoveringTests: context.configuration.execution.selectCoveringTests,
             // Same bound isolated mode's own worker pool already resolves
