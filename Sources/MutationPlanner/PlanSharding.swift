@@ -110,7 +110,12 @@ public enum PlanSharding {
                 mutations: mutations[shardIndex],
                 skipped: skipped[shardIndex],
                 operators: plan.operators,
-                budgetInclusionReasons: inclusionReasons[shardIndex]
+                budgetInclusionReasons: inclusionReasons[shardIndex],
+                // Carried through, never recomputed: a shard is a subset of
+                // an already-fixed selection, so it was planned under the
+                // parent's settings whatever this process's own
+                // configuration happens to say now.
+                planningHash: plan.planningHash
             )
         }
     }
@@ -166,7 +171,8 @@ public enum PlanSharding {
             mutations: plan.mutations.filter { requested.contains($0.id) },
             skipped: plan.skipped.filter { requested.contains($0.id) },
             operators: plan.operators,
-            budgetInclusionReasons: plan.budgetInclusionReasons.filter { requested.contains($0.mutationID) }
+            budgetInclusionReasons: plan.budgetInclusionReasons.filter { requested.contains($0.mutationID) },
+            planningHash: plan.planningHash
         )
     }
 

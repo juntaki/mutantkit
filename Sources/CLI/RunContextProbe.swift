@@ -129,10 +129,12 @@ enum RunContextProbe {
         return RunContextFingerprint(value: ContentHash.of(components.joined(separator: "\u{1F}")))
     }
 
-    /// How much of the `Configuration` a given cached artifact's identity
-    /// depends on. See `computeContextDigest`'s "Configuration scope"
-    /// section for why this is not one answer for both caches.
-    enum ConfigurationScope {
+    /// How much of the run's context a given cached artifact's identity
+    /// actually depends on — both how much of the `Configuration`, and how
+    /// precisely the tool's own implementation is identified. See
+    /// `computeContextDigest`'s "Identity scope" section for why this is
+    /// not one answer for both caches.
+    enum IdentityScope {
         /// Everything (bar `execution.workers`, and `qualityGate`, which
         /// `configurationHash` zeroes itself). The conservative default: a
         /// setting added later is folded in without anyone having to
@@ -177,6 +179,52 @@ enum RunContextProbe {
         /// the baseline measures must bump this purpose's own tag, exactly
         /// as `resultCache2` had to.
         case coverageAttribution
+
+        /// How this scope identifies "the MutantKit build that produced the
+        /// artifact".
+        ///
+        /// `.wholeConfiguration` uses the release version and commit SHA,
+        /// which is automatic and cannot be forgotten. `.coverageAttribution`
+        /// uses `ExecutionImplementationVersion` instead, and the reason is
+        /// that the commit SHA is both too strict and too weak for this
+        /// artifact, in opposite directions:
+        ///
+        /// - Too strict for a release build, where the SHA is stamped in:
+        ///   a README-only commit changes it and throws away a measurement
+        ///   that cost ~100 minutes. Observed in the field — two installs of
+        ///   the same `1.0.4-dev` version, differing only in commits that
+        ///   never touched the measurement, could not share a map.
+        /// - Too weak for a development build, where `ToolVersion.commitSHA`
+        ///   is `nil` and `version` is a placeholder, so *every* locally
+        ///   built binary shares one identity no matter what changed inside
+        ///   it. `ExecutionImplementationVersion`'s own doc comment names
+        ///   this as the gap it exists to close.
+        ///
+        /// The result cache keeps the SHA as well, deliberately: it already
+        /// checks `ExecutionImplementationVersion` *and*
+        /// `MutationVerdictVerifier.currentVersion` at load time, so the SHA
+        /// there is a third, automatic belt on top of two precise braces. The
+        /// coverage cache has no such load-time check, so moving it to the
+        /// precise mechanism gives it the guard it was missing rather than
+        /// removing one it had.
+        var toolIdentityComponents: [String] {
+            switch self {
+            case .wholeConfiguration:
+                []
+            case .coverageAttribution:
+                ["executionImplementationVersion=\(ExecutionImplementationVersion.current)"]
+            }
+        }
+
+        /// Whether the tool's release version and commit SHA identify the
+        /// build for this scope. False only where something more precise
+        /// stands in — see `toolIdentityComponents`.
+        var usesToolReleaseIdentity: Bool {
+            switch self {
+            case .wholeConfiguration: true
+            case .coverageAttribution: false
+            }
+        }
 
         func narrow(_ configuration: inout Configuration) {
             switch self {
@@ -250,7 +298,7 @@ enum RunContextProbe {
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
         purpose: String,
-        configurationScope: ConfigurationScope = .wholeConfiguration,
+        identityScope: IdentityScope = .wholeConfiguration,
         toolchainCacheIdentityComplete: Bool = true,
         processRunner: ProcessRunner = defaultProcessRunner
     ) async throws -> String {
@@ -273,13 +321,16 @@ enum RunContextProbe {
         // measures/produces the identical thing.
         var scopedConfiguration = configuration
         scopedConfiguration.execution.workers = nil
-        configurationScope.narrow(&scopedConfiguration)
+        identityScope.narrow(&scopedConfiguration)
 
+        let toolReleaseIdentity = identityScope.usesToolReleaseIdentity
+            ? ["toolVersion=\(toolchain.toolVersion)", "toolCommitSHA=\(toolchain.toolCommitSHA ?? "unknown")"]
+            : []
         let components = [
-            "\(purpose)=v4",
-            "configurationHash=\(scopedConfiguration.configurationHash)",
-            "toolVersion=\(toolchain.toolVersion)",
-            "toolCommitSHA=\(toolchain.toolCommitSHA ?? "unknown")",
+            "\(purpose)=v4"
+        ] + [
+            "configurationHash=\(scopedConfiguration.configurationHash)"
+        ] + toolReleaseIdentity + identityScope.toolIdentityComponents + [
             "swiftVersion=\(toolchain.swiftVersion)",
             "swiftSyntaxVersion=\(toolchain.swiftSyntaxVersion)",
             "xcodeVersion=\(toolchain.xcodeVersion ?? "unknown")",

@@ -96,8 +96,13 @@
 /// **The maintenance contract this manual epoch runs on, made explicit**:
 /// bump `current` by one whenever a change lands to any of —
 /// `MutationRunner`'s mutation-application/apply-to-sandbox path,
-/// `selectCoveringTests` or any other test-selection algorithm,
-/// `WorkspaceManager`/sandbox provisioning, or the schemata
+/// `selectCoveringTests` or any other test-selection algorithm, the
+/// per-test coverage *measurement* that algorithm consumes
+/// (`TestSelecting.measurePerTestCoverage` and everything it is built from:
+/// test enumeration, the `-only-testing:` argument shape,
+/// `PerTestCoverageAttribution.attribute`'s retry and partial-attribution
+/// policy, and the coverage readers), `WorkspaceManager`/sandbox
+/// provisioning, or the schemata
 /// build/embedding pipeline (`SchemataMutationRunner`,
 /// `SchemataChunkPlanner` and lowerers) — any place that decides *how* an
 /// already-identified mutation actually gets exercised, as opposed to
@@ -111,7 +116,22 @@
 /// question `MutationVerdictVerifier.currentVersion` already lives with;
 /// no corpus/lint enforcement exists for it either).
 public enum ExecutionImplementationVersion {
-    /// Introduced to close the cache-soundness gap described above — no
-    /// prior value to have bumped from.
-    public static let current = 1
+    /// Version history, newest last:
+    ///
+    /// 1. Introduced to close the cache-soundness gap described above — no
+    ///    prior value to have bumped from.
+    /// 2. Per-test coverage attribution stopped discarding the whole map
+    ///    over one unprovable test: an unmeasurable test is now carried in
+    ///    `PerTestCoverageMap.unattributedTests` and folded into every
+    ///    selection, and each test is retried once before it is given up
+    ///    on. That is a change to `selectCoveringTests`' own algorithm and
+    ///    to the measurement it consumes, which the maintenance contract
+    ///    above requires a bump for — it landed without one, and this is
+    ///    that bump. (Found by auditing which identities actually guard
+    ///    which artifacts, not by anything failing: a verdict cached under
+    ///    the old behaviour came from a *wider* test selection than the new
+    ///    behaviour produces, so reusing one was never unsound in this
+    ///    particular direction. The contract does not ask each change to be
+    ///    re-argued case by case, and a bump costs one cold cache.)
+    public static let current = 2
 }

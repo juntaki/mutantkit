@@ -157,7 +157,8 @@ public struct MutationSuppressionSet: Sendable, Hashable {
             mutations: kept,
             skipped: skipped,
             operators: plan.operators,
-            budgetInclusionReasons: inclusionReasons
+            budgetInclusionReasons: inclusionReasons,
+            planningHash: plan.planningHash
         )
     }
 }

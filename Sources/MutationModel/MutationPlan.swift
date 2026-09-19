@@ -177,6 +177,14 @@ public struct MutationPlan: Codable, Sendable {
     /// Hash of the resolved configuration, so a plan run under different
     /// settings is detectable.
     public let configurationHash: String
+    /// Hash of only the settings that decided what got planned — see
+    /// `Configuration.planningHash`. Separate from `configurationHash`
+    /// because the two answer different questions, and using the broad one
+    /// for the narrow question reports mismatches that do not exist: an
+    /// execution-only edit between `plan` and `run` changes
+    /// `configurationHash` while leaving this identical, which is exactly
+    /// the case `PlanCompatibilityValidator` must not warn about.
+    public let planningHash: String
     /// Hashes of every source file considered, keyed by relative path.
     public let sourceFileHashes: [String: String]
     /// Sorted by `MutationID` — this is what makes execution order deterministic.
@@ -205,7 +213,8 @@ public struct MutationPlan: Codable, Sendable {
         mutations: [MutationPoint],
         skipped: [SkippedMutation],
         operators: [OperatorDescriptor],
-        budgetInclusionReasons: [InclusionReason] = []
+        budgetInclusionReasons: [InclusionReason] = [],
+        planningHash: String? = nil
     ) {
         schemaVersion = SchemaVersion.plan
         self.planID = planID
@@ -213,6 +222,13 @@ public struct MutationPlan: Codable, Sendable {
         self.projectRoot = projectRoot
         self.toolchain = toolchain
         self.configurationHash = configurationHash
+        // Defaulting to `configurationHash` means "this caller draws no
+        // distinction between the two scopes", which is true of every
+        // hand-built plan in a test and of any caller that has not been
+        // taught the difference. It degrades to exactly today's behaviour —
+        // an execution-only edit warns — which is the safe direction to fail
+        // in: an unnecessary warning, never a missed real change.
+        self.planningHash = planningHash ?? configurationHash
         self.sourceFileHashes = sourceFileHashes
         self.mutations = mutations.sorted { $0.id < $1.id }
         self.skipped = skipped
@@ -223,6 +239,7 @@ public struct MutationPlan: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, planID, createdAt, projectRoot, toolchain, configurationHash
         case sourceFileHashes, mutations, skipped, operators, budgetInclusionReasons
+        case planningHash
     }
 
     /// Custom only for `budgetInclusionReasons`: a plan.json written before
@@ -244,6 +261,13 @@ public struct MutationPlan: Codable, Sendable {
         budgetInclusionReasons = try container.decodeIfPresent(
             [InclusionReason].self, forKey: .budgetInclusionReasons
         ) ?? []
+        // Absent means "this plan drew no distinction between the two
+        // scopes" -- either a plan written before the field existed, or one
+        // whose two hashes coincided (see `encode(to:)`). Falling back to
+        // `configurationHash` reproduces exactly the behaviour such a plan
+        // was written under, rather than inventing a narrower identity for
+        // it after the fact.
+        planningHash = try container.decodeIfPresent(String.self, forKey: .planningHash) ?? configurationHash
     }
 
     /// Custom only for `budgetInclusionReasons`: omitted entirely when empty
@@ -265,6 +289,14 @@ public struct MutationPlan: Codable, Sendable {
         try container.encode(mutations, forKey: .mutations)
         try container.encode(skipped, forKey: .skipped)
         try container.encode(operators, forKey: .operators)
+        // Omitted when it carries nothing `configurationHash` does not
+        // already say -- the same treatment, for the same ADR-0007 invariant
+        // 8/B.8 reason, `budgetInclusionReasons` gets just below: a plan
+        // whose two scopes coincide keeps the bytes it had before this field
+        // existed.
+        if planningHash != configurationHash {
+            try container.encode(planningHash, forKey: .planningHash)
+        }
         if !budgetInclusionReasons.isEmpty {
             try container.encode(budgetInclusionReasons, forKey: .budgetInclusionReasons)
         }

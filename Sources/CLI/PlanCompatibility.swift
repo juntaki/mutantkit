@@ -5,13 +5,20 @@ import MutationModel
 /// version, SwiftSyntax version, or configuration is reported rather than
 /// silently executed as if nothing had changed.
 ///
-/// Deliberately conservative: `configurationHash` today covers the whole
-/// resolved configuration, including execution-only settings (worker count,
-/// report format) that do not affect what was planned. A mismatch is
-/// reported as a warning, not an error, until the hash is split into a
-/// planning-affecting component and an execution-only one — `verify`'s
-/// anchor check remains the authoritative test of whether a plan still
-/// applies to the source.
+/// The configuration comparison is against `planningHash`, not
+/// `configurationHash`: the question here is "would re-planning produce a
+/// different plan", and only the settings planning actually reads can change
+/// that answer. Comparing the whole configuration — which this did until
+/// `Configuration.planningHash` existed — reported a mismatch for any
+/// execution-only edit made between `plan` and `run`, including turning on
+/// `execution.selectCoveringTests`, raising `workers`, or adding a report
+/// format. Confirmed in the field as a false positive that reads like a
+/// trust problem and has no action attached to it.
+///
+/// Still a warning rather than an error, and `verify`'s anchor check remains
+/// the authoritative test of whether a plan still applies to the source:
+/// this compares settings, and settings are not the only thing that can move
+/// under a plan.
 enum PlanCompatibilityValidator {
     static func check(
         _ plan: MutationPlan,
@@ -43,15 +50,17 @@ enum PlanCompatibilityValidator {
             ))
         }
 
-        if plan.configurationHash != configuration.configurationHash {
+        if plan.planningHash != configuration.planningHash {
             issues.append(ConfigurationIssue(
                 severity: .warning,
-                path: "plan.configurationHash",
+                path: "plan.planningHash",
                 message: """
-                This run's configuration hash does not match the one recorded in the plan. This may be \
-                an execution-only setting (workers, report format) that does not affect what was \
-                planned, or a planning-affecting change (operators, source scope) that does — run \
-                `mutantkit verify` to check the plan's anchors still match, and re-plan if they do not.
+                A setting that decides what gets planned — source scope, operators, budget, or diff \
+                base — has changed since this plan was produced, so re-planning now would not produce \
+                this plan. Run `mutantkit verify` to check the plan's anchors still match the source, \
+                and re-plan to pick up the new scope. (Execution-only settings are deliberately not \
+                compared here: changing workers, report format or test selection does not change what \
+                was planned.)
                 """
             ))
         }

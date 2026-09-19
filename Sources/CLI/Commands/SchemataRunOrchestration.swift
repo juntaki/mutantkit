@@ -435,7 +435,8 @@ enum SchemataRunOrchestration {
         let fallbackPlan = MutationPlan(
             planID: plan.planID, createdAt: plan.createdAt, projectRoot: plan.projectRoot, toolchain: plan.toolchain,
             configurationHash: plan.configurationHash, sourceFileHashes: plan.sourceFileHashes,
-            mutations: plan.mutations.filter { fallbackIDs.contains($0.id) }, skipped: plan.skipped, operators: plan.operators
+            mutations: plan.mutations.filter { fallbackIDs.contains($0.id) }, skipped: plan.skipped,
+            operators: plan.operators, planningHash: plan.planningHash
         )
         return try await MutationRunner(
             plan: fallbackPlan, configuration: context.configuration, projectRoot: context.projectRoot,

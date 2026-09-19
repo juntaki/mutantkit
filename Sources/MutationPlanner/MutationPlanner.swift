@@ -132,7 +132,7 @@ public struct MutationPlanner: Sendable {
 
         let plan = MutationPlan(
             planID: Self.planID(
-                configurationHash: configuration.configurationHash,
+                planningHash: configuration.planningHash,
                 sourceFileHashes: discovery.fileHashes,
                 mutations: surviving,
                 skipped: skipped
@@ -145,7 +145,8 @@ public struct MutationPlanner: Sendable {
             mutations: surviving,
             skipped: skipped,
             operators: resolution.descriptors,
-            budgetInclusionReasons: inclusionReasons
+            budgetInclusionReasons: inclusionReasons,
+            planningHash: configuration.planningHash
         )
 
         // Checking here costs milliseconds. Checking after execution costs the
@@ -450,14 +451,26 @@ public struct MutationPlanner: Sendable {
     /// `createdAt` is excluded on purpose: re-planning an unchanged tree with an
     /// unchanged config produces the same ID, which is what lets a cache, a
     /// resume, or a set of shards recognise each other.
+    /// A plan's identity: what makes two plans "the same plan".
+    ///
+    /// Keyed on `planningHash`, not `configurationHash`. Two runs of `plan`
+    /// that differ only in an execution setting — `workers`,
+    /// `selectCoveringTests`, the report format — discover the identical
+    /// mutations from the identical sources, and calling those two different
+    /// plans means their checkpoints, run manifests and result groupings do
+    /// not line up, for a difference that had no bearing on planning. The
+    /// version marker moves to `v2` because every existing plan's ID changes
+    /// with the input: an ID is a claim about what a plan is, and one
+    /// computed under a scheme this build no longer implements is a claim it
+    /// cannot check.
     private static func planID(
-        configurationHash: String,
+        planningHash: String,
         sourceFileHashes: [String: String],
         mutations: [MutationPoint],
         skipped: [SkippedMutation]
     ) -> String {
         let separator = "\u{1F}"
-        var components = ["v1", configurationHash]
+        var components = ["v2", planningHash]
         components += sourceFileHashes.keys.sorted().map { "\($0)=\(sourceFileHashes[$0]!)" }
         components += mutations.map(\.id.rawValue).sorted()
         components += skipped.map { "\($0.id.rawValue)=\($0.reason.rawValue)" }.sorted()
