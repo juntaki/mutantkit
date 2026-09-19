@@ -68,13 +68,31 @@ public struct BaselineCoverageMeasurement: Sendable {
 
         if configuration.execution.selectCoveringTests {
             if let cacheKey, let cached = await cache?.load(cacheKey) {
+                Self.note(
+                    "coverage cache: hit — reusing the per-test attribution measured for this source tree, test " +
+                        "suite and toolchain. The profiling pass is skipped."
+                )
                 perTestCoverage = cached
                 coverage = cached.aggregate()
             } else if let selecting = test as? any TestSelecting {
+                Self.note("coverage cache: \(Self.missReason(hasKey: cacheKey != nil, hasCache: cache != nil))")
                 let profilingStarted = Date()
                 perTestCoverage = await selecting.measurePerTestCoverage(
                     artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds
                 )
+                if perTestCoverage == nil {
+                    // The failure that cost a real project ~100 minutes,
+                    // twice, in silence: the pass ran in full and attributed
+                    // nothing, so nothing was narrowed and nothing was
+                    // cached. Correct (the run falls back to testing every
+                    // mutant against the whole suite) but expensive, and
+                    // impossible to notice from the outside — the cache
+                    // directory is simply never created.
+                    Self.note(
+                        "warning: per-test coverage could not be attributed for any test. Every mutant will run " +
+                            "the full configured test list, and nothing was cached, so the next run measures again."
+                    )
+                }
                 // `flatMap`, not `?.`: `aggregate()` is optional in its own
                 // right and answers `nil` for a partial attribution, so the
                 // `.noCoverage` fast path can never be driven by a map that
@@ -105,5 +123,32 @@ public struct BaselineCoverageMeasurement: Sendable {
         return Result(
             perTestCoverage: perTestCoverage, coverage: coverage, profilingDurationSeconds: profilingDurationSeconds
         )
+    }
+
+    /// Why this run is about to pay for the profiling pass rather than
+    /// reusing a measurement.
+    ///
+    /// Named rather than reported as a bare "miss", because the three
+    /// reasons call for completely different responses: an ordinary miss is
+    /// expected on a first run and needs no action, a missing key means the
+    /// digest could not be computed and *no* run will ever cache (a real,
+    /// fixable problem, previously visible only as a raw error dump), and a
+    /// missing cache means caching was disabled for this run.
+    static func missReason(hasKey: Bool, hasCache: Bool) -> String {
+        let measuring = "measuring per-test coverage"
+        guard hasCache else { return "disabled for this run — \(measuring)." }
+        guard hasKey else {
+            return "unusable — this run's context digest could not be computed, so nothing can be reused or " +
+                "stored. \(measuring) again."
+        }
+        return "miss — no measurement exists for this source tree, test suite and toolchain. \(measuring); " +
+            "later runs against an unchanged tree reuse it."
+    }
+
+    /// Progress and cost notices go to stderr, never stdout: stdout carries
+    /// the run's own reportable output, which `--report json` consumers
+    /// parse. Same split every other diagnostic in this tool already makes.
+    private static func note(_ message: String) {
+        FileHandle.standardError.write(Data("\(message)\n".utf8))
     }
 }

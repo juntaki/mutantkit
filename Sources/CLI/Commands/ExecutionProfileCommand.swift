@@ -82,7 +82,7 @@ extension ExecutionProfileCommand {
     ) -> String {
         let decisions = ExecutionProfileResolver.decisions(for: characteristics, current: currentExecution)
         let optimized = ExecutionProfileResolver.resolve(profile: .optimized, current: currentExecution, characteristics: characteristics)
-        let changes = fieldChanges(from: currentExecution, to: optimized)
+        let changes = ExecutionProfileFieldChanges.between(currentExecution, optimized)
 
         var lines: [String] = []
         lines.append("")
@@ -162,23 +162,5 @@ extension ExecutionProfileCommand {
                 "here under any profile."
         )
         return lines.joined(separator: "\n")
-    }
-
-    /// `sharedModuleCache` is deliberately absent: `ExecutionProfileResolver
-    /// .resolve` never touches it (see `ExecutionProfile`'s own doc
-    /// comment), so `before`/`after` can never differ on that field and a
-    /// comparison here would be permanently-dead code.
-    private static func fieldChanges(from before: ExecutionSettings, to after: ExecutionSettings) -> [String] {
-        var changes: [String] = []
-        if before.strategy != after.strategy {
-            changes.append("execution.strategy: \(before.strategy.rawValue) → \(after.strategy.rawValue)")
-        }
-        if before.selectCoveringTests != after.selectCoveringTests {
-            changes.append("execution.selectCoveringTests: \(before.selectCoveringTests) → \(after.selectCoveringTests)")
-        }
-        if before.measureCoverage != after.measureCoverage {
-            changes.append("execution.measureCoverage: \(before.measureCoverage) → \(after.measureCoverage)")
-        }
-        return changes
     }
 }

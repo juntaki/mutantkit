@@ -2,7 +2,31 @@ import ArgumentParser
 import Foundation
 import MutationModel
 
+/// The process entry point, separate from `MutantKit` itself only so stdout's
+/// buffering can be set before ArgumentParser writes anything to it.
+///
+/// A C runtime gives stdout line buffering when it is a terminal and *block*
+/// buffering otherwise. Every long-running command here is routinely run into
+/// a pipe — a CI log, a `tee`, an agent's captured output — and block
+/// buffering means a run that takes hours emits nothing until a 4KB buffer
+/// fills or the process exits. Confirmed in the field: a real run's per-test
+/// coverage pass and its mutant loop were both invisible from outside, and
+/// `ps` was the only way to tell the run was alive. Some CI systems also kill
+/// a job that has produced no output for long enough, which turns this from
+/// an ergonomic problem into a failed run.
+///
+/// `_IOLBF`, not `_IONBF`: a line at a time is exactly the granularity every
+/// writer here produces, and unbuffered would make a syscall per byte for no
+/// added promptness. (This repo's own private probe executables already do
+/// the same thing for the same reason; the shipped binary simply never did.)
 @main
+enum MutantKitMain {
+    static func main() async {
+        setvbuf(stdout, nil, _IOLBF, 0)
+        await MutantKit.main()
+    }
+}
+
 struct MutantKit: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mutantkit",

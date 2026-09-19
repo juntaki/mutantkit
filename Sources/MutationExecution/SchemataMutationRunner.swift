@@ -300,6 +300,11 @@ public struct SchemataMutationRunner: Sendable {
     /// (see `prepareBatchedPrimaries`): a "batch" of one token has no
     /// containment benefit over the unbatched path.
     private let schemataTokenBatchSize: Int
+    /// Counts *chunks*, not mutants: a chunk is this backend's unit of
+    /// build-and-test work, so it is what a human watching the run is
+    /// actually waiting on. The isolated backend counts mutants for the same
+    /// reason — there, one mutant is one build-and-test cycle.
+    private let progress: ProgressReporter?
 
     public init(
         planID: String,
@@ -320,7 +325,8 @@ public struct SchemataMutationRunner: Sendable {
         coverageCache: CoverageProfileCache? = nil,
         coverageCacheKey: CoverageProfileCache.Key? = nil,
         preEstablishedBaseline: SharedBaselineEstablisher.Outcome? = nil,
-        schemataTokenBatchSize: Int = 1
+        schemataTokenBatchSize: Int = 1,
+        progress: ProgressReporter? = nil
     ) {
         self.planID = planID
         self.workUnitID = workUnitID
@@ -341,6 +347,7 @@ public struct SchemataMutationRunner: Sendable {
         self.coverageCacheKey = coverageCacheKey
         self.preEstablishedBaseline = preEstablishedBaseline
         self.schemataTokenBatchSize = schemataTokenBatchSize
+        self.progress = progress
     }
 
     public func run() async throws -> Outcome {
@@ -443,6 +450,7 @@ public struct SchemataMutationRunner: Sendable {
                 entryOutcomes.append(contentsOf: result.outcomes)
                 buildFailureEvents.append(contentsOf: result.buildFailureEvents)
                 infrastructureFallbackEvents.append(contentsOf: result.infrastructureFallbackEvents)
+                await progress?.recordCompletion()
                 if let program = remainingPrograms.next() {
                     group.addTask {
                         await self.runChunkTracked(

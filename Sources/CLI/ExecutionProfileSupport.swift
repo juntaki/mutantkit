@@ -110,8 +110,48 @@ enum ExecutionProfileSupport {
         )
         let enabled = ExecutionProfileResolver.decisions(for: characteristics, current: requested)
             .filter(\.eligible).map(\.feature.rawValue)
-        return enabled.isEmpty
+        let headline = enabled.isEmpty
             ? "Execution profile: \(settings.execution.profile.rawValue) — nothing eligible for this project; running with today's defaults."
             : "Execution profile: \(settings.execution.profile.rawValue) — enabled \(enabled.joined(separator: ", "))."
+
+        // The settings this actually replaced, named with their before and
+        // after values — not just which features it switched on.
+        //
+        // Those are different facts, and only the second one answers the
+        // question a user asks after reading their own `mutantkit.yml`:
+        // "I wrote `strategy: isolated`, so why is this running schemata?"
+        // A feature list mentions `schemata` but never says it overrode
+        // anything, which leaves the config file looking like it was
+        // honoured. Reported for every changed field, whether the file set
+        // it or left it at the default, because the effect on the run is the
+        // same either way and the profile is the reason in both cases.
+        let changes = ExecutionProfileFieldChanges.between(requested, settings.execution)
+        guard !changes.isEmpty else { return headline }
+        return headline + "\n  overrides: " + changes.joined(separator: ", ")
+    }
+}
+
+/// What resolving an `execution.profile` changed about the concrete
+/// execution settings — shared by `run` (which reports it as it happens) and
+/// `mutantkit execution-profile` (which previews it before anything runs), so
+/// the preview and the real thing can never describe the same resolution
+/// differently.
+enum ExecutionProfileFieldChanges {
+    /// `sharedModuleCache` is deliberately absent: `ExecutionProfileResolver
+    /// .resolve` never touches it (see `ExecutionProfile`'s own doc
+    /// comment), so `before`/`after` can never differ on that field and a
+    /// comparison here would be permanently-dead code.
+    static func between(_ before: ExecutionSettings, _ after: ExecutionSettings) -> [String] {
+        var changes: [String] = []
+        if before.strategy != after.strategy {
+            changes.append("execution.strategy: \(before.strategy.rawValue) → \(after.strategy.rawValue)")
+        }
+        if before.selectCoveringTests != after.selectCoveringTests {
+            changes.append("execution.selectCoveringTests: \(before.selectCoveringTests) → \(after.selectCoveringTests)")
+        }
+        if before.measureCoverage != after.measureCoverage {
+            changes.append("execution.measureCoverage: \(before.measureCoverage) → \(after.measureCoverage)")
+        }
+        return changes
     }
 }

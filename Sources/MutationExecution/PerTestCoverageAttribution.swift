@@ -42,6 +42,7 @@ public enum PerTestCoverageAttribution {
         tests: [TestIdentifier],
         source: String,
         attempts: Int = 2,
+        progress: ProgressReporter? = nil,
         attempt: (TestIdentifier, Int) async -> CoverageMap?
     ) async -> PerTestCoverageMap? {
         var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
@@ -53,15 +54,20 @@ public enum PerTestCoverageAttribution {
                 measured = await attempt(test, attemptNumber)
                 if measured != nil { break }
             }
-            guard let measured else {
-                unattributedTests.insert(test)
-                continue
-            }
-            for (file, lines) in measured.executedLines {
-                for line in lines {
-                    coveringTests[file, default: [:]][line, default: []].insert(test)
+            if let measured {
+                for (file, lines) in measured.executedLines {
+                    for line in lines {
+                        coveringTests[file, default: [:]][line, default: []].insert(test)
+                    }
                 }
+            } else {
+                unattributedTests.insert(test)
             }
+            // Awaited in the loop body rather than deferred into a detached
+            // task: this is the only signal a human has that an hour-plus
+            // pass is progressing at all, so it has to arrive in order, as
+            // each test finishes — not whenever a scheduler gets to it.
+            await progress?.recordCompletion()
         }
 
         guard !coveringTests.isEmpty else { return nil }
