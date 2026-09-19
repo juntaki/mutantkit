@@ -1,4 +1,6 @@
+@testable import CLI
 import Foundation
+import MutationModel
 import Testing
 
 /// Turns a one-time manual audit into a permanent, mechanical gate — the
@@ -379,5 +381,37 @@ struct DocumentedVersionPinConsistencyTests {
     func preReleaseTagsAreReadWhole() {
         let references = Self.versionReferences(in: "pinned at v0.1.0-alpha.1 for now", file: "fixture.md")
         #expect(references.map(\.version) == ["v0.1.0-alpha.1"])
+    }
+}
+
+/// The other way a version pin drifts: not documentation falling behind the
+/// release, but two constants in the source that mean the same thing and are
+/// maintained separately.
+///
+/// `ToolVersion.planSchemaVersion`/`.reportSchemaVersion` were literals
+/// copied from `SchemaVersion.plan`/`.result`. Nothing tied them and nothing
+/// checked them, so bumping the constant the writers actually stamp into a
+/// file would have left `mutantkit --version` reporting a schema this build
+/// no longer writes.
+@Suite("Regression: reported schema versions are the ones actually written")
+struct ReportedSchemaVersionConsistencyTests {
+    @Test("The version output reports the same plan schema the plan writer stamps")
+    func planSchemaMatches() {
+        #expect(ToolVersion.planSchemaVersion == SchemaVersion.plan)
+    }
+
+    @Test("The version output reports the same result schema the report writer stamps")
+    func resultSchemaMatches() {
+        #expect(ToolVersion.reportSchemaVersion == SchemaVersion.result)
+    }
+
+    /// Pins the mechanism, not just today's values: with both sides at 1, an
+    /// equality assertion passes just as well for two unrelated literals that
+    /// happen to agree. This fails unless the reported value is *derived*
+    /// from the written one.
+    @Test("The reported values track the written ones rather than happening to match")
+    func reportedValuesAreDerivedNotCopied() {
+        #expect(ToolVersion.summary.contains("plan schema: \(SchemaVersion.plan)"))
+        #expect(ToolVersion.summary.contains("report schema: \(SchemaVersion.result)"))
     }
 }

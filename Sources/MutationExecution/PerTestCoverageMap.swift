@@ -99,13 +99,30 @@ public struct TestIdentifier: Sendable, Hashable, Codable {
 /// `Codable` so a baseline pass's attribution can be persisted across runs
 /// by `CoverageProfileCache`: re-running the same source/test/toolchain
 /// combination reuses the measured map instead of paying the profiling cost
-/// again. The on-disk form is the obvious nested dictionary — a structural
-/// change to `coveringTests` invalidates existing caches by failing to
-/// decode, which is the safe direction. `unattributedTests` is decoded
-/// permissively for the opposite reason, and it is safe in exactly this one
-/// direction: an entry written before this field existed came from the
-/// all-or-nothing era, where a stored map was by construction complete, so
-/// the empty default it decodes to is that entry's own true value.
+/// again.
+///
+/// ## The on-disk form interns the test identifiers
+///
+/// The obvious encoding — write each `TestIdentifier` wherever it appears —
+/// writes it once per *covered line*, not once per test. Measured on a real
+/// 647-test iOS project: 117 files, 19,690 covered lines, **976,184
+/// `(file, line, test)` entries over 642 distinct tests**, at ~80 characters
+/// of identifier text each. The resulting cache entry was 106 MB, of which
+/// roughly 75 MB was the same few hundred strings written back out nearly a
+/// million times.
+///
+/// So the identifiers are written once, in `tests`, and every occurrence
+/// below is an index into it — about 20x smaller on that project, for a
+/// file the run reads and writes whole. The order of `tests` is sorted, so
+/// two encodings of the same map are byte-identical.
+///
+/// A structural change like this one invalidates existing entries by failing
+/// to decode, which is the safe direction and the reason no legacy reader is
+/// kept here. `unattributedTests` is decoded permissively for the opposite
+/// reason, and it is safe in exactly this one direction: an entry written
+/// before that field existed came from the all-or-nothing era, where a
+/// stored map was by construction complete, so the empty default it decodes
+/// to is that entry's own true value.
 public struct PerTestCoverageMap: Sendable, Hashable, Codable {
     /// Repository-relative file → 1-based line → the tests whose baseline
     /// run executed it.
@@ -126,11 +143,54 @@ public struct PerTestCoverageMap: Sendable, Hashable, Codable {
         self.source = source
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case coveringTests, source, unattributedTests, tests
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        coveringTests = try container.decode([String: [Int: Set<TestIdentifier>]].self, forKey: .coveringTests)
+        let tests = try container.decode([TestIdentifier].self, forKey: .tests)
         source = try container.decode(String.self, forKey: .source)
-        unattributedTests = try container.decodeIfPresent(Set<TestIdentifier>.self, forKey: .unattributedTests) ?? []
+
+        func resolve(_ indices: [Int]) throws -> Set<TestIdentifier> {
+            try Set(indices.map { index in
+                guard tests.indices.contains(index) else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .coveringTests, in: container,
+                        debugDescription: "test index \(index) is outside the \(tests.count)-entry table"
+                    )
+                }
+                return tests[index]
+            })
+        }
+
+        let encoded = try container.decode([String: [Int: [Int]]].self, forKey: .coveringTests)
+        coveringTests = try encoded.mapValues { try $0.mapValues(resolve) }
+        unattributedTests = try resolve(container.decodeIfPresent([Int].self, forKey: .unattributedTests) ?? [])
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+
+        var everyTest = unattributedTests
+        for lines in coveringTests.values {
+            for tests in lines.values { everyTest.formUnion(tests) }
+        }
+        // Sorted, so the same map always encodes to the same bytes rather
+        // than to whatever order a `Set` happened to iterate in.
+        let table = everyTest.sorted {
+            ($0.target, $0.qualifiedName) < ($1.target, $1.qualifiedName)
+        }
+        let index = Dictionary(uniqueKeysWithValues: table.enumerated().map { ($1, $0) })
+
+        try container.encode(table, forKey: .tests)
+        try container.encode(source, forKey: .source)
+        try container.encode(
+            coveringTests.mapValues { $0.mapValues { $0.map { index[$0]! }.sorted() } }, forKey: .coveringTests
+        )
+        if !unattributedTests.isEmpty {
+            try container.encode(unattributedTests.map { index[$0]! }.sorted(), forKey: .unattributedTests)
+        }
     }
 
     public var isEmpty: Bool { coveringTests.isEmpty }

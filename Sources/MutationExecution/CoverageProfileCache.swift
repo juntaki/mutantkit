@@ -65,7 +65,18 @@ public actor CoverageProfileCache {
     public func store(_ coverage: PerTestCoverageMap, for key: Key) {
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         let record = CacheRecord(key: key, coverage: coverage)
-        guard let data = try? JSONEncoder().encode(record) else { return }
+        let encoder = JSONEncoder()
+        // `.sortedKeys` makes the file a function of the map alone. Without
+        // it, `coveringTests`' dictionary keys come out in whatever order
+        // hashing produced, so storing the same attribution twice writes two
+        // different files — which makes any byte comparison of a cache entry
+        // meaningless, and rewrites a large file for no reason.
+        //
+        // `.withoutEscapingSlashes` is not cosmetic at this size: every file
+        // path and every `Suite/testName` in the identifier table contains
+        // slashes, and the default `\/` spends an extra byte on each one.
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(record) else { return }
         try? data.write(to: root.appendingPathComponent(key.storageName), options: .atomic)
     }
 
