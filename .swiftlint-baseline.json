@@ -93,7 +93,7 @@
     "text": "enum SchemataRunOrchestration {",
     "violation": {
       "severity": "warning",
-      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 357 lines",
+      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 358 lines",
       "ruleIdentifier": "type_body_length",
       "ruleName": "Type Body Length",
       "location": {
@@ -565,7 +565,7 @@
       "location": {
         "file": "Sources/MutationPlanner/MutationPlanner.swift",
         "character": 17,
-        "line": 314
+        "line": 315
       }
     }
   },
@@ -578,7 +578,7 @@
       "location": {
         "file": "Sources/MutationPlanner/MutationPlanner.swift",
         "character": 17,
-        "line": 393
+        "line": 394
       },
       "ruleName": "Large Tuple",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead."
@@ -756,7 +756,7 @@
       "ruleIdentifier": "force_try",
       "severity": "error",
       "location": {
-        "line": 128,
+        "line": 136,
         "character": 17,
         "file": "Tests/MutantKitTests/Support/Builders.swift"
       },
@@ -771,7 +771,7 @@
       "ruleName": "Line Length",
       "severity": "warning",
       "location": {
-        "line": 130,
+        "line": 138,
         "file": "Tests/MutantKitTests/Support/Builders.swift",
         "character": 1
       },
@@ -783,7 +783,7 @@
     "text": "    return try! SchemataBuildReceipt(",
     "violation": {
       "location": {
-        "line": 132,
+        "line": 140,
         "character": 12,
         "file": "Tests/MutantKitTests/Support/Builders.swift"
       },
@@ -803,7 +803,7 @@
       "location": {
         "character": 1,
         "file": "Tests/MutantKitTests/Support/Builders.swift",
-        "line": 140
+        "line": 148
       },
       "reason": "Line should be 140 characters or less; currently it has 142 characters",
       "ruleDescription": "Lines should not span too many characters."
@@ -814,7 +814,7 @@
     "violation": {
       "ruleName": "Line Length",
       "location": {
-        "line": 147,
+        "line": 155,
         "file": "Tests/MutantKitTests/Support/Builders.swift",
         "character": 1
       },

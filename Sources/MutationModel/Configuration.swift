@@ -69,6 +69,51 @@ public struct Configuration: Codable, Sendable, Hashable {
         guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
         return ContentHash.of(data)
     }
+
+    /// Hash of only the settings that decide *what gets planned* — which
+    /// mutants exist at all, not how they are then executed.
+    ///
+    /// `configurationHash` above covers the whole configuration, which makes
+    /// it the right identity for "was this produced under the same settings"
+    /// and the wrong one for "would re-planning produce a different plan".
+    /// Using it for the second question means any execution-only edit
+    /// between `plan` and `run` — turning on `selectCoveringTests`, changing
+    /// `workers`, adding a report format — reports a plan/configuration
+    /// mismatch that does not exist. Observed in the field: adding
+    /// `execution.selectCoveringTests: true` to `mutantkit.yml` after
+    /// planning warned that the plan no longer matched the configuration,
+    /// which is alarming, unactionable, and false.
+    ///
+    /// Scoped by what planning actually reads, which is enumerable:
+    /// `MutationPlanner.makePlan` reads `sources`, `operators`,
+    /// `execution.budget` and `execution.diffBase`; `PlanCommand` resolves
+    /// SwiftPM's live source set from `project` before handing it over. The
+    /// rest — `tests`, `timeouts`, `reports`, `qualityGate`, and every other
+    /// `execution` field — is read only while executing a plan that already
+    /// exists.
+    ///
+    /// Everything outside `execution` is zeroed by name, so a *new* top-level
+    /// section is folded in by default; that is the conservative direction,
+    /// since an unnecessary input costs a false warning and a missing one
+    /// costs a missed real change. Inside `execution` the two planning
+    /// fields are named explicitly instead, which leaves one obligation: an
+    /// execution field added later that does change what gets planned must be
+    /// preserved here too.
+    public var planningHash: String {
+        var hashed = self
+        hashed.tests = TestSettings()
+        hashed.timeouts = TimeoutSettings()
+        hashed.reports = []
+        hashed.qualityGate = QualityGateSettings()
+        let planningExecution = (budget: execution.budget, diffBase: execution.diffBase)
+        hashed.execution = ExecutionSettings()
+        hashed.execution.budget = planningExecution.budget
+        hashed.execution.diffBase = planningExecution.diffBase
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
+        return ContentHash.of(data)
+    }
 }
 
 // MARK: - Project

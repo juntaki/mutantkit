@@ -281,6 +281,12 @@ extension RunCommand {
         let coverageCache = CoverageProfileCache(root: coverageCacheRoot)
         let coverageCacheKey: CoverageProfileCache.Key?
         do {
+            // "coverageProfileCache3": the scope of the *tool identity* this
+            // digest is computed over changed too (see
+            // `IdentityScope.toolIdentityComponents`) — entries keyed under
+            // the previous scheme are claims this build cannot check, for the
+            // same reason the previous bump gave.
+            //
             // "coverageProfileCache2", not "coverageProfileCache": the
             // scope of the configuration this digest is computed over
             // changed (see `ConfigurationScope.coverageAttribution`), so
@@ -290,8 +296,8 @@ extension RunCommand {
             // cache's scheme is untouched, and its entries are far cheaper
             // to lose anyway.
             let digest = try await RunContextProbe.computeContextDigest(
-                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache2",
-                configurationScope: .coverageAttribution,
+                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache3",
+                identityScope: .coverageAttribution,
                 toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
             )
             coverageCacheKey = CoverageProfileCache.Key(contextDigest: digest)

@@ -25,11 +25,12 @@ extension MutationApplicationEvidence {
 func makeToolchain(
     xcodeVersion: String? = nil,
     buildSDKIdentity: String? = nil,
-    destinationRuntimeIdentity: String? = nil
+    destinationRuntimeIdentity: String? = nil,
+    toolCommitSHA: String? = "0000000000000000000000000000000000000000"
 ) -> ToolchainFingerprint {
     ToolchainFingerprint(
         toolVersion: "0.1.0",
-        toolCommitSHA: "0000000000000000000000000000000000000000",
+        toolCommitSHA: toolCommitSHA,
         swiftVersion: "6.3.3",
         swiftSyntaxVersion: "603.0.2",
         xcodeVersion: xcodeVersion,
@@ -76,7 +77,14 @@ func makePlan(
         operators: [
             BoolLiteralInversionOperator.descriptor,
             RelationalOperatorReplacementOperator.descriptor
-        ]
+        ],
+        // Both hashes taken from the same default `Configuration()`, so a
+        // plan from this builder is "clean" against that configuration on
+        // either scope. Without this the planning hash would default to the
+        // *configuration* hash, and every compatibility check against a
+        // default configuration would report a mismatch that says nothing
+        // about the test's own subject.
+        planningHash: Configuration().planningHash
     )
 }
 
