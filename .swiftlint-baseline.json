@@ -33,11 +33,11 @@
     "text": "}",
     "violation": {
       "location": {
-        "line": 2157,
+        "line": 2192,
         "character": 1,
         "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"
       },
-      "reason": "File should contain 1000 lines or less: currently contains 2157",
+      "reason": "File should contain 1000 lines or less: currently contains 2192",
       "ruleIdentifier": "file_length",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
