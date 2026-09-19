@@ -777,6 +777,17 @@ jobs:
           MUTANTKIT_ACCEPTANCE: "1"
           MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
           MUTANTKIT_WAVE_ACCEPTANCE: ${{ matrix.wave }}
+          # Observation only -- nothing reads this to make a decision, and
+          # the 120-second budget it measures is deliberately unchanged.
+          # `xcodebuild -list -json` has been killed at that deadline three
+          # times (120.056s, 120.119s, 120.164s), which says the budget
+          # touches the edge of the distribution and nothing about where the
+          # edge is: only the failures were ever recorded. This appends one
+          # row per attempt, successes included, so a later decision about
+          # the budget can be read off the successful durations instead of
+          # guessed from the failed ones. See
+          # `Sources/AppleBuildAdapters/SchemeDiscoveryObservationLog.swift`.
+          MUTANTKIT_SCHEME_DISCOVERY_LOG: ${{ github.workspace }}/scheme-discovery.jsonl
         run: |
           # `|| test_exit=$?`, never a bare status read. GitHub runs a
           # `shell: bash` step as `bash --noprofile --norc -eo pipefail {0}`,
@@ -839,6 +850,43 @@ jobs:
           fi
 
           exit $test_exit
+
+      # Observation only. This step never fails the job and nothing gates on
+      # it: its whole purpose is to accumulate the successful-duration
+      # distribution that the 120-second `xcodebuild -list -json` budget was
+      # set without. `always()` because the successes are the missing half --
+      # a collector that only ran on failure would rebuild the same blind
+      # spot it exists to fill.
+      - name: Scheme-discovery timings
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="${{ github.workspace }}/scheme-discovery.jsonl"
+          if [ ! -s "$log" ]; then
+            echo "No scheme-discovery attempts recorded for ${{ matrix.fixture }}."
+            exit 0
+          fi
+          total=$(wc -l < "$log" | tr -d ' ')
+          {
+            echo "### \`xcodebuild -list -json\`: $total attempt(s) — ${{ matrix.fixture }}"
+            echo
+            echo '```json'
+            head -n 50 "$log"
+            if [ "$total" -gt 50 ]; then
+              echo "... $((total - 50)) more row(s); the full file is in this job's artifacts."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scheme-discovery timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scheme-discovery-timings-${{ matrix.fixture }}
+          path: scheme-discovery.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Collect acceptance coverage profile
         if: always()
