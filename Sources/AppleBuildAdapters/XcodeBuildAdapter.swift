@@ -80,6 +80,17 @@ public struct XcodeBuildAdapter: Sendable {
     /// time, and CI disproved that assumption.
     let processRunner: ProcessRunner
 
+    /// Where each `xcodebuild -list -json` attempt's timing is appended, or
+    /// `nil` to record nothing — the default on every path that does not say
+    /// otherwise, since the variable is unset outside CI.
+    ///
+    /// Read once here rather than from the global environment at each call
+    /// site so a test can point one adapter at its own file without setting a
+    /// process-wide variable that every *other* adapter running concurrently
+    /// in the same test process would then also write to.
+    var schemeDiscoveryLogPath: String? =
+        ProcessInfo.processInfo.environment[SchemeDiscoveryObservationLog.environmentVariable]
+
     public init(
         configuration: Configuration,
         kind: ProjectKind,
@@ -460,15 +471,36 @@ public struct XcodeBuildAdapter: Sendable {
         in workspace: URL, emptyResultRetryCount: Int = 2
     ) async -> SchemeDiscoveryResult {
         let arguments = projectArguments(in: workspace) + ["-list", "-json"]
+        // Every `return` below is preceded by one observation row, and the
+        // fall-through case records one too, so the log holds one row per
+        // attempt actually made -- successes included. Successes are the
+        // whole point: three failures at the 120s deadline say the budget
+        // touches the distribution's edge and nothing more, and the budget
+        // stays where it is until the successful durations say what it
+        // should be. See `SchemeDiscoveryObservationLog`.
+        func observe(_ outcome: SchemeDiscoveryObservationLog.Outcome,
+                     attempt: Int, result: ProcessResult?, schemeCount: Int) {
+            SchemeDiscoveryObservationLog.record(
+                attempt: attempt,
+                outcome: outcome,
+                result: result,
+                schemeCount: schemeCount,
+                budgetSeconds: Self.schemeListTimeoutSeconds,
+                path: schemeDiscoveryLogPath
+            )
+        }
         for attempt in 0 ... emptyResultRetryCount {
             let result = try? await processRunner(
                 ToolPaths.xcodebuild, arguments, workspace, Self.schemeListTimeoutSeconds
             )
             guard let result, result.succeeded else {
+                observe(result == nil ? .notStarted : .didNotSucceed,
+                        attempt: attempt, result: result, schemeCount: 0)
                 return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: false)
             }
             let schemes = SchemeListJSON.schemes(from: result.standardOutput)
             if !schemes.isEmpty {
+                observe(.schemesFound, attempt: attempt, result: result, schemeCount: schemes.count)
                 return SchemeDiscoveryResult(schemes: schemes, lastResult: result, answered: true)
             }
             // An empty list read out of output the supervisor never confirmed
@@ -481,11 +513,14 @@ public struct XcodeBuildAdapter: Sendable {
             // does not parse, so any scheme name read out at all came from
             // a complete document.
             guard result.outputComplete else {
+                observe(.outputIncomplete, attempt: attempt, result: result, schemeCount: 0)
                 return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: false)
             }
             if attempt == emptyResultRetryCount {
+                observe(.answeredNone, attempt: attempt, result: result, schemeCount: 0)
                 return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: true)
             }
+            observe(.emptyRetrying, attempt: attempt, result: result, schemeCount: 0)
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return SchemeDiscoveryResult(schemes: [], lastResult: nil, answered: false)
