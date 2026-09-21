@@ -344,10 +344,16 @@ enum SchemataRunOrchestration {
     /// treat a real baseline failure as "not applicable, assume passed"
     /// and skip the `IntegrityChecker` `baselineMismatch` violation that
     /// failure is supposed to trigger.
-    private enum SchemataPortionResult {
+    /// Internal, not `private`, only so `resolveBaseline` above can be
+    /// tested against each case directly — the same treatment
+    /// `sharedChunkBuildFailureIssues` already has.
+    enum SchemataPortionResult {
         case notApplicable
         case succeeded(SchemataMutationRunner.Outcome)
-        case baselineFailed(diagnosis: String)
+        /// `record` is the failed baseline as the runner observed it, so
+        /// `merge` can attach the real one instead of a zeroed stand-in —
+        /// see `RunError.baselineDidNotPass`'s own doc comment.
+        case baselineFailed(record: BaselineRecord, diagnosis: String)
     }
 
     private static func runSchemataPortion(
@@ -422,7 +428,10 @@ enum SchemataRunOrchestration {
             // aborting the whole run before the fallback portion even runs.
             let diagnosis = "\(error)"
             print("! Schemata baseline did not pass (\(diagnosis)); embedded mutants cannot be scored this run.")
-            return .baselineFailed(diagnosis: diagnosis)
+            switch error {
+            case let .baselineDidNotPass(record, _):
+                return .baselineFailed(record: record, diagnosis: diagnosis)
+            }
         }
     }
 
@@ -480,6 +489,61 @@ enum SchemataRunOrchestration {
     /// priority — it is the one shape every existing reporter already
     /// knows how to render, and is the more informative of two genuinely-
     /// passing runs.
+    /// Which baseline the merged report carries, and whether the run has to
+    /// declare itself degraded — the one decision in `merge` that a wrong
+    /// answer makes invisible rather than loud, so it is separated out and
+    /// tested directly (`SchemataDegradedBaselineTests`). Pure: `merge`'s
+    /// other inputs (the plan, the ledger, the adapters) cannot change it.
+    struct BaselineResolution {
+        let passed: Bool
+        let record: BaselineRecord
+        let degradationReason: String?
+    }
+
+    /// An all-`nil` record is a statement that nothing about the baseline is
+    /// known — used only where that is genuinely true, never in place of a
+    /// record that exists.
+    private static var unknownBaseline: BaselineRecord {
+        BaselineRecord(
+            passed: false, testSummary: nil, durationSeconds: 0, buildProductHash: nil, buildCommand: nil, testCommand: nil
+        )
+    }
+
+    /// Takes the two candidate records rather than the reports they came
+    /// from: those are all this decision reads, and naming them directly is
+    /// what keeps it a pure function of its inputs.
+    static func resolveBaseline(
+        _ schemataPortion: SchemataPortionResult, schemataBaseline: BaselineRecord?,
+        fallbackBaseline: BaselineRecord?, embeddedCount: Int, fallbackCount: Int
+    ) -> BaselineResolution {
+        switch schemataPortion {
+        case let .baselineFailed(record, diagnosis):
+            // The baseline the schemata portion actually observed, not a
+            // zeroed stand-in for it: this case is precisely the "genuine
+            // shared-baseline failure" `merge`'s doc comment promises
+            // attaches the failed record, and a synthesized all-`nil` one
+            // told a reader nothing about whether the project even built.
+            BaselineResolution(
+                passed: false, record: record,
+                degradationReason: "the schemata baseline did not pass: \(diagnosis)"
+            )
+        case .notApplicable:
+            BaselineResolution(
+                passed: fallbackBaseline?.passed ?? true,
+                record: fallbackBaseline ?? unknownBaseline,
+                degradationReason: embeddedCount == 0 && fallbackCount > 0
+                    ? "no mutation in this plan was embeddable under the currently registered schemata lowerers"
+                    : nil
+            )
+        case .succeeded:
+            BaselineResolution(
+                passed: (schemataBaseline?.passed ?? true) && (fallbackBaseline?.passed ?? true),
+                record: fallbackBaseline ?? schemataBaseline ?? unknownBaseline,
+                degradationReason: nil
+            )
+        }
+    }
+
     private static func merge(
         _ context: Context, startedAt: Date, schemataPortion: SchemataPortionResult, fallbackReport: RunReport?,
         counts: PortionCounts, baselineIssues: [OperationalIssue]
@@ -493,31 +557,11 @@ enum SchemataRunOrchestration {
             try? ledger.insert(result)
         }
 
-        let baselinePassed: Bool
-        let baseline: BaselineRecord
-        let degradationReason: String?
-        switch schemataPortion {
-        case let .baselineFailed(diagnosis):
-            baselinePassed = false
-            baseline = BaselineRecord(
-                passed: false, testSummary: nil, durationSeconds: 0, buildProductHash: nil, buildCommand: nil, testCommand: nil
-            )
-            degradationReason = "the schemata baseline did not pass: \(diagnosis)"
-        case .notApplicable:
-            baselinePassed = fallbackReport?.baseline.passed ?? true
-            baseline = fallbackReport?.baseline ?? BaselineRecord(
-                passed: false, testSummary: nil, durationSeconds: 0, buildProductHash: nil, buildCommand: nil, testCommand: nil
-            )
-            degradationReason = embeddedCount == 0 && fallbackCount > 0
-                ? "no mutation in this plan was embeddable under the currently registered schemata lowerers"
-                : nil
-        case .succeeded:
-            baselinePassed = (schemataOutcome?.baseline.passed ?? true) && (fallbackReport?.baseline.passed ?? true)
-            baseline = fallbackReport?.baseline ?? schemataOutcome?.baseline ?? BaselineRecord(
-                passed: false, testSummary: nil, durationSeconds: 0, buildProductHash: nil, buildCommand: nil, testCommand: nil
-            )
-            degradationReason = nil
-        }
+        let resolved = resolveBaseline(
+            schemataPortion, schemataBaseline: schemataOutcome?.baseline, fallbackBaseline: fallbackReport?.baseline,
+            embeddedCount: embeddedCount, fallbackCount: fallbackCount
+        )
+        let (baselinePassed, baseline, degradationReason) = (resolved.passed, resolved.record, resolved.degradationReason)
         let integrity = IntegrityChecker.check(plan: context.plan, ledger: ledger, baselinePassed: baselinePassed)
         let executionStrategy = ExecutionStrategyReport(
             requested: .schemata, effectiveCount: embeddedCount, fallbackCount: fallbackCount, degradationReason: degradationReason,

@@ -138,6 +138,11 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
         case throwOnReceiptResolution
     }
 
+    /// What `runBaseline` returns, when a test needs a baseline that did not
+    /// pass. `nil` keeps the unconditional `.passed` every existing test
+    /// relies on.
+    var baselineResult: TestRunResult?
+
     private struct UntypedFakeError: Error {}
 
     private static func imageUUID(forBuildCall callIndex: Int) -> ImageUUID {
@@ -235,6 +240,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
 
     func runBaseline(_ artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double) async throws -> TestRunResult {
         lock.withLock { baselineTimeoutSeconds.append(timeoutSeconds) }
+        if let baselineResult { return baselineResult }
         return TestRunResult(status: .passed, summary: nil, command: Self.command, resultArtifactPath: nil, diagnosis: "diag:passed")
     }
 

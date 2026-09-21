@@ -322,6 +322,40 @@ struct AcceptanceRun {
         mutations(withOutcome: .killedByAssertion).union(mutations(withOutcome: .killedByCrash))
     }
 
+    /// Every fact a "zero fallback" expectation needs in order to be
+    /// actionable from a CI log alone: which reasons the fallbacks were
+    /// attributed to, and — the part that actually names a cause — each
+    /// operational issue's own diagnosis, which for a failed chunk build
+    /// carries `BuildClassifier`'s first compiler diagnostic.
+    ///
+    /// Attached to those expectations because their failure message
+    /// otherwise reports only that a count was not zero. A real CI failure
+    /// (`sharedChunkBuildFailure: 1` of 6 chunks, recurring on `main`) was
+    /// undiagnosable from its artifacts for exactly that reason: the
+    /// diagnosis existed, in the report and on stderr, and nothing the job
+    /// uploaded ever showed it.
+    var schemataFallbackEvidence: String {
+        let strategy = report.executionStrategy
+        let issues = report.operationalIssues.map { "  [\($0.severity.rawValue)] \($0.kind.rawValue): \($0.diagnosis)" }
+        return """
+        degradationReason: \(strategy?.degradationReason ?? "nil")
+        effective/fallback: \(strategy?.effectiveCount ?? -1)/\(strategy?.fallbackCount ?? -1) of \(report.integrity.planned) planned
+        fallbackReasonCounts: \(strategy?.fallbackReasonCounts ?? [:])
+        plannerFallbackReasonCounts: \(strategy?.plannerFallbackReasonCounts ?? [:])
+        operationalIssues:
+        \(issues.isEmpty ? "  (none)" : issues.joined(separator: "\n"))
+        """
+    }
+
+    /// The same idea for the other way this bar fails: a baseline that did
+    /// not pass. `BaselineRecord` carries the commands and durations that
+    /// separate "the project did not build" from "the suite ran and was
+    /// red" from "nothing ran at all", none of which a bare
+    /// `#expect(baseline.passed)` failure prints.
+    var baselineEvidence: String {
+        "baseline: \(report.baseline)\ndegradationReason: \(report.executionStrategy?.degradationReason ?? "nil")"
+    }
+
     func cleanUp() {
         try? FileManager.default.removeItem(at: directory)
     }
