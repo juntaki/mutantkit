@@ -69,25 +69,34 @@ struct SchemataMatrixIOSSimulatorAcceptanceTests {
     func fullyActivatesNoFallback() throws {
         let run = try self.run()
         #expect(run.exitCode == 0, "\(run.runOutput)")
-        #expect(run.report.baseline.passed, "the baseline must reflect a genuinely passing suite")
+        #expect(run.report.baseline.passed, "the baseline must reflect a genuinely passing suite\n\(run.baselineEvidence)")
 
         let integrity = run.report.integrity
         #expect(integrity.violations.isEmpty, "\(integrity.violations.map(\.detail))")
 
         let strategy = try #require(run.report.executionStrategy)
         #expect(strategy.requested == .schemata)
-        #expect(strategy.degradationReason == nil, "a whole-run degradation means schemata never really activated")
-        #expect(strategy.effectiveCount == integrity.planned, "every planned mutation must go through the real schemata backend")
+        #expect(
+            strategy.degradationReason == nil,
+            "a whole-run degradation means schemata never really activated\n\(run.baselineEvidence)"
+        )
+        #expect(
+            strategy.effectiveCount == integrity.planned,
+            "every planned mutation must go through the real schemata backend\n\(run.schemataFallbackEvidence)"
+        )
         #expect(
             strategy.fallbackCount == 0,
-            "this fixture is fully covered on purpose — any fallback here is a real gap, not expected uncoverage"
+            """
+            this fixture is fully covered on purpose — any fallback here is a real gap, not expected uncoverage
+            \(run.schemataFallbackEvidence)
+            """
         )
         #expect((strategy.fallbackReasonCounts ?? [:]).isEmpty)
         #expect((strategy.plannerFallbackReasonCounts ?? [:]).isEmpty)
 
         let operationalIssueKinds = Set(run.report.operationalIssues.map(\.kind))
-        #expect(!operationalIssueKinds.contains(.schemataChunkBuildFailed))
-        #expect(!operationalIssueKinds.contains(.schemataChunkReceiptUnavailable))
+        #expect(!operationalIssueKinds.contains(.schemataChunkBuildFailed), "\(run.schemataFallbackEvidence)")
+        #expect(!operationalIssueKinds.contains(.schemataChunkReceiptUnavailable), "\(run.schemataFallbackEvidence)")
     }
 
     @Test("The bundled/override iOS-Simulator archive this run actually linked resolves with the expected provenance")

@@ -93,7 +93,7 @@
     "text": "enum SchemataRunOrchestration {",
     "violation": {
       "severity": "warning",
-      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 358 lines",
+      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 359 lines",
       "ruleIdentifier": "type_body_length",
       "ruleName": "Type Body Length",
       "location": {
@@ -311,7 +311,7 @@
         "character": 8,
         "line": 32
       },
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 992 lines"
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 997 lines"
     }
   },
   {
@@ -423,13 +423,13 @@
     "violation": {
       "ruleIdentifier": "file_length",
       "severity": "warning",
-      "reason": "File should contain 1000 lines or less: currently contains 2182",
+      "reason": "File should contain 1000 lines or less: currently contains 2215",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
       "location": {
         "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1,
-        "line": 2182
+        "line": 2215
       }
     },
     "text": "}"

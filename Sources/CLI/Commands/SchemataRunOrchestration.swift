@@ -347,7 +347,10 @@ enum SchemataRunOrchestration {
     private enum SchemataPortionResult {
         case notApplicable
         case succeeded(SchemataMutationRunner.Outcome)
-        case baselineFailed(diagnosis: String)
+        /// `record` is the failed baseline as the runner observed it, so
+        /// `merge` can attach the real one instead of a zeroed stand-in —
+        /// see `RunError.baselineDidNotPass`'s own doc comment.
+        case baselineFailed(record: BaselineRecord, diagnosis: String)
     }
 
     private static func runSchemataPortion(
@@ -422,7 +425,10 @@ enum SchemataRunOrchestration {
             // aborting the whole run before the fallback portion even runs.
             let diagnosis = "\(error)"
             print("! Schemata baseline did not pass (\(diagnosis)); embedded mutants cannot be scored this run.")
-            return .baselineFailed(diagnosis: diagnosis)
+            switch error {
+            case let .baselineDidNotPass(record, _):
+                return .baselineFailed(record: record, diagnosis: diagnosis)
+            }
         }
     }
 
@@ -497,11 +503,14 @@ enum SchemataRunOrchestration {
         let baseline: BaselineRecord
         let degradationReason: String?
         switch schemataPortion {
-        case let .baselineFailed(diagnosis):
+        case let .baselineFailed(record, diagnosis):
             baselinePassed = false
-            baseline = BaselineRecord(
-                passed: false, testSummary: nil, durationSeconds: 0, buildProductHash: nil, buildCommand: nil, testCommand: nil
-            )
+            // The baseline the schemata portion actually observed, not a
+            // zeroed stand-in for it: this case is precisely the "genuine
+            // shared-baseline failure" this function's doc comment promises
+            // attaches the failed record, and a synthesized all-`nil` one
+            // told a reader nothing about whether the project even built.
+            baseline = record
             degradationReason = "the schemata baseline did not pass: \(diagnosis)"
         case .notApplicable:
             baselinePassed = fallbackReport?.baseline.passed ?? true
