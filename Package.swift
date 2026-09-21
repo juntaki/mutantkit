@@ -75,7 +75,7 @@ let package = Package(
         .library(name: "MutantKitSchemataRuntime", type: .static, targets: ["MutantKitSchemataRuntimeC"])
     ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "603.0.0"),
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "604.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.8.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0")
     ],

@@ -415,3 +415,133 @@ struct ReportedSchemaVersionConsistencyTests {
         #expect(ToolVersion.summary.contains("report schema: \(SchemaVersion.result)"))
     }
 }
+
+/// The third instance of the same class, and the one that costs the most
+/// when it drifts.
+///
+/// `ToolVersion.swiftSyntaxVersion` is what a plan records as the parser it
+/// was discovered with, and `PlanCompatibility.check` compares a stored
+/// plan's copy against the running build's to warn that byte anchors — and
+/// therefore Mutation IDs — may have moved. A dependency bumped without
+/// bumping the literal makes that comparison stale-against-stale: it always
+/// agrees, the warning never fires, and the plan claims a parser the binary
+/// is not linked against. Unlike the schema versions above there is no
+/// in-process symbol to derive it from, so `Package.resolved` — the file
+/// that decides what actually gets linked — is the thing it is tied to.
+@Suite("Regression: the recorded SwiftSyntax version is the one actually resolved")
+struct SwiftSyntaxVersionPinConsistencyTests {
+    /// `#filePath`-anchored for the same reason as the suite above: it
+    /// resolves identically here and in a projected public snapshot, with no
+    /// environment, git, or build products involved.
+    private static var packageResolved: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Regression
+            .deletingLastPathComponent() // MutantKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // repository root
+            .appendingPathComponent("Package.resolved")
+    }
+
+    static func resolvedVersion(ofPin identity: String, in data: Data) throws -> String? {
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let pins = root?["pins"] as? [[String: Any]] ?? []
+        guard let pin = pins.first(where: { $0["identity"] as? String == identity }) else { return nil }
+        return (pin["state"] as? [String: Any])?["version"] as? String
+    }
+
+    @Test("ToolVersion.swiftSyntaxVersion equals the version Package.resolved pins")
+    func recordedVersionMatchesTheResolvedPin() throws {
+        let data = try Data(contentsOf: Self.packageResolved)
+        let resolved = try #require(
+            try Self.resolvedVersion(ofPin: "swift-syntax", in: data),
+            "Package.resolved must pin swift-syntax; without it nothing decides which parser is linked"
+        )
+        #expect(
+            ToolVersion.swiftSyntaxVersion == resolved,
+            """
+            ToolVersion.swiftSyntaxVersion is \(ToolVersion.swiftSyntaxVersion) but Package.resolved pins \(resolved).
+            Every plan would record the stale one, and PlanCompatibility.check's byte-anchor warning compares
+            that recorded value against this same constant — so it would agree with itself and never fire.
+            """
+        )
+    }
+
+    /// The second copy of the same fact, and the one that bit first: the
+    /// public projection does not use the root `Package.swift` at all — the
+    /// hand-maintained `oss-public/Package.swift` overlay is copied verbatim
+    /// over it (see that file's own header, which says it must be kept in
+    /// sync by hand). Bumping only the private manifest left the projected
+    /// tree resolving the old parser while `ToolVersion` claimed the new
+    /// one, and the projection's own build was the first thing to notice.
+    ///
+    /// Compares every external package requirement, not just SwiftSyntax's:
+    /// the drift is a property of the hand-copy, so nothing about it is
+    /// specific to one dependency.
+    ///
+    /// Skipped in the projected public tree, where the overlay is the only
+    /// manifest and there is no second copy to disagree with — the same
+    /// both-trees handling `DocumentedVersionPinConsistencyTests.scannedFiles`
+    /// uses.
+    @Test("The public overlay manifest pins the same dependency versions as the root one")
+    func overlayManifestAgreesWithTheRootManifest() throws {
+        let root = Self.packageResolved.deletingLastPathComponent()
+        let overlay = root.appendingPathComponent("oss-public/Package.swift")
+        guard FileManager.default.fileExists(atPath: overlay.path) else { return }
+
+        let rootRequirements = Self.packageRequirements(
+            in: try String(contentsOf: root.appendingPathComponent("Package.swift"), encoding: .utf8)
+        )
+        let overlayRequirements = Self.packageRequirements(in: try String(contentsOf: overlay, encoding: .utf8))
+
+        #expect(!rootRequirements.isEmpty, "the scan matched no dependency at all; the manifest shape changed")
+        #expect(
+            rootRequirements == overlayRequirements,
+            """
+            oss-public/Package.swift declares different dependency requirements from Package.swift.
+            The overlay is copied verbatim over the root manifest when the public tree is projected, so
+            the public build resolves what it says, not what the private manifest says.
+            root:    \(rootRequirements.sorted(by: { $0.key < $1.key }))
+            overlay: \(overlayRequirements.sorted(by: { $0.key < $1.key }))
+            """
+        )
+    }
+
+    /// Every `.package(url: "…", from: "…")` line, as `url -> from`.
+    /// Deliberately literal: these manifests are hand-written in exactly
+    /// this one shape, and a parser general enough for the others would be
+    /// harder to trust than the thing it checks.
+    static func packageRequirements(in manifest: String) -> [String: String] {
+        var found: [String: String] = [:]
+        for line in manifest.components(separatedBy: .newlines) {
+            guard line.contains(".package(url:") else { continue }
+            let quoted = line.components(separatedBy: "\"")
+            guard quoted.count >= 4 else { continue }
+            found[quoted[1]] = quoted[3]
+        }
+        return found
+    }
+
+    @Test("The manifest scan reads a url and its requirement, and ignores anything else")
+    func manifestScanReadsRequirements() {
+        let manifest = """
+        dependencies: [
+            .package(url: "https://example.com/a.git", from: "1.2.3"),
+            .package(url: "https://example.com/b.git", from: "4.0.0")
+        ],
+        targets: [.target(name: "X", dependencies: [.product(name: "A", package: "a")])]
+        """
+        #expect(Self.packageRequirements(in: manifest) == [
+            "https://example.com/a.git": "1.2.3", "https://example.com/b.git": "4.0.0"
+        ])
+    }
+
+    /// The parser here is the test's own load-bearing part, so it is tested
+    /// rather than assumed — a silently-nil lookup would turn this whole
+    /// suite into one that cannot fail.
+    @Test("An absent pin is reported as absent, not as a match")
+    func missingPinIsDistinguishable() throws {
+        let data = Data(#"{"pins":[{"identity":"yams","state":{"version":"6.2.2"}}],"version":3}"#.utf8)
+        #expect(try Self.resolvedVersion(ofPin: "swift-syntax", in: data) == nil)
+        #expect(try Self.resolvedVersion(ofPin: "yams", in: data) == "6.2.2")
+    }
+}
