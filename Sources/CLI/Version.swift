@@ -19,7 +19,16 @@ public enum ToolVersion {
     /// SwiftSyntax version this binary was linked against. Recorded because a
     /// SwiftSyntax change can move a node's trivia boundaries, which moves byte
     /// anchors, which changes Mutation IDs.
-    public static let swiftSyntaxVersion = "603.0.0"
+    ///
+    /// SwiftSyntax exposes no version symbol to read this from, so it stays a
+    /// literal — but an unchecked literal is the failure `planSchemaVersion`
+    /// below describes, and here it is worse than a wrong `--version` line:
+    /// `PlanCompatibility.check` warns that byte anchors may have moved by
+    /// comparing this value in a stored plan against this value now, so a
+    /// dependency bumped without bumping this compares the stale constant to
+    /// itself and the warning silently never fires.
+    /// `SwiftSyntaxVersionPinConsistencyTests` ties it to `Package.resolved`.
+    public static let swiftSyntaxVersion = "604.0.0"
 
     /// Read from `SchemaVersion`, never copied. These are the same fact as
     /// the constants the plan and report writers stamp into their own files,
