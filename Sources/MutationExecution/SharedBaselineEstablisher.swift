@@ -81,13 +81,7 @@ public enum SharedBaselineEstablisher {
         )
 
         guard run.status == .passed else {
-            return .failed(
-                record: record,
-                diagnosis: """
-                The unmutated suite did not pass (\(run.status.rawValue)): \(run.diagnosis) Every \
-                mutant is measured against this run, so nothing can be concluded until it is green.
-                """
-            )
+            return .failed(record: record, diagnosis: suiteDidNotPassDiagnosis(run))
         }
 
         // The one step this establisher does *not* implement in parallel with
@@ -120,6 +114,23 @@ public enum SharedBaselineEstablisher {
             perTestCoverage: measured.perTestCoverage,
             coverage: measured.coverage
         ))
+    }
+
+    /// The one sentence every backend uses for "the unmutated suite ran and
+    /// did not pass", public so `SchemataMutationRunner`'s own non-shared
+    /// baseline path words it identically instead of keeping a second copy.
+    ///
+    /// It carries `status` and the adapter's structured `diagnosis` rather
+    /// than the test counts, because the counts alone cannot distinguish the
+    /// failures that matter: a suite where nothing ran at all and one where
+    /// assertions failed both render as "0 of 0 tests failed" once the
+    /// summary is reduced to numbers, and the first is an infrastructure
+    /// fact while the second is a real red suite.
+    public static func suiteDidNotPassDiagnosis(_ run: TestRunResult) -> String {
+        """
+        The unmutated suite did not pass (\(run.status.rawValue)): \(run.diagnosis) Every \
+        mutant is measured against this run, so nothing can be concluded until it is green.
+        """
     }
 
     private static func unusableBaseline(startedAt: Date, buildCommand: CommandRecord? = nil) -> BaselineRecord {
