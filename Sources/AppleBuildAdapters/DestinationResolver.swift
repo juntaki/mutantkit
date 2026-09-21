@@ -315,4 +315,44 @@ public enum DestinationResolver {
             "platform=macOS"
         }
     }
+
+    /// The same destination with its concrete device dropped — what to pass
+    /// to an `xcodebuild` invocation that only *reads* settings and never
+    /// builds or runs anything on a device.
+    ///
+    /// `xcodebuild -showBuildSettings -destination platform=iOS Simulator,id=<udid>`
+    /// refuses outright ("Unable to find a device matching the provided
+    /// destination specifier", exit 64) the moment that UDID stops resolving
+    /// — the device was deleted, or the simulator set was reset, at any point
+    /// after the build that produced the artifact. Observed in CI: a schemata
+    /// chunk built and tested fine, then `resolveSchemataBuildReceipt` could
+    /// not read back where its own product had been written, so the chunk
+    /// degraded to isolated with `.buildReceiptUnavailable` — a real
+    /// degradation caused by nothing about the build.
+    ///
+    /// A settings query needs the *platform*, because that is what selects
+    /// the `Debug-iphonesimulator` product directory and the wrapper layout;
+    /// it does not need a device. Measured against two real fixtures on Xcode
+    /// 26.6: a device-pinned and a `generic/platform=iOS Simulator` query
+    /// return byte-identical `MACH_O_TYPE`, `BUILT_PRODUCTS_DIR`,
+    /// `EXECUTABLE_PATH`, `WRAPPER_NAME` and `PRODUCT_NAME`. (They differ in
+    /// `ARCHS`, `ONLY_ACTIVE_ARCH`, `TARGET_DEVICE_*` and the per-arch
+    /// intermediate paths derived from them — none of which any settings
+    /// reader here consults.)
+    ///
+    /// Only a simulator platform is rewritten, and only when `platform=`
+    /// names one exactly: `platform=macOS` has no device to lose, an
+    /// already-generic specifier parses no `platform=` field at all and is
+    /// returned untouched, and a physical-device destination is left alone
+    /// rather than guessed at, since no measurement here covers one. A
+    /// rewrite that were wrong anyway fails closed — a `BUILT_PRODUCTS_DIR`
+    /// for the wrong platform holds no artifact, and the caller raises
+    /// `builtArtifactMissing`.
+    public static func buildSettingsDestination(for destination: String) -> String {
+        guard
+            let platform = field(named: "platform", inDestination: destination),
+            simulatorPlatforms.contains(where: { $0.name.caseInsensitiveCompare(platform) == .orderedSame })
+        else { return destination }
+        return "generic/platform=\(platform)"
+    }
 }

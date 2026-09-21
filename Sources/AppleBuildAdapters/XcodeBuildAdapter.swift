@@ -1115,8 +1115,12 @@ extension XcodeBuildAdapter: SchemataBuildable {
         defer {
             Task { await GateTimingRecorder.shared.record("receipt.resolve", chunkID: context.chunkID, start: receiptStart) }
         }
+        // Deliberately not `destination()`: reading back where this chunk's
+        // product was written must not depend on the run's device still
+        // existing — see `DestinationResolver.buildSettingsDestination(for:)`.
         let buildSettingsContext = XcodeCompilationUnitImageResolver.BuildSettingsContext(
-            projectArguments: projectArguments(in: workspace), scheme: try await resolveScheme(in: workspace), destination: destination(),
+            projectArguments: projectArguments(in: workspace), scheme: try await resolveScheme(in: workspace),
+            destination: DestinationResolver.buildSettingsDestination(for: destination()),
             derivedDataPath: derivedDataPath(in: workspace), workspace: workspace, timeoutSeconds: configuration.timeouts.baselineSeconds
         )
         let targetsByName = Dictionary(grouping: units, by: \.buildTarget.targetName)

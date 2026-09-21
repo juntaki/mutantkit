@@ -250,3 +250,66 @@ struct DestinationResolverTests {
         #expect(Self.device("iPhone", platformRuntimeIdentifier: "iOS-26-5").destination.hasPrefix("platform=iOS Simulator,id="))
     }
 }
+
+/// Which destination a settings-only `xcodebuild` invocation is given.
+///
+/// `resolveSchemataBuildReceipt` used to read back its own chunk's product
+/// location with the run's fully resolved `platform=iOS Simulator,id=<udid>`.
+/// That query fails outright (exit 64, "Unable to find a device matching the
+/// provided destination specifier") once the UDID stops resolving, which in
+/// CI degraded an already-built, already-tested chunk to isolated with
+/// `.buildReceiptUnavailable` — for a reason that had nothing to do with the
+/// build. Nothing this settings reader consults varies by device, so the
+/// device is dropped and the platform kept.
+@Suite("Destination resolver: the settings-only destination drops the device")
+struct BuildSettingsDestinationTests {
+    @Test("Every simulator platform loses its device selector and keeps its platform")
+    func simulatorDestinationsBecomeGeneric() {
+        #expect(DestinationResolver.buildSettingsDestination(
+            for: "platform=iOS Simulator,id=75EF742A-E1F8-4BB4-A0A9-2BB0EDA1D68F"
+        ) == "generic/platform=iOS Simulator")
+        #expect(DestinationResolver.buildSettingsDestination(
+            for: "platform=iOS Simulator,name=iPhone 17 Pro,OS=26.0"
+        ) == "generic/platform=iOS Simulator")
+        #expect(DestinationResolver.buildSettingsDestination(for: "platform=tvOS Simulator,name=Apple TV 4K (3rd generation)")
+            == "generic/platform=tvOS Simulator")
+        #expect(DestinationResolver.buildSettingsDestination(for: "platform=watchOS Simulator,name=Apple Watch Series 10 (46mm)")
+            == "generic/platform=watchOS Simulator")
+        #expect(DestinationResolver.buildSettingsDestination(for: "platform=visionOS Simulator,name=Apple Vision Pro")
+            == "generic/platform=visionOS Simulator")
+    }
+
+    /// The rewrite is keyed on the parsed `platform=` field, not on the
+    /// destination string containing a platform name somewhere: a physical
+    /// `platform=iOS` device is not a simulator and is not silently turned
+    /// into one, and a specifier that never named a device is already what
+    /// this function would produce.
+    @Test("Anything without a simulator device to drop is returned unchanged")
+    func nonSimulatorDestinationsPassThrough() {
+        for destination in [
+            "platform=macOS",
+            "platform=macOS,arch=arm64",
+            "platform=iOS,id=00008120-000A1C2E3D4F001E",
+            "generic/platform=iOS",
+            "generic/platform=iOS Simulator"
+        ] {
+            #expect(DestinationResolver.buildSettingsDestination(for: destination) == destination)
+        }
+    }
+
+    /// The whole point of the rewrite: whatever a run resolved its
+    /// destination to, the settings query derived from it never names a
+    /// device — so no device disappearing between build and receipt can make
+    /// the receipt unreadable.
+    @Test("A resolved destination's settings query never carries an id=")
+    func aResolvedDestinationNeverYieldsADevicePin() throws {
+        let device = SimulatorDevice(
+            udid: "75EF742A-E1F8-4BB4-A0A9-2BB0EDA1D68F", name: "iPhone 17 Pro",
+            runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-0", state: "Shutdown"
+        )
+        let resolved = try DestinationResolver.resolve("platform=iOS Simulator,name=iPhone 17 Pro", against: [device])
+
+        #expect(resolved.destinationArgument.contains("id="), "the run itself must still address the one resolved device")
+        #expect(!DestinationResolver.buildSettingsDestination(for: resolved.destinationArgument).contains("id="))
+    }
+}
