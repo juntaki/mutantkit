@@ -1,3 +1,5 @@
+import MutationModel
+
 /// Build identity, embedded at release time.
 ///
 /// Every plan and report records these. A result that cannot be traced back to
@@ -19,8 +21,21 @@ public enum ToolVersion {
     /// anchors, which changes Mutation IDs.
     public static let swiftSyntaxVersion = "603.0.0"
 
-    public static let planSchemaVersion = 1
-    public static let reportSchemaVersion = 1
+    /// Read from `SchemaVersion`, never copied. These are the same fact as
+    /// the constants the plan and report writers stamp into their own files,
+    /// and a second literal here is a second thing to remember: bumping
+    /// `SchemaVersion.plan` while this stayed at its old value would leave
+    /// `mutantkit --version` reporting a schema the tool no longer writes —
+    /// a lie in the one output whose entire job is to say what this build
+    /// is. Nothing tied the two before, and nothing checked them.
+    ///
+    /// Same reasoning `Scripts/release-build.sh` already applies to the
+    /// schemata runtime ABI version, which it reads out of the C header
+    /// rather than duplicating: "a hand-maintained second copy is exactly
+    /// the kind of drift that would make a genuine release silently
+    /// mismatch".
+    public static let planSchemaVersion = SchemaVersion.plan
+    public static let reportSchemaVersion = SchemaVersion.result
 
     public static var summary: String {
         var lines = ["mutantkit \(version)"]

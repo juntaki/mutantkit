@@ -143,17 +143,70 @@ struct PerTestCoverageMapPartialAttributionTests {
         #expect(decoded.unattributedTests == [unproven])
     }
 
-    /// A cache entry written before `unattributedTests` existed came from
-    /// the all-or-nothing era, where a map was only ever stored if every
-    /// test had been proven — so decoding it as complete is that entry's own
-    /// true value, not a permissive guess.
-    @Test("An entry written before the unproven set existed decodes as complete")
-    func legacyEntryDecodesAsComplete() throws {
-        let legacy = Data(#"{"coveringTests":{"Sources/Foo.swift":{"1":[]}},"source":"legacy"}"#.utf8)
+    /// A cache entry with no `unattributedTests` key came from the
+    /// all-or-nothing era, where a map was only ever stored if every test had
+    /// been proven — so decoding it as complete is that entry's own true
+    /// value, not a permissive guess.
+    @Test("An entry with no unproven set decodes as complete")
+    func entryWithoutUnprovenSetDecodesAsComplete() throws {
+        let stored = Data(#"{"tests":[],"coveringTests":{"Sources/Foo.swift":{"1":[]}},"source":"stored"}"#.utf8)
 
-        let decoded = try JSONDecoder().decode(PerTestCoverageMap.self, from: legacy)
+        let decoded = try JSONDecoder().decode(PerTestCoverageMap.self, from: stored)
 
         #expect(decoded.isComplete)
         #expect(decoded.aggregate() != nil)
+    }
+
+    /// The on-disk form writes each identifier once and refers to it by
+    /// index everywhere else. Pinned because the obvious encoding — the
+    /// identifier inline at every occurrence — produced a 106 MB cache entry
+    /// on a real 647-test project, nearly all of it the same few hundred
+    /// strings repeated across 976,184 occurrences.
+    @Test("Identifiers are written once and referenced by index, not repeated per covered line")
+    func identifiersAreInterned() throws {
+        let manyLines = Dictionary(
+            uniqueKeysWithValues: (1 ... 200).map { ($0, Set([addTest, subTest])) }
+        )
+        let map = PerTestCoverageMap(coveringTests: ["Sources/Foo.swift": manyLines], source: "test")
+
+        let encoded = try Self.cacheEncoder().encode(map)
+        let text = try #require(String(data: encoded, encoding: .utf8))
+
+        // Two identifiers, 400 occurrences: each name may appear only in the
+        // table, never once per line.
+        #expect(text.components(separatedBy: "AddTests/testAdd").count - 1 == 1)
+        #expect(text.components(separatedBy: "SubTests/testSub").count - 1 == 1)
+        #expect(try JSONDecoder().decode(PerTestCoverageMap.self, from: encoded) == map)
+    }
+
+    /// A cache file is read and written whole, so two encodings of the same
+    /// map differing only in `Set` iteration order would rewrite it for no
+    /// reason and make any byte comparison meaningless.
+    @Test("The same map always encodes to the same bytes")
+    func encodingIsDeterministic() throws {
+        let map = partialMap()
+
+        #expect(try Self.cacheEncoder().encode(map) == (try Self.cacheEncoder().encode(map)))
+    }
+
+    /// The exact encoder `CoverageProfileCache.store` uses — the guarantees
+    /// asserted above are the stored file's, not `JSONEncoder`'s defaults.
+    private static func cacheEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }
+
+    /// The safe direction, pinned so nobody adds a lenient reader later: an
+    /// entry in the pre-interning shape must miss, not be half-understood.
+    @Test("An entry in the superseded inline shape fails to decode rather than being misread")
+    func supersededShapeFailsToDecode() {
+        let superseded = Data(
+            #"{"coveringTests":{"Sources/Foo.swift":{"1":[{"target":"T","qualifiedName":"S/t"}]}},"source":"old"}"#.utf8
+        )
+
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(PerTestCoverageMap.self, from: superseded)
+        }
     }
 }

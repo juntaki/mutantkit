@@ -85,6 +85,46 @@
 /// "always, on every CI run and every local clean rebuild" defeats the
 /// cache's entire purpose rather than merely costing it some hit rate.
 ///
+/// ## Hashing the *source* instead — measured, and also not a replacement
+///
+/// The investigation above only ever considered hashing the built
+/// executable. Hashing normalized source is a different idea and does not
+/// share that idea's non-determinism problem: a digest generated at build
+/// time and embedded as a constant also sidesteps the "needs the source
+/// checkout at runtime" objection, which applies to deriving a value *while
+/// running*, not to code generation.
+///
+/// It was measured rather than argued about, over the 41 commits in the last
+/// 200 that modified a Swift file under `Sources/MutationExecution`,
+/// `Sources/AppleBuildAdapters` or `Sources/MutationPlanner`:
+///
+/// | what the digest covers | commits that would force a bump |
+/// |---|---|
+/// | raw file bytes | 41 of 41 (100%) |
+/// | file contents, comments and formatting stripped | 33 of 41 (80%) |
+/// | only declarations this contract names, normalized | 10 of 41 (24%) |
+///
+/// At file granularity this fails for the same reason the executable hash
+/// did, and the normalization buys only 20 points: a constant that
+/// invalidates every cached result on four out of five in-scope commits
+/// defeats the cache rather than costing it hit rate. The 8 commits that
+/// normalization *does* absorb were all doc-comment edits, which this
+/// repository produces a lot of.
+///
+/// Declaration granularity is a different proposition — one bump decision
+/// per four in-scope commits is ordinary review discipline for code this
+/// sensitive. Two things are true of that 24% and should not be lost: the
+/// measurement used brace matching rather than SwiftSyntax and could not
+/// attribute a declaration for 11 of the 33 code-changing commits, so it is
+/// a floor rather than a settled number; and the set of in-scope
+/// declarations is still written by hand, so this automates *remembering*,
+/// never *judging*.
+///
+/// Which is the honest summary of the whole question: no digest can decide
+/// whether a change alters behaviour. What one can do is make the decision
+/// impossible to skip silently — the gap named at the end of this comment,
+/// and the one that let a real bump (version 2 below) land late.
+///
 /// A middle-ground fix (stripping the non-deterministic sections before
 /// hashing, or forcing deterministic linking) was *not* pursued — it is
 /// exactly the kind of extra machinery this investigation was told not to
