@@ -39,7 +39,11 @@ enum ExecutionCapabilitiesDiagnosis {
     /// && adapter.test is SchemataTestable` (the check `SchemataRunOrchestration
     /// .run` itself uses to fail closed at run time — see its own
     /// `OrchestrationError.adapterNotSchemataCapable` guard): that pair is
-    /// necessary but not sufficient. `AppleAdapterFactory.adapter(for:)`
+    /// necessary but not sufficient. (As of the v2 `HybridExecutionEngine`
+    /// extraction's Step 2, that guard's error case lives at
+    /// `HybridExecutionEngine.EngineError.adapterNotSchemataCapable`, not
+    /// `SchemataRunOrchestration.OrchestrationError` — same check, same
+    /// message, relocated only.) `AppleAdapterFactory.adapter(for:)`
     /// maps `.swiftPackageApple`, `.xcodeProject` *and* `.xcodeWorkspace`
     /// all to the same `XcodeBuildProjectAdapter`/`XcodeBuildAdapter`
     /// pair, whose `build`/`test` conform to `SchemataBuildable`/
@@ -114,7 +118,7 @@ enum ExecutionCapabilitiesDiagnosis {
     /// that protocol's own doc comment ("an adapter that cannot (or was
     /// not asked to) produce this attribution simply does not conform").
     private static func perTestCoverageItem(adapter: any ProjectAdapter) -> DiagnosisItem {
-        let supported = adapter.test is TestSelecting
+        let supported = adapter.testSelecting != nil
         return DiagnosisItem(
             name: "Per-test coverage selection",
             status: supported ? .ok : .warning,
@@ -152,8 +156,8 @@ enum ExecutionCapabilitiesDiagnosis {
     /// as one line — `execution.testBatchSize` is one setting regardless
     /// of which backend ends up honouring it.
     private static func testBatchingItem(adapter: any ProjectAdapter) -> DiagnosisItem {
-        let schemataBatching = adapter.test is SchemataBatchTestable
-        let isolatedBatching = adapter.test is BatchTestable
+        let schemataBatching = adapter.schemataBatchTestable != nil
+        let isolatedBatching = adapter.batchTestable != nil
         let supported = schemataBatching || isolatedBatching
         let detail =
             if schemataBatching {

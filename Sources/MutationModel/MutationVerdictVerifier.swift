@@ -70,6 +70,24 @@ public enum MutationVerdictVerifier {
             self.confirmTimedOutMutants = confirmTimedOutMutants
         }
 
+        /// The one canonical way to derive a run's actual confirmation
+        /// policy from its resolved `ExecutionSettings` — previously
+        /// reimplemented identically (same three fields, same three flags)
+        /// in `MutationEvidenceAssembler.verificationPolicy`,
+        /// `SchemataRunOrchestration.run()`'s local `policy`, and
+        /// `RunCommand+ExecutionContext.prepareRunExecutionContext`'s local
+        /// `verificationPolicy`. Every call site above passed the exact same
+        /// three booleans from the exact same `Configuration.execution`
+        /// fields, so folding them into this one factory changes no
+        /// computed value — pure duplication removal.
+        public init(_ execution: ExecutionSettings) {
+            self.init(
+                retestKilledMutants: execution.retestKilledMutants,
+                confirmCrashKills: execution.confirmCrashKills,
+                confirmTimedOutMutants: execution.confirmTimedOutMutants
+            )
+        }
+
         /// Requires nothing — the pre-policy behavior. `verify(_:policy:)`
         /// takes no default, so this is never reached by omission; the
         /// right explicit choice for a test fixture that isn't exercising

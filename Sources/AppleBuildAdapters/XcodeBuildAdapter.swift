@@ -80,6 +80,48 @@ public struct XcodeBuildAdapter: Sendable {
     /// time, and CI disproved that assumption.
     let processRunner: ProcessRunner
 
+    /// The scheme-discovery/resolution collaborator — see
+    /// `XcodeSchemeResolver`'s own doc comment. Extracted from this struct in
+    /// v2 Step 4 §7 Step 1; every method a test calls directly
+    /// (`discoverSchemes`/`resolveScheme`) stays declared here, unchanged
+    /// signature, forwarding to this collaborator.
+    let schemeResolver: XcodeSchemeResolver
+
+    /// The stale-app-uninstall collaborator — see `StaleAppUninstaller`'s own
+    /// doc comment. Extracted from this struct in v2 Step 4 §7 Step 2;
+    /// `uninstallStaleApp` stays declared here, unchanged signature,
+    /// forwarding to this collaborator.
+    let uninstaller: StaleAppUninstaller
+
+    /// The shared "launch `xcodebuild test-without-building`, handle a
+    /// launch failure or timeout" collaborator — see
+    /// `XCTestInvocationService`'s own doc comment. Extracted from this
+    /// struct in v2 Step 4 §7 Step 3; `runTestsOnDestination`/
+    /// `runSchemataTokenOnDestination` stay declared here, unchanged
+    /// signature, each now a thin resolve-inputs-then-forward wrapper.
+    let invocationService: XCTestInvocationService
+
+    /// The device-selection-and-lease collaborator — see
+    /// `SimulatorLeaseCoordinator`'s own doc comment. Extracted from this
+    /// struct in v2 Step 4 §7 Step 5; `leaseAndRunTests`,
+    /// `leaseAndRunSchemataToken`, and `runBatchTests` stay declared here,
+    /// each now delegating device selection to this collaborator while
+    /// keeping its own `SimulatorPoolError`-to-`TestRunResult` shaping and
+    /// (for the schemata path) its own `GateTimingRecorder` wrap, since each
+    /// of the three shapes that failure value differently today.
+    let leaseCoordinator: SimulatorLeaseCoordinator
+
+    /// The build collaborator — see `BuildDriver`'s own doc comment. Extracted
+    /// from this struct in v2 Step 4 §7 Step 6; `build(in:enableCoverage:
+    /// extraArguments:)` stays declared here (private, called by
+    /// `buildBaseline`/`buildMutant`/`buildSchemataChunk`/`readCoverage`,
+    /// none of which change), now a thin resolve-inputs-then-forward
+    /// wrapper. `BuildDriver`'s own stored-property list has no
+    /// `SimulatorPool`/`SimulatorLeaseCoordinator`/`resolvedDestination` —
+    /// see its file's header comment for why that is Structural Invariant
+    /// 1's structural enforcement, not just an incidental fact.
+    let buildDriver: BuildDriver
+
     /// Where each `xcodebuild -list -json` attempt's timing is appended, or
     /// `nil` to record nothing — the default on every path that does not say
     /// otherwise, since the variable is unset outside CI.
@@ -107,6 +149,21 @@ public struct XcodeBuildAdapter: Sendable {
         self.resolvedDestination = resolvedDestination
         self.workerDevicesByWorkspace = workerDevicesByWorkspace
         processRunner = defaultProcessRunner
+        schemeResolver = XcodeSchemeResolver(
+            configuredScheme: configuration.project.scheme,
+            projectFileRelativePath: projectFileRelativePath,
+            kind: kind,
+            processRunner: processRunner
+        )
+        uninstaller = StaleAppUninstaller(processRunner: processRunner)
+        invocationService = XCTestInvocationService(
+            terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds,
+            resultReader: XCResultAdapter()
+        )
+        leaseCoordinator = SimulatorLeaseCoordinator(simulators: simulators, resolvedDestination: resolvedDestination)
+        buildDriver = BuildDriver(
+            kind: kind, projectFileRelativePath: projectFileRelativePath, configuration: configuration, scheme: schemeResolver
+        )
     }
 
     /// Test-only initializer that injects the simulator pool and the
@@ -132,6 +189,21 @@ public struct XcodeBuildAdapter: Sendable {
         self.resolvedDestination = resolvedDestination
         self.workerDevicesByWorkspace = workerDevicesByWorkspace
         self.processRunner = processRunner
+        schemeResolver = XcodeSchemeResolver(
+            configuredScheme: configuration.project.scheme,
+            projectFileRelativePath: projectFileRelativePath,
+            kind: kind,
+            processRunner: processRunner
+        )
+        uninstaller = StaleAppUninstaller(processRunner: processRunner)
+        invocationService = XCTestInvocationService(
+            terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds,
+            resultReader: XCResultAdapter()
+        )
+        leaseCoordinator = SimulatorLeaseCoordinator(simulators: simulators, resolvedDestination: resolvedDestination)
+        buildDriver = BuildDriver(
+            kind: kind, projectFileRelativePath: projectFileRelativePath, configuration: configuration, scheme: schemeResolver
+        )
     }
 
     /// The device name in a destination string, if it names one.
@@ -333,10 +405,6 @@ public struct XcodeBuildAdapter: Sendable {
         return arguments
     }
 
-    func productsDirectory(in workspace: URL) -> URL {
-        derivedDataPath(in: workspace).appendingPathComponent("Build/Products", isDirectory: true)
-    }
-
     /// The destination to build and test against.
     ///
     /// A package for a non-host platform needs a real one; guessing a specific
@@ -356,174 +424,34 @@ public struct XcodeBuildAdapter: Sendable {
 
     // MARK: - Scheme
 
-    /// The scheme to build.
-    ///
-    /// Resolved from configuration when given, otherwise discovered. Never
-    /// derived from the project's name: SwiftPM's generated scheme is
-    /// `<Package>-Package`, and an `.xcodeproj`'s schemes need not mention the
-    /// project at all, so a name built by convention names something that does not
-    /// exist.
+    //
+    // Delegates entirely to `schemeResolver` (v2 Step 4 §7 Step 1 — see
+    // `XcodeSchemeResolver`'s own doc comment). These two methods stay
+    // declared here, unchanged signature, because `@testable` unit tests
+    // call them directly on `XcodeBuildAdapter`
+    // (`XcodeBuildAdapterSchemeDiscoveryRetryTests`,
+    // `SchemeDiscoveryObservationLogTests`) — see plan §6's design
+    // constraint. `schemeDiscoveryLogPath` is read here, at the call site,
+    // rather than baked into `schemeResolver` at construction time: it is a
+    // mutable `var` tests set *after* constructing the adapter, so it must
+    // be threaded through per call to keep observing the current value.
+
+    /// The scheme to build. See `XcodeSchemeResolver.resolve(in:logPath:)`.
     func resolveScheme(in workspace: URL) async throws -> String {
-        if let configured = configuration.project.scheme { return configured }
-
-        let discovery = await discoverSchemesWithDiagnostics(in: workspace)
-        let schemes = discovery.schemes
-
-        guard !schemes.isEmpty else {
-            throw BuildFailure(
-                kind: .infrastructure,
-                diagnosis: SchemeResolutionDiagnosis.noSchemeResolved(
-                    answered: discovery.answered,
-                    lastResult: discovery.lastResult,
-                    timeoutSeconds: Self.schemeListTimeoutSeconds
-                ),
-                command: listCommand(in: workspace, result: discovery.lastResult),
-                output: discovery.lastResult?.combinedOutput ?? ""
-            )
-        }
-
-        guard schemes.count == 1 else {
-            throw BuildFailure(
-                kind: .infrastructure,
-                diagnosis: """
-                \(schemes.count) schemes are available (\(schemes.joined(separator: ", "))) \
-                and mutantkit will not choose for you. Set project.scheme in mutantkit.yml.
-                """,
-                command: listCommand(in: workspace, result: discovery.lastResult),
-                output: discovery.lastResult?.combinedOutput ?? ""
-            )
-        }
-
-        return schemes[0]
-    }
-
-    private func listCommand(in workspace: URL, result: ProcessResult?) -> CommandRecord {
-        CommandRecording.record(
-            executable: ToolPaths.xcodebuild,
-            arguments: projectArguments(in: workspace) + ["-list", "-json"],
-            workingDirectory: workspace,
-            result: result
-        )
+        try await schemeResolver.resolve(in: workspace, logPath: schemeDiscoveryLogPath)
     }
 
     /// Discovered schemes, or an empty list when discovery itself failed.
-    ///
-    /// Non-throwing because the two callers that take this plain `[String]`
-    /// form (`XcodeConfigDetector`, `Diagnostics`) genuinely treat "could not
-    /// ask" and "there are none" the same way: both mean no scheme can be
-    /// resolved here and now, and neither caller is reporting a failure to a
-    /// user. `resolveScheme` is the one that *is*, and it deliberately does
-    /// not use this form — see `SchemeDiscoveryResult.answered`, and
-    /// `SchemeResolutionDiagnosis` for the real CI failure that proved the
-    /// two must not share one remedy.
+    /// See `XcodeSchemeResolver.discover(in:emptyResultRetryCount:logPath:)`.
     ///
     /// `public`, not just used internally by `resolveScheme`: `XcodeConfigDetector`
     /// (`init`/`doctor` auto-detection) needs this exact same real
     /// `xcodebuild -list -json` discovery, before any `Configuration` exists
     /// to construct a full adapter for a real run.
-    ///
-    /// Retries a *clean, fast, empty* result up to `emptyResultRetryCount`
-    /// additional times before giving up — real CI evidence (2026-09-12,
-    /// `xcode-project`'s own recurring "No schemes are available here"
-    /// flake, reproduced identically 4 times) showed this exact call
-    /// reporting zero schemes for a project whose shared scheme a
-    /// *separate*, immediately preceding poll of the identical invocation
-    /// had just confirmed visible — i.e. `xcodebuild`'s own scheme-visibility state can
-    /// genuinely flicker under real resource pressure, not merely lag
-    /// once and then stay caught up. This is a real robustness gap for
-    /// any user on a loaded machine, not only a CI artifact, so the fix
-    /// belongs here rather than in a test's own pre-flight wait. Only a
-    /// clean empty result is retried, never a timeout or a crash — those
-    /// already have their own, larger `timeoutSeconds` budget and retrying
-    /// them here would only compound a real hang.
     public func discoverSchemes(in workspace: URL, emptyResultRetryCount: Int = 2) async -> [String] {
-        await discoverSchemesWithDiagnostics(in: workspace, emptyResultRetryCount: emptyResultRetryCount).schemes
-    }
-
-    /// A discovery attempt's raw last `ProcessResult`, alongside the
-    /// resolved scheme list — `resolveScheme`'s own thrown `BuildFailure`
-    /// needs the real exit code/stdout/stderr for a genuine "no schemes"
-    /// diagnosis (previously always `nil`, since `discoverSchemes`
-    /// discarded the underlying `ProcessResult` entirely); `discoverSchemes`
-    /// itself stays a plain `[String]` for its two other call sites
-    /// (`XcodeConfigDetector`, `Diagnostics`), which have never needed more
-    /// than the scheme list.
-    struct SchemeDiscoveryResult {
-        let schemes: [String]
-        let lastResult: ProcessResult?
-        /// Whether `xcodebuild` actually produced a scheme list to read.
-        ///
-        /// `schemes.isEmpty` alone cannot answer that, and conflating the
-        /// two is precisely how a 120-second timeout with empty output got
-        /// reported to a user as "no schemes are available here" — see
-        /// `SchemeResolutionDiagnosis`. `false` means the emptiness is an
-        /// absence of evidence; `true` means `xcodebuild` was asked, it
-        /// answered, and the answer was none.
-        let answered: Bool
-    }
-
-    /// `xcodebuild -list -json`'s own budget. Named rather than inlined so
-    /// the diagnosis for a run killed at this deadline can quote the number
-    /// the run was actually held to, instead of a second copy of it.
-    static let schemeListTimeoutSeconds: Double = 120
-
-    func discoverSchemesWithDiagnostics(
-        in workspace: URL, emptyResultRetryCount: Int = 2
-    ) async -> SchemeDiscoveryResult {
-        let arguments = projectArguments(in: workspace) + ["-list", "-json"]
-        // Every `return` below is preceded by one observation row, and the
-        // fall-through case records one too, so the log holds one row per
-        // attempt actually made -- successes included. Successes are the
-        // whole point: three failures at the 120s deadline say the budget
-        // touches the distribution's edge and nothing more, and the budget
-        // stays where it is until the successful durations say what it
-        // should be. See `SchemeDiscoveryObservationLog`.
-        func observe(_ outcome: SchemeDiscoveryObservationLog.Outcome,
-                     attempt: Int, result: ProcessResult?, schemeCount: Int) {
-            SchemeDiscoveryObservationLog.record(
-                attempt: attempt,
-                outcome: outcome,
-                result: result,
-                schemeCount: schemeCount,
-                budgetSeconds: Self.schemeListTimeoutSeconds,
-                path: schemeDiscoveryLogPath
-            )
-        }
-        for attempt in 0 ... emptyResultRetryCount {
-            let result = try? await processRunner(
-                ToolPaths.xcodebuild, arguments, workspace, Self.schemeListTimeoutSeconds
-            )
-            guard let result, result.succeeded else {
-                observe(result == nil ? .notStarted : .didNotSucceed,
-                        attempt: attempt, result: result, schemeCount: 0)
-                return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: false)
-            }
-            let schemes = SchemeListJSON.schemes(from: result.standardOutput)
-            if !schemes.isEmpty {
-                observe(.schemesFound, attempt: attempt, result: result, schemeCount: schemes.count)
-                return SchemeDiscoveryResult(schemes: schemes, lastResult: result, answered: true)
-            }
-            // An empty list read out of output the supervisor never confirmed
-            // it had fully drained is not an answer: `ProcessResult
-            // .outputComplete`'s own contract requires every consumer that
-            // derives a failure classification to fail closed here, and the
-            // classification this feeds ("the project has no schemes") is
-            // exactly the kind that must not rest on possibly-truncated
-            // bytes. A *non-empty* list needs no such guard — truncated JSON
-            // does not parse, so any scheme name read out at all came from
-            // a complete document.
-            guard result.outputComplete else {
-                observe(.outputIncomplete, attempt: attempt, result: result, schemeCount: 0)
-                return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: false)
-            }
-            if attempt == emptyResultRetryCount {
-                observe(.answeredNone, attempt: attempt, result: result, schemeCount: 0)
-                return SchemeDiscoveryResult(schemes: [], lastResult: result, answered: true)
-            }
-            observe(.emptyRetrying, attempt: attempt, result: result, schemeCount: 0)
-            try? await Task.sleep(nanoseconds: 500_000_000)
-        }
-        return SchemeDiscoveryResult(schemes: [], lastResult: nil, answered: false)
+        await schemeResolver.discover(
+            in: workspace, emptyResultRetryCount: emptyResultRetryCount, logPath: schemeDiscoveryLogPath
+        )
     }
 }
 
@@ -556,68 +484,12 @@ extension XcodeBuildAdapter: BuildAdapter {
     ///   `SwiftPackageMacOSAdapter` captures its baseline's hash *before*
     ///   the coverage-instrumented test rebuild rather than after.
     private func build(in workspace: URL, enableCoverage: Bool = false, extraArguments: [String] = []) async throws -> BuildArtifact {
-        let scheme = try await resolveScheme(in: workspace)
-        let derivedData = derivedDataPath(in: workspace)
-
-        // `build-for-testing`, not `build`: it produces the test bundles *and* the
-        // `.xctestrun` that `test-without-building` needs, which is what lets the
-        // build and test phases be timed and classified separately.
-        var arguments = projectArguments(in: workspace) + [
-            "build-for-testing",
-            "-scheme", scheme,
-            "-destination", destination(),
-            "-derivedDataPath", derivedData.path
-        ]
-        // Build-setting overrides (e.g. XcodeLinkerInjector's OTHER_LDFLAGS/
-        // LIBRARY_SEARCH_PATHS) go last, matching xcodebuild's own
-        // convention of trailing NAME=value pairs after every flag.
-        arguments.append(contentsOf: extraArguments)
-        if enableCoverage {
-            arguments.append(contentsOf: ["-enableCodeCoverage", "YES"])
-        }
-
-        let result: ProcessResult
-        do {
-            result = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcodebuild,
-                arguments: arguments,
-                workingDirectory: workspace,
-                timeoutSeconds: configuration.timeouts.baselineSeconds,
-                terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
-            )
-        } catch {
-            throw BuildFailure(
-                kind: .infrastructure,
-                diagnosis: "Could not launch xcodebuild: \(error)",
-                command: CommandRecording.record(
-                    executable: ToolPaths.xcodebuild,
-                    arguments: arguments,
-                    workingDirectory: workspace,
-                    result: nil
-                ),
-                output: ""
-            )
-        }
-
-        let command = CommandRecording.record(
-            executable: ToolPaths.xcodebuild,
-            arguments: arguments,
-            workingDirectory: workspace,
-            result: result
-        )
-
-        guard result.succeeded else {
-            throw BuildClassifier.failure(from: result, command: command)
-        }
-
-        let products = productsDirectory(in: workspace)
-        let xctestrun = try XCTestRunLocator.locate(in: products, command: command)
-
-        return BuildArtifact(
-            productsDirectory: products,
-            productHash: TestProductHasher.hash(productsDirectory: products),
-            xctestrunPath: xctestrun,
-            command: command
+        try await buildDriver.build(
+            in: workspace,
+            buildDestination: destination(),
+            schemeDiscoveryLogPath: schemeDiscoveryLogPath,
+            enableCoverage: enableCoverage,
+            extraArguments: extraArguments
         )
     }
 
@@ -695,32 +567,17 @@ extension XcodeBuildAdapter: TestAdapter {
         }
     }
 
-    /// Leases the device this run's tests must land on, runs them, and
-    /// releases it — the shape shared by every path below, differing only in
-    /// *which* device is unambiguous enough to lease directly.
-    ///
-    /// Three cases, most to least specific:
-    /// - `resolvedDestination` names a concrete device (the normal path once
-    ///   `DestinationResolver` has run): lease that exact UDID. No name to
-    ///   re-derive, no runtime ambiguity possible.
-    /// - No resolution happened, but the configured destination is already
-    ///   pinned to `id=` (a caller set one explicitly, or an older code path
-    ///   that predates resolution): lease that exact UDID too — `name=`
-    ///   parsing would find nothing in an `id=`-only string and silently
-    ///   fall back to leasing an arbitrary free device, which is not what an
-    ///   explicit `id=` asked for.
-    /// - Otherwise, the original name-hint behavior: narrowed to the device
-    ///   the destination asked for, addressed by whichever UDID
-    ///   `SimulatorPool` matches it to.
-    ///
-    /// Checked *before* any of the three cases above: the per-worker
-    /// device (`workerDevicesByWorkspace`), when this mutant's persistent
-    /// incremental-build sandbox (`workspace`) has one assigned. Still
-    /// routed through `simulators.withLease(udid:)`, not used directly —
-    /// exclusivity is structurally guaranteed here (each worker's own
-    /// sandbox is only ever touched by that one worker, serially), but
-    /// leasing anyway costs nothing and keeps "at most one lease per
-    /// device" a real invariant the pool enforces, not one this call site
+    /// Which device this run's tests land on is `leaseCoordinator`'s own
+    /// decision (v2 Step 4 §7 Step 5 — see `SimulatorLeaseCoordinator`'s own
+    /// doc comment for the four-case fallback order and why
+    /// `workerDevicesByWorkspace` — when this mutant's persistent
+    /// incremental-build sandbox (`workspace`) has an entry — is passed as
+    /// `leaseAndRunTests`'s own `preferredDevice`, ahead of every other
+    /// case). Exclusivity is structurally guaranteed even for a worker's own
+    /// preferred device (each worker's own sandbox is only ever touched by
+    /// that one worker, serially), but leasing it anyway, same as every
+    /// other case, costs nothing and keeps "at most one lease per device" a
+    /// real invariant `SimulatorPool` enforces, not one this call site
     /// merely assumes.
     /// The uninstall-then-launch decision itself, factored out of
     /// `leaseAndRunTests` so `XcodeBuildAdapterUninstallFailureTests` can
@@ -758,24 +615,23 @@ extension XcodeBuildAdapter: TestAdapter {
         enableCoverage: Bool = false,
         expectedTestCount: Int? = nil
     ) async throws -> TestRunResult {
-        func run(_ lease: SimulatorLease) async throws -> TestRunResult {
+        @Sendable func run(_ lease: SimulatorLease) async throws -> TestRunResult {
             try await runTestsAfterUninstall(
                 lease: lease, artifact: artifact, in: workspace, label: label, timeoutSeconds: timeoutSeconds,
                 testFilters: testFilters, enableCoverage: enableCoverage, expectedTestCount: expectedTestCount
             )
         }
 
-        if let device = workerDevicesByWorkspace?[workspace.lastPathComponent] {
-            return try await simulators.withLease(udid: device.udid, run)
-        }
-        if let device = resolvedDestination?.device {
-            return try await simulators.withLease(udid: device.udid, run)
-        }
-        if let udid = Self.udid(inDestination: destination()) {
-            return try await simulators.withLease(udid: udid, run)
-        }
-        let hint = Self.deviceName(inDestination: destination())
-        return try await simulators.withLease(matching: hint, run)
+        // Device selection delegated to `leaseCoordinator` (v2 Step 4 §7
+        // Step 5 — see `SimulatorLeaseCoordinator`'s own doc comment). The
+        // per-worker device, when this mutant's sandbox has one assigned, is
+        // passed as `preferredDevice` — this is the *only* one of the three
+        // call sites that does (plan §5.1); the other two always pass `nil`.
+        return try await leaseCoordinator.withLease(
+            preferredDevice: workerDevicesByWorkspace?[workspace.lastPathComponent],
+            rawDestination: destination(),
+            run: run
+        )
     }
 
     /// The device UDID in a destination string, if it names one.
@@ -854,45 +710,21 @@ extension XcodeBuildAdapter: TestAdapter {
     /// of this method — including `runTestsAfterUninstall` and
     /// `runSchemataTokenAfterUninstall`, whose launch-suppression contract
     /// can therefore be proven without a real simulator at all.
-    enum StaleAppUninstallOutcome: Sendable, Equatable {
-        case ready
-        case failed(bundleID: String, detail: String)
-    }
+    /// See `StaleAppUninstaller.Outcome` — kept as a `typealias` rather than
+    /// a re-declared type, so `XcodeBuildAdapterUninstallFailureTests`'
+    /// `guard case let .failed(...) = outcome` (type-inferred, never
+    /// spelling a qualified name) keeps compiling unchanged.
+    typealias StaleAppUninstallOutcome = StaleAppUninstaller.Outcome
 
+    /// Delegates entirely to `uninstaller` (v2 Step 4 §7 Step 2 — see
+    /// `StaleAppUninstaller`'s own doc comment). Stays declared here,
+    /// unchanged signature, because `XcodeBuildAdapterUninstallFailureTests`
+    /// calls it directly — see plan §6's design constraint.
     func uninstallStaleApp(
         artifact: BuildArtifact, from lease: SimulatorLease,
         report: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) }
     ) async -> StaleAppUninstallOutcome {
-        guard let xctestrun = artifact.xctestrunPath else { return .ready }
-        for bundleID in Self.bundleIdentifiers(inXCTestRun: xctestrun) {
-            let result: ProcessResult?
-            do {
-                // `timeoutSeconds` was 30. Real public CI evidence
-                // (2026-09-11) showed this `simctl uninstall` call
-                // SIGTERM'd (exit 143) under real CI-load slowness —
-                // `ProcessSupervisor.run`'s own timeout escalation firing
-                // before `simctl` finished. Raised with real headroom
-                // (30 -> 120), matching this session's other CI-load
-                // timeout fixes (internal investigation notes, not part
-                // of this public repo, have the full accumulated evidence).
-                result = try await processRunner(
-                    ToolPaths.xcrun,
-                    ["simctl", "uninstall", lease.device.udid, bundleID],
-                    FileManager.default.temporaryDirectory,
-                    120
-                )
-            } catch {
-                let detail = "\(error)"
-                report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: detail))
-                return .failed(bundleID: bundleID, detail: detail)
-            }
-            if let result, !result.succeeded {
-                let detail = Self.uninstallFailureDetail(result)
-                report(Self.uninstallFailureWarning(bundleID: bundleID, udid: lease.device.udid, detail: detail))
-                return .failed(bundleID: bundleID, detail: detail)
-            }
-        }
-        return .ready
+        await uninstaller.uninstall(artifact: artifact, from: lease, report: report)
     }
 
     /// The `TestRunResult` a caller reports when `uninstallStaleApp` returns
@@ -900,7 +732,9 @@ extension XcodeBuildAdapter: TestAdapter {
     /// test-without-building` — the diagnosis text is the same
     /// `uninstallFailureWarning` a human watching the run sees on stderr, so
     /// a report reader sees exactly why this mutant never got a real test
-    /// verdict.
+    /// verdict. Stays here rather than moving to `StaleAppUninstaller`: it
+    /// builds a `TestRunResult`, this adapter's own return type, not the
+    /// uninstaller's concern (plan §7 Step 2).
     static func uninstallFailureResult(bundleID: String, udid: String, detail: String, command: CommandRecord) -> TestRunResult {
         TestRunResult(
             status: .infrastructureFailure, summary: nil, command: command, resultArtifactPath: nil,
@@ -908,64 +742,23 @@ extension XcodeBuildAdapter: TestAdapter {
         )
     }
 
-    /// The `.failed` detail for a non-zero `simctl uninstall`, in the three
-    /// shapes a real failure can arrive in — none of which may produce an
-    /// empty string. A fail-closed outcome whose diagnosis says nothing is
-    /// indistinguishable, to whoever later reads the report, from a check
-    /// that never ran; "zero work" must not be able to look like an answer.
-    ///
-    /// - Capture incomplete (`ProcessResult.outputComplete == false`): say
-    ///   so explicitly rather than pass a partial read off as the whole
-    ///   story. See `ProcessResult.outputComplete`'s own doc comment.
-    /// - Captured in full, with content: that content, redacted and
-    ///   truncated. This is the ordinary case (`Invalid device: ...`).
-    /// - Captured in full and genuinely empty: name the exit code, because
-    ///   "simctl failed and wrote nothing" is itself the diagnosis. Before
-    ///   this branch existed the detail was the empty string, and the
-    ///   warning a human saw ended in a bare colon.
-    ///
-    /// A pure function over an already-observed `ProcessResult`, so the
-    /// contract tests pin all three branches deterministically without a
-    /// real `simctl` invocation.
-    static func uninstallFailureDetail(_ result: ProcessResult) -> String {
-        guard result.outputComplete else {
-            return "subprocess output incomplete (stdout/stderr could not be fully captured before the process exited)"
-        }
-        let captured = OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard captured.isEmpty else { return captured }
-        return "simctl exited \(result.exitCode) without writing any diagnostic output"
-    }
-
-    /// The exact text `uninstallStaleApp` reports for a genuine failure —
-    /// a pure function so `XcodeBuildAdapterUninstallFailureTests` can pin
-    /// its wording directly, independent of whichever real `simctl` error
-    /// text happened to be observed.
+    /// Thin forwarder kept here (unlike `uninstallFailureDetail`/
+    /// `bundleIdentifiers`, which moved without a trace left behind):
+    /// `XcodeBuildAdapterUninstallFailureTests`' own "uninstallFailureWarning
+    /// names the bundle, the device, and the real detail" test calls
+    /// `XcodeBuildAdapter.uninstallFailureWarning` directly as a static, and
+    /// `uninstallFailureResult` above also needs it.
     static func uninstallFailureWarning(bundleID: String, udid: String, detail: String) -> String {
-        "warning: could not uninstall stale app \(bundleID) from simulator \(udid) before this mutant's test run: \(detail)\n"
+        StaleAppUninstaller.uninstallFailureWarning(bundleID: bundleID, udid: udid, detail: detail)
     }
 
-    /// Every `TestHostBundleIdentifier` named in a `.xctestrun` plist — the app
-    /// each test target is hosted inside, and so the app a stale simulator
-    /// install of it could shadow. Same two on-disk shapes as
-    /// `Diagnostics.testTargets(inXCTestRun:)`: format version 2 nests targets
-    /// under `TestConfigurations`, version 1 puts them at the top level next to
-    /// a metadata key.
-    static func bundleIdentifiers(inXCTestRun url: URL) -> [String] {
-        guard let data = try? Data(contentsOf: url),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-              let root = plist as? [String: Any]
-        else { return [] }
-
-        let targets: [[String: Any]] = if let configurations = root["TestConfigurations"] as? [[String: Any]] {
-            configurations.flatMap { $0["TestTargets"] as? [[String: Any]] ?? [] }
-        } else {
-            root.values.compactMap { $0 as? [String: Any] }
-        }
-
-        return Array(Set(targets.compactMap { $0["TestHostBundleIdentifier"] as? String })).sorted()
-    }
-
+    /// Delegates the shared launch/timeout shape to `invocationService` (v2
+    /// Step 4 §7 Step 3 — see `XCTestInvocationService`'s own doc comment).
+    /// What stays here is resolving `artifact.xctestrunPath` (including its
+    /// own "no `.xctestrun` at all" early return, unchanged) and classifying
+    /// the result via `resultReader.classify(...expectedTestCount:)` — the
+    /// isolated path's own classify shape, which the schemata path's does
+    /// not share (see plan §5.4/§6.3).
     private func runTestsOnDestination(
         _ destination: String,
         artifact: BuildArtifact,
@@ -990,14 +783,6 @@ extension XcodeBuildAdapter: TestAdapter {
         }
 
         let resultBundle = resultBundlePath(in: workspace, label: label)
-        // xcodebuild refuses to overwrite an existing bundle, and a retry must not
-        // fail for that reason alone.
-        try? FileManager.default.removeItem(at: resultBundle)
-        try? FileManager.default.createDirectory(
-            at: resultBundle.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-
         let arguments = Self.testWithoutBuildingArguments(
             xctestrunPath: xctestrun.path,
             destination: destination,
@@ -1007,69 +792,20 @@ extension XcodeBuildAdapter: TestAdapter {
             enableCoverage: enableCoverage
         )
 
-        let result: ProcessResult
-        do {
-            result = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcodebuild,
-                arguments: arguments,
-                workingDirectory: workspace,
-                timeoutSeconds: timeoutSeconds,
-                terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
-            )
-        } catch {
-            return TestRunResult(
-                status: .infrastructureFailure,
-                summary: nil,
-                command: CommandRecording.record(
-                    executable: ToolPaths.xcodebuild,
-                    arguments: arguments,
-                    workingDirectory: workspace,
-                    result: nil
-                ),
-                resultArtifactPath: nil,
-                diagnosis: "Could not launch xcodebuild: \(error)"
-            )
-        }
-
-        let command = CommandRecording.record(
-            executable: ToolPaths.xcodebuild,
+        return await invocationService.runSingle(
             arguments: arguments,
-            workingDirectory: workspace,
-            result: result
-        )
-
-        // The timeout is the one outcome the bundle cannot describe: a killed run
-        // leaves a partial bundle, or none. The supervisor's verdict is the fact.
-        if result.timedOut {
-            return TestRunResult(
-                status: .timedOut,
-                summary: nil,
-                command: command,
-                resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path)
-                    ? resultBundle : nil,
-                diagnosis: """
-                The test run exceeded its \(String(format: "%.0f", timeoutSeconds))s limit \
-                and was terminated.
-                """
+            resultBundle: resultBundle,
+            timeoutSeconds: timeoutSeconds,
+            timeoutDiagnosis: """
+            The test run exceeded its \(String(format: "%.0f", timeoutSeconds))s limit \
+            and was terminated.
+            """,
+            in: workspace
+        ) {
+            await resultReader.classify(
+                resultBundle: resultBundle, workingDirectory: workspace, expectedTestCount: expectedTestCount
             )
         }
-
-        // Everything else comes from the bundle, including success. xcodebuild's
-        // exit code is deliberately not consulted: it reports 65 both for a failing
-        // test and for a runner that never started, and only the bundle can tell
-        // those apart.
-        let outcome = await resultReader.classify(
-            resultBundle: resultBundle, workingDirectory: workspace, expectedTestCount: expectedTestCount
-        )
-
-        return TestRunResult(
-            status: outcome.status,
-            summary: outcome.summary,
-            command: command,
-            resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path)
-                ? resultBundle : nil,
-            diagnosis: outcome.diagnosis
-        )
     }
 
     /// A bundle path unique to this run.
@@ -1211,25 +947,26 @@ extension XcodeBuildAdapter: SchemataTestable {
     private func leaseAndRunSchemataToken(
         artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String], testFilters: [String]?
     ) async throws -> TestRunResult {
-        func run(_ lease: SimulatorLease) async throws -> TestRunResult {
+        @Sendable func run(_ lease: SimulatorLease) async throws -> TestRunResult {
             try await runSchemataTokenAfterUninstall(
                 lease: lease, artifact: artifact, in: workspace, timeoutSeconds: timeoutSeconds,
                 environment: environment, testFilters: testFilters
             )
         }
 
+        // `token.leaseAndRun.total` must keep wrapping exactly this span —
+        // device selection through lease acquisition through `run`'s own
+        // body — unchanged by moving the device-selection logic itself into
+        // `leaseCoordinator` (plan §5.4/§8: a mark's placement must move
+        // with its sub-step, never separate from it).
         let leaseAndRunStart = GateTimingRecorder.shared.now()
         defer {
             Task { await GateTimingRecorder.shared.record("token.leaseAndRun.total", start: leaseAndRunStart) }
         }
-        if let device = resolvedDestination?.device {
-            return try await simulators.withLease(udid: device.udid, run)
-        }
-        if let udid = Self.udid(inDestination: destination()) {
-            return try await simulators.withLease(udid: udid, run)
-        }
-        let hint = Self.deviceName(inDestination: destination())
-        return try await simulators.withLease(matching: hint, run)
+        // `preferredDevice: nil` — the schemata path never honors
+        // `workerDevicesByWorkspace` (plan §5.1); see
+        // `SimulatorLeaseCoordinator`'s own doc comment.
+        return try await leaseCoordinator.withLease(preferredDevice: nil, rawDestination: destination(), run: run)
     }
 
     /// `SchemataXcodeRuntimeAcceptanceTests` already proved by hand: setting
@@ -1243,6 +980,14 @@ extension XcodeBuildAdapter: SchemataTestable {
     /// mutant, rather than mutating the one shared file every mutant's
     /// build produced (which concurrent mutants running against the same
     /// chunk build would otherwise race on).
+    /// Delegates the shared launch/timeout shape to `invocationService` (v2
+    /// Step 4 §7 Step 3 — see `XCTestInvocationService`'s own doc comment).
+    /// What stays here: resolving `artifact.xctestrunPath`, writing the
+    /// env-merged `.xctestrun` variant (`token.xctestrunVariant`, unchanged),
+    /// and classifying with the schemata path's own `token.xcresultClassify`
+    /// `GateTimingRecorder` wrap — a mark the isolated path does not have
+    /// (plan §5.4) — so it stays here, bracketing only the classify call, not
+    /// moved into the shared service.
     private func runSchemataTokenOnDestination(
         _ destination: String, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double, environment: [String: String],
         testFilters: [String]? = nil
@@ -1257,7 +1002,7 @@ extension XcodeBuildAdapter: SchemataTestable {
         let variantXCTestRun: URL
         let variantStart = GateTimingRecorder.shared.now()
         do {
-            variantXCTestRun = try Self.xctestrunVariant(mergingEnvironment: environment, into: baseXCTestRun)
+            variantXCTestRun = try XCTestRunLocator.writingVariant(mergingEnvironment: environment, into: baseXCTestRun)
         } catch {
             return TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
@@ -1267,128 +1012,26 @@ extension XcodeBuildAdapter: SchemataTestable {
         await GateTimingRecorder.shared.record("token.xctestrunVariant", start: variantStart)
 
         let resultBundle = resultBundlePath(in: workspace, label: "schemata-\(UUID().uuidString)")
-        try? FileManager.default.removeItem(at: resultBundle)
-        try? FileManager.default.createDirectory(
-            at: resultBundle.deletingLastPathComponent(), withIntermediateDirectories: true
-        )
-
         let arguments = Self.testWithoutBuildingArguments(
             xctestrunPath: variantXCTestRun.path, destination: destination, resultBundlePath: resultBundle.path,
             targets: testFilters ?? configuration.tests.targets, extraArguments: configuration.tests.extraArguments
         )
 
-        let result: ProcessResult
-        do {
-            result = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace,
-                timeoutSeconds: timeoutSeconds, terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
-            )
-        } catch {
-            return TestRunResult(
-                status: .infrastructureFailure,
-                summary: nil,
-                command: CommandRecording.record(
-                    executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: nil
-                ),
-                resultArtifactPath: nil,
-                diagnosis: "Could not launch xcodebuild: \(error)"
-            )
+        return await invocationService.runSingle(
+            arguments: arguments,
+            resultBundle: resultBundle,
+            timeoutSeconds: timeoutSeconds,
+            timeoutDiagnosis: """
+            The schemata test run exceeded its \(String(format: "%.0f", timeoutSeconds))s limit \
+            and was terminated.
+            """,
+            in: workspace
+        ) {
+            let classifyStart = GateTimingRecorder.shared.now()
+            let outcome = await resultReader.classify(resultBundle: resultBundle, workingDirectory: workspace)
+            await GateTimingRecorder.shared.record("token.xcresultClassify", start: classifyStart)
+            return outcome
         }
-
-        let command = CommandRecording.record(
-            executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: result
-        )
-
-        if result.timedOut {
-            return TestRunResult(
-                status: .timedOut, summary: nil, command: command,
-                resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path) ? resultBundle : nil,
-                diagnosis: """
-                The schemata test run exceeded its \(String(format: "%.0f", timeoutSeconds))s limit \
-                and was terminated.
-                """
-            )
-        }
-
-        let classifyStart = GateTimingRecorder.shared.now()
-        let outcome = await resultReader.classify(resultBundle: resultBundle, workingDirectory: workspace)
-        await GateTimingRecorder.shared.record("token.xcresultClassify", start: classifyStart)
-        return TestRunResult(
-            status: outcome.status, summary: outcome.summary, command: command,
-            resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path) ? resultBundle : nil,
-            diagnosis: outcome.diagnosis
-        )
-    }
-
-    private enum XCTestRunVariantError: Error, CustomStringConvertible {
-        case malformed(String)
-        case writeFailed(String)
-
-        var description: String {
-            switch self {
-            case let .malformed(path): "malformed .xctestrun at \(path)"
-            case let .writeFailed(path): "could not write .xctestrun variant at \(path)"
-            }
-        }
-    }
-
-    /// Writes the variant *next to* `base`, in the same directory — not
-    /// under some other convenience location like `.mutantkit/`. An
-    /// `.xctestrun`'s own paths are resolved relative to `__TESTROOT__`,
-    /// which Xcode derives from wherever the `.xctestrun` file itself
-    /// physically sits, not from any field recorded inside it. Confirmed
-    /// the hard way: a variant written to a different directory than the
-    /// original resolved its test bundle path relative to *that*
-    /// directory instead, and `test-without-building` failed with
-    /// "Missing test product" for a bundle that, moments earlier, the
-    /// original (unmoved) `.xctestrun` found without trouble.
-    private static func xctestrunVariant(mergingEnvironment environment: [String: String], into base: URL) throws -> URL {
-        guard var plist = NSDictionary(contentsOf: base) as? [String: Any] else {
-            throw XCTestRunVariantError.malformed(base.path)
-        }
-
-        // Same two on-disk shapes `bundleIdentifiers(inXCTestRun:)` above
-        // already handles: format version 2 nests each real test target
-        // under `TestConfigurations[].TestTargets[]`; version 1 puts every
-        // target directly at the top level next to `__xctestrun_metadata__`.
-        // Only handling the flat v1 shape here silently drops every
-        // injected environment variable on a version-2 `.xctestrun` (the
-        // shape Xcode 26 generates): `TestConfigurations`'s value is an
-        // array, so `as? [String: Any]` fails and the whole key is skipped,
-        // while the two top-level keys that *do* happen to be dictionaries
-        // (`ContainerInfo`, `TestPlan`) are not test targets at all and
-        // silently absorb the write instead.
-        if var configurations = plist["TestConfigurations"] as? [[String: Any]] {
-            for configIndex in configurations.indices {
-                guard var targets = configurations[configIndex]["TestTargets"] as? [[String: Any]] else { continue }
-                for targetIndex in targets.indices {
-                    var targetEnvironment = targets[targetIndex]["EnvironmentVariables"] as? [String: String] ?? [:]
-                    for (variable, value) in environment { targetEnvironment[variable] = value }
-                    targets[targetIndex]["EnvironmentVariables"] = targetEnvironment
-                }
-                configurations[configIndex]["TestTargets"] = targets
-            }
-            plist["TestConfigurations"] = configurations
-        } else {
-            for key in plist.keys where key != "__xctestrun_metadata__" {
-                guard var target = plist[key] as? [String: Any] else { continue }
-                var targetEnvironment = target["EnvironmentVariables"] as? [String: String] ?? [:]
-                for (variable, value) in environment { targetEnvironment[variable] = value }
-                target["EnvironmentVariables"] = targetEnvironment
-                plist[key] = target
-            }
-        }
-
-        let variant = base.deletingLastPathComponent().appendingPathComponent("variant-\(UUID().uuidString).xctestrun")
-        // `NSDictionary.write(to:atomically:)` is the non-throwing
-        // Objective-C-era API — `try` on it compiles but silently
-        // discards a `false` (failure) return, exactly the kind of quiet
-        // failure this whole proof chain exists to refuse. The `Bool`
-        // result is checked explicitly instead.
-        guard (plist as NSDictionary).write(to: variant, atomically: true) else {
-            throw XCTestRunVariantError.writeFailed(variant.path)
-        }
-        return variant
     }
 }
 
@@ -1870,7 +1513,7 @@ extension XcodeBuildAdapter: BatchTestable {
         configurationTestIdentifiers: [String: [String]],
         nativeTimeoutAllowanceSeconds: Double? = nil
     ) async -> [String: TestRunResult] {
-        func run(destination: String) async -> [String: TestRunResult] {
+        @Sendable func run(destination: String) async -> [String: TestRunResult] {
             await runBatchOnDestination(
                 destination, xctestrunPath: xctestrunPath, in: workspace,
                 timeoutSeconds: timeoutSeconds, configurationTestIdentifiers: configurationTestIdentifiers,
@@ -1883,14 +1526,12 @@ extension XcodeBuildAdapter: BatchTestable {
         }
 
         do {
-            if let device = resolvedDestination?.device {
-                return try await simulators.withLease(udid: device.udid) { lease in await run(destination: lease.destination) }
+            // `preferredDevice: nil` — the batch path never honors
+            // `workerDevicesByWorkspace` (plan §5.1); see
+            // `SimulatorLeaseCoordinator`'s own doc comment.
+            return try await leaseCoordinator.withLease(preferredDevice: nil, rawDestination: destination()) { lease in
+                await run(destination: lease.destination)
             }
-            if let udid = Self.udid(inDestination: destination()) {
-                return try await simulators.withLease(udid: udid) { lease in await run(destination: lease.destination) }
-            }
-            let hint = Self.deviceName(inDestination: destination())
-            return try await simulators.withLease(matching: hint) { lease in await run(destination: lease.destination) }
         } catch let error as SimulatorPoolError {
             let failure = TestRunResult(
                 status: .infrastructureFailure, summary: nil,
@@ -1914,6 +1555,15 @@ extension XcodeBuildAdapter: BatchTestable {
         }
     }
 
+    /// Builds the batch invocation's own arguments (including the
+    /// native-timeout-allowance injection, specific to this one call path —
+    /// see `XCTestInvocationService`'s own doc comment for why there is no
+    /// shared pure static for it, unlike `testWithoutBuildingArguments`) and
+    /// delegates launch/timeout/classification to `invocationService` (v2
+    /// Step 4 §7 Step 4). Deliberately does not remove any existing item at
+    /// `resultBundle` first — unchanged from before this step: the path is
+    /// already a fresh per-call UUID, so there is nothing stale at it to
+    /// remove.
     private func runBatchOnDestination(
         _ destination: String,
         xctestrunPath: URL,
@@ -1975,173 +1625,13 @@ extension XcodeBuildAdapter: BatchTestable {
         }
         arguments.append(contentsOf: configuration.tests.extraArguments)
 
-        let result: ProcessResult
-        do {
-            result = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcodebuild,
-                arguments: arguments,
-                workingDirectory: workspace,
-                timeoutSeconds: timeoutSeconds,
-                terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
-            )
-        } catch {
-            let failure = TestRunResult(
-                status: .infrastructureFailure, summary: nil,
-                command: CommandRecording.record(
-                    executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: nil
-                ),
-                resultArtifactPath: nil,
-                diagnosis: "Could not launch xcodebuild for the batch: \(error)"
-            )
-            return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
-        }
-
-        let command = CommandRecording.record(
-            executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: result
+        return await invocationService.runBatch(
+            arguments: arguments,
+            resultBundle: resultBundle,
+            timeoutSeconds: timeoutSeconds,
+            configurationTestIdentifiers: configurationTestIdentifiers,
+            in: workspace
         )
-
-        // A batch-wide timeout means none of its configurations produced a
-        // trustworthy result — the bundle, if any, reflects an arbitrary
-        // subset that happened to finish before the kill, not a complete
-        // record. Every configuration in the batch is reported timed out
-        // rather than trusting a partial bundle to say which ones did.
-        //
-        // `isBatchAttributedTimeout` is only true when more than one
-        // configuration actually shared this timeout budget: a "batch" of
-        // exactly one (the final remainder chunk, or any batch that ends up
-        // with a single member) has no attribution ambiguity at all — the
-        // timeout unambiguously belongs to that one mutant, the same as a
-        // non-batching adapter's timeout does, so `confirmTimeout` must
-        // still treat a disagreeing confirmation as `.flaky` rather than
-        // trusting it outright.
-        if result.timedOut {
-            let failure = TestRunResult(
-                status: .timedOut, summary: nil, command: command,
-                resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path) ? resultBundle : nil,
-                diagnosis: """
-                The batch exceeded its \(String(format: "%.0f", timeoutSeconds))s limit and was \
-                terminated before every configuration in it could be confirmed to finish.
-                """,
-                isBatchAttributedTimeout: configurationTestIdentifiers.count > 1
-            )
-            return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
-        }
-
-        var outcomes = await resultReader.classifyBatch(
-            resultBundle: resultBundle, workingDirectory: workspace,
-            configurationTestIdentifiers: configurationTestIdentifiers
-        )
-
-        // A batch where *every* configuration came back unaccounted for is
-        // not "several unrelated bundle read failures" — it is almost
-        // always one batch-wide problem (the invocation never really ran).
-        // Exit code alone cannot gate this: a batch with genuine failures
-        // or crashes in it also exits non-zero, which is why it is not
-        // consulted above either. But once every configuration is already
-        // unattributed, there is nothing left an exit code could wrongly
-        // override, so it is safe to fold in here purely to make the
-        // diagnosis legible instead of leaving every mutant blaming a
-        // generic "no record" with no way to tell why.
-        if !result.succeeded, outcomes.values.allSatisfy({ $0.status == .infrastructureFailure }) {
-            let detail = OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 800)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            outcomes = outcomes.mapValues {
-                XCResultAdapter.Outcome(
-                    status: .infrastructureFailure,
-                    summary: $0.summary,
-                    diagnosis: "\($0.diagnosis) xcodebuild exited \(result.exitCode): \(detail)"
-                )
-            }
-        }
-
-        let bundleExists = FileManager.default.fileExists(atPath: resultBundle.path)
-        return outcomes.mapValues { outcome in
-            TestRunResult(
-                status: outcome.status, summary: outcome.summary, command: command,
-                resultArtifactPath: bundleExists ? resultBundle : nil, diagnosis: outcome.diagnosis
-            )
-        }
-    }
-}
-
-// MARK: - .xctestrun
-
-/// Finds the `.xctestrun` that `build-for-testing` produced.
-enum XCTestRunLocator {
-    /// Searches `Build/Products` for the file.
-    ///
-    /// Searched, never constructed. The name encodes the scheme, the platform, the
-    /// SDK version and the architecture — a real one reads
-    /// `Probe-Package_Probe-Package_macosx26.5-arm64.xctestrun` — and every one of
-    /// those varies by machine and by Xcode release. Building that string from a
-    /// template produces a path that does not exist, and the resulting "file not
-    /// found" gets read as a broken project rather than a broken guess.
-    static func locate(in productsDirectory: URL, command: CommandRecord) throws -> URL {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: productsDirectory,
-            includingPropertiesForKeys: nil
-        )) ?? []
-
-        let found = contents.filter { $0.pathExtension == "xctestrun" }.sorted { $0.path < $1.path }
-
-        switch found.count {
-        case 1:
-            return found[0]
-        case 0:
-            let siblings = contents.map(\.lastPathComponent).sorted()
-            throw BuildFailure(
-                kind: .infrastructure,
-                diagnosis: """
-                build-for-testing succeeded but left no .xctestrun in \
-                \(productsDirectory.path). That directory contains \
-                \(siblings.isEmpty ? "nothing" : siblings.joined(separator: ", ")). \
-                The scheme probably has no test target enabled — check its Test action \
-                in Xcode.
-                """,
-                command: command,
-                output: ""
-            )
-        default:
-            let names = found.map(\.lastPathComponent).joined(separator: ", ")
-            throw BuildFailure(
-                kind: .infrastructure,
-                diagnosis: """
-                \(found.count) .xctestrun files are present in \(productsDirectory.path) \
-                (\(names)) and mutantkit will not guess which one to run. This usually \
-                means several test plans or destinations were built; narrow \
-                project.destination or the scheme's test plan in mutantkit.yml.
-                """,
-                command: command,
-                output: ""
-            )
-        }
-    }
-}
-
-// MARK: - JSON
-
-/// `xcodebuild -list -json`, which reports under `workspace` or `project`
-/// depending on what it was pointed at.
-enum SchemeListJSON {
-    private struct Payload: Decodable {
-        struct Container: Decodable {
-            let name: String
-            let schemes: [String]?
-            let targets: [String]?
-        }
-
-        let workspace: Container?
-        let project: Container?
-    }
-
-    static func schemes(from data: Data) -> [String] {
-        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return [] }
-        return payload.workspace?.schemes ?? payload.project?.schemes ?? []
-    }
-
-    static func targets(from data: Data) -> [String] {
-        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return [] }
-        return payload.workspace?.targets ?? payload.project?.targets ?? []
     }
 }
 
@@ -2161,6 +1651,19 @@ public struct XcodeBuildProjectAdapter: ProjectAdapter {
     /// underlying adapter owns, without exposing that pool or downcasting
     /// `build`/`test` back to `XcodeBuildAdapter` from the CLI.
     private let simulatorBearingAdapter: XcodeBuildAdapter?
+    /// Six `ProjectAdapter` capability properties, populated below from the
+    /// same `XcodeBuildAdapter` instance `build`/`test` already share —
+    /// zero `as?`, a compile-time-checked upcast, since `adapter`'s
+    /// concrete type and every protocol it conforms to are both statically
+    /// known right here. See `ProjectAdapter`'s own doc comment and this
+    /// project's internal execution-engine restructuring notes (not part
+    /// of this public repo) for the full rationale.
+    public let schemataBuild: (any SchemataBuildable)?
+    public let schemataTest: (any SchemataTestable)?
+    public let coverageMeasuring: (any CoverageMeasuring)?
+    public let testSelecting: (any TestSelecting)?
+    public let batchTestable: (any BatchTestable)?
+    public let schemataBatchTestable: (any SchemataBatchTestable)?
 
     public init(
         configuration: Configuration,
@@ -2183,6 +1686,12 @@ public struct XcodeBuildProjectAdapter: ProjectAdapter {
         simulatorBearingAdapter = adapter
         build = adapter
         test = adapter
+        schemataBuild = adapter
+        schemataTest = adapter
+        coverageMeasuring = adapter
+        testSelecting = adapter
+        batchTestable = adapter
+        schemataBatchTestable = adapter
     }
 
     /// Boots and verifies readiness of the device this run will test on,

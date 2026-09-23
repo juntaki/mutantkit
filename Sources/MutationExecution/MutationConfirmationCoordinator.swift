@@ -26,7 +26,7 @@ struct TimeoutInnerRetestRequest {
 /// Extracted out of `MutationRunner` (Phase A1 of the execution-pipeline
 /// decomposition): every method here closes over exactly the dependencies a
 /// retest needs to run in true isolation — `workspaces`/`build`/`test` to
-/// stand up an independent sandbox and drive it, `configuration` for the
+/// stand up an independent sandbox and drive it, `policy` for the
 /// `retestKilledMutants`/`confirmCrashKills` gates a retest itself checks
 /// (not the outer `confirmCrashKills`/`confirmTimedOutMutants` gate that
 /// decides *whether* to call in here at all — that stays in
@@ -35,17 +35,53 @@ struct TimeoutInnerRetestRequest {
 /// `MutationVerdictVerifier` (via `MutationEvidenceAssembler.finalize`)
 /// still does that, from whatever `ConfirmationObservation`s these methods
 /// hand back.
+///
+/// Extraction-plan Step 9: this type used to hold the whole `Configuration`
+/// for exactly these two flags. `policy` is the same
+/// `MutationVerdictVerifier.VerdictVerificationPolicy` `RunSession` carries
+/// (`session.policy`, itself the Step 1 factory's one canonical derivation
+/// from `Configuration.execution` — see `MutationVerdictVerifier.swift`),
+/// so this is a pure narrowing: the exact same two booleans, read from the
+/// exact same source, without holding the rest of `Configuration` this type
+/// never otherwise touched.
 struct MutationConfirmationCoordinator: Sendable {
     let workspaces: WorkspaceManager
     let build: any BuildAdapter
     let test: any TestAdapter
-    let configuration: Configuration
+    let policy: MutationVerdictVerifier.VerdictVerificationPolicy
     /// The tool's own stable, read-only original project copy —
     /// `MutationRunner`'s own `projectRoot`, threaded through unchanged.
     /// Used only by `confirmKill`, and only when `test` conforms to
     /// `PackageManifestConfirmationRetesting` — see that protocol's own doc
     /// comment for why a confirmation retest needs it at all.
     let projectRoot: URL
+    /// `test`'s `PackageManifestConfirmationRetesting` conformance,
+    /// resolved once here via the wrapper-aware
+    /// `packageManifestConfirmationRetesting(for:)` resolver — safe because
+    /// `test` is a `let`, set once by `MutationRunner.init` and never
+    /// reassigned for this coordinator's whole lifetime, so the resolved
+    /// value cannot go stale. The resolver itself (unwraps through
+    /// `TestAdapterWrapping`) is unchanged; only *when* it runs moves from
+    /// "every `confirmKill` call" to "once, at construction." See this
+    /// project's internal execution-engine restructuring notes (not part
+    /// of this public repo) for the full rationale.
+    let manifestDependentTest: (any PackageManifestConfirmationRetesting)?
+    /// `test`'s `TestSelecting` conformance, memoized on the same terms as
+    /// `manifestDependentTest` above.
+    let selectingTest: (any TestSelecting)?
+
+    init(
+        workspaces: WorkspaceManager, build: any BuildAdapter, test: any TestAdapter,
+        policy: MutationVerdictVerifier.VerdictVerificationPolicy, projectRoot: URL
+    ) {
+        self.workspaces = workspaces
+        self.build = build
+        self.test = test
+        self.policy = policy
+        self.projectRoot = projectRoot
+        manifestDependentTest = packageManifestConfirmationRetesting(for: test)
+        selectingTest = testAdapterCapability((any TestSelecting).self, for: test)
+    }
 
     /// Runs a mutant's tests, narrowed to `selectedTests` when the adapter
     /// can honour that (`TestSelecting`) and a set was supplied, and
@@ -65,7 +101,7 @@ struct MutationConfirmationCoordinator: Sendable {
         timeoutSeconds: Double,
         selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
-        if let selecting = test as? any TestSelecting {
+        if let selecting = selectingTest {
             return try await selecting.runMutant(
                 point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
             )
@@ -95,7 +131,7 @@ struct MutationConfirmationCoordinator: Sendable {
     func confirmKillIfNeeded(
         _ prepared: MutationRunner.PreparedMutant, baseline: MutationRunner.BaselineContext, run: TestRunResult, activationProven: Bool
     ) async -> (observation: ConfirmationObservation, durationSeconds: Double)? {
-        guard configuration.execution.retestKilledMutants, run.status == .failed, activationProven else { return nil }
+        guard policy.retestKilledMutants, run.status == .failed, activationProven else { return nil }
         let confirmationStarted = Date()
         let observation: ConfirmationObservation
         if let confirmationSandbox = prepared.confirmationSandbox {
@@ -164,7 +200,7 @@ struct MutationConfirmationCoordinator: Sendable {
             // more than that (`PackageManifestConfirmationRetesting`) gets
             // routed to its own dedicated method instead of the ordinary
             // `runMutant` path every other adapter still uses unchanged.
-            if let manifestDependent = packageManifestConfirmationRetesting(for: test) {
+            if let manifestDependent = manifestDependentTest {
                 confirmingRun = try await manifestDependent.runConfirmationRetest(
                     point, packageRoot: projectRoot, productsScratchRoot: sandbox,
                     timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
@@ -361,7 +397,7 @@ struct MutationConfirmationCoordinator: Sendable {
         // still be writing. Same shape and same reasoning as `prepare`'s
         // own `confirmationSandbox` — see that method's doc comment.
         let innerConfirmationSandbox: URL?
-        if configuration.execution.retestKilledMutants, wasBatchAttributed {
+        if policy.retestKilledMutants, wasBatchAttributed {
             // Same `cloneProductsForConfirmationRetest` dispatch
             // `establishConfirmationSandbox` uses, for the identical
             // reason: this clone ultimately feeds `confirmKill` (via
@@ -423,7 +459,7 @@ struct MutationConfirmationCoordinator: Sendable {
         // artifact (see `confirmCrashKill`'s doc comment) — its own fresh,
         // independent rebuild, same as any other first-observed crash.
         var crashConfirmationEvidence: CrashConfirmation?
-        if configuration.execution.confirmCrashKills, wasBatchAttributed,
+        if policy.confirmCrashKills, wasBatchAttributed,
            confirmingRun.status == .crashed, confirmingActivationProven {
             let (crashObservation, crashEvidence) = await confirmCrashKill(
                 point, baseline: baseline, selectedTests: selectedTests, originalDiagnosis: confirmingRun.diagnosis
@@ -462,7 +498,7 @@ struct MutationConfirmationCoordinator: Sendable {
     /// `confirmKillIfNeeded`'s outer-level counterpart handles a missing
     /// `confirmationSandbox`. Returns `nil` when no retest applies at all.
     func timeoutInnerConfirmKillIfNeeded(_ request: TimeoutInnerRetestRequest) async -> ConfirmationObservation? {
-        guard configuration.execution.retestKilledMutants, request.wasBatchAttributed,
+        guard policy.retestKilledMutants, request.wasBatchAttributed,
               request.confirmingRun.status == .failed, request.confirmingActivationProven else { return nil }
         guard let innerConfirmationSandbox = request.innerConfirmationSandbox else {
             return ConfirmationObservation(

@@ -241,15 +241,15 @@ verify_archive "iphonesimulator" "arm64 and x86_64"
 
 # ── Phase 8/9: the critical end-to-end step ──────────────────────────────────
 #
-# From a temp directory with no relationship to any mutantkit/mutantkit-private/
-# mutantkit-f7 checkout, with MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE explicitly
+# From a temp directory with no relationship to any mutantkit checkout,
+# with MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE explicitly
 # unset, clone a small pinned real corpus and run the *extracted packaged
 # binary* to plan and run at least one real mutation, resolving its schemata
 # runtime purely from what it bundles.
 section "Phase 8/9: real plan+run against swift-numerics, bundled runtime only"
 
 case "$CORPUS_DIR" in
-    */mutantkit-private*|*/mutantkit-f7/*|*/mutantkit/*)
+    */mutantkit*)
         fail "CORPUS_DIR ($CORPUS_DIR) looks like it is inside a mutantkit checkout — refusing to run there"
         ;;
 esac

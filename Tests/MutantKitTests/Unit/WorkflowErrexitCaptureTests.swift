@@ -30,13 +30,13 @@ import Testing
 /// this file exists.
 @Suite("Workflow steps that read $? must disable errexit first")
 struct WorkflowErrexitCaptureTests {
-    /// The workflows live at the repo root in the public checkout and
-    /// under `oss-public/` in the private monorepo. Both are real, and
-    /// *both* are returned when both exist rather than the first one
-    /// found: the private monorepo has its own `.github/workflows` too,
-    /// and taking only the first match meant this test silently scanned
-    /// those two files and never the projected ones — which is how the
-    /// first version of it passed against a deliberately reintroduced bug.
+    /// The workflows live at the repo root in the published tree and under
+    /// `oss-public/` in the full development checkout. Both are real, and
+    /// *both* are returned when both exist rather than the first one found:
+    /// the development checkout has its own `.github/workflows` too, and
+    /// taking only the first match meant this test silently scanned those
+    /// two files and never the projected ones — which is how the first
+    /// version of it passed against a deliberately reintroduced bug.
     private static func workflowsDirectories() -> [URL] {
         let root = Acceptance.packageRoot
         return [

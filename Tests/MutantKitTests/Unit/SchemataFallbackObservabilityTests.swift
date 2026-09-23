@@ -111,7 +111,7 @@ struct SchemataFallbackObservabilityTests {
         let outcome = try await outcomeFromSyntheticSharedChunkBuildFailure()
         #expect(outcome.sharedChunkBuildFailureEvents.count == 1, "precondition: the runner produced the event this suite reports")
 
-        let issues = SchemataRunOrchestration.sharedChunkBuildFailureIssues(outcome.sharedChunkBuildFailureEvents)
+        let issues = HybridExecutionEngine.sharedChunkBuildFailureIssues(outcome.sharedChunkBuildFailureEvents)
         let issue = try #require(issues.first, "the event must not be silently dropped — this is the whole defect being fixed")
         #expect(issues.count == 1, "one issue per failed chunk, never one per affected MutationID")
         #expect(issue.kind == .schemataChunkBuildFailed)
@@ -130,7 +130,7 @@ struct SchemataFallbackObservabilityTests {
     @Test("An operational issue survives a JSON round trip, so a reader of report.json sees the same thing the console did")
     func operationalIssueRoundTripsThroughJSON() async throws {
         let outcome = try await outcomeFromSyntheticSharedChunkBuildFailure()
-        let issues = SchemataRunOrchestration.sharedChunkBuildFailureIssues(outcome.sharedChunkBuildFailureEvents)
+        let issues = HybridExecutionEngine.sharedChunkBuildFailureIssues(outcome.sharedChunkBuildFailureEvents)
         let decoded = try JSONDecoder().decode([OperationalIssue].self, from: JSONEncoder().encode(issues))
         #expect(decoded == issues)
         #expect(decoded.first?.kind == .schemataChunkBuildFailed)
@@ -138,12 +138,12 @@ struct SchemataFallbackObservabilityTests {
 
     @Test("A run with no failed chunk build reports no issue at all — this channel stays quiet when nothing is wrong")
     func noEventProducesNoIssue() {
-        #expect(SchemataRunOrchestration.sharedChunkBuildFailureIssues([]).isEmpty)
+        #expect(HybridExecutionEngine.sharedChunkBuildFailureIssues([]).isEmpty)
     }
 
     @Test("A one-mutant chunk is reported in the singular, so the message never reads '1 mutants'")
     func singleAffectedMutationIsReportedInTheSingular() {
-        let issues = SchemataRunOrchestration.sharedChunkBuildFailureIssues([
+        let issues = HybridExecutionEngine.sharedChunkBuildFailureIssues([
             SchemataMutationRunner.SharedChunkBuildFailureEvent(
                 chunkID: "chunk-solo", affectedMutationCount: 1, diagnosticReference: "switch must be exhaustive"
             )
@@ -187,7 +187,7 @@ struct SchemataFallbackObservabilityTests {
         let outcome = try await outcomeFromSyntheticReceiptUnavailable()
         #expect(outcome.infrastructureFallbackEvents.count == 1, "precondition: the runner produced the event this suite reports")
 
-        let issues = SchemataRunOrchestration.schemataInfrastructureFallbackIssues(outcome.infrastructureFallbackEvents)
+        let issues = HybridExecutionEngine.schemataInfrastructureFallbackIssues(outcome.infrastructureFallbackEvents)
         let issue = try #require(issues.first, "the event must not be silently dropped")
         #expect(issues.count == 1, "one issue per affected chunk, never one per affected MutationID")
         #expect(issue.kind == .schemataChunkReceiptUnavailable)
@@ -202,7 +202,7 @@ struct SchemataFallbackObservabilityTests {
     @Test("A receipt-unavailable operational issue survives a JSON round trip")
     func receiptUnavailableIssueRoundTripsThroughJSON() async throws {
         let outcome = try await outcomeFromSyntheticReceiptUnavailable()
-        let issues = SchemataRunOrchestration.schemataInfrastructureFallbackIssues(outcome.infrastructureFallbackEvents)
+        let issues = HybridExecutionEngine.schemataInfrastructureFallbackIssues(outcome.infrastructureFallbackEvents)
         let decoded = try JSONDecoder().decode([OperationalIssue].self, from: JSONEncoder().encode(issues))
         #expect(decoded == issues)
         #expect(decoded.first?.kind == .schemataChunkReceiptUnavailable)
@@ -210,12 +210,12 @@ struct SchemataFallbackObservabilityTests {
 
     @Test("A run with no receipt-unavailable event reports no issue at all")
     func noReceiptUnavailableEventProducesNoIssue() {
-        #expect(SchemataRunOrchestration.schemataInfrastructureFallbackIssues([]).isEmpty)
+        #expect(HybridExecutionEngine.schemataInfrastructureFallbackIssues([]).isEmpty)
     }
 
     @Test("A one-mutant receipt-unavailable chunk is reported in the singular, so the message never reads '1 mutants'")
     func singleAffectedMutationIsReportedInTheSingularForReceiptUnavailable() {
-        let issues = SchemataRunOrchestration.schemataInfrastructureFallbackIssues([
+        let issues = HybridExecutionEngine.schemataInfrastructureFallbackIssues([
             SchemataMutationRunner.SchemataInfrastructureFallbackEvent(
                 chunkID: "chunk-solo", reason: .buildReceiptUnavailable, affectedMutationCount: 1,
                 diagnosis: "the chunk's own build receipt could not be resolved: synthetic failure"
@@ -228,7 +228,7 @@ struct SchemataFallbackObservabilityTests {
     func receiptUnavailableReachesTheFallbackReasonHistogram() async throws {
         let outcome = try await outcomeFromSyntheticReceiptUnavailable()
         #expect(outcome.isolatedFallbacks.count == 3)
-        let counts = SchemataRunOrchestration.fallbackReasonCounts(outcome.isolatedFallbacks)
+        let counts = HybridExecutionEngine.fallbackReasonCounts(outcome.isolatedFallbacks)
         #expect(counts == ["buildReceiptUnavailable": 3])
     }
 
@@ -238,14 +238,14 @@ struct SchemataFallbackObservabilityTests {
     func fallbackReasonsSurviveAsAHistogram() async throws {
         let outcome = try await outcomeFromSyntheticSharedChunkBuildFailure()
         #expect(outcome.isolatedFallbacks.count == 3)
-        let counts = SchemataRunOrchestration.fallbackReasonCounts(outcome.isolatedFallbacks)
+        let counts = HybridExecutionEngine.fallbackReasonCounts(outcome.isolatedFallbacks)
         #expect(counts == ["sharedChunkBuildFailure": 3])
     }
 
     @Test("The histogram keeps every reason distinct — a hang-budget overflow is never conflated with a build failure or a no-HIT")
     func histogramKeysAreDistinctPerReason() {
         let ids = (1 ... 4).map { MutationID(rawValue: "mut_\($0)") }
-        let counts = SchemataRunOrchestration.fallbackReasonCounts([
+        let counts = HybridExecutionEngine.fallbackReasonCounts([
             .init(mutationID: ids[0], reason: .sharedChunkBuildFailure),
             .init(mutationID: ids[1], reason: .hangBudgetExceeded),
             .init(mutationID: ids[2], reason: .activation(.noHit)),
@@ -279,7 +279,7 @@ struct SchemataFallbackObservabilityTests {
 
     @Test("Every planner-time fallback reason reaches the report as a count histogram, keeping every reason distinct")
     func plannerFallbackReasonsSurviveAsAHistogram() {
-        let counts = SchemataRunOrchestration.plannerFallbackReasonCounts([
+        let counts = HybridExecutionEngine.plannerFallbackReasonCounts([
             .resultBuilderBody,
             .patternPosition,
             .controlFlowConstant,
@@ -300,7 +300,7 @@ struct SchemataFallbackObservabilityTests {
 
     @Test("The free-form diagnostic payload of unsupportedOperand/structuralConflict/platformUnsupported is dropped from the key — never a per-mutation-unique histogram entry")
     func freeFormDiagnosisTextNeverBecomesPartOfTheKey() {
-        let counts = SchemataRunOrchestration.plannerFallbackReasonCounts([
+        let counts = HybridExecutionEngine.plannerFallbackReasonCounts([
             .unsupportedOperand(reason: "first mutant's own diagnosis text"),
             .unsupportedOperand(reason: "a completely different mutant's own diagnosis text"),
             .structuralConflict(reason: "yet another distinct diagnosis"),

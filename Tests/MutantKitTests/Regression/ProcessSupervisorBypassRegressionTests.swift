@@ -194,19 +194,17 @@ struct ProcessSupervisorBypassRegressionTests {
             .appendingPathComponent("Sources")
     }
 
-    /// Whether this checkout is the private repo -- the only tree where
-    /// every `excludedTargets`/`excludedFiles` entry above is guaranteed to
-    /// exist. A public-projection snapshot (see the private repo's own
-    /// `.public-tree.toml`) is a deliberately filtered subset: several
-    /// allow-listed research-only targets (and, as of the entry documented
-    /// above, `BenchmarkRunner`) are excluded from it BY DESIGN, not by
-    /// staleness. Detected by the presence of `.public-tree.toml` itself at
-    /// the package root -- the private repo always has it, a public
-    /// projection never does (it's the one file that would have to
-    /// describe its own exclusion to get excluded, so git-projector never
-    /// copies it) -- rather than hand-duplicating `.public-tree.toml`'s own
+    /// Whether this checkout is the full development checkout -- the only
+    /// tree where every `excludedTargets`/`excludedFiles` entry above is
+    /// guaranteed to exist. The published tree is a deliberately filtered
+    /// subset: several allow-listed research-only targets (and, as of the
+    /// entry documented above, `BenchmarkRunner`) are excluded from it BY
+    /// DESIGN, not by staleness. Detected by the presence of a project-
+    /// local config file at the package root that the published tree never
+    /// carries (it's the one file that would have to describe its own
+    /// exclusion to get excluded) -- rather than hand-duplicating its own
     /// exclude list here, which would silently drift out of sync with it.
-    private static var isPrivateRepoCheckout: Bool {
+    private static var isFullDevelopmentCheckout: Bool {
         FileManager.default.fileExists(
             atPath: sourcesRoot.deletingLastPathComponent().appendingPathComponent(".public-tree.toml").path
         )
@@ -340,14 +338,14 @@ struct ProcessSupervisorBypassRegressionTests {
     /// (and a stale entry left behind) would silently narrow this scan's
     /// real coverage without any test ever going red for it.
     ///
-    /// Private-repo checkout only (see `isPrivateRepoCheckout`) -- against
-    /// a public-projection snapshot, several entries are legitimately
-    /// absent by design, which this specific staleness guard cannot
-    /// distinguish from a genuine stale entry; `noBypassesOutsideAllowList`
-    /// above still runs the real scan there unconditionally.
+    /// Full development checkout only (see `isFullDevelopmentCheckout`) --
+    /// against the published tree, several entries are legitimately absent
+    /// by design, which this specific staleness guard cannot distinguish
+    /// from a genuine stale entry; `noBypassesOutsideAllowList` above still
+    /// runs the real scan there unconditionally.
     @Test(
         "Every allow-listed target and file still exists under Sources/",
-        .enabled(if: ProcessSupervisorBypassRegressionTests.isPrivateRepoCheckout)
+        .enabled(if: ProcessSupervisorBypassRegressionTests.isFullDevelopmentCheckout)
     )
     func allowListEntriesAreReal() {
         let fileManager = FileManager.default

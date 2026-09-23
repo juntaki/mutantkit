@@ -29,10 +29,10 @@ struct CIAcceptanceMatrixClassificationTests {
     }
 
     /// `Scripts/ci-fixtures.json` lives at a different relative path
-    /// depending on which repo checkout this runs in: the public repo's
-    /// root, or the private monorepo's `oss-public/` overlay of exactly the
-    /// paths that differ from its own internal layout. Both are real, both
-    /// must work.
+    /// depending on which checkout this runs in: the published tree's
+    /// root, or the full development checkout's `oss-public/` overlay of
+    /// exactly the paths that differ from its own internal layout. Both are
+    /// real, both must work.
     private static func fixturesFileURL() throws -> URL {
         let root = Acceptance.packageRoot
         for candidate in [

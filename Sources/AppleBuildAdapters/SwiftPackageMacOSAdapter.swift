@@ -844,10 +844,32 @@ public struct SwiftPackageMacOSProjectAdapter: ProjectAdapter {
     public let kind: ProjectKind = .swiftPackageMacOS
     public let build: any BuildAdapter
     public let test: any TestAdapter
+    /// Populated from the same `SwiftPackageMacOSAdapter` instance
+    /// `build`/`test` already share — zero `as?`, a compile-time-checked
+    /// upcast. `batchTestable`/`schemataBatchTestable` are left at
+    /// `ProjectAdapter`'s own `nil` default: `SwiftPackageMacOSAdapter`
+    /// does not conform to `BatchTestable`/`SchemataBatchTestable` (no
+    /// such extension exists in this file — confirmed by grep, and a real,
+    /// load-bearing difference `ExecutionCapabilitiesDiagnosis
+    /// .testBatchingItem`'s `is` checks already depend on), so no upcast is
+    /// possible here — the compiler would refuse one that doesn't hold,
+    /// itself a permanent, free check that a future `BatchTestable`
+    /// conformance can't be added to the adapter body without this file
+    /// being updated too. See this project's internal execution-engine
+    /// restructuring notes (not part of this public repo) for the full
+    /// rationale.
+    public let schemataBuild: (any SchemataBuildable)?
+    public let schemataTest: (any SchemataTestable)?
+    public let coverageMeasuring: (any CoverageMeasuring)?
+    public let testSelecting: (any TestSelecting)?
 
     public init(configuration: Configuration) {
         let adapter = SwiftPackageMacOSAdapter(configuration: configuration)
         build = adapter
         test = adapter
+        schemataBuild = adapter
+        schemataTest = adapter
+        coverageMeasuring = adapter
+        testSelecting = adapter
     }
 }
