@@ -9,36 +9,34 @@ import SwiftFrontend
 /// Extracted out of `MutationRunner` (Phase A1 of the execution-pipeline
 /// decomposition): every stored property here is one of `MutationRunner`'s
 /// own dependencies for exactly this job — `plan` for the `planID`/
-/// `workUnitID` a result is stamped with, `configuration` for the
-/// confirmation policy `MutationVerdictVerifier` is judged against,
+/// `workUnitID` a result is stamped with, `policy` for the confirmation
+/// policy `MutationVerdictVerifier` is judged against,
 /// `checkpoints`/`resultCache`/`progress`/`operationalIssues` for
 /// `finalize`'s own persistence side effects. `operationalIssues` in
 /// particular is the *same* `OperationalIssueLog` instance
 /// `MutationRunner` itself holds and reads at the end of `run()` — passed
 /// in at construction, not created here — so a warning `finalize` records
 /// still reaches that run's own `RunReport.operationalIssues`.
+///
+/// Extraction-plan Step 9: `policy` replaces what used to be a whole
+/// `configuration: Configuration` field held only so `verificationPolicy`
+/// (below) could recompute `MutationVerdictVerifier.VerdictVerificationPolicy`
+/// from it on every access — `configuration` was never read for anything
+/// else here. `policy` is now supplied once, already computed by the Step 1
+/// factory (the same value `RunSession.policy`/`MutationRunner`'s own local
+/// carry), so this is a pure narrowing plus removing a redundant
+/// recomputation, not a behavior change: the three
+/// `Configuration.execution` booleans this ends up gated on are bit-for-bit
+/// identical to what `verificationPolicy` used to compute fresh each time.
 struct MutationEvidenceAssembler: Sendable {
     let plan: MutationPlan
-    let configuration: Configuration
+    let policy: MutationVerdictVerifier.VerdictVerificationPolicy
     let checkpoints: CheckpointStore?
     let artifactsRoot: URL?
     let resultCache: MutationResultCache?
     let resultCacheDigest: String?
     let progress: ProgressReporter?
     let operationalIssues: OperationalIssueLog
-
-    /// The confirmation policy this run is actually gated on — passed to
-    /// `MutationVerdictVerifier.verify` so it can require the confirmation
-    /// `finishAfterTest`'s own `configuration.execution.retestKilledMutants`/
-    /// `confirmCrashKills` checks promise, rather than trusting whatever
-    /// `confirmations` a reverified `MutationObservations` happens to carry.
-    private var verificationPolicy: MutationVerdictVerifier.VerdictVerificationPolicy {
-        MutationVerdictVerifier.VerdictVerificationPolicy(
-            retestKilledMutants: configuration.execution.retestKilledMutants,
-            confirmCrashKills: configuration.execution.confirmCrashKills,
-            confirmTimedOutMutants: configuration.execution.confirmTimedOutMutants
-        )
-    }
 
     /// Whether the mutation reached the binary the tests ran against.
     ///
@@ -112,7 +110,7 @@ struct MutationEvidenceAssembler: Sendable {
             confirmations: confirmations,
             infrastructureFailureDiagnosis: infrastructureFailureDiagnosis
         )
-        let record = MutationVerdictVerifier.verify(observations, policy: verificationPolicy)
+        let record = MutationVerdictVerifier.verify(observations, policy: policy)
         let result: MutationResult
         do {
             result = try MutationResult.projected(

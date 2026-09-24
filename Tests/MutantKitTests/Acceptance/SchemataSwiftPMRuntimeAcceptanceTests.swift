@@ -68,8 +68,9 @@ struct SchemataSwiftPMRuntimeAcceptanceTests {
 
         // A local path dependency's package *identity* (what `package:`
         // below must name) is derived from its checkout directory name,
-        // not its manifest's `name:` field — `mutantkit-private` here, even
-        // though `Package.swift` declares `name: "MutantKit"`.
+        // not its manifest's `name:` field — whatever this repository's own
+        // checkout directory happens to be named, even though `Package.swift`
+        // declares `name: "MutantKit"`.
         let dependencyIdentity = Acceptance.packageRoot.lastPathComponent
         let packageManifest = """
         // swift-tools-version:6.0

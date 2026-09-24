@@ -29,7 +29,7 @@ struct SchemataDegradedBaselineTests {
     func baselineFailedKeepsTheObservedRecord() {
         let observed = Self.record(passed: false, hash: "product-hash")
 
-        let resolved = SchemataRunOrchestration.resolveBaseline(
+        let resolved = HybridExecutionEngine.resolveBaseline(
             .baselineFailed(record: observed, diagnosis: "the suite did not pass (crashed)"),
             schemataBaseline: nil, fallbackBaseline: nil, embeddedCount: 0, fallbackCount: 0
         )
@@ -47,14 +47,14 @@ struct SchemataDegradedBaselineTests {
     func notApplicableUsesTheFallbackBaseline() {
         let fallback = Self.record(passed: true, hash: "fallback-hash")
 
-        let resolved = SchemataRunOrchestration.resolveBaseline(
+        let resolved = HybridExecutionEngine.resolveBaseline(
             .notApplicable, schemataBaseline: nil, fallbackBaseline: fallback, embeddedCount: 0, fallbackCount: 3
         )
         #expect(resolved.passed)
         #expect(resolved.record.buildProductHash == "fallback-hash")
         #expect(resolved.degradationReason?.contains("no mutation in this plan was embeddable") == true)
 
-        let partly = SchemataRunOrchestration.resolveBaseline(
+        let partly = HybridExecutionEngine.resolveBaseline(
             .notApplicable, schemataBaseline: nil, fallbackBaseline: fallback, embeddedCount: 2, fallbackCount: 3
         )
         #expect(partly.degradationReason == nil, "a run with real embedded mutants is not degraded by having fallbacks too")
@@ -69,20 +69,20 @@ struct SchemataDegradedBaselineTests {
         let red = Self.record(passed: false, hash: "red")
         // The payload is not what this decision reads — the two records
         // passed alongside it are — so any outcome value does here.
-        let succeeded = SchemataRunOrchestration.SchemataPortionResult.succeeded(
+        let succeeded = HybridExecutionEngine.SchemataPortionResult.succeeded(
             SchemataMutationRunner.Outcome(
                 baseline: green, results: [], multiTargetVerdicts: [], isolatedFallbacks: [],
                 sharedChunkBuildFailureEvents: [], infrastructureFallbackEvents: []
             )
         )
 
-        #expect(SchemataRunOrchestration.resolveBaseline(
+        #expect(HybridExecutionEngine.resolveBaseline(
             succeeded, schemataBaseline: green, fallbackBaseline: green, embeddedCount: 5, fallbackCount: 0
         ).passed)
-        #expect(!SchemataRunOrchestration.resolveBaseline(
+        #expect(!HybridExecutionEngine.resolveBaseline(
             succeeded, schemataBaseline: red, fallbackBaseline: green, embeddedCount: 5, fallbackCount: 1
         ).passed)
-        #expect(!SchemataRunOrchestration.resolveBaseline(
+        #expect(!HybridExecutionEngine.resolveBaseline(
             succeeded, schemataBaseline: green, fallbackBaseline: red, embeddedCount: 5, fallbackCount: 1
         ).passed)
     }
@@ -94,7 +94,7 @@ struct SchemataDegradedBaselineTests {
     /// reported as a passing baseline either.
     @Test("With no fallback report, the unknown baseline is never presented as a real one")
     func notApplicableWithoutFallbackReportsNothingKnown() {
-        let resolved = SchemataRunOrchestration.resolveBaseline(
+        let resolved = HybridExecutionEngine.resolveBaseline(
             .notApplicable, schemataBaseline: nil, fallbackBaseline: nil, embeddedCount: 0, fallbackCount: 0
         )
         #expect(resolved.record.passed == false)

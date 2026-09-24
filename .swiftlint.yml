@@ -22,9 +22,9 @@
 # and similar), but `cyclomatic_complexity` also covers ConfigurationValidation
 # (13), DeclarationIdentityResolver (15) and one simulator-pool test — and
 # `large_tuple` is spread across several test files. This count includes a
-# handful of entries private-tree-only targets (research/probe executables,
-# benchmark harness) contribute that the public projection's own baseline
-# doesn't carry, since those targets are excluded from the public snapshot.
+# handful of entries internal-only targets (research/probe executables,
+# benchmark harness) contribute that this baseline doesn't carry, since
+# those targets are excluded from what ships publicly.
 # (Earlier versions of this comment also named InspectCommand.run()/
 # RunCommand.run(), then QualityGate.evaluate (16)/
 # BudgetSelectorV2.allocateCounts (18), then a ReproduceCommand handler (13);

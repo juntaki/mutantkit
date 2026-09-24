@@ -79,7 +79,7 @@ worth carrying forward as concrete v0.7 targets rather than abstract goals:
 
 ## CI cost / duplication (informational, not yet acted on)
 
-A parallel audit found `oss-public/.github/workflows/ci.yml` runs 19
+A parallel audit found `.github/workflows/ci.yml` runs 19
 acceptance legs, each independently resolving SwiftPM dependencies and
 compiling from scratch (~3.5–4.5 min per job, measured near-constant
 regardless of fixture) — 26 separate from-scratch compilations of the same
@@ -95,10 +95,10 @@ lowest-risk opportunities identified:
    never caches a compiled artifact or crosses build configs.
 2. Build the debug test harness once per `ci.yml` run and share it via
    `actions/upload-artifact`/`download-artifact` across the acceptance
-   matrix, `unit`, and the schemata jobs — the pattern this public overlay
-   is documented (`release-validation.yml`'s own header comment) as having
-   lost relative to the private repo's own `ci.yml`. Estimated at 60–80
-   minutes of aggregate runner-minutes per CI run. Needs care for the two
+   matrix, `unit`, and the schemata jobs — the pattern
+   `release-validation.yml`'s own header comment documents `ci.yml` as
+   having lost. Estimated at 60–80 minutes of aggregate runner-minutes per
+   CI run. Needs care for the two
    schemata jobs, which also need a separate release-config build layered
    on top — not unsafe, just not "drop in with no thought."
 
