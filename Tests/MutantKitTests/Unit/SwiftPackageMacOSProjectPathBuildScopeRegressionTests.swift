@@ -7,32 +7,17 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// Real, end-to-end regression coverage for #77: `configuration.project.path`
-/// was honored by plan-time discovery (`SwiftPMLiveSourceResolution`) but
-/// ignored by the actual sandboxed `swift build`/`swift test` invocations in
-/// `SwiftPackageMacOSAdapter`, which always ran at the sandbox root — the
-/// raw clone of `--project-root`, not `project.path` joined onto it.
+/// Regression for #77: `project.path` was honored by plan-time discovery but
+/// ignored by the real `swift build`/`swift test` invocations, which always
+/// ran at the sandbox root instead of joining `project.path` onto it. Stages
+/// the shape that needs `project.path` in the first place — an outer
+/// directory with two sibling packages, one depending on the other via
+/// `.package(path:)` — and asserts a mutant build now runs, and finds the
+/// package, at the resolved location.
 ///
-/// `project.path` exists specifically for a package that is not itself at
-/// `--project-root` (a monorepo umbrella one level up from the real
-/// package), most plausibly so that package's own local `.package(path:)`
-/// siblings — which live outside the package directory itself, but inside
-/// the umbrella — get cloned into the sandbox alongside it
-/// (`WorkspaceManager.createSandbox` clones `--project-root`'s entire
-/// contents verbatim, siblings included). Before this fix, pointing
-/// `--project-root` at the umbrella so a sibling dependency would resolve,
-/// with `project.path` set to the real package's subdirectory, ran `swift
-/// build` at the umbrella root — which has no `Package.swift` of its own —
-/// instead of at the package. This suite reproduces that exact monorepo
-/// shape (an outer directory containing two sibling packages, one
-/// `.package(path:)`-depending on the other) against a real toolchain and
-/// asserts the mutation build now runs, and finds the package, in the
-/// resolved location.
-///
-/// Deliberately at the unit level, not gated behind `MUTANTKIT_ACCEPTANCE`:
-/// a real, fast, toolchain-only bug with no simulator/xcodebuild involved.
-/// `.subprocessExclusive` because this spawns real `swift build`/`swift
-/// test` subprocesses — see `SubprocessTestGate`'s own doc comment.
+/// Not gated behind `MUTANTKIT_ACCEPTANCE`: fast, toolchain-only, no
+/// simulator involved. `.subprocessExclusive` because this spawns real
+/// `swift build`/`swift test` subprocesses.
 @Suite("SwiftPackageMacOSAdapter: project.path is honored by the real build/test, not just planning", .subprocessExclusive)
 struct SwiftPackageMacOSProjectPathBuildScopeRegressionTests {
     private static let relativePath = "Package/Sources/PathScopeFixtureLib/Widget.swift"
@@ -41,7 +26,7 @@ struct SwiftPackageMacOSProjectPathBuildScopeRegressionTests {
     import PathScopeFixtureSibling
 
     public func shouldPass() -> Bool {
-        siblingIsTrue()
+        siblingIsTrue() && true
     }
 
     """
@@ -65,12 +50,9 @@ struct SwiftPackageMacOSProjectPathBuildScopeRegressionTests {
         return configuration
     }
 
-    /// Stages the monorepo shape #77 needs: an outer directory (what
-    /// `--project-root` points at) containing the real package under
-    /// `project.path` ("Package") alongside a sibling it depends on via
-    /// `.package(path: "../Sibling")` — reachable only because
-    /// `WorkspaceManager` clones the whole outer directory, not just
-    /// "Package" alone.
+    /// Outer directory (`--project-root`) containing the real package under
+    /// `project.path` ("Package") plus a sibling it depends on via
+    /// `.package(path: "../Sibling")`.
     private func stagePackage() throws -> URL {
         let outer = FileManager.default.temporaryDirectory
             .appendingPathComponent("mutantkit-path-scope-regression-\(UUID().uuidString)")
