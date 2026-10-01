@@ -15,7 +15,7 @@ public enum SandboxExternalRootError: Error, Equatable, CustomStringConvertible 
     }
 }
 
-/// S3 preflight for external roots.
+/// Preflight for external roots.
 ///
 /// Project-root symlinks retain the tool's existing behavior. External roots
 /// are stricter because they are copied to a different position relative to

@@ -3,7 +3,7 @@ import Foundation
 /// The entries a sandbox copy carries from one root: every file, symlink
 /// and directory below it, minus excluded names and minus any scratch root.
 ///
-/// S3 materialization and S5 external-root fingerprinting use this same walk,
+/// Sandbox materialization and the run identity's external-root fingerprint use this same walk,
 /// so "equal digest" and "equal sandbox copy" are statements about one set
 /// of entries rather than two enumerations that can drift apart.
 public enum SandboxCopyWalk {

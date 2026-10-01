@@ -3,7 +3,7 @@ import Foundation
 import Testing
 
 /// The containment proof on scripted resolver answers. WorkspaceManager
-/// wiring is tested separately when S3 materialization is connected.
+/// wiring is tested separately with the sandbox materialization.
 @Suite("Sandbox containment proof")
 struct SandboxContainmentProofTests {
     @Test("Every package inside the container, matching the layout, is proven")

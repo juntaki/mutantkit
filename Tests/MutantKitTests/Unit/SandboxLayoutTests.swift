@@ -4,8 +4,8 @@ import Testing
 
 /// Pure path-shape tests for `SandboxLayout`.
 ///
-/// The paths deliberately do not exist. S2 must not inspect the filesystem:
-/// discovery has already canonicalized the roots, and S3 owns copying and
+/// The paths deliberately do not exist. The layout must not inspect the filesystem:
+/// discovery has already canonicalized the roots, and materialization owns copying and
 /// containment checks.
 @Suite("Sandbox layout")
 struct SandboxLayoutTests {
