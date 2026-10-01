@@ -541,7 +541,7 @@ jobs:
       matrix:
         include:
           - fixture: swift-package
-            filter: SwiftPackageMacOSAcceptanceTests
+            filter: SwiftPackageMacOSAcceptanceTests|SwiftPackageMacOSProjectPathAcceptanceTests
             simulator: "0"
           - fixture: swift-package-coverage
             filter: SwiftPackageMacOSCoverageAcceptanceTests
