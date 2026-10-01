@@ -13,9 +13,14 @@ import SwiftFrontend
 /// from this adapter.
 public struct SwiftPackageMacOSAdapter: Sendable {
     let configuration: Configuration
+    /// Where each workspace sits inside its sandbox, which is how a build
+    /// finds the scratch root its shared module cache lives under. `nil`
+    /// means a project-only layout: the workspace is the container.
+    let sandboxLayout: SandboxLayout?
 
-    public init(configuration: Configuration) {
+    public init(configuration: Configuration, sandboxLayout: SandboxLayout? = nil) {
         self.configuration = configuration
+        self.sandboxLayout = sandboxLayout
     }
 
     /// Where SwiftPM leaves the test bundles.
@@ -36,9 +41,7 @@ public struct SwiftPackageMacOSAdapter: Sendable {
     /// clone of `--project-root`, and an absolute path can't express
     /// "somewhere inside this sandbox".
     func resolvedWorkspace(_ workspace: URL) -> URL {
-        guard let path = configuration.project.path, !path.isEmpty, path != "." else { return workspace }
-        guard !path.hasPrefix("/") else { return workspace }
-        return workspace.appendingPathComponent(path)
+        ProjectPathResolution.packageDirectory(in: workspace, projectPath: configuration.project.path)
     }
 }
 
@@ -94,7 +97,7 @@ extension SwiftPackageMacOSAdapter: BuildAdapter {
     /// retry's own failure -- whatever it is -- propagates as the real,
     /// final answer rather than looping.
     private func buildWithSharedCacheRecovery(in workspace: URL) async throws -> BuildArtifact {
-        guard let cachePath = await resolvedModuleCachePath(for: workspace) else {
+        guard let cachePath = try await resolvedModuleCachePath(for: workspace) else {
             return try await build(in: workspace, extraArguments: [])
         }
         let extraArguments = Self.moduleCacheArguments(for: cachePath)
@@ -190,9 +193,30 @@ extension SwiftPackageMacOSAdapter: BuildAdapter {
     /// build already warmed, because a mutation never changes an import)
     /// was checked against the isolated backend's build shape, not
     /// schemata's.
-    private func resolvedModuleCachePath(for workspace: URL) async -> URL? {
+    ///
+    /// The scratch root comes from the layout, never from the workspace's
+    /// parent directory: a workspace nested in its container would
+    /// otherwise put a cache inside every container. A workspace that is
+    /// not where the layout says fails the build as infrastructure.
+    private func resolvedModuleCachePath(for workspace: URL) async throws -> URL? {
         guard configuration.execution.sharedModuleCache else { return nil }
-        return await SharedModuleCacheNamespace.shared.moduleCachePath(forSandbox: workspace, workingDirectory: workspace)
+        let scratchRoot: URL
+        do {
+            scratchRoot = try SandboxLayout.container(
+                ofWorkspace: workspace, workspaceRelativePath: sandboxLayout?.workspaceRelativePath ?? ""
+            ).deletingLastPathComponent()
+        } catch {
+            throw BuildFailure(
+                kind: .infrastructure,
+                diagnosis: "The shared module cache has no scratch root for this build: \(error)",
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcrun, arguments: ["swift", "build", "--build-tests"],
+                    workingDirectory: workspace, result: nil
+                ),
+                output: ""
+            )
+        }
+        return await SharedModuleCacheNamespace.shared.moduleCachePath(scratchRoot: scratchRoot, workingDirectory: workspace)
     }
 
     private func build(in rawWorkspace: URL, extraArguments: [String] = []) async throws -> BuildArtifact {
@@ -895,8 +919,8 @@ public struct SwiftPackageMacOSProjectAdapter: ProjectAdapter {
     public let coverageMeasuring: (any CoverageMeasuring)?
     public let testSelecting: (any TestSelecting)?
 
-    public init(configuration: Configuration) {
-        let adapter = SwiftPackageMacOSAdapter(configuration: configuration)
+    public init(configuration: Configuration, sandboxLayout: SandboxLayout? = nil) {
+        let adapter = SwiftPackageMacOSAdapter(configuration: configuration, sandboxLayout: sandboxLayout)
         build = adapter
         test = adapter
         schemataBuild = adapter

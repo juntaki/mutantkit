@@ -50,31 +50,24 @@ struct RunContextProbeOutputCompletenessTests {
         }
     }
 
-    /// The same fail-closed gate must fire for every caller that derives a
-    /// cache-identity fact through `worktreeContentState`, not only a direct
-    /// caller — `compute` (checkpoint identity) and `computeContextDigest`
-    /// (coverage/result cache identity) both route through it with no
-    /// separate error-handling path of their own, so this pins that neither
-    /// one accidentally gained one.
-    @Test("compute() and computeContextDigest() both propagate the same rejection, never silently substituting a partial digest")
-    func computeAndComputeContextDigestBothPropagateTheRejection() async throws {
+    /// The same fail-closed gate must fire for the run input state, which
+    /// every cache identity (the checkpoint, the coverage cache and the
+    /// result cache) is derived from: it routes through
+    /// `worktreeContentState` with no separate error-handling path of its
+    /// own, and the run then derives no identity at all.
+    @Test("The run input state propagates the same rejection, never silently substituting a partial digest")
+    func runInputStatePropagatesTheRejection() async throws {
         let root = FileManager.default.temporaryDirectory
-        let toolchain = ToolchainFingerprint(
-            toolVersion: "test", toolCommitSHA: nil, swiftVersion: "test", swiftSyntaxVersion: "test",
-            xcodeVersion: nil, buildSDKIdentity: nil, destinationRuntimeIdentity: nil
-        )
 
         await #expect(throws: RunContextProbeError.self) {
-            _ = try await RunContextProbe.compute(
-                projectRoot: root, configuration: Configuration(), toolchain: toolchain, workUnitID: "wu",
-                processRunner: forcedIncompleteRunner()
+            _ = try await RunInputState.compute(
+                projectRoot: root, layout: .projectOnly(root), processRunner: forcedIncompleteRunner()
             )
         }
-        await #expect(throws: RunContextProbeError.self) {
-            _ = try await RunContextProbe.computeContextDigest(
-                projectRoot: root, configuration: Configuration(), toolchain: toolchain, purpose: "resultCache2",
-                processRunner: forcedIncompleteRunner()
-            )
-        }
+        let state = await RunCommand.runInputState(
+            root: root, layout: .projectOnly(root), scratchRoots: [],
+            toolchainCacheIdentityComplete: true, processRunner: forcedIncompleteRunner()
+        )
+        #expect(state == nil)
     }
 }

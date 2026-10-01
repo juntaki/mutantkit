@@ -1,5 +1,6 @@
 @testable import CLI
 import Foundation
+import MutationExecution
 import MutationModel
 import Testing
 
@@ -18,7 +19,7 @@ import Testing
 /// `ToolchainProbe`'s own incompleteness actually flows through: the
 /// `toolchainCacheIdentityComplete` flag `RunCommand` threads from
 /// `ToolchainProbeResult.identityEvidenceComplete` into `RunContextProbe
-/// .compute`/`.computeContextDigest`. The `false` here is a deliberately
+/// .compute`/`.computeContextDigest` and `RunCommand.runInputState`. The `false` here is a deliberately
 /// hand-constructed stand-in for what a real incomplete `ToolchainProbe`
 /// subprocess produces — labeled as such, not offered as a substitute for
 /// `ToolchainProbeTests`'s own real, subprocess-backed coverage of
@@ -43,25 +44,15 @@ struct ToolchainCacheIdentityCompletenessTests {
         return false
     }
 
-    @Test("compute() throws incompleteToolchainIdentity when the toolchain probe behind it was incomplete, without touching git at all")
-    func computeRejectsAnIncompleteToolchainIdentity() async throws {
-        let root = FileManager.default.temporaryDirectory
-
+    @Test("compute() throws incompleteToolchainIdentity when the toolchain probe behind it was incomplete")
+    func computeRejectsAnIncompleteToolchainIdentity() throws {
         do {
-            _ = try await RunContextProbe.compute(
-                projectRoot: root,
+            _ = try RunContextProbe.compute(
+                inputState: .placeholder,
                 configuration: Configuration(),
                 toolchain: toolchain(),
                 workUnitID: "wu",
-                toolchainCacheIdentityComplete: false,
-                // A `processRunner` that fails the test outright if called:
-                // the toolchain-identity guard must reject before any git
-                // work is attempted, not merely reject after also paying for
-                // it.
-                processRunner: { _, _, _, _ in
-                    Issue.record("worktreeContentState must not run when the toolchain identity is already known incomplete")
-                    throw CancellationError()
-                }
+                toolchainCacheIdentityComplete: false
             )
             Issue.record("expected compute() to throw for an incomplete toolchain identity")
         } catch {
@@ -70,18 +61,12 @@ struct ToolchainCacheIdentityCompletenessTests {
     }
 
     @Test("computeContextDigest() throws incompleteToolchainIdentity identically, for both the coverage-cache and result-cache purposes")
-    func computeContextDigestRejectsAnIncompleteToolchainIdentity() async throws {
-        let root = FileManager.default.temporaryDirectory
-        let failingRunner: RunContextProbe.ProcessRunner = { _, _, _, _ in
-            Issue.record("worktreeContentState must not run when the toolchain identity is already known incomplete")
-            throw CancellationError()
-        }
-
-        for purpose in ["coverageProfileCache", "resultCache2"] {
+    func computeContextDigestRejectsAnIncompleteToolchainIdentity() throws {
+        for purpose in ["coverageProfileCache4", "resultCache3"] {
             do {
-                _ = try await RunContextProbe.computeContextDigest(
-                    projectRoot: root, configuration: Configuration(), toolchain: toolchain(), purpose: purpose,
-                    toolchainCacheIdentityComplete: false, processRunner: failingRunner
+                _ = try RunContextProbe.computeContextDigest(
+                    inputState: .placeholder, configuration: Configuration(), toolchain: toolchain(), purpose: purpose,
+                    toolchainCacheIdentityComplete: false
                 )
                 Issue.record("expected computeContextDigest(purpose: \(purpose)) to throw for an incomplete toolchain identity")
             } catch {
@@ -90,17 +75,38 @@ struct ToolchainCacheIdentityCompletenessTests {
         }
     }
 
+    /// The run computes its input state once, before any identity. With an
+    /// incomplete toolchain identity it must not pay for the git work at
+    /// all, and every identity is disabled.
+    @Test("An incomplete toolchain identity yields no run input state, without touching git at all")
+    func runInputStateSkipsGitForAnIncompleteToolchainIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory
+        let state = await RunCommand.runInputState(
+            root: root, layout: .projectOnly(root), scratchRoots: [],
+            toolchainCacheIdentityComplete: false,
+            processRunner: { _, _, _, _ in
+                Issue.record("worktreeContentState must not run when the toolchain identity is already known incomplete")
+                throw CancellationError()
+            }
+        )
+        #expect(state == nil)
+        #expect(
+            RunCommand.runIdentities(inputState: state, configuration: Configuration(), toolchain: toolchain(), workUnitID: "wu")
+                == RunCommand.RunIdentities(checkpoint: nil, coverageCacheDigest: nil, resultCacheDigest: nil)
+        )
+    }
+
     /// The guard is not always-on: a `processRunner` that succeeds is only
-    /// ever reached when `toolchainCacheIdentityComplete` is `true` (the
-    /// default), proving `false` — not the parameter's mere presence — is
-    /// what triggers rejection above.
-    @Test("A complete toolchain identity lets computeContextDigest reach the processRunner at all")
+    /// ever reached when `toolchainCacheIdentityComplete` is `true`,
+    /// proving `false` — not the parameter's mere presence — is what skips
+    /// the git work above.
+    @Test("A complete toolchain identity lets the run input state reach the processRunner at all")
     func completeToolchainIdentityReachesTheProcessRunner() async throws {
         let root = FileManager.default.temporaryDirectory
         let tracker = CallTracker()
 
-        _ = try? await RunContextProbe.computeContextDigest(
-            projectRoot: root, configuration: Configuration(), toolchain: toolchain(), purpose: "coverageProfileCache",
+        _ = await RunCommand.runInputState(
+            root: root, layout: .projectOnly(root), scratchRoots: [],
             toolchainCacheIdentityComplete: true,
             processRunner: { _, _, _, _ in
                 await tracker.markCalled()

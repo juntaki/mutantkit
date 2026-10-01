@@ -69,7 +69,7 @@ enum RunContextProbe {
         _ executable: String, _ arguments: [String], _ workingDirectory: URL, _ timeoutSeconds: Double
     ) async throws -> ProcessResult
 
-    private static let defaultProcessRunner: ProcessRunner = { executable, arguments, workingDirectory, timeoutSeconds in
+    static let defaultProcessRunner: ProcessRunner = { executable, arguments, workingDirectory, timeoutSeconds in
         try await ProcessSupervisor.run(
             executable: executable, arguments: arguments, workingDirectory: workingDirectory, timeoutSeconds: timeoutSeconds
         )
@@ -90,27 +90,27 @@ enum RunContextProbe {
     /// config) happens to still match.
     static let classificationRulesVersion = 2
 
+    /// The checkpoint fingerprint of `inputState` under this configuration,
+    /// toolchain and work unit.
+    ///
+    /// `inputState` is the run's one `RunInputState`, computed once by the
+    /// caller; the result-cache and coverage-cache digests hash the same
+    /// value.
     static func compute(
-        projectRoot: URL,
+        inputState: RunInputState,
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
         workUnitID: String,
-        toolchainCacheIdentityComplete: Bool = true,
-        processRunner: ProcessRunner = defaultProcessRunner
-    ) async throws -> RunContextFingerprint {
-        // Checked before the (possibly slow) git work below: a caller that
-        // already knows its `toolchain` was built from an incomplete probe
-        // gains nothing from computing a worktree digest just to discard it.
+        toolchainCacheIdentityComplete: Bool = true
+    ) throws -> RunContextFingerprint {
         // See `RunContextProbeError.incompleteToolchainIdentity` and
-        // `ToolchainProbeResult.identityEvidenceComplete`'s own doc comments —
-        // this is the identical fail-closed treatment `worktreeContentState`
-        // below already gives a `git` invocation whose own output could not
-        // be confirmed complete, applied to the other half of what this
-        // fingerprint hashes.
+        // `ToolchainProbeResult.identityEvidenceComplete`'s own doc comments:
+        // a toolchain identity whose probe output could not be confirmed
+        // complete gets the same fail-closed treatment `worktreeContentState`
+        // gives a `git` invocation whose output could not be.
         guard toolchainCacheIdentityComplete else {
             throw RunContextProbeError.incompleteToolchainIdentity
         }
-        let git = try await worktreeContentState(in: projectRoot, processRunner: processRunner)
 
         let components = [
             "classificationRulesVersion=\(classificationRulesVersion)",
@@ -122,9 +122,8 @@ enum RunContextProbe {
             "swiftSyntaxVersion=\(toolchain.swiftSyntaxVersion)",
             "xcodeVersion=\(toolchain.xcodeVersion ?? "unknown")",
             "buildSDKIdentity=\(toolchain.buildSDKIdentity ?? "unknown")",
-            "destinationRuntimeIdentity=\(toolchain.destinationRuntimeIdentity ?? "unknown")",
-            "worktreeContentState=\(git)"
-        ]
+            "destinationRuntimeIdentity=\(toolchain.destinationRuntimeIdentity ?? "unknown")"
+        ] + inputState.identityComponents
 
         return RunContextFingerprint(value: ContentHash.of(components.joined(separator: "\u{1F}")))
     }
@@ -245,7 +244,7 @@ enum RunContextProbe {
     /// coverage attribution) and `MutationResultCache` (a mutant's
     /// evaluated outcome).
     ///
-    /// Same inputs as `compute(projectRoot:configuration:toolchain:workUnitID:)`
+    /// Same inputs as `compute(inputState:configuration:toolchain:workUnitID:)`
     /// except for `workUnitID`: both coverage attribution and a mutant's
     /// outcome are properties of the source tree, test suite, and toolchain,
     /// not of which mutations happen to be planned alongside them. Two
@@ -277,6 +276,10 @@ enum RunContextProbe {
     /// scheme both purposes share, not to what makes either one's payload
     /// trustworthy.
     ///
+    /// What the run's inputs are is versioned separately, inside
+    /// `inputState` (`RunInputState.closureVersion`); the checkpoint
+    /// fingerprint folds in the same components.
+    ///
     /// ## Configuration scope
     ///
     /// `configurationScope` exists because the two purposes do not depend on
@@ -294,20 +297,17 @@ enum RunContextProbe {
     /// `ConfigurationScope.coverageAttribution` for what it keeps and the
     /// argument for each thing it drops.
     static func computeContextDigest(
-        projectRoot: URL,
+        inputState: RunInputState,
         configuration: Configuration,
         toolchain: ToolchainFingerprint,
         purpose: String,
         identityScope: IdentityScope = .wholeConfiguration,
-        toolchainCacheIdentityComplete: Bool = true,
-        processRunner: ProcessRunner = defaultProcessRunner
-    ) async throws -> String {
-        // See `compute`'s identical guard, just above, for why this is
-        // checked before doing any git work at all.
+        toolchainCacheIdentityComplete: Bool = true
+    ) throws -> String {
+        // See `compute`'s identical guard, just above.
         guard toolchainCacheIdentityComplete else {
             throw RunContextProbeError.incompleteToolchainIdentity
         }
-        let worktree = try await worktreeContentState(in: projectRoot, processRunner: processRunner)
 
         // `execution.workers` bounds chunk/mutant-level *parallelism* only —
         // it has no bearing on what a baseline build produces, what per-test
@@ -335,9 +335,8 @@ enum RunContextProbe {
             "swiftSyntaxVersion=\(toolchain.swiftSyntaxVersion)",
             "xcodeVersion=\(toolchain.xcodeVersion ?? "unknown")",
             "buildSDKIdentity=\(toolchain.buildSDKIdentity ?? "unknown")",
-            "destinationRuntimeIdentity=\(toolchain.destinationRuntimeIdentity ?? "unknown")",
-            "worktreeContentState=\(worktree)"
-        ]
+            "destinationRuntimeIdentity=\(toolchain.destinationRuntimeIdentity ?? "unknown")"
+        ] + inputState.identityComponents
 
         return ContentHash.of(components.joined(separator: "\u{1F}"))
     }
@@ -379,12 +378,18 @@ enum RunContextProbe {
     ///
     /// ## Scope
     ///
-    /// The scoped set is a superset of what a sandbox can read:
-    /// `WorkspaceManager` builds a sandbox by copying the project root minus
-    /// `defaultExcludes`, so the sandbox's files are a subset of the
-    /// worktree's non-ignored files. Equal digests therefore imply equal
-    /// bytes for every file the build and the tests can reach, which implies
-    /// an equal verdict.
+    /// This covers the project root. A sandbox also carries every local
+    /// package outside the project that the build reads; those are hashed
+    /// separately (`RunInputState.externalPackageInputs`), and every run
+    /// identity folds in both. Each external root is hashed over exactly
+    /// the entries its copy receives. The project root is hashed over its
+    /// tracked and untracked, non-ignored files, which is not the whole of
+    /// its copy: `WorkspaceManager` copies the project root minus
+    /// `defaultExcludes` and does not consult `.gitignore`, so a git-ignored
+    /// file outside those excludes (a root `.swiftpm/configuration` file
+    /// ignored by the package template, say) reaches the sandbox without
+    /// reaching this digest. Apart from such files, equal digests imply
+    /// equal bytes for every file the build and the tests can reach.
     ///
     /// The excluded-from-sandbox roots (`.build`, `DerivedData`, `Pods`, …)
     /// are deliberately **not** subtracted here even though subtracting them
@@ -492,7 +497,7 @@ enum RunContextProbe {
     /// A tracked path deleted from the worktree contributes `absent`, which
     /// no readable file can collide with because every other branch returns
     /// either a `sha256:`-prefixed digest or a `symlink:` prefix.
-    private static func contentIdentity(of url: URL, path: String) throws -> String {
+    static func contentIdentity(of url: URL, path: String) throws -> String {
         let fileManager = FileManager.default
         // `attributesOfItem` does not follow symlinks, so a symlink is
         // classified as one rather than as whatever it resolves to.

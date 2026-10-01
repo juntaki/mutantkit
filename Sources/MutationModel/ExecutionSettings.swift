@@ -373,7 +373,7 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// the *first* process's build is still actively using. The reset-at-
     /// first-resolution race described above is a different code path
     /// (`WorkspaceManager.init`'s own wipe, and `SharedModuleCacheNamespace
-    /// .moduleCachePath(forSandbox:workingDirectory:)`'s once-per-scratch-
+    /// .moduleCachePath(scratchRoot:workingDirectory:)`'s once-per-scratch-
     /// root reset) and is not covered by that claim -- both still run
     /// unconditionally on first use, regardless of whether the claim was
     /// won -- so the limitation above still holds for that path, and the

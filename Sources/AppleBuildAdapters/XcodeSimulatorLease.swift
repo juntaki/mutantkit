@@ -13,7 +13,7 @@
 // schemata-token nor the batch path ever checked it. This type does not
 // memoize or rediscover that fact; it takes `preferredDevice` as an explicit
 // per-call parameter, so the isolated caller passes
-// `workerDevicesByWorkspace?[workspace.lastPathComponent]` and the other two
+// the device registered for the workspace's sandbox container and the other two
 // pass `nil` — reproducing each caller's exact current behavior, visible at
 // every call site rather than implicit in which block happens to check a
 // dictionary. See `XcodeBuildAdapter`'s three call sites for the mapping.

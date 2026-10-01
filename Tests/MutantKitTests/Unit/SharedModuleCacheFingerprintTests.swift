@@ -86,24 +86,12 @@ struct WorkspaceManagerModuleCachePathTests {
         )
     }
 
-    @Test("moduleCachePath(forSandbox:fingerprint:) resolves one path component above the sandbox, namespaced by fingerprint")
-    func pathForSandboxResolvesAboveSandboxNamespacedByFingerprint() {
+    @Test("moduleCachePath(underScratchRoot:fingerprint:) resolves directly below the scratch root, namespaced by fingerprint")
+    func pathUnderScratchRootIsNamespacedByFingerprint() {
         let scratchRoot = URL(fileURLWithPath: "/tmp/example-scratch-root")
-        let sandbox = scratchRoot.appendingPathComponent("sbx_deadbeefdeadbeefdead")
-        let resolved = WorkspaceManager.moduleCachePath(forSandbox: sandbox, fingerprint: "cafef00d")
+        let resolved = WorkspaceManager.moduleCachePath(underScratchRoot: scratchRoot, fingerprint: "cafef00d")
 
         #expect(resolved.deletingLastPathComponent().path == scratchRoot.path)
         #expect(resolved.lastPathComponent == ".module-cache-cafef00d")
-    }
-
-    @Test("underScratchRoot: and forSandbox: resolve the identical path for a sandbox directly under that root")
-    func underScratchRootAgreesWithForSandbox() {
-        let scratchRoot = URL(fileURLWithPath: "/tmp/example-scratch-root")
-        let sandbox = scratchRoot.appendingPathComponent("sbx_deadbeefdeadbeefdead")
-
-        let viaSandbox = WorkspaceManager.moduleCachePath(forSandbox: sandbox, fingerprint: "cafef00d")
-        let viaScratchRoot = WorkspaceManager.moduleCachePath(underScratchRoot: scratchRoot, fingerprint: "cafef00d")
-
-        #expect(viaSandbox.path == viaScratchRoot.path)
     }
 }

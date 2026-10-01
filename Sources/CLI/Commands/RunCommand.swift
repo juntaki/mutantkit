@@ -71,10 +71,9 @@ struct RunCommand: AsyncParsableCommand {
         }
         let loadedPlan = try MutationPlan.decode(from: Data(contentsOf: planURL))
 
-        var resolution = try await AppleAdapterFactory.resolve(configuration: settings, in: root)
-        print("Project: \(resolution.detection.kind.rawValue) — \(resolution.detection.reason)")
-
         let runDirectory = root.appendingPathComponent(".mutantkit")
+
+        var resolution = try await Self.resolveAdapterAndLayout(settings: settings, root: root, runDirectory: runDirectory)
 
         // The configuration exactly as loaded/overridden, before
         // `ExecutionProfileSupport.resolveProfile` (below) may turn
@@ -226,6 +225,25 @@ struct RunCommand: AsyncParsableCommand {
         }
     }
 
+    /// The adapter, rebuilt for the run's sandbox layout: laid out once,
+    /// here, and handed to every sandbox of the run, it is the project plus
+    /// every local package outside it that the build reads.
+    private static func resolveAdapterAndLayout(
+        settings: Configuration, root: URL, runDirectory: URL
+    ) async throws -> AppleAdapterFactory.Resolution {
+        let manifestDumps = SwiftPMManifestDumps()
+        let resolution = try await LocalPackageLayout.resolve(
+            AppleAdapterFactory.resolve(configuration: settings, in: root, manifestDumps: manifestDumps),
+            configuration: settings, projectRoot: root,
+            scratchRoot: runDirectory.appendingPathComponent("sandboxes"), manifestDumps: manifestDumps
+        )
+        print("Project: \(resolution.detection.kind.rawValue) — \(resolution.detection.reason)")
+        if let layout = resolution.sandboxLayout, !layout.externalRoots.isEmpty {
+            print(LocalPackageLayout.summary(of: layout))
+        }
+        return resolution
+    }
+
     /// v0.5 Stable Contracts: diagnostics go to stderr, not stdout — both
     /// lines here are the failure report itself (why the simulator was not
     /// ready, and the consequence of failing closed), not separate success
@@ -304,8 +322,10 @@ struct RunCommand: AsyncParsableCommand {
         // *mutated*, not which files a sandbox needs to build. Copying build
         // state is actively harmful — SwiftPM records absolute paths in `.build`,
         // so a copy of it at a new path fails before it compiles anything.
-        let workspaces = try WorkspaceManager(
-            projectRoot: root, scratchRoot: scratch, cleanSubtreeCloning: settings.resolved.execution.cleanSubtreeCloning
+        let workspaces = try LocalPackageLayout.workspaceManager(
+            layout: resolution.sandboxLayout ?? .projectOnly(root), kind: resolution.detection.kind,
+            projectPath: settings.resolved.project.path,
+            scratchRoot: scratch, cleanSubtreeCloning: settings.resolved.execution.cleanSubtreeCloning
         )
         if await workspaces.supportsAPFSClone() {
             print("Sandboxes: APFS clone (copy-on-write)")
@@ -434,8 +454,10 @@ struct RunCommand: AsyncParsableCommand {
             // pass's `workspaces` so the two passes' sandboxes never
             // collide mid-run.
             let schemataScratch = runDirectory.appendingPathComponent("schemata-sandboxes")
-            let schemataWorkspaces = try WorkspaceManager(
-                projectRoot: context.projectRoot,
+            let schemataWorkspaces = try LocalPackageLayout.workspaceManager(
+                layout: workspaces.layout,
+                kind: context.adapter.kind,
+                projectPath: context.configuration.project.path,
                 scratchRoot: schemataScratch,
                 cleanSubtreeCloning: context.configuration.execution.cleanSubtreeCloning
             )

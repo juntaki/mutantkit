@@ -147,10 +147,10 @@ final class RunContextProbeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let resultCacheDigest = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(), toolchain: makeToolchain(), purpose: "resultCache2"
+            inputState: .forProject(repo), configuration: Configuration(), toolchain: makeToolchain(), purpose: "resultCache2"
         )
         let coverageCacheDigest = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(), toolchain: makeToolchain(), purpose: "coverageProfileCache"
+            inputState: .forProject(repo), configuration: Configuration(), toolchain: makeToolchain(), purpose: "coverageProfileCache"
         )
 
         XCTAssertNotEqual(resultCacheDigest, coverageCacheDigest)
@@ -165,10 +165,10 @@ final class RunContextProbeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let oldDigest = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(), toolchain: makeToolchain(), purpose: "resultCache"
+            inputState: .forProject(repo), configuration: Configuration(), toolchain: makeToolchain(), purpose: "resultCache"
         )
         let newDigest = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(), toolchain: makeToolchain(), purpose: "resultCache2"
+            inputState: .forProject(repo), configuration: Configuration(), toolchain: makeToolchain(), purpose: "resultCache2"
         )
 
         XCTAssertNotEqual(oldDigest, newDigest, "bumping the purpose tag must miss every pre-existing cache entry")
@@ -191,10 +191,10 @@ final class RunContextProbeTests: XCTestCase {
         configWithFourWorkers.execution.workers = 4
 
         let oneWorkerDigest = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: configWithOneWorker, toolchain: makeToolchain(), purpose: "coverageProfileCache"
+            inputState: .forProject(repo), configuration: configWithOneWorker, toolchain: makeToolchain(), purpose: "coverageProfileCache"
         )
         let fourWorkerDigest = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: configWithFourWorkers, toolchain: makeToolchain(), purpose: "coverageProfileCache"
+            inputState: .forProject(repo), configuration: configWithFourWorkers, toolchain: makeToolchain(), purpose: "coverageProfileCache"
         )
 
         XCTAssertEqual(
@@ -216,11 +216,11 @@ final class RunContextProbeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let digestA = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(),
+            inputState: .forProject(repo), configuration: Configuration(),
             toolchain: makeToolchain(buildSDKIdentity: "sdk:iphonesimulator:26.3(23D8133)"), purpose: "resultCache2"
         )
         let digestB = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(),
+            inputState: .forProject(repo), configuration: Configuration(),
             toolchain: makeToolchain(buildSDKIdentity: "sdk:iphonesimulator:26.5(23F77)"), purpose: "resultCache2"
         )
 
@@ -235,12 +235,12 @@ final class RunContextProbeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let digestA = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(),
+            inputState: .forProject(repo), configuration: Configuration(),
             toolchain: makeToolchain(destinationRuntimeIdentity: "simulator:com.apple.CoreSimulator.SimRuntime.iOS-26-3"),
             purpose: "resultCache2"
         )
         let digestB = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(),
+            inputState: .forProject(repo), configuration: Configuration(),
             toolchain: makeToolchain(destinationRuntimeIdentity: "simulator:com.apple.CoreSimulator.SimRuntime.iOS-26-5"),
             purpose: "resultCache2"
         )
@@ -261,12 +261,12 @@ final class RunContextProbeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let digestA = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(),
+            inputState: .forProject(repo), configuration: Configuration(),
             toolchain: makeToolchain(xcodeVersion: "Xcode 26.6", buildSDKIdentity: "sdk:iphonesimulator:26.3(23D8133)"),
             purpose: "resultCache2"
         )
         let digestB = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(),
+            inputState: .forProject(repo), configuration: Configuration(),
             toolchain: makeToolchain(xcodeVersion: "Xcode 26.6", buildSDKIdentity: "sdk:iphonesimulator:26.5(23F77)"),
             purpose: "resultCache2"
         )

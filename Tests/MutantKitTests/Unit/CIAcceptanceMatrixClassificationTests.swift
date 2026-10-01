@@ -168,6 +168,19 @@ struct CIAcceptanceMatrixClassificationTests {
         #expect(entry.wave == "1", "without wave: \"1\", Acceptance.waveEnabled stays false and this suite silently never runs")
     }
 
+    /// The only end-to-end run over a project whose local packages sit
+    /// beside it rather than inside it. It needs no simulator.
+    @Test("LocalPathDependencyAcceptanceTests has a host-only matrix entry")
+    func localPathDependencySuiteIsWiredIntoCI() throws {
+        let matrix = try loadMatrix()
+        let entry = try #require(
+            matrix.first { $0.filter.split(separator: "|").map(String.init).contains("LocalPathDependencyAcceptanceTests") },
+            "no acceptance matrix entry runs LocalPathDependencyAcceptanceTests at all"
+        )
+        #expect(entry.fixture == "local-path-dependencies")
+        #expect(entry.simulator == "0")
+    }
+
     /// Every matrix entry must declare a `simulator` value at all — an
     /// entry with none would leave `MUTANTKIT_ACCEPTANCE_SIMULATOR` unset in
     /// that job, silently defaulting to `Acceptance.simulatorEnabled`'s own

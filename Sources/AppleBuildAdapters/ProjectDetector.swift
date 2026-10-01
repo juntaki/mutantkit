@@ -1,5 +1,4 @@
 import Foundation
-import MutationExecution
 import MutationModel
 
 /// What detection concluded, and the evidence it concluded it from.
@@ -59,11 +58,17 @@ public enum ProjectDetector {
     /// Platforms that `swift test` can run on this host.
     private static let hostPlatforms: Set<String> = ["macos", "driverkit", "linux"]
 
+    /// - Parameter manifestDumps: shared with local-dependency discovery so
+    ///   the project's manifest is evaluated once per run.
     public static func detect(
         in directory: URL,
-        timeoutSeconds: Double = 60
+        timeoutSeconds: Double = 60,
+        manifestDumps: SwiftPMManifestDumps? = nil
     ) async throws -> ProjectDetection {
-        try await detect(in: directory, timeoutSeconds: timeoutSeconds, processRunner: defaultProcessRunner)
+        try await detect(
+            in: directory, timeoutSeconds: timeoutSeconds, manifestDumps: manifestDumps,
+            processRunner: defaultProcessRunner
+        )
     }
 
     /// - Parameter processRunner: `AdapterSupport.swift`'s `ProcessRunner`
@@ -76,6 +81,7 @@ public enum ProjectDetector {
     static func detect(
         in directory: URL,
         timeoutSeconds: Double,
+        manifestDumps: SwiftPMManifestDumps? = nil,
         processRunner: @escaping ProcessRunner
     ) async throws -> ProjectDetection {
         let contents = (try? FileManager.default.contentsOfDirectory(
@@ -106,7 +112,8 @@ public enum ProjectDetector {
         }
 
         return try await detectPackage(
-            manifest: manifest, in: directory, timeoutSeconds: timeoutSeconds, processRunner: processRunner
+            manifest: manifest, in: directory, timeoutSeconds: timeoutSeconds,
+            manifestDumps: manifestDumps, processRunner: processRunner
         )
     }
 
@@ -115,10 +122,11 @@ public enum ProjectDetector {
         manifest: URL,
         in directory: URL,
         timeoutSeconds: Double,
+        manifestDumps: SwiftPMManifestDumps?,
         processRunner: @escaping ProcessRunner
     ) async throws -> ProjectDetection {
         let platforms = try await declaredPlatforms(
-            in: directory, timeoutSeconds: timeoutSeconds, processRunner: processRunner
+            in: directory, timeoutSeconds: timeoutSeconds, manifestDumps: manifestDumps, processRunner: processRunner
         )
 
         // No `platforms:` means SwiftPM's defaults, which include macOS.
@@ -167,43 +175,17 @@ public enum ProjectDetector {
     static func declaredPlatforms(
         in directory: URL,
         timeoutSeconds: Double,
+        manifestDumps: SwiftPMManifestDumps? = nil,
         processRunner: @escaping ProcessRunner = defaultProcessRunner
     ) async throws -> [String] {
-        var result = try await processRunner(ToolPaths.xcrun, ["swift", "package", "dump-package"], directory, timeoutSeconds)
-
-        // A truncated capture (`outputComplete == false`) has reached this
-        // point on real CI with an empty stderr under extreme resource
-        // pressure (available memory in the low single-digit GB, system load
-        // many multiples of the core count) -- indistinguishable from a
-        // genuine "manifest is broken" failure without this signal, and the
-        // identical invocation has been observed to succeed immediately
-        // afterward once pressure eases. See `ProcessResult.outputComplete`'s
-        // own doc comment for the general incident class this guards
-        // against (the same shape that hit `simctl uninstall` for real). One
-        // bounded retry, not an open-ended loop: a manifest that is
-        // genuinely unreadable fails the same way on the retry too.
-        if !result.outputComplete {
-            result = try await processRunner(ToolPaths.xcrun, ["swift", "package", "dump-package"], directory, timeoutSeconds)
-        }
-
-        guard result.outputComplete else {
-            throw ProjectDetectionError.manifestUnreadable(
-                directory: directory.path,
-                detail: "swift package dump-package exited (status \(result.exitCode)) but its output could not be " +
-                    "fully captured before the subprocess ended, even after one retry"
-            )
-        }
-
-        guard result.succeeded else {
-            throw ProjectDetectionError.manifestUnreadable(
-                directory: directory.path,
-                detail: OutputRedactor.redact(String(decoding: result.standardError, as: UTF8.self))
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+        let output = if let manifestDumps {
+            try await manifestDumps.output(in: directory, timeoutSeconds: timeoutSeconds, processRunner: processRunner)
+        } else {
+            try await SwiftPMManifestDump.run(in: directory, timeoutSeconds: timeoutSeconds, processRunner: processRunner)
         }
 
         do {
-            let manifest = try JSONDecoder().decode(DumpedManifest.self, from: result.standardOutput)
+            let manifest = try JSONDecoder().decode(DumpedManifest.self, from: output)
             return manifest.platforms?.map { $0.platformName.lowercased() } ?? []
         } catch {
             throw ProjectDetectionError.manifestUnreadable(

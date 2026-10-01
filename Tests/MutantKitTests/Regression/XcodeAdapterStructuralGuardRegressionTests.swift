@@ -83,7 +83,10 @@ struct WorkerDeviceAffinityIsolatedOnlyRegressionTests {
             nonNilLines.count == 1,
             "expected exactly one non-nil preferredDevice: argument (the isolated lease call); found \(nonNilLines.count): \(nonNilLines)"
         )
-        #expect(nonNilLines.first?.contains("workerDevicesByWorkspace?[workspace.lastPathComponent]") == true)
+        // Keyed by the sandbox container's name, which is also the
+        // workspace's name when the layout has no external packages.
+        #expect(nonNilLines.first?.contains("preferredDevice: workerDevicesByWorkspace.flatMap") == true)
+        #expect(text.contains(".lastPathComponent).flatMap { devices[$0] }"))
 
         let nilLines = preferredDeviceLines.filter { $0.contains("preferredDevice: nil") }
         #expect(

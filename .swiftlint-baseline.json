@@ -2,1966 +2,1951 @@
   {
     "text": "public actor SimulatorPool {",
     "violation": {
+      "reason": "Actor body should span 300 lines or less excluding comments and whitespace: currently spans 341 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Sources/AppleBuildAdapters/SimulatorPool.swift",
-        "line": 150,
-        "character": 8
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Actor body should span 300 lines or less excluding comments and whitespace: currently spans 341 lines"
+      "location": {
+        "line": 150,
+        "character": 8,
+        "file": "Sources/AppleBuildAdapters/SimulatorPool.swift"
+      }
     }
   },
   {
     "text": "    public func runBatch(",
     "violation": {
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 87 lines",
+      "severity": "warning",
       "ruleDescription": "Function bodies should not span too many lines",
       "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift",
-        "line": 1381,
-        "character": 12
-      },
-      "severity": "error",
       "ruleIdentifier": "function_body_length",
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 87 lines"
+      "location": {
+        "line": 1387,
+        "character": 12,
+        "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"
+      }
     }
   },
   {
     "text": "}",
     "violation": {
+      "reason": "File should contain 1000 lines or less: currently contains 1717",
+      "severity": "warning",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
-      "location": {
-        "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift",
-        "line": 1705,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "file_length",
-      "reason": "File should contain 1000 lines or less: currently contains 1705"
+      "location": {
+        "line": 1717,
+        "character": 1,
+        "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"
+      }
     }
   },
   {
     "text": "    private static func notApplicableMarker(corpusName: String, metric: Metric, dimension: StratumTestResult.Dimension, parent: String?) -> StratumTestResult {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 159 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/BudgetV2Eval/Screen.swift",
-        "line": 174,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 159 characters"
+      "location": {
+        "line": 174,
+        "character": 1,
+        "file": "Sources/BudgetV2Eval/Screen.swift"
+      }
     }
   },
   {
     "text": "    private static func decide(",
     "violation": {
+      "reason": "Function should have 6 parameters or less: it currently has 7",
+      "severity": "warning",
       "ruleDescription": "Number of function parameters should be low.",
       "ruleName": "Function Parameter Count",
-      "location": {
-        "file": "Sources/BudgetV2Eval/Screen.swift",
-        "line": 188,
-        "character": 20
-      },
-      "severity": "error",
       "ruleIdentifier": "function_parameter_count",
-      "reason": "Function should have 6 parameters or less: it currently has 7"
+      "location": {
+        "line": 188,
+        "character": 20,
+        "file": "Sources/BudgetV2Eval/Screen.swift"
+      }
     }
   },
   {
     "text": "        let sorted = pooled.enumerated().sorted { $0.element.value < $1.element.value }",
     "violation": {
+      "reason": "When the index is not used, `.enumerated()` can be removed",
+      "severity": "warning",
       "ruleDescription": "When the index or the item is not used, `.enumerated()` can be removed.",
       "ruleName": "Unused Enumerated",
-      "location": {
-        "file": "Sources/BudgetV2Eval/Statistics.swift",
-        "line": 34,
-        "character": 29
-      },
-      "severity": "error",
       "ruleIdentifier": "unused_enumerated",
-      "reason": "When the index is not used, `.enumerated()` can be removed"
-    }
-  },
-  {
-    "text": "enum SchemataRunOrchestration {",
-    "violation": {
-      "ruleDescription": "Type bodies should not span too many lines",
-      "ruleName": "Type Body Length",
       "location": {
-        "file": "Sources/CLI/Commands/SchemataRunOrchestration.swift",
-        "line": 27,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "type_body_length",
-      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 373 lines"
+        "line": 34,
+        "character": 29,
+        "file": "Sources/BudgetV2Eval/Statistics.swift"
+      }
     }
   },
   {
     "text": "    func confirmTimeout(",
     "violation": {
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 95 lines",
+      "severity": "warning",
       "ruleDescription": "Function bodies should not span too many lines",
       "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/MutationExecution/MutationConfirmationCoordinator.swift",
-        "line": 314,
-        "character": 5
-      },
-      "severity": "error",
       "ruleIdentifier": "function_body_length",
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 95 lines"
+      "location": {
+        "line": 341,
+        "character": 5,
+        "file": "Sources/MutationExecution/MutationConfirmationCoordinator.swift"
+      }
     }
   },
   {
     "text": "public struct MutationRunner: Sendable {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1376 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 38,
-        "character": 8
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1373 lines"
+      "location": {
+        "line": 38,
+        "character": 8,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
-    "text": "    ) async -> (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: URL?) {",
+    "text": "    ) async -> (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: Sandbox?) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 619,
-        "character": 16
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 629,
+        "character": 16,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "    ) async -> (results: [MutationResult], batchCount: Int, batchDurations: [Double]) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 1102,
-        "character": 16
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 1112,
+        "character": 16,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "    ) async -> (",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 1278,
-        "character": 16
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 1288,
+        "character": 16,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "    private func testWaveChunk(",
     "violation": {
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 95 lines",
+      "severity": "warning",
       "ruleDescription": "Function bodies should not span too many lines",
       "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 1406,
-        "character": 13
-      },
-      "severity": "error",
       "ruleIdentifier": "function_body_length",
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 95 lines"
+      "location": {
+        "line": 1416,
+        "character": 13,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "    ) async -> (results: [MutationResult], nextSurvivors: [WaveSurvivor], duration: Double?) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 1409,
-        "character": 16
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 1419,
+        "character": 16,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "    ) async -> (results: [MutationResult], configurations: Int, duration: Double?) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 1696,
-        "character": 16
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 1706,
+        "character": 16,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "                timeouts: TimeoutController(settings: configuration.timeouts).recordingBaseline(durationSeconds: shared.testDurationSeconds),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 141 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 1999,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 141 characters"
+      "location": {
+        "line": 2009,
+        "character": 1,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "    private func prepare(",
     "violation": {
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 115 lines",
+      "severity": "warning",
       "ruleDescription": "Function bodies should not span too many lines",
       "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 2176,
-        "character": 13
-      },
-      "severity": "error",
       "ruleIdentifier": "function_body_length",
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 115 lines"
+      "location": {
+        "line": 2191,
+        "character": 13,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "            build: BuildObservation(outcome: .succeeded(buildProductHash: prepared.artifact.productHash, command: prepared.artifact.command)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 2639,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+      "location": {
+        "line": 2654,
+        "character": 1,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "}",
     "violation": {
+      "reason": "File should contain 1000 lines or less: currently contains 2853",
+      "severity": "warning",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
-      "location": {
-        "file": "Sources/MutationExecution/MutationRunner.swift",
-        "line": 2848,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "file_length",
-      "reason": "File should contain 1000 lines or less: currently contains 2848"
+      "location": {
+        "line": 2853,
+        "character": 1,
+        "file": "Sources/MutationExecution/MutationRunner.swift"
+      }
     }
   },
   {
     "text": "    public func runMutant(",
     "violation": {
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 89 lines",
+      "severity": "warning",
       "ruleDescription": "Function bodies should not span too many lines",
       "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/MutationExecution/PrioritizingTestAdapter.swift",
-        "line": 89,
-        "character": 12
-      },
-      "severity": "error",
       "ruleIdentifier": "function_body_length",
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 89 lines"
+      "location": {
+        "line": 102,
+        "character": 12,
+        "file": "Sources/MutationExecution/PrioritizingTestAdapter.swift"
+      }
     }
   },
   {
     "text": "public struct SchemataMutationRunner: Sendable {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1008 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 32,
-        "character": 8
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1001 lines"
+      "location": {
+        "line": 32,
+        "character": 8,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "    private func runChunk(",
     "violation": {
+      "reason": "Function should have 6 parameters or less: it currently has 8",
+      "severity": "warning",
       "ruleDescription": "Number of function parameters should be low.",
       "ruleName": "Function Parameter Count",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 957,
-        "character": 13
-      },
-      "severity": "error",
       "ruleIdentifier": "function_parameter_count",
-      "reason": "Function should have 6 parameters or less: it currently has 8"
+      "location": {
+        "line": 973,
+        "character": 13,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "    private func runEntries(",
     "violation": {
+      "reason": "Function should have 6 parameters or less: it currently has 8",
+      "severity": "warning",
       "ruleDescription": "Number of function parameters should be low.",
       "ruleName": "Function Parameter Count",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 1264,
-        "character": 13
-      },
-      "severity": "error",
       "ruleIdentifier": "function_parameter_count",
-      "reason": "Function should have 6 parameters or less: it currently has 8"
+      "location": {
+        "line": 1291,
+        "character": 13,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "        switch prepareDispatch(entry, state: state, timeoutController: timeoutController, perTestCoverage: perTestCoverage, coverage: coverage) {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 145 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 1636,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 145 characters"
+      "location": {
+        "line": 1663,
+        "character": 1,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "                let (kind, runID, unitID, tok): (String, RunID, CompilationUnitID, SchemataSelectorToken) = switch record {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 1724,
-        "character": 49
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 1751,
+        "character": 49,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "                        SchemataEvidenceCollector.tokenEnvironmentVariable: SchemataEvidenceCollector.tokenEnvironmentValue(for: dispatch.token),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 145 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 1909,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 145 characters"
+      "location": {
+        "line": 1936,
+        "character": 1,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "                        SchemataEvidenceCollector.runIDEnvironmentVariable: SchemataEvidenceCollector.runIDEnvironmentValue(for: dispatch.runID)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 1911,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 1938,
+        "character": 1,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "    func runSchemataToken(",
     "violation": {
+      "reason": "Function should have 6 parameters or less: it currently has 7",
+      "severity": "warning",
       "ruleDescription": "Number of function parameters should be low.",
       "ruleName": "Function Parameter Count",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 2123,
-        "character": 5
-      },
-      "severity": "error",
       "ruleIdentifier": "function_parameter_count",
-      "reason": "Function should have 6 parameters or less: it currently has 7"
+      "location": {
+        "line": 2150,
+        "character": 5,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "}",
     "violation": {
+      "reason": "File should contain 1000 lines or less: currently contains 2267",
+      "severity": "warning",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
-      "location": {
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
-        "line": 2256,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "file_length",
-      "reason": "File should contain 1000 lines or less: currently contains 2256"
+      "location": {
+        "line": 2267,
+        "character": 1,
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+      }
     }
   },
   {
     "text": "    public static func establish(",
     "violation": {
+      "reason": "Function should have 6 parameters or less: it currently has 7",
+      "severity": "warning",
       "ruleDescription": "Number of function parameters should be low.",
       "ruleName": "Function Parameter Count",
-      "location": {
-        "file": "Sources/MutationExecution/SharedBaselineEstablisher.swift",
-        "line": 28,
-        "character": 19
-      },
-      "severity": "error",
       "ruleIdentifier": "function_parameter_count",
-      "reason": "Function should have 6 parameters or less: it currently has 7"
+      "location": {
+        "line": 28,
+        "character": 19,
+        "file": "Sources/MutationExecution/SharedBaselineEstablisher.swift"
+      }
     }
   },
   {
     "text": "    public static func validate(_ configuration: Configuration, projectRoot: URL? = nil) -> [ConfigurationIssue] {",
     "violation": {
+      "reason": "Function should have complexity 12 or less; currently complexity is 13",
+      "severity": "warning",
       "ruleDescription": "Complexity of function bodies should be limited.",
       "ruleName": "Cyclomatic Complexity",
-      "location": {
-        "file": "Sources/MutationModel/ConfigurationValidation.swift",
-        "line": 52,
-        "character": 12
-      },
-      "severity": "error",
       "ruleIdentifier": "cyclomatic_complexity",
-      "reason": "Function should have complexity 12 or less; currently complexity is 13"
+      "location": {
+        "line": 52,
+        "character": 12,
+        "file": "Sources/MutationModel/ConfigurationValidation.swift"
+      }
     }
   },
   {
     "text": "    public static func validate(_ configuration: Configuration, projectRoot: URL? = nil) -> [ConfigurationIssue] {",
     "violation": {
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 102 lines",
+      "severity": "warning",
       "ruleDescription": "Function bodies should not span too many lines",
       "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/MutationModel/ConfigurationValidation.swift",
-        "line": 52,
-        "character": 19
-      },
-      "severity": "error",
       "ruleIdentifier": "function_body_length",
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 102 lines"
+      "location": {
+        "line": 52,
+        "character": 19,
+        "file": "Sources/MutationModel/ConfigurationValidation.swift"
+      }
     }
   },
   {
     "text": "    public func record(_ name: String, chunkID: String? = nil, mutationID: String? = nil, start: ContinuousClock.Instant, end: ContinuousClock.Instant? = nil) {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 160 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/MutationModel/GateTimingRecorder.swift",
-        "line": 59,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 160 characters"
+      "location": {
+        "line": 59,
+        "character": 1,
+        "file": "Sources/MutationModel/GateTimingRecorder.swift"
+      }
     }
   },
   {
     "text": "public enum MutationVerdictVerifier {",
     "violation": {
+      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 715 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Sources/MutationModel/MutationVerdictVerifier.swift",
-        "line": 36,
-        "character": 8
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 715 lines"
+      "location": {
+        "line": 36,
+        "character": 8,
+        "file": "Sources/MutationModel/MutationVerdictVerifier.swift"
+      }
     }
   },
   {
     "text": "}",
     "violation": {
+      "reason": "File should contain 1000 lines or less: currently contains 1056",
+      "severity": "warning",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
-      "location": {
-        "file": "Sources/MutationModel/MutationVerdictVerifier.swift",
-        "line": 1056,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "file_length",
-      "reason": "File should contain 1000 lines or less: currently contains 1056"
+      "location": {
+        "line": 1056,
+        "character": 1,
+        "file": "Sources/MutationModel/MutationVerdictVerifier.swift"
+      }
     }
   },
   {
     "text": "/// Moved here from `MutationExecution` (ADR-0006 Stage 1): `MutationVerdictVerifier`",
     "violation": {
+      "reason": "A doc comment should be attached to a declaration",
+      "severity": "warning",
       "ruleDescription": "A doc comment should be attached to a declaration",
       "ruleName": "Orphaned Doc Comment",
-      "location": {
-        "file": "Sources/MutationModel/TestObservation.swift",
-        "line": 3,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "orphaned_doc_comment",
-      "reason": "A doc comment should be attached to a declaration"
+      "location": {
+        "line": 3,
+        "character": 1,
+        "file": "Sources/MutationModel/TestObservation.swift"
+      }
     }
   },
   {
     "text": "    public init(mutationRef: PlannedMutationRef, outcome: MutationOutcome, evidence: MutationEvidence, testSummary: TestOutcomeSummary?, diagnosis: String) {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 157 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Sources/MutationModel/VerdictProof.swift",
-        "line": 29,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 157 characters"
+      "location": {
+        "line": 29,
+        "character": 1,
+        "file": "Sources/MutationModel/VerdictProof.swift"
+      }
     }
   },
   {
     "text": "    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
+      "ruleIdentifier": "large_tuple",
       "location": {
-        "file": "Sources/MutationPlanner/MutationPlanner.swift",
         "line": 315,
-        "character": 17
-      },
-      "severity": "error",
-      "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+        "character": 17,
+        "file": "Sources/MutationPlanner/MutationPlanner.swift"
+      }
     }
   },
   {
     "text": "    ) throws -> ([MutationPoint], [SkippedMutation], [InclusionReason]) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Sources/MutationPlanner/MutationPlanner.swift",
-        "line": 394,
-        "character": 17
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 394,
+        "character": 17,
+        "file": "Sources/MutationPlanner/MutationPlanner.swift"
+      }
     }
   },
   {
     "text": "    func run() throws {",
     "violation": {
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 101 lines",
+      "severity": "warning",
       "ruleDescription": "Function bodies should not span too many lines",
       "ruleName": "Function Body Length",
-      "location": {
-        "file": "Sources/PlanSubsetDerivation/main.swift",
-        "line": 59,
-        "character": 5
-      },
-      "severity": "error",
       "ruleIdentifier": "function_body_length",
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 101 lines"
+      "location": {
+        "line": 59,
+        "character": 5,
+        "file": "Sources/PlanSubsetDerivation/main.swift"
+      }
     }
   },
   {
     "text": "public struct HTMLReporter: Reporter {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 306 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Sources/Reporting/HTMLReporter.swift",
-        "line": 11,
-        "character": 8
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 306 lines"
+      "location": {
+        "line": 11,
+        "character": 8,
+        "file": "Sources/Reporting/HTMLReporter.swift"
+      }
     }
   },
   {
     "text": "    private static func component(for node: Syntax) -> String? {",
     "violation": {
+      "reason": "Function should have complexity 12 or less; currently complexity is 15",
+      "severity": "warning",
       "ruleDescription": "Complexity of function bodies should be limited.",
       "ruleName": "Cyclomatic Complexity",
-      "location": {
-        "file": "Sources/SwiftFrontend/DeclarationIdentityResolver.swift",
-        "line": 32,
-        "character": 13
-      },
-      "severity": "error",
       "ruleIdentifier": "cyclomatic_complexity",
-      "reason": "Function should have complexity 12 or less; currently complexity is 15"
+      "location": {
+        "line": 32,
+        "character": 13,
+        "file": "Sources/SwiftFrontend/DeclarationIdentityResolver.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"The same MutationID, outcome, scorability, and failing tests come from both backends, for &&/|| over identifiers and self. member access\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 149 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Acceptance/LogicalConnectorSchemataIsolatedDifferentialAcceptanceTests.swift",
         "line": 204,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 149 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/LogicalConnectorSchemataIsolatedDifferentialAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "    private static func matchingStartup(in transcript: RuntimeTranscript, token: SchemataSelectorToken, runID: RunID) -> RuntimeStartupEvent? {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 143 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMLinkerInjectionAcceptanceTests.swift",
         "line": 131,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 143 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMLinkerInjectionAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "    private static func matchingHit(in transcript: RuntimeTranscript, startup: RuntimeStartupEvent, token: SchemataSelectorToken) -> RuntimeHitEvent? {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 151 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMLinkerInjectionAcceptanceTests.swift",
-        "line": 138,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 151 characters"
+      "location": {
+        "line": 138,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMLinkerInjectionAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "            guard case let .hit(event) = record, event.token == token, event.runID == startup.runID, event.processID == startup.processID else {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMLinkerInjectionAcceptanceTests.swift",
-        "line": 140,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 140,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMLinkerInjectionAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "    private static func matchingStartup(in transcript: RuntimeTranscript, token: SchemataSelectorToken, runID: RunID) -> RuntimeStartupEvent? {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 143 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMRuntimeAcceptanceTests.swift",
-        "line": 171,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 143 characters"
+      "location": {
+        "line": 171,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMRuntimeAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "    private static func matchingHit(in transcript: RuntimeTranscript, startup: RuntimeStartupEvent, token: SchemataSelectorToken) -> RuntimeHitEvent? {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 151 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMRuntimeAcceptanceTests.swift",
-        "line": 178,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 151 characters"
+      "location": {
+        "line": 178,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMRuntimeAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "            guard case let .hit(event) = record, event.token == token, event.runID == startup.runID, event.processID == startup.processID else {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMRuntimeAcceptanceTests.swift",
-        "line": 180,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 180,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/SchemataSwiftPMRuntimeAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "            guard case let .hit(event) = record, event.token == staged.token, event.runID == startup.runID, event.processID == startup.processID",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Acceptance/SchemataXcodeRuntimeAcceptanceTests.swift",
-        "line": 331,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 331,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Acceptance/SchemataXcodeRuntimeAcceptanceTests.swift"
+      }
     }
   },
   {
     "text": "    let image = try! BuiltImageReceipt(",
     "violation": {
+      "reason": "Force tries should be avoided",
+      "severity": "error",
       "ruleDescription": "Force tries should be avoided",
       "ruleName": "Force Try",
-      "location": {
-        "file": "Tests/MutantKitTests/Support/Builders.swift",
-        "line": 136,
-        "character": 17
-      },
-      "severity": "error",
       "ruleIdentifier": "force_try",
-      "reason": "Force tries should be avoided"
+      "location": {
+        "line": 136,
+        "character": 17,
+        "file": "Tests/MutantKitTests/Support/Builders.swift"
+      }
     }
   },
   {
     "text": "        slices: [BuiltImageSlice(architecture: BuiltArchitectureIdentity(cpuType: 0x0100_000C, cpuSubtype: 0), imageUUID: schemataFixtureImageUUID)]",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 148 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Support/Builders.swift",
-        "line": 138,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 148 characters"
+      "location": {
+        "line": 138,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Support/Builders.swift"
+      }
     }
   },
   {
     "text": "    return try! SchemataBuildReceipt(",
     "violation": {
+      "reason": "Force tries should be avoided",
+      "severity": "error",
       "ruleDescription": "Force tries should be avoided",
       "ruleName": "Force Try",
-      "location": {
-        "file": "Tests/MutantKitTests/Support/Builders.swift",
-        "line": 140,
-        "character": 12
-      },
-      "severity": "error",
       "ruleIdentifier": "force_try",
-      "reason": "Force tries should be avoided"
+      "location": {
+        "line": 140,
+        "character": 12,
+        "file": "Tests/MutantKitTests/Support/Builders.swift"
+      }
     }
   },
   {
     "text": "        runID: schemataFixtureRunID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID, compilationUnitID: schemataFixtureCompilationUnitID,",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Support/Builders.swift",
         "line": 148,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Support/Builders.swift"
+      }
     }
   },
   {
     "text": "        runID: schemataFixtureRunID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID, compilationUnitID: schemataFixtureCompilationUnitID,",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Support/Builders.swift",
-        "line": 155,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+      "location": {
+        "line": 155,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Support/Builders.swift"
+      }
     }
   },
   {
     "text": "struct BatchXCTestRunBuilderTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 313 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift",
-        "line": 9,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 313 lines"
+      "location": {
+        "line": 9,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(targetA?[\"EnvironmentVariables\"] as? [String: String] == [\"MUTANTKIT_SCHEMATA_TOKEN\": \"1:1\", \"MUTANTKIT_SCHEMATA_RUN_ID\": \"runA\"])",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 146 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift",
-        "line": 347,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 146 characters"
+      "location": {
+        "line": 347,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(targetB?[\"EnvironmentVariables\"] as? [String: String] == [\"MUTANTKIT_SCHEMATA_TOKEN\": \"1:2\", \"MUTANTKIT_SCHEMATA_RUN_ID\": \"runB\"])",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 146 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift",
-        "line": 348,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 146 characters"
+      "location": {
+        "line": 348,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(targetA?[\"OnlyTestIdentifiers\"] as? [String] == [\"SomeClass/testA\"], \"each configuration keeps its own independent test selection too\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 151 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift",
-        "line": 349,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 151 characters"
+      "location": {
+        "line": 349,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/BatchXCTestRunBuilderTests.swift"
+      }
     }
   },
   {
     "text": "struct BoolLiteralSchemataLowererTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 577 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BoolLiteralSchemataLowererTests.swift",
-        "line": 16,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 577 lines"
+      "location": {
+        "line": 16,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/BoolLiteralSchemataLowererTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"Test E: pattern exclusion is ancestor-structural, not only direct-parent \u2014 an enum-associated-value pattern nests the literal several levels below its ExpressionPatternSyntax ancestor\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 196 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BoolLiteralSchemataLowererTests.swift",
-        "line": 197,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 196 characters"
+      "location": {
+        "line": 197,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/BoolLiteralSchemataLowererTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(reason == .patternPosition, \"the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax itself \u2014 only an ancestor walk finds it\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 181 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BoolLiteralSchemataLowererTests.swift",
-        "line": 215,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 181 characters"
+      "location": {
+        "line": 215,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/BoolLiteralSchemataLowererTests.swift"
+      }
     }
   },
   {
     "text": "        let strata: [(operatorID: String, originalText: String, replacementText: String)] = [",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/BudgetSelectorTests.swift",
-        "line": 288,
-        "character": 22
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 288,
+        "character": 22,
+        "file": "Tests/MutantKitTests/Unit/BudgetSelectorTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(resolved.device?.udid == iphone.udid, \"a numerically-newer tvOS runtime must never be selected as \\\"latest\\\" for an iOS request\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 145 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/DestinationResolverTests.swift",
-        "line": 225,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 145 characters"
+      "location": {
+        "line": 225,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/DestinationResolverTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(Self.device(\"Apple Watch\", platformRuntimeIdentifier: \"watchOS-11-0\").destination.hasPrefix(\"platform=watchOS Simulator,id=\"))",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/DestinationResolverTests.swift",
-        "line": 248,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+      "location": {
+        "line": 248,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/DestinationResolverTests.swift"
+      }
     }
   },
   {
     "text": "        let source = \"// mutantkit:disable-next-line swift.core.relational-operator-replacement, swift.core.unary-not-removal\\nif !(index < count) { }\"",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 151 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/InlineMutationSuppressionScannerTests.swift",
-        "line": 34,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 151 characters"
+      "location": {
+        "line": 34,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/InlineMutationSuppressionScannerTests.swift"
+      }
     }
   },
   {
     "text": "        let variants = points.map { LogicalConnectorMutationVariant(originalOperator: $0.originalText, replacementOperator: $0.replacementText) }",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 145 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/LogicalConnectorReplacementSchemataLowererTests.swift",
-        "line": 187,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 145 characters"
+      "location": {
+        "line": 187,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/LogicalConnectorReplacementSchemataLowererTests.swift"
+      }
     }
   },
   {
     "text": "struct MutationPlannerEndToEndTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 323 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationPlannerEndToEndTests.swift",
-        "line": 11,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 323 lines"
+      "location": {
+        "line": 11,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationPlannerEndToEndTests.swift"
+      }
     }
   },
   {
     "text": "        await store(cache, observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID), for: key)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 151 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift",
         "line": 63,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 151 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift"
+      }
     }
   },
   {
     "text": "        await store(cache, observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID), for: key)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 151 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift",
         "line": 94,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 151 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift"
+      }
     }
   },
   {
     "text": "        await store(cache, observations: makeObservations(point: point, outcome: .survived, planID: planID, workUnitID: workUnitID), for: key)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift",
         "line": 123,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift"
+      }
     }
   },
   {
     "text": "        await store(cache, observations: makeObservations(point: point, outcome: .survived, planID: planID, workUnitID: workUnitID), for: key)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift",
-        "line": 154,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+      "location": {
+        "line": 154,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift"
+      }
     }
   },
   {
     "text": "        await store(cache, observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID), for: key)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 151 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift",
         "line": 248,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 151 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift"
+      }
     }
   },
   {
     "text": "            await store(cache, observations: makeObservations(point: point, outcome: outcome, planID: planID, workUnitID: workUnitID), for: key)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
+      "ruleIdentifier": "line_length",
       "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift",
         "line": 373,
-        "character": 1
-      },
-      "severity": "error",
-      "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift"
+      }
     }
   },
   {
     "text": "            await store(cache, observations: makeObservations(point: point, outcome: outcome, planID: planID, workUnitID: workUnitID), for: key)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift",
-        "line": 394,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 394,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationResultCacheTests.swift"
+      }
     }
   },
   {
     "text": "    ) async throws -> (",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationRunnerIncrementalBatchTestingTests.swift",
-        "line": 60,
-        "character": 23
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 60,
+        "character": 23,
+        "file": "Tests/MutantKitTests/Unit/MutationRunnerIncrementalBatchTestingTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"A mutant missing from the batch's returned results is recovered via a fresh, individual standalone reverify, not left infrastructureFailure (Gate 3 Phase H15C)\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 172 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationRunnerIncrementalBatchTestingTests.swift",
-        "line": 168,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 172 characters"
+      "location": {
+        "line": 168,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationRunnerIncrementalBatchTestingTests.swift"
+      }
     }
   },
   {
     "text": "    ) async throws -> (RunReport, SpyBuildAdapter, SpyTestAdapter) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationRunnerIncrementalBuildTests.swift",
-        "line": 52,
-        "character": 23
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 52,
+        "character": 23,
+        "file": "Tests/MutantKitTests/Unit/MutationRunnerIncrementalBuildTests.swift"
+      }
     }
   },
   {
     "text": "struct MutationRunnerWaveEarlyKillTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 680 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationRunnerWaveEarlyKillTests.swift",
-        "line": 33,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 680 lines"
+      "location": {
+        "line": 33,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationRunnerWaveEarlyKillTests.swift"
+      }
     }
   },
   {
     "text": "    ) async throws -> (report: RunReport, adapter: SpyWaveAdapter, points: [MutationPoint], priorityStoreURL: URL) {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationRunnerWaveEarlyKillTests.swift",
-        "line": 91,
-        "character": 23
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 91,
+        "character": 23,
+        "file": "Tests/MutantKitTests/Unit/MutationRunnerWaveEarlyKillTests.swift"
+      }
     }
   },
   {
     "text": "}",
     "violation": {
+      "reason": "File should contain 1000 lines or less: currently contains 1280",
+      "severity": "warning",
       "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationRunnerWaveEarlyKillTests.swift",
-        "line": 1280,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "file_length",
-      "reason": "File should contain 1000 lines or less: currently contains 1280"
+      "location": {
+        "line": 1280,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationRunnerWaveEarlyKillTests.swift"
+      }
     }
   },
   {
     "text": "struct MutationVerdictVerifierSchemataChainTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 355 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierSchemataChainTests.swift",
-        "line": 11,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 355 lines"
+      "location": {
+        "line": 11,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierSchemataChainTests.swift"
+      }
     }
   },
   {
     "text": "struct MutationVerdictVerifierTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 673 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 13,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 673 lines"
+      "location": {
+        "line": 13,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "        let record = try verify { ref in MutationObservations(plannedMutation: ref, sourceApplication: .notApplied(diagnosis: \"anchor moved\")) }",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 45,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 45,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "        let record = try verify { ref in MutationObservations(plannedMutation: ref, infrastructureFailureDiagnosis: \"sandbox could not be created\") }",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 149 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 52,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 149 characters"
+      "location": {
+        "line": 52,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 156 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 399,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 156 characters"
+      "location": {
+        "line": 399,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "        let primaryFailure = TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: [\"RealTests/testReal()\"], durationSeconds: nil)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 141 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 418,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 141 characters"
+      "location": {
+        "line": 418,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .failed, summary: primaryFailure), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 423,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 423,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"confirmKill: confirmation's originalFailingTests matches, but the real primary run failed a different test \u2014 flaky, not confirmed\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 435,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+      "location": {
+        "line": 435,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "        let primaryFailure = TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: [\"RealTests/testReal()\"], durationSeconds: nil)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 141 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 437,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 141 characters"
+      "location": {
+        "line": 437,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "        let confirmingFailure = TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: [\"OtherTests/testOther()\"], durationSeconds: nil)",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 146 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 438,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 146 characters"
+      "location": {
+        "line": 438,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .failed, summary: primaryFailure), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 443,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 443,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                    kind: .kill, run: run(status: .failed, summary: TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: [\"B\"], durationSeconds: nil)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 163 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 477,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 163 characters"
+      "location": {
+        "line": 477,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "        let forgedActivation: ActivationEvidence = .buildProductDiffersFromBaseline(mutantHash: \"forged-mutant\", baselineHash: \"forged-baseline\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 145 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 598,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 145 characters"
+      "location": {
+        "line": 598,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .timedOut, isBatchAttributedTimeout: false), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 154 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 632,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 154 characters"
+      "location": {
+        "line": 632,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .timedOut), activation: provenIsolated, confirmingBuildProductHash: \"h1\")]",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 163 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 651,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 163 characters"
+      "location": {
+        "line": 651,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .timedOut), activation: unprovenIsolated, confirmingBuildProductHash: \"h0\")]",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 165 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 664,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 165 characters"
+      "location": {
+        "line": 664,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .passed), activation: provenIsolated, confirmingBuildProductHash: \"h1\", wasBatchAttributed: false)]",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 188 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 690,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 188 characters"
+      "location": {
+        "line": 690,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .timedOut, isBatchAttributedTimeout: true), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 153 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 702,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 153 characters"
+      "location": {
+        "line": 702,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .passed), activation: provenIsolated, confirmingBuildProductHash: \"h1\", wasBatchAttributed: true)]",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 187 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 703,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 187 characters"
+      "location": {
+        "line": 703,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .timedOut, isBatchAttributedTimeout: true), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 153 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 715,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 153 characters"
+      "location": {
+        "line": 715,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .failed), activation: provenIsolated, confirmingBuildProductHash: \"h1\", wasBatchAttributed: true)]",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 187 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 716,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 187 characters"
+      "location": {
+        "line": 716,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .timedOut, isBatchAttributedTimeout: true), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 153 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 728,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 153 characters"
+      "location": {
+        "line": 728,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .crashed), activation: provenIsolated, confirmingBuildProductHash: \"h1\", wasBatchAttributed: true)]",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 188 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 729,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 188 characters"
+      "location": {
+        "line": 729,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated))",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 155 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 749,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 155 characters"
+      "location": {
+        "line": 749,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated)),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 156 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 763,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 156 characters"
+      "location": {
+        "line": 763,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated))",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 155 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
-        "line": 779,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 155 characters"
+      "location": {
+        "line": 779,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+      }
     }
   },
   {
     "text": "struct PlanShardingTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 374 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/PlanShardingTests.swift",
-        "line": 12,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 374 lines"
+      "location": {
+        "line": 12,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/PlanShardingTests.swift"
+      }
     }
   },
   {
     "text": "    private let passing: (report: RunReport, plan: MutationPlan, results: [MutationResult]) = {",
     "violation": {
+      "reason": "Tuples should have at most 2 members",
+      "severity": "warning",
       "ruleDescription": "Tuples shouldn't have too many members. Create a custom type instead.",
       "ruleName": "Large Tuple",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/ReporterFailClosedTests.swift",
-        "line": 17,
-        "character": 26
-      },
-      "severity": "error",
       "ruleIdentifier": "large_tuple",
-      "reason": "Tuples should have at most 2 members"
+      "location": {
+        "line": 17,
+        "character": 26,
+        "file": "Tests/MutantKitTests/Unit/ReporterFailClosedTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"The free-form diagnostic payload of unsupportedOperand/structuralConflict/platformUnsupported is dropped from the key \u2014 never a per-mutation-unique histogram entry\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 176 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataFallbackObservabilityTests.swift",
-        "line": 301,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 176 characters"
+      "location": {
+        "line": 301,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataFallbackObservabilityTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"A ExecutionStrategyReport carrying both histograms round-trips through JSON, and a legacy report predating this field still decodes\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataFallbackObservabilityTests.swift",
-        "line": 312,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 312,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataFallbackObservabilityTests.swift"
+      }
     }
   },
   {
     "text": "struct SchemataMutationRunnerBatchingTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 433 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift",
-        "line": 23,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 433 lines"
+      "location": {
+        "line": 23,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"A timeout in a single-test batched primary still routes through the existing individual confirmation path, unchanged by Phase H12.3\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift",
-        "line": 433,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 433,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(try outcome(for: fixture.sortedPoints[1].id, in: result).outcome == .survived, \"the recovered pass must settle survived, not infrastructureFailure\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 164 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift",
-        "line": 486,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 164 characters"
+      "location": {
+        "line": 486,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"A batched primary's ambiguous result, recovered as a crash, goes through the exact same unmodified kill path an unbatched crash would\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 146 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift",
-        "line": 503,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 146 characters"
+      "location": {
+        "line": 503,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"A batched primary's ambiguous result, recovered as a timeout, still goes through the existing, unmodified timeout-confirmation path\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift",
-        "line": 536,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 536,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerBatchingTests.swift"
+      }
     }
   },
   {
     "text": "                compilationUnitID: compilationUnitID(target: target, point: point), sourceEmbeddingID: Self.sourceEmbeddingID, includeHit: true",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 143 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerConcurrencyTests.swift",
-        "line": 128,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 143 characters"
+      "location": {
+        "line": 128,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerConcurrencyTests.swift"
+      }
     }
   },
   {
     "text": "        #expect(defaultOutcome.multiTargetVerdicts.map(\\.mutationRef.mutationID) == explicitOutcome.multiTargetVerdicts.map(\\.mutationRef.mutationID))",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 150 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerConcurrencyTests.swift",
-        "line": 401,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 150 characters"
+      "location": {
+        "line": 401,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerConcurrencyTests.swift"
+      }
     }
   },
   {
     "text": "            timeouts: TimeoutSettings(baselineSeconds: 30), toolchainHash: \"toolchain\", buildArgumentsHash: \"args\", policy: Self.confirmsTimeoutsOnly",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 149 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerRecoveryRebuildFailureTests.swift",
-        "line": 292,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 149 characters"
+      "location": {
+        "line": 292,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerRecoveryRebuildFailureTests.swift"
+      }
     }
   },
   {
     "text": "    private func entry(mutationID: MutationID, target: String, chunkID: String, localIndex: UInt32, namespace: UInt64) -> SchemataPlanEntry {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 141 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift",
-        "line": 42,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 141 characters"
+      "location": {
+        "line": 42,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"Multi-target: one target's shared build failure discards the whole MutationID, including the other target's already-verified result\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift",
-        "line": 188,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 188,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"A chunk whose build fails with an untyped error or a nil product hash reports no observability event \u2014 only a typed BuildFailure does\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 146 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift",
-        "line": 263,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 146 characters"
+      "location": {
+        "line": 263,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift"
+      }
     }
   },
   {
     "text": "    func runMutant(_ point: MutationPoint, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double) async throws -> TestRunResult {",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 142 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift",
-        "line": 316,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 142 characters"
+      "location": {
+        "line": 316,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataMutationRunnerSharedChunkBuildFailureTests.swift"
+      }
     }
   },
   {
     "text": "        let header = try makeFile(source.appendingPathComponent(\"include/mutantkit_protocol_v3.h\"), modified: Date(timeIntervalSince1970: 2000))",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 144 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SchemataRuntimeStalenessGuardTests.swift",
-        "line": 50,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 144 characters"
+      "location": {
+        "line": 50,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SchemataRuntimeStalenessGuardTests.swift"
+      }
     }
   },
   {
     "text": "            baselineResult: TestRunResult(status: .passed, summary: nil, command: command(\"test\"), resultArtifactPath: nil, diagnosis: \"ok\"),",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 141 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SharedBaselineEstablisherTests.swift",
-        "line": 107,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 141 characters"
+      "location": {
+        "line": 107,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SharedBaselineEstablisherTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"Rule 2 extension (codex finding): a trailing call to a custom, non-stdlib Never-returning function in a multi-statement non-Void body is not a candidate\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 165 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SideEffectCallRemovalOperatorREDTests.swift",
-        "line": 287,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 165 characters"
+      "location": {
+        "line": 287,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SideEffectCallRemovalOperatorREDTests.swift"
+      }
     }
   },
   {
     "text": "    @Test(\"Scenario 17: the sole statement of a closure literal with no explicit return type, in a non-Void-inferred context, is not a candidate\")",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 146 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SideEffectCallRemovalOperatorREDTests.swift",
-        "line": 509,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 146 characters"
+      "location": {
+        "line": 509,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SideEffectCallRemovalOperatorREDTests.swift"
+      }
     }
   },
   {
     "text": "struct SimulatorPoolCloningTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 342 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SimulatorPoolCloningTests.swift",
-        "line": 15,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 342 lines"
+      "location": {
+        "line": 15,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SimulatorPoolCloningTests.swift"
+      }
     }
   },
   {
     "text": "    private static func pool(_ simctl: FakeSimctl) -> SimulatorPool {",
     "violation": {
+      "reason": "Function should have complexity 12 or less; currently complexity is 15",
+      "severity": "warning",
       "ruleDescription": "Complexity of function bodies should be limited.",
       "ruleName": "Cyclomatic Complexity",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SimulatorPoolCloningTests.swift",
-        "line": 120,
-        "character": 13
-      },
-      "severity": "error",
       "ruleIdentifier": "cyclomatic_complexity",
-      "reason": "Function should have complexity 12 or less; currently complexity is 15"
+      "location": {
+        "line": 120,
+        "character": 13,
+        "file": "Tests/MutantKitTests/Unit/SimulatorPoolCloningTests.swift"
+      }
     }
   },
   {
     "text": "        \"THE regression test for the reported bug: an .iOSSimulator request with only the flat macOS-shaped layout present must refuse, never silently fall back to the macOS archive\"",
     "violation": {
+      "reason": "Line should be 140 characters or less; currently it has 182 characters",
+      "severity": "warning",
       "ruleDescription": "Lines should not span too many characters.",
       "ruleName": "Line Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/SwiftPMLinkerInjectorTests.swift",
-        "line": 103,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "line_length",
-      "reason": "Line should be 140 characters or less; currently it has 182 characters"
+      "location": {
+        "line": 103,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/SwiftPMLinkerInjectorTests.swift"
+      }
     }
   },
   {
     "text": "struct XCResultAdapterBatchTests {",
     "violation": {
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 490 lines",
+      "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
-      "location": {
-        "file": "Tests/MutantKitTests/Unit/XCResultAdapterBatchTests.swift",
-        "line": 17,
-        "character": 1
-      },
-      "severity": "error",
       "ruleIdentifier": "type_body_length",
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 490 lines"
+      "location": {
+        "line": 17,
+        "character": 1,
+        "file": "Tests/MutantKitTests/Unit/XCResultAdapterBatchTests.swift"
+      }
     }
   }
 ]

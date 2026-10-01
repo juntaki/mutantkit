@@ -37,11 +37,11 @@ final class RunContextProbeIdentityScopeTests: XCTestCase {
         schemataOneFifty.sources.include = ["Sources/Only/**"]
 
         let digestA = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: isolatedFifty, toolchain: makeToolchain(),
+            inputState: .forProject(repo), configuration: isolatedFifty, toolchain: makeToolchain(),
             purpose: "coverageProfileCache3", identityScope: .coverageAttribution
         )
         let digestB = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: schemataOneFifty, toolchain: makeToolchain(),
+            inputState: .forProject(repo), configuration: schemataOneFifty, toolchain: makeToolchain(),
             purpose: "coverageProfileCache3", identityScope: .coverageAttribution
         )
 
@@ -72,7 +72,7 @@ final class RunContextProbeIdentityScopeTests: XCTestCase {
 
         func digest(_ configuration: Configuration) async throws -> String {
             try await RunContextProbe.computeContextDigest(
-                projectRoot: repo, configuration: configuration, toolchain: makeToolchain(),
+                inputState: .forProject(repo), configuration: configuration, toolchain: makeToolchain(),
                 purpose: "coverageProfileCache3", identityScope: .coverageAttribution
             )
         }
@@ -95,7 +95,7 @@ final class RunContextProbeIdentityScopeTests: XCTestCase {
 
         func digest(commit: String?) async throws -> String {
             try await RunContextProbe.computeContextDigest(
-                projectRoot: repo, configuration: Configuration(),
+                inputState: .forProject(repo), configuration: Configuration(),
                 toolchain: makeToolchain(toolCommitSHA: commit),
                 purpose: "coverageProfileCache3", identityScope: .coverageAttribution
             )
@@ -119,7 +119,7 @@ final class RunContextProbeIdentityScopeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let digest = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: Configuration(), toolchain: makeToolchain(),
+            inputState: .forProject(repo), configuration: Configuration(), toolchain: makeToolchain(),
             purpose: "coverageProfileCache3", identityScope: .coverageAttribution
         )
 
@@ -146,7 +146,7 @@ final class RunContextProbeIdentityScopeTests: XCTestCase {
 
         func digest(commit: String?) async throws -> String {
             try await RunContextProbe.computeContextDigest(
-                projectRoot: repo, configuration: Configuration(),
+                inputState: .forProject(repo), configuration: Configuration(),
                 toolchain: makeToolchain(toolCommitSHA: commit), purpose: "resultCache2"
             )
         }
@@ -171,10 +171,10 @@ final class RunContextProbeIdentityScopeTests: XCTestCase {
         schemata.execution.strategy = .schemata
 
         let digestA = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: isolated, toolchain: makeToolchain(), purpose: "resultCache2"
+            inputState: .forProject(repo), configuration: isolated, toolchain: makeToolchain(), purpose: "resultCache2"
         )
         let digestB = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: schemata, toolchain: makeToolchain(), purpose: "resultCache2"
+            inputState: .forProject(repo), configuration: schemata, toolchain: makeToolchain(), purpose: "resultCache2"
         )
 
         XCTAssertNotEqual(digestA, digestB, "the result cache's default scope must still cover execution settings")

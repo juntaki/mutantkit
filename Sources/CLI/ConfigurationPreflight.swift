@@ -10,7 +10,7 @@ enum ConfigurationPreflight {
     static func run(_ configuration: Configuration) throws {
         // The current directory, not `configuration.project.path`: it is the
         // tree `WorkspaceManager` actually clones into every worker's
-        // sandbox (see `RunCommand`'s `WorkspaceManager(projectRoot:...)`),
+        // sandbox as the project copy (see `SandboxLayout.projectRoot`),
         // symlinks and all, so it is what `ConfigurationValidator`'s
         // symlink-escape check for `project.derivedDataPath` needs to be
         // representative. This does not see a `--project-root` override —

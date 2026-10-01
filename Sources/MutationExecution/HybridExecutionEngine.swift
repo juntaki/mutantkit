@@ -183,7 +183,7 @@ public enum HybridExecutionEngine {
         _ context: Context, workspaces: WorkspaceManager, operationalIssues: OperationalIssueLog
     ) async -> SharedBaselineEstablisher.Outcome {
         let started = Date()
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: "shared-baseline")
         } catch {
@@ -196,12 +196,12 @@ public enum HybridExecutionEngine {
             )
         }
         let outcome = await SharedBaselineEstablisher.establish(
-            build: context.adapter.build, test: context.testAdapter, in: sandbox,
+            build: context.adapter.build, test: context.testAdapter, in: sandbox.workspaceRoot,
             configuration: context.configuration, projectRoot: context.projectRoot,
             coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey,
             operationalIssues: operationalIssues
         )
-        try? await workspaces.destroySandbox(at: sandbox)
+        try? await workspaces.destroySandbox(sandbox)
         return outcome
     }
 

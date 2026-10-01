@@ -105,7 +105,7 @@ struct WorkspaceManagerCloneProductsForConfirmationTests {
         let products = try makeFakeProductsDirectory()
 
         let first = try await workspaces.cloneProductsForConfirmation(from: products, id: "mut_a")
-        try await workspaces.destroySandbox(at: first)
+        try await workspaces.destroyProductsClone(at: first)
         let firstAgain = try await workspaces.cloneProductsForConfirmation(from: products, id: "mut_a")
         let second = try await workspaces.cloneProductsForConfirmation(from: products, id: "mut_b")
 
@@ -138,14 +138,14 @@ struct WorkspaceManagerCloneProductsForConfirmationTests {
         #expect(try Data(contentsOf: binary) == Data("second-mutant".utf8))
     }
 
-    @Test("destroySandbox deletes a nested confirmation clone unmodified, same as a sandbox")
-    func destroySandboxDeletesAClone() async throws {
+    @Test("destroyProductsClone deletes a nested confirmation clone unmodified")
+    func destroyProductsCloneDeletesAClone() async throws {
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratchRoot)
         let products = try makeFakeProductsDirectory()
         let destination = try await workspaces.cloneProductsForConfirmation(from: products, id: "mut_a")
         #expect(FileManager.default.fileExists(atPath: destination.path))
 
-        try await workspaces.destroySandbox(at: destination)
+        try await workspaces.destroyProductsClone(at: destination)
 
         #expect(!FileManager.default.fileExists(atPath: destination.path))
     }

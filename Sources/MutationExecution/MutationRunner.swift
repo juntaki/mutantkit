@@ -430,7 +430,7 @@ public struct MutationRunner: Sendable {
     ) async -> [MutationResult] {
         var results: [MutationResult] = []
 
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: id)
         } catch {
@@ -459,7 +459,7 @@ public struct MutationRunner: Sendable {
             results.append(result)
         }
 
-        try? await workspaces.destroySandbox(at: sandbox)
+        try? await workspaces.destroySandbox(sandbox)
         return results
     }
 
@@ -569,10 +569,10 @@ public struct MutationRunner: Sendable {
 
         var collected: [MutationResult] = []
         var readyToTest: [PreparedMutant] = []
-        var workerSandboxes: [URL] = []
+        var workerSandboxes: [Sandbox] = []
 
         try await withThrowingTaskGroup(
-            of: (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: URL?).self
+            of: (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: Sandbox?).self
         ) { group in
             for workerIndex in 0 ..< workers {
                 group.addTask {
@@ -598,7 +598,7 @@ public struct MutationRunner: Sendable {
         // its own result recorded — is it safe to tear down the sandboxes
         // that built them.
         for sandbox in workerSandboxes {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
         }
 
         return (collected, summary)
@@ -626,11 +626,11 @@ public struct MutationRunner: Sendable {
     /// `ProcessSupervisor`'s "Remaining risks" section.
     private func runIncrementalBuildWorkerSequential(
         id: String, queue: MutationQueue, baseline: BaselineContext
-    ) async -> (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: URL?) {
+    ) async -> (results: [MutationResult], readyToTest: [PreparedMutant], sandbox: Sandbox?) {
         var results: [MutationResult] = []
         var readyToTest: [PreparedMutant] = []
 
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: id)
         } catch {
@@ -709,7 +709,7 @@ public struct MutationRunner: Sendable {
         id: String, queue: MutationQueue, baseline: BaselineContext,
         collector: PipelineCollector, coordinator: PipelineCoordinator
     ) async {
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: id)
         } catch {
@@ -806,7 +806,7 @@ public struct MutationRunner: Sendable {
                         diagnosis: "The batch test adapter no longer conforms to BatchTestable."
                     )
                 )
-                try? await workspaces.destroySandbox(at: next.item.sandbox)
+                try? await workspaces.destroy(next.item.workspace)
                 await collector.add(result)
                 await coordinator.finishedTesting(workerID: next.workerID)
             }
@@ -889,7 +889,7 @@ public struct MutationRunner: Sendable {
         )
         return PreparedMutant(
             point: prepared.point,
-            sandbox: clone,
+            workspace: .productsClone(clone),
             applied: prepared.applied,
             artifact: artifact,
             activation: prepared.activation,
@@ -930,18 +930,18 @@ public struct MutationRunner: Sendable {
         var readyToTest: [PreparedMutant] = []
 
         let workers = max(1, configuration.execution.resolvedWorkerCount())
-        try await withThrowingTaskGroup(of: (URL, PrepareOutcome).self) { group in
+        try await withThrowingTaskGroup(of: (Sandbox?, PrepareOutcome).self) { group in
             var remaining = pending.makeIterator()
 
             func addTask(for point: MutationPoint) throws {
                 group.addTask {
                     let started = Date()
-                    let sandbox: URL
+                    let sandbox: Sandbox
                     do {
                         sandbox = try await self.workspaces.createSandbox(id: point.id.rawValue)
                     } catch {
                         return (
-                            URL(fileURLWithPath: "/"),
+                            nil,
                             .finished(await self.evidenceAssembler.infrastructureFailureResult(
                                 point: point,
                                 diagnosis: "No sandbox could be created for this mutant: \(error)",
@@ -962,7 +962,7 @@ public struct MutationRunner: Sendable {
             while let (sandbox, outcome) = try await group.next() {
                 switch outcome {
                 case let .finished(result):
-                    try? await workspaces.destroySandbox(at: sandbox)
+                    if let sandbox { try? await workspaces.destroySandbox(sandbox) }
                     collected.append(result)
                 case let .readyToTest(prepared):
                     readyToTest.append(prepared)
@@ -1064,7 +1064,7 @@ public struct MutationRunner: Sendable {
                     ),
                     testDurationSeconds: testDurationSeconds
                 )
-                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                try? await workspaces.destroy(prepared.workspace)
                 collected.append(result)
             }
             return (collected, BatchExecutionSummary(batchCount: 0, totalConfigurations: 0))
@@ -1118,7 +1118,7 @@ public struct MutationRunner: Sendable {
                 let items = [BatchMutantItem(id: prepared.point.id, artifact: prepared.artifact, selectedTests: nil)]
                 let batchTimeout = baseline.timeouts.mutantLimitSeconds
                 let batchStarted = Date()
-                let runs = await batchable.runBatch(items, in: batchSandbox, timeoutSeconds: batchTimeout)
+                let runs = await batchable.runBatch(items, in: batchSandbox.workspaceRoot, timeoutSeconds: batchTimeout)
                 let duration = Date().timeIntervalSince(batchStarted)
                 batchDurations.append(duration)
 
@@ -1127,9 +1127,9 @@ public struct MutationRunner: Sendable {
                     resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its batch."
                 )
                 let result = await finishAfterTest(prepared, baseline: baseline, run: run, testDurationSeconds: duration)
-                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                try? await workspaces.destroy(prepared.workspace)
                 results.append(result)
-                try? await workspaces.destroySandbox(at: batchSandbox)
+                try? await workspaces.destroySandbox(batchSandbox)
             } catch {
                 let result = await finishAfterTest(
                     prepared, baseline: baseline,
@@ -1138,7 +1138,7 @@ public struct MutationRunner: Sendable {
                         resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
                     )
                 )
-                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                try? await workspaces.destroy(prepared.workspace)
                 results.append(result)
             }
         }
@@ -1328,7 +1328,7 @@ public struct MutationRunner: Sendable {
                 testDurationSeconds: survivor.cumulativeTestSeconds,
                 priorTestAttempts: survivor.attempts
             )
-            try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+            try? await workspaces.destroy(survivor.prepared.workspace)
             results.append(result)
         }
 
@@ -1377,7 +1377,7 @@ public struct MutationRunner: Sendable {
                 testDurationSeconds: survivor.cumulativeTestSeconds + standaloneDuration,
                 priorTestAttempts: survivor.attempts, appendCurrentAttempt: true
             )
-            try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+            try? await workspaces.destroy(survivor.prepared.workspace)
             results.append(result)
         }
 
@@ -1470,7 +1470,7 @@ public struct MutationRunner: Sendable {
             }()
             let batchStarted = monotonicNow()
             let runs = await batchable.runBatch(
-                items, in: batchSandbox, timeoutSeconds: batchTimeout,
+                items, in: batchSandbox.workspaceRoot, timeoutSeconds: batchTimeout,
                 nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
             )
             let duration = monotonicNow() - batchStarted
@@ -1571,7 +1571,7 @@ public struct MutationRunner: Sendable {
                     if result.outcome.isKilled {
                         await store.recordDetection(by: test)
                     }
-                    try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+                    try? await workspaces.destroy(survivor.prepared.workspace)
                     results.append(result)
                 } else {
                     // Passed this test → advance to the next one, carrying
@@ -1615,7 +1615,7 @@ public struct MutationRunner: Sendable {
                 }
             }
 
-            try? await workspaces.destroySandbox(at: batchSandbox)
+            try? await workspaces.destroySandbox(batchSandbox)
             return (results, nextSurvivors, duration)
         } catch {
             // No place to write this wave's batch xctestrun/result bundle:
@@ -1633,7 +1633,7 @@ public struct MutationRunner: Sendable {
                     ),
                     testDurationSeconds: survivor.cumulativeTestSeconds
                 )
-                try? await workspaces.destroySandbox(at: survivor.prepared.sandbox)
+                try? await workspaces.destroy(survivor.prepared.workspace)
                 results.append(result)
             }
             return (results, [], nil)
@@ -1706,7 +1706,7 @@ public struct MutationRunner: Sendable {
     ) async -> (results: [MutationResult], configurations: Int, duration: Double?) {
         var collected: [MutationResult] = []
 
-        let batchSandbox: URL
+        let batchSandbox: Sandbox
         do {
             batchSandbox = try await workspaces.createSandbox(id: "batch-\(batchIndex)")
         } catch {
@@ -1724,7 +1724,7 @@ public struct MutationRunner: Sendable {
                         resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
                     )
                 )
-                try? await workspaces.destroySandbox(at: prepared.sandbox)
+                try? await workspaces.destroy(prepared.workspace)
                 collected.append(result)
             }
             return (collected, chunk.count, nil)
@@ -1758,7 +1758,7 @@ public struct MutationRunner: Sendable {
         }()
         let batchStarted = Date()
         let runs = await batchable.runBatch(
-            items, in: batchSandbox, timeoutSeconds: batchTimeout,
+            items, in: batchSandbox.workspaceRoot, timeoutSeconds: batchTimeout,
             nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
         )
         let batchTestDuration = Date().timeIntervalSince(batchStarted)
@@ -1796,11 +1796,11 @@ public struct MutationRunner: Sendable {
             let result = await finishAfterTest(
                 prepared, baseline: baseline, run: run, testDurationSeconds: verifiedDurationSeconds ?? batchTestDuration
             )
-            try? await workspaces.destroySandbox(at: prepared.sandbox)
+            try? await workspaces.destroy(prepared.workspace)
             collected.append(result)
         }
 
-        try? await workspaces.destroySandbox(at: batchSandbox)
+        try? await workspaces.destroySandbox(batchSandbox)
         return (collected, chunk.count, batchTestDuration)
     }
 
@@ -1842,7 +1842,7 @@ public struct MutationRunner: Sendable {
 
         let started = Date()
 
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: Self.baselineSandboxID)
         } catch {
@@ -1852,8 +1852,8 @@ public struct MutationRunner: Sendable {
             )
         }
 
-        let attempt = await establishBaseline(in: sandbox, startedAt: started)
-        try? await workspaces.destroySandbox(at: sandbox)
+        let attempt = await establishBaseline(in: sandbox.workspaceRoot, startedAt: started)
+        try? await workspaces.destroySandbox(sandbox)
         return attempt
     }
 
@@ -2069,7 +2069,12 @@ public struct MutationRunner: Sendable {
     /// parameter to `confirmKillIfNeeded`.
     struct PreparedMutant: Sendable {
         let point: MutationPoint
-        let sandbox: URL
+        /// Where this mutant is tested, and what destroying it removes.
+        let workspace: MutantWorkspace
+        var sandbox: URL {
+            workspace.url
+        }
+
         let applied: AppliedMutation
         let artifact: BuildArtifact
         let activation: ActivationEvidence?
@@ -2102,7 +2107,7 @@ public struct MutationRunner: Sendable {
         /// the mutant's whole original covering-test set.
         func narrowed(to test: TestIdentifier) -> PreparedMutant {
             PreparedMutant(
-                point: point, sandbox: sandbox, applied: applied, artifact: artifact,
+                point: point, workspace: workspace, applied: applied, artifact: artifact,
                 activation: activation, observation: observation, selectedTests: [test],
                 startedAt: startedAt, buildDurationSeconds: buildDurationSeconds,
                 confirmationSandbox: confirmationSandbox
@@ -2121,7 +2126,7 @@ public struct MutationRunner: Sendable {
     private func evaluate(_ point: MutationPoint, baseline: BaselineContext) async -> MutationResult {
         let started = Date()
 
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: point.id.rawValue)
         } catch {
@@ -2133,13 +2138,13 @@ public struct MutationRunner: Sendable {
         }
 
         let result = await evaluate(point, in: sandbox, baseline: baseline, startedAt: started)
-        try? await workspaces.destroySandbox(at: sandbox)
+        try? await workspaces.destroySandbox(sandbox)
         return result
     }
 
     private func evaluate(
         _ point: MutationPoint,
-        in sandbox: URL,
+        in sandbox: Sandbox,
         baseline: BaselineContext,
         startedAt: Date
     ) async -> MutationResult {
@@ -2153,7 +2158,7 @@ public struct MutationRunner: Sendable {
                 run = try await confirmationCoordinator.runMutantTests(
                     point,
                     artifact: prepared.artifact,
-                    in: sandbox,
+                    in: sandbox.workspaceRoot,
                     timeoutSeconds: baseline.timeouts.mutantLimitSeconds(selectedTests: prepared.selectedTests),
                     selectedTests: prepared.selectedTests
                 )
@@ -2185,7 +2190,7 @@ public struct MutationRunner: Sendable {
     /// one whose build succeeded and still needs running.
     private func prepare(
         _ point: MutationPoint,
-        in sandbox: URL,
+        in sandbox: Sandbox,
         baseline: BaselineContext,
         startedAt: Date
     ) async -> PrepareOutcome {
@@ -2276,7 +2281,7 @@ public struct MutationRunner: Sendable {
         let artifact: BuildArtifact
         let buildStarted = Date()
         do {
-            artifact = try await build.buildMutant(applied, in: sandbox)
+            artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
         } catch let failure as BuildFailure {
             return await finished(
                 sourceApplication: .applied(evidenceAssembler.evidence(applied, buildCommand: failure.command)),
@@ -2384,7 +2389,7 @@ public struct MutationRunner: Sendable {
 
         return .readyToTest(PreparedMutant(
             point: point,
-            sandbox: sandbox,
+            workspace: .sandbox(sandbox),
             applied: applied,
             artifact: artifact,
             activation: activation,
@@ -2618,7 +2623,7 @@ public struct MutationRunner: Sendable {
         // across waves without ever re-preparing it), so this is not
         // reachable more than once per mutant.
         if let confirmationSandbox = prepared.confirmationSandbox {
-            try? await workspaces.destroySandbox(at: confirmationSandbox)
+            try? await workspaces.destroyProductsClone(at: confirmationSandbox)
         }
 
         let resultArtifact = evidenceAssembler.preserve(run.resultArtifactPath, for: prepared.point, in: prepared.sandbox)
@@ -2744,7 +2749,7 @@ private actor PipelineCoordinator {
     }
 
     private struct WorkerState {
-        var sandbox: URL?
+        var sandbox: Sandbox?
         var buildFinished = false
         var outstandingClones = 0
         var destroyed = false
@@ -2766,7 +2771,7 @@ private actor PipelineCoordinator {
     /// `nil` case, instead of) building. Must be called once per worker
     /// before that worker's first `send`, so `destroyIfEligible` always has
     /// a `WorkerState` to look up.
-    func registerWorker(_ id: String, sandbox: URL?) {
+    func registerWorker(_ id: String, sandbox: Sandbox?) {
         workers[id] = WorkerState(sandbox: sandbox)
     }
 
@@ -2843,6 +2848,6 @@ private actor PipelineCoordinator {
         else { return }
         state.destroyed = true
         workers[id] = state
-        try? await workspaces.destroySandbox(at: sandbox)
+        try? await workspaces.destroySandbox(sandbox)
     }
 }

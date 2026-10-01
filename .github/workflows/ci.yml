@@ -706,6 +706,12 @@ jobs:
           - fixture: swiftpm-direct-coverage-runner
             filter: SwiftPMDirectCoverageRunnerAcceptanceTests
             simulator: "0"
+          # A project whose local packages sit beside it (`../SwiftMapper`,
+          # `../Logging`): dry-run, run, the confirmation retest, and a
+          # sibling edit invalidating the caches and the checkpoint.
+          - fixture: local-path-dependencies
+            filter: LocalPathDependencyAcceptanceTests
+            simulator: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Same cache as release-validation.yml's jobs carry, for the same

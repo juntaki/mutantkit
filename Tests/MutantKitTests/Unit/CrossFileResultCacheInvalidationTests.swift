@@ -145,7 +145,7 @@ struct CrossFileResultCacheInvalidationTests {
         let plan1 = narrowed(discoveredPlan1, to: point1)
 
         let digest1 = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: configuration, toolchain: toolchain, purpose: "resultCache2"
+            inputState: .forProject(repo), configuration: configuration, toolchain: toolchain, purpose: "resultCache2"
         )
 
         let cache = MutationResultCache(root: cacheRoot, policy: .permissive)
@@ -205,7 +205,7 @@ struct CrossFileResultCacheInvalidationTests {
         )
 
         let digest2 = try await RunContextProbe.computeContextDigest(
-            projectRoot: repo, configuration: configuration, toolchain: toolchain, purpose: "resultCache2"
+            inputState: .forProject(repo), configuration: configuration, toolchain: toolchain, purpose: "resultCache2"
         )
         #expect(
             digest2 != digest1,

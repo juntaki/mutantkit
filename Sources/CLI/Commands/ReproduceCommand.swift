@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import MutationExecution
 import MutationModel
 
 /// Rebuilds one mutant, alone, in a sandbox you can keep.
@@ -48,9 +49,9 @@ struct ReproduceCommand: AsyncParsableCommand {
             throw ExitCode(MutantKitExit.operationalError)
         }
 
-        let sandbox = try await prepareFreshSandbox(root: root, mutationID: point.id.rawValue)
+        let (sandbox, layout) = try await prepareFreshSandbox(root: root, settings: settings, mutationID: point.id.rawValue)
 
-        let target = sandbox.appendingPathComponent(point.file)
+        let target = sandbox.workspaceRoot.appendingPathComponent(point.file)
         let applied = try applyAndReportMutation(point, fileAt: target)
 
         guard run || replay else {
@@ -62,7 +63,7 @@ struct ReproduceCommand: AsyncParsableCommand {
             return
         }
 
-        let execution = try await resolveExecutionContext(settings: settings, loadedPlan: loadedPlan, root: root)
+        let execution = try await resolveExecutionContext(settings: settings, loadedPlan: loadedPlan, root: root, layout: layout)
 
         // `reproduce`/`--replay` are standalone investigations, not part of a
         // `mutantkit run`'s lifecycle, so they have no manifest of their own to
