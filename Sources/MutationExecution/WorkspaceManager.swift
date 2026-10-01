@@ -6,9 +6,13 @@ import MutationModel
 public enum WorkspaceError: Error, CustomStringConvertible {
     case invalidSandboxID(String)
     case sandboxOutsideScratchRoot(path: String, scratchRoot: String)
+    case notASandboxContainer(path: String, scratchRoot: String)
+    case notAProductsClone(path: String, scratchRoot: String)
     case pathOutsideSandbox(path: String, sandbox: String)
     case unreadable(path: String, underlying: String)
     case unwritable(path: String, underlying: String)
+    /// The first sandbox's manifests load a local package from outside it.
+    case containment(SandboxContainmentError)
 
     public var description: String {
         switch self {
@@ -16,12 +20,18 @@ public enum WorkspaceError: Error, CustomStringConvertible {
             "\(String(reflecting: id)) is not a usable sandbox name."
         case let .sandboxOutsideScratchRoot(path, scratchRoot):
             "Refusing to delete \(path): it resolves outside the scratch root \(scratchRoot)."
+        case let .notASandboxContainer(path, scratchRoot):
+            "Refusing to delete \(path): it is not a sandbox directly inside the scratch root \(scratchRoot)."
+        case let .notAProductsClone(path, scratchRoot):
+            "Refusing to delete \(path): it is not a products clone directly inside the scratch root \(scratchRoot)."
         case let .pathOutsideSandbox(path, sandbox):
             "Refusing to touch \(path): it resolves outside the sandbox \(sandbox)."
         case let .unreadable(path, underlying):
             "Could not read \(path): \(underlying)"
         case let .unwritable(path, underlying):
             "Could not write \(path): \(underlying)"
+        case let .containment(error):
+            error.description
         }
     }
 }
@@ -33,6 +43,10 @@ public enum WorkspaceError: Error, CustomStringConvertible {
 /// able to leave mutated code behind. Every mutant therefore gets its own copy of
 /// the project under the tool's scratch root, and `WorkspaceManager` itself —
 /// every method in this file — only ever reads `projectRoot`, never writes to it.
+/// The same holds for the local packages outside the project that the
+/// layout names (see `SandboxLayout`): each sandbox is a container holding a
+/// copy of every one of them beside the project copy, at their original
+/// relative positions, so relative package paths resolve inside it.
 ///
 /// That is a narrower claim than "the original tree is only ever read by
 /// this tool," which does not hold without qualification: with
@@ -55,7 +69,12 @@ public enum WorkspaceError: Error, CustomStringConvertible {
 /// it materializes committed state, so it would silently test something other
 /// than the code the user is looking at.
 public actor WorkspaceManager {
-    private let projectRoot: URL
+    /// Where the project and its local packages sit in every sandbox.
+    public nonisolated let layout: SandboxLayout
+    private var projectRoot: URL {
+        layout.projectRoot
+    }
+
     /// Canonical (symlink-resolved). Every deletion is checked against this.
     private let scratchRoot: URL
     private let excludes: [String]
@@ -68,6 +87,12 @@ public actor WorkspaceManager {
     /// for the rest of this instance's lifetime -- see
     /// `cachedCleanSubtreeIndex()`.
     private var cleanSubtreeIndex: CleanSubtreeIndex?
+    /// Run on the first sandbox this instance creates; see
+    /// `proveContainmentOnce(_:)`.
+    private let containmentProof: (any SandboxContainmentProving)?
+    /// The one evaluation of `containmentProof`, shared by every sandbox
+    /// created while it runs and remembered, success or failure, after.
+    private var containmentProofRun: Task<Void, any Error>?
 
     /// Directories that hold build output, VCS state or previous runs. Copying
     /// them is pure cost: the build regenerates them, and DerivedData alone can
@@ -92,13 +117,38 @@ public actor WorkspaceManager {
         "logs"
     ]
 
+    /// A manager whose sandboxes are copies of `projectRoot` alone.
     public init(
         projectRoot: URL,
         scratchRoot: URL,
         excludes: [String] = WorkspaceManager.defaultExcludes,
         cleanSubtreeCloning: Bool = false
     ) throws {
-        self.projectRoot = projectRoot.standardizedFileURL
+        try self.init(
+            layout: .projectOnly(projectRoot),
+            scratchRoot: scratchRoot,
+            excludes: excludes,
+            cleanSubtreeCloning: cleanSubtreeCloning
+        )
+    }
+
+    /// A manager whose sandboxes reproduce `layout`: the project and every
+    /// external local package at their original relative positions.
+    ///
+    /// `excludes` applies to every root alike, matched against paths
+    /// relative to that root.
+    ///
+    /// `containmentProof`, when given, runs on the first sandbox before
+    /// `createSandbox` returns it; see `proveContainmentOnce(_:)`.
+    public init(
+        layout: SandboxLayout,
+        scratchRoot: URL,
+        excludes: [String] = WorkspaceManager.defaultExcludes,
+        cleanSubtreeCloning: Bool = false,
+        containmentProof: (any SandboxContainmentProving)? = nil
+    ) throws {
+        self.layout = layout
+        self.containmentProof = containmentProof
         self.excludes = excludes
         self.cleanSubtreeCloning = cleanSubtreeCloning
 
@@ -186,7 +236,7 @@ public actor WorkspaceManager {
 
     /// `moduleCacheDirectoryName` above, namespaced by a real toolchain
     /// fingerprint (see `SharedModuleCacheFingerprint`) -- the real,
-    /// on-disk directory name `moduleCachePath(forSandbox:fingerprint:)`
+    /// on-disk directory name `moduleCachePath(underScratchRoot:fingerprint:)`
     /// resolves to. A second, independent layer of protection on top of
     /// `init`'s own wipe-at-construction of the plain, unnamespaced
     /// directory above: that wipe is `try?`-guarded best-effort and only
@@ -208,78 +258,17 @@ public actor WorkspaceManager {
         ".module-cache-" + fingerprint
     }
 
-    /// Where the fingerprint-namespaced shared module cache lives for a
-    /// sandbox this manager created -- one path component up from the
-    /// sandbox itself, i.e. directly under this manager's own
+    /// Where the fingerprint-namespaced shared module cache lives under
     /// `scratchRoot`.
     ///
-    /// A `BuildAdapter` never sees `scratchRoot` directly, only the sandbox
-    /// URL it is asked to build in -- this lets it recover the shared
-    /// cache's location anyway, without threading a second path through
-    /// every adapter-construction call site. Safe because `createSandbox`'s
-    /// own contract (see its doc comment) guarantees every sandbox this
-    /// type ever hands out is exactly one path component below its scratch
-    /// root, always -- so `sandbox`'s parent directory *is* that scratch
-    /// root, whichever `WorkspaceManager` produced it.
-    public nonisolated static func moduleCachePath(forSandbox sandbox: URL, fingerprint: String) -> URL {
-        moduleCachePath(underScratchRoot: sandbox.deletingLastPathComponent(), fingerprint: fingerprint)
-    }
-
-    /// The same path `moduleCachePath(forSandbox:fingerprint:)` resolves,
-    /// expressed directly from a scratch root rather than from a sandbox
-    /// inside it -- for a caller that has not created (and may never
-    /// create) any sandbox, such as `mutantkit doctor`'s module-cache
-    /// diagnostic previewing what a real `mutantkit run` would resolve to.
+    /// The scratch root is always given, never guessed from a sandbox path:
+    /// a workspace can sit several components inside its container (see
+    /// `SandboxLayout`), so a build adapter recovers it with
+    /// `SandboxLayout.scratchRoot(ofWorkspace:)`, which fails loudly for a
+    /// path that is not a sandbox workspace. `mutantkit doctor` previews the
+    /// path from the scratch root a real run would use.
     public nonisolated static func moduleCachePath(underScratchRoot scratchRoot: URL, fingerprint: String) -> URL {
         scratchRoot.appendingPathComponent(moduleCacheDirectoryName(forFingerprint: fingerprint), isDirectory: true)
-    }
-
-    /// Builds a fresh sandbox for `id` and returns its canonical location.
-    public func createSandbox(id: String) async throws -> URL {
-        // `id` reaches us from a plan file, which is data we did not write. It is
-        // hashed below rather than used as a path component, which already
-        // neutralizes separators and `..` — but a malformed id is still a bug
-        // worth reporting rather than quietly hashing into a valid-looking name.
-        guard !id.isEmpty, !id.contains("/"), id != ".", id != ".." else {
-            throw WorkspaceError.invalidSandboxID(id)
-        }
-
-        let sandbox = scratchRoot
-            .appendingPathComponent(Self.directoryName(for: id))
-            .standardizedFileURL
-        guard sandbox.path.hasPrefix(scratchRoot.path + "/") else {
-            throw WorkspaceError.sandboxOutsideScratchRoot(path: sandbox.path, scratchRoot: scratchRoot.path)
-        }
-
-        do {
-            try fileManager.createDirectory(at: sandbox, withIntermediateDirectories: true)
-        } catch {
-            throw WorkspaceError.unwritable(path: sandbox.path, underlying: error.localizedDescription)
-        }
-
-        try populate(from: projectRoot, to: sandbox, relativePath: "")
-        return sandbox
-    }
-
-    /// Deletes a sandbox, refusing anything that is not really inside the scratch root.
-    ///
-    /// This runs against a path that has been through a plan file, a build
-    /// adapter and a filesystem, so it re-derives the answer instead of trusting
-    /// it: the path is canonicalized first, which is what catches a sandbox that
-    /// is a symlink to somewhere that matters. A recursive delete gets exactly
-    /// one chance to be wrong.
-    public func destroySandbox(at url: URL) async throws {
-        let canonical = url.resolvingSymlinksInPath().standardizedFileURL
-        guard canonical.path != scratchRoot.path, canonical.path.hasPrefix(scratchRoot.path + "/") else {
-            throw WorkspaceError.sandboxOutsideScratchRoot(path: canonical.path, scratchRoot: scratchRoot.path)
-        }
-        guard fileManager.fileExists(atPath: canonical.path) else { return }
-
-        do {
-            try fileManager.removeItem(at: canonical)
-        } catch {
-            throw WorkspaceError.unwritable(path: canonical.path, underlying: error.localizedDescription)
-        }
     }
 
     /// Overwrites one file inside `sandbox` with the pristine copy from
@@ -293,8 +282,8 @@ public actor WorkspaceManager {
     /// The single-mutation-per-file invariant `MutationApplication` relies
     /// on means one file is always enough; nothing else in the sandbox is
     /// ever written to.
-    public func restoreFile(relativePath: String, in sandbox: URL) async throws {
-        let source = try resolveSourceURL(in: projectRoot, relativePath: relativePath)
+    public func restoreFile(relativePath: String, in sandbox: Sandbox) async throws {
+        let source = try Self.resolveSourceURL(in: projectRoot, relativePath: relativePath)
         let destination = try resolveSourceURL(in: sandbox, relativePath: relativePath)
         try materialize(source, at: destination)
     }
@@ -510,8 +499,16 @@ public actor WorkspaceManager {
     /// the layer that owns the guarantee it relies on. A plan is data, and data
     /// does not get to name `../../../etc/passwd` — nor to reach outside through
     /// a symlink that happens to live in the tree we copied.
-    public nonisolated func resolveSourceURL(in sandbox: URL, relativePath: String) throws -> URL {
-        let root = sandbox.resolvingSymlinksInPath().standardizedFileURL
+    ///
+    /// Resolved against the sandbox's workspace: plan paths are
+    /// project-relative, so a local package copied beside the project can
+    /// never be named, and so never mutated.
+    public nonisolated func resolveSourceURL(in sandbox: Sandbox, relativePath: String) throws -> URL {
+        try Self.resolveSourceURL(in: sandbox.workspaceRoot, relativePath: relativePath)
+    }
+
+    private nonisolated static func resolveSourceURL(in directory: URL, relativePath: String) throws -> URL {
+        let root = directory.resolvingSymlinksInPath().standardizedFileURL
         let candidate = root.appendingPathComponent(relativePath).standardizedFileURL
         guard candidate.path.hasPrefix(root.path + "/") else {
             throw WorkspaceError.pathOutsideSandbox(path: candidate.path, sandbox: root.path)
@@ -561,7 +558,9 @@ public actor WorkspaceManager {
         return clone(source, to: destination)
     }
 
-    /// Copies one directory level, recursing rather than cloning the tree whole.
+    /// Copies `source` entry by entry, following `SandboxCopyWalk`, rather
+    /// than cloning the tree whole. The run fingerprint hashes local packages
+    /// outside the project through the same walk.
     ///
     /// `clonefile` would happily clone `projectRoot` in a single call, but the
     /// exclusions have to be honoured *before* the entries exist, not deleted
@@ -574,51 +573,34 @@ public actor WorkspaceManager {
     /// skips this recursion entirely in favour of one whole-directory clone
     /// (`materializeWholeSubtree`) — see `CleanSubtreeIndex`'s own doc
     /// comment. Every other entry — dirty directories, files, symlinks —
-    /// takes exactly the path it always has.
-    private func populate(from source: URL, to destination: URL, relativePath: String) throws {
-        let entries: [URL]
-        do {
-            entries = try fileManager.contentsOfDirectory(
-                at: source,
-                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                options: []
-            )
-        } catch {
-            throw WorkspaceError.unreadable(path: source.path, underlying: error.localizedDescription)
-        }
-
-        for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            let name = entry.lastPathComponent
-            let relative = relativePath.isEmpty ? name : relativePath + "/" + name
-            if isExcluded(name: name, relativePath: relative) { continue }
-
-            // The scratch root usually lives inside the project it is testing;
-            // descending into it would copy every other sandbox into this one.
-            if entry.resolvingSymlinksInPath().standardizedFileURL.path == scratchRoot.path { continue }
-
-            let target = destination.appendingPathComponent(name)
-            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-
-            // Symlinks are recreated, never followed: following one turns a link
-            // into a copy of whatever it points at, which is both wrong and
-            // unbounded when it points at a parent. Checked strictly before the
-            // directory branch below, so a symlinked directory is never mistaken
-            // for a whole-subtree-clone candidate, whatever the index says.
-            if values?.isSymbolicLink == true {
-                try recreateSymbolicLink(at: entry, to: target)
-            } else if values?.isDirectory == true {
-                if cleanSubtreeCloning, cachedCleanSubtreeIndex().isClean(relativePath: relative) {
-                    try materializeWholeSubtree(entry, at: target)
-                    continue
+    /// takes exactly the path it always has. Only the project root may use
+    /// the index (`usesCleanSubtreeIndex`), which is keyed on its paths.
+    private func populate(from source: URL, to destination: URL, usesCleanSubtreeIndex: Bool) throws {
+        try SandboxCopyWalk.walk(
+            root: source, excludes: excludes, skippingCanonicalPaths: [scratchRoot.path]
+        ) { entry in
+            let target = destination.appendingPathComponent(entry.relativePath)
+            switch entry.kind {
+            case .symbolicLink:
+                // Recreated, never followed: following one turns a link into
+                // a copy of whatever it points at, which is both wrong and
+                // unbounded when it points at a parent.
+                try recreateSymbolicLink(at: entry.url, to: target)
+                return false
+            case .directory:
+                if usesCleanSubtreeIndex, cachedCleanSubtreeIndex().isClean(relativePath: entry.relativePath) {
+                    try materializeWholeSubtree(entry.url, at: target)
+                    return false
                 }
                 do {
                     try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
                 } catch {
                     throw WorkspaceError.unwritable(path: target.path, underlying: error.localizedDescription)
                 }
-                try populate(from: entry, to: target, relativePath: relative)
-            } else {
-                try materialize(entry, at: target)
+                return true
+            case .file:
+                try materialize(entry.url, at: target)
+                return false
             }
         }
     }
@@ -767,6 +749,204 @@ public actor WorkspaceManager {
     static func isExcluded(name: String, relativePath: String, excludes: [String]) -> Bool {
         excludes.contains { pattern in
             fnmatch(pattern, name, 0) == 0 || fnmatch(pattern, relativePath, 0) == 0
+        }
+    }
+}
+
+// MARK: - Containers over the layout
+
+extension WorkspaceManager {
+    /// Builds a fresh sandbox for `id`: a container directly below the
+    /// scratch root holding the project copy and a copy of every external
+    /// root, each at its position in the layout.
+    ///
+    /// Reusing a container is intentionally incremental for the project
+    /// copy: files whose copy is still current are kept. Entries of a
+    /// reused container that are no longer on a layout path (a dependency
+    /// dropped since) are removed first, so nothing the current layout does
+    /// not name can be read, and each external root's copy is rebuilt whole.
+    public func createSandbox(id: String) async throws -> Sandbox {
+        // `id` reaches us from a plan file, which is data we did not write. It is
+        // hashed below rather than used as a path component, which already
+        // neutralizes separators and `..` — but a malformed id is still a bug
+        // worth reporting rather than quietly hashing into a valid-looking name.
+        guard !id.isEmpty, !id.contains("/"), id != ".", id != ".." else {
+            throw WorkspaceError.invalidSandboxID(id)
+        }
+
+        let container = scratchRoot
+            .appendingPathComponent(Self.directoryName(for: id), isDirectory: true)
+            .standardizedFileURL
+        guard container.path.hasPrefix(scratchRoot.path + "/") else {
+            throw WorkspaceError.sandboxOutsideScratchRoot(path: container.path, scratchRoot: scratchRoot.path)
+        }
+        let sandbox = layout.sandbox(containerRoot: container)
+
+        // A container that already exists must be a real directory below the
+        // scratch root. Following a symlink here would make the prune below,
+        // and every copy after it, act on whatever the link points at.
+        try requireRealContainer(container, beforeCreation: true)
+        try createDirectory(container)
+        try requireRealContainer(container, beforeCreation: false)
+        if !layout.externalRoots.isEmpty {
+            try pruneContainer(container)
+        }
+
+        try createDirectory(sandbox.workspaceRoot)
+        try populate(from: projectRoot, to: sandbox.workspaceRoot, usesCleanSubtreeIndex: cleanSubtreeCloning)
+        // The clean-subtree index is keyed on project-relative paths, so it
+        // says nothing about an external root: those always take the walk.
+        // Each root copy is rebuilt from nothing: `populate` only visits
+        // entries the package still has, so a file deleted from it since a
+        // reused container was filled would otherwise stay and be compiled.
+        // A package's copy holds no build state (that lives in the
+        // workspace's `.build`), so rebuilding costs only the clones.
+        for root in layout.externalRoots {
+            let destination = container.appendingPathComponent(root.relativePath, isDirectory: true)
+            try removeIfPresent(destination)
+            try createDirectory(destination)
+            try populate(from: root.sourceRoot, to: destination, usesCleanSubtreeIndex: false)
+        }
+        try await proveContainmentOnce(sandbox)
+        return sandbox
+    }
+
+    /// Runs the containment proof on the first sandbox this instance
+    /// creates, before any sandbox is handed out.
+    ///
+    /// Once is enough: every later sandbox is a copy of the same layout at
+    /// an equal-length path, and no mutation touches a manifest. Sandboxes
+    /// requested while the proof runs wait for it, and its verdict holds
+    /// for the rest of this instance's lifetime, so after a refusal no
+    /// sandbox is ever returned. A refused sandbox's container is removed.
+    private func proveContainmentOnce(_ sandbox: Sandbox) async throws {
+        guard let containmentProof else { return }
+        let run: Task<Void, any Error>
+        if let containmentProofRun {
+            run = containmentProofRun
+        } else {
+            let layout = layout
+            run = Task { try await containmentProof.proveContainment(of: sandbox, layout: layout) }
+            containmentProofRun = run
+        }
+        do {
+            try await run.value
+        } catch let refusal as SandboxContainmentError {
+            try? removeIfPresent(sandbox.containerRoot)
+            throw WorkspaceError.containment(refusal)
+        } catch {
+            try? removeIfPresent(sandbox.containerRoot)
+            throw error
+        }
+    }
+
+    /// Deletes a sandbox's container, with every copy in it.
+    ///
+    /// The container must be exactly one `sbx_` directory directly below the
+    /// scratch root once symlinks are resolved: a workspace inside a
+    /// container, the scratch root itself or anything elsewhere is refused.
+    /// A recursive delete gets exactly one chance to be wrong.
+    public func destroySandbox(_ sandbox: Sandbox) async throws {
+        let canonical = sandbox.containerRoot.resolvingSymlinksInPath().standardizedFileURL
+        guard canonical.deletingLastPathComponent().path == scratchRoot.path,
+              canonical.lastPathComponent.hasPrefix("sbx_")
+        else {
+            throw WorkspaceError.notASandboxContainer(path: canonical.path, scratchRoot: scratchRoot.path)
+        }
+        try removeIfPresent(canonical)
+    }
+
+    /// Deletes whatever an earlier process left at `id`'s sandbox, external
+    /// copies included, so the next `createSandbox(id:)` starts from nothing
+    /// instead of reusing it incrementally. Nothing there is not an error.
+    public func destroyExistingSandbox(id: String) async throws {
+        guard !id.isEmpty, !id.contains("/"), id != ".", id != ".." else {
+            throw WorkspaceError.invalidSandboxID(id)
+        }
+        let container = scratchRoot.appendingPathComponent(Self.directoryName(for: id), isDirectory: true)
+        guard fileManager.fileExists(atPath: container.path) else { return }
+        try await destroySandbox(layout.sandbox(containerRoot: container))
+    }
+
+    /// Deletes a products clone `cloneProducts*` made.
+    ///
+    /// Same rule as `destroySandbox(_:)`, for the other kind of directory
+    /// this manager creates: exactly one `prd_` directory directly below the
+    /// scratch root once symlinks are resolved.
+    public func destroyProductsClone(at clone: URL) async throws {
+        let canonical = clone.resolvingSymlinksInPath().standardizedFileURL
+        guard canonical.deletingLastPathComponent().path == scratchRoot.path,
+              canonical.lastPathComponent.hasPrefix("prd_")
+        else {
+            throw WorkspaceError.notAProductsClone(path: canonical.path, scratchRoot: scratchRoot.path)
+        }
+        try removeIfPresent(canonical)
+    }
+
+    private func removeIfPresent(_ directory: URL) throws {
+        guard fileManager.fileExists(atPath: directory.path) else { return }
+        do {
+            try fileManager.removeItem(at: directory)
+        } catch {
+            throw WorkspaceError.unwritable(path: directory.path, underlying: error.localizedDescription)
+        }
+    }
+
+    /// Refuses a container that is a symbolic link, or that resolves anywhere
+    /// but directly below the scratch root.
+    ///
+    /// `beforeCreation` tolerates a container that does not exist yet; after
+    /// creation it must exist and resolve to exactly `scratchRoot/<name>`.
+    private func requireRealContainer(_ container: URL, beforeCreation: Bool) throws {
+        let type = (try? fileManager.attributesOfItem(atPath: container.path))?[.type] as? FileAttributeType
+        if type == nil, beforeCreation { return }
+        let scratch = CanonicalPath.resolve(scratchRoot.path) ?? CanonicalPath.lexical(scratchRoot.path)
+        let expected = scratch + "/" + container.lastPathComponent
+        guard type == .typeDirectory, CanonicalPath.resolve(container.path) == expected else {
+            throw WorkspaceError.sandboxOutsideScratchRoot(path: container.path, scratchRoot: scratchRoot.path)
+        }
+    }
+
+    private func createDirectory(_ directory: URL) throws {
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            throw WorkspaceError.unwritable(path: directory.path, underlying: error.localizedDescription)
+        }
+    }
+
+    /// Removes whatever a reused container holds off the layout's paths.
+    ///
+    /// Walks only the directories that lead to a root (`Apps` for
+    /// `Apps/Core`). A root's own copy is left to `populate`, and an entry
+    /// that should be a directory on the way but is not one is removed too.
+    private func pruneContainer(_ container: URL) throws {
+        let roots = Set([layout.workspaceRelativePath] + layout.externalRoots.map(\.relativePath))
+        try prune(directory: container, relativePath: "", roots: roots)
+    }
+
+    private func prune(directory: URL, relativePath: String, roots: Set<String>) throws {
+        let names: [String]
+        do {
+            names = try fileManager.contentsOfDirectory(atPath: directory.path)
+        } catch {
+            throw WorkspaceError.unreadable(path: directory.path, underlying: error.localizedDescription)
+        }
+        for name in names {
+            let relative = relativePath.isEmpty ? name : relativePath + "/" + name
+            let entry = directory.appendingPathComponent(name)
+            let isDirectory = (try? fileManager.attributesOfItem(atPath: entry.path))?[.type] as? FileAttributeType
+                == .typeDirectory
+            if isDirectory, roots.contains(relative) { continue }
+            if isDirectory, roots.contains(where: { $0.hasPrefix(relative + "/") }) {
+                try prune(directory: entry, relativePath: relative, roots: roots)
+                continue
+            }
+            do {
+                try fileManager.removeItem(at: entry)
+            } catch {
+                throw WorkspaceError.unwritable(path: entry.path, underlying: error.localizedDescription)
+            }
         }
     }
 }

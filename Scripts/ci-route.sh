@@ -106,7 +106,11 @@ xcode_adapter='^Sources/AppleBuildAdapters/XcodeBuildAdapter\.swift$|^Sources/Ap
 # sharding/merging logic layered on top of it -- see `sharding` below,
 # which used to live in this group and was too broad: a ShardCommand/
 # MergeCommand change does not need the full swift-package-ios fixture).
-swift_package='^Sources/AppleBuildAdapters/SwiftPackageMacOSAdapter\.swift$'
+# The manifest dump, the local package resolver and the sandbox containment
+# proof decide which sibling packages every SwiftPM sandbox carries, so they
+# route here too, and this group also runs the local-path-dependencies
+# fixture.
+swift_package='^Sources/AppleBuildAdapters/SwiftPackageMacOSAdapter\.swift$|^Sources/AppleBuildAdapters/SwiftPMManifestDump\.swift$|^Sources/AppleBuildAdapters/SwiftPMLocalDependencyResolver\.swift$|^Sources/AppleBuildAdapters/SwiftPMSandboxContainmentProof\.swift$'
 # sharding: the shard/merge orchestration layer -- a plan gets split,
 # each shard runs independently, and the results get merged back together.
 # ShardMergeAcceptanceTests is the fixture that actually proves splitting
@@ -165,7 +169,7 @@ case "$event_name" in
         fi
         if echo "$changed_files" | grep -qE "$swift_package"; then
           matched_any="true"
-          fixtures+=("swift-package" "swift-package-coverage" "swift-package-ios" "shard-merge")
+          fixtures+=("swift-package" "swift-package-coverage" "swift-package-ios" "shard-merge" "local-path-dependencies")
         fi
         if echo "$changed_files" | grep -qE "$sharding"; then
           matched_any="true"

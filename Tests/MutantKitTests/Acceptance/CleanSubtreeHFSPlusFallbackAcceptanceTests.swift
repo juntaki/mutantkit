@@ -68,8 +68,8 @@ struct CleanSubtreeHFSPlusFallbackAcceptanceTests {
         let fastPathWorkspaces = try WorkspaceManager(
             projectRoot: projectRoot, scratchRoot: fastPathScratch, cleanSubtreeCloning: true
         )
-        let referenceSandbox = try await referenceWorkspaces.createSandbox(id: "mut_nonapfs")
-        let fastPathSandbox = try await fastPathWorkspaces.createSandbox(id: "mut_nonapfs")
+        let referenceSandbox = try await referenceWorkspaces.createSandbox(id: "mut_nonapfs").workspaceRoot
+        let fastPathSandbox = try await fastPathWorkspaces.createSandbox(id: "mut_nonapfs").workspaceRoot
 
         let referenceSnapshot = try Self.snapshot(at: referenceSandbox)
         let fastPathSnapshot = try Self.snapshot(at: fastPathSandbox)

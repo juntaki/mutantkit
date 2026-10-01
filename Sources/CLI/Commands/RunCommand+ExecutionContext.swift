@@ -157,11 +157,14 @@ extension RunCommand {
             configuration: configuration,
             projectRoot: projectRoot,
             resolvedDestination: projectAdapter.resolvedDestination,
-            workerDevicesByWorkspace: devicesByWorkspace
+            workerDevicesByWorkspace: devicesByWorkspace,
+            sandboxLayout: resolution.sandboxLayout
         )
 
         return SimulatorWorkerPoolProvision(
-            resolution: AppleAdapterFactory.Resolution(adapter: newAdapter, detection: resolution.detection),
+            resolution: AppleAdapterFactory.Resolution(
+                adapter: newAdapter, detection: resolution.detection, sandboxLayout: resolution.sandboxLayout
+            ),
             cleanup: {
                 let failures = await provisioningPool.releaseWorkerPool(devices, base: baseDevice)
                 if !failures.isEmpty {
@@ -212,6 +215,23 @@ extension RunCommand {
         }
         let settings = settings.resolved
 
+        // One input state for the whole run: the project worktree plus every
+        // local package outside it that the sandboxes copy. The checkpoint
+        // and both caches below all hash this value; `nil` (an input that
+        // cannot be read, or a toolchain identity that cannot be trusted)
+        // disables all three, and the reason is printed once here.
+        let identities = Self.runIdentities(
+            inputState: await Self.runInputState(
+                root: root, layout: resolution.sandboxLayout ?? .projectOnly(root),
+                scratchRoots: [
+                    runDirectory.appendingPathComponent("sandboxes"),
+                    runDirectory.appendingPathComponent("schemata-sandboxes")
+                ],
+                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
+            ),
+            configuration: settings, toolchain: toolchain, workUnitID: loadedPlan.workUnitID
+        )
+
         // Keyed by work unit and by everything the checkpoint's cached
         // results depend on, not by work unit alone: a checkpoint exists to
         // survive an interruption *within* one attempt at a run, not to
@@ -221,19 +241,7 @@ extension RunCommand {
         // than found and then having to be distrusted — see
         // `RunContextFingerprint`'s doc comment for why that distinction
         // mattered in practice.
-        let fingerprint: RunContextFingerprint?
-        do {
-            fingerprint = try await RunContextProbe.compute(
-                projectRoot: root,
-                configuration: settings,
-                toolchain: toolchain,
-                workUnitID: loadedPlan.workUnitID,
-                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
-            )
-        } catch {
-            print("\(error)")
-            fingerprint = nil
-        }
+        let fingerprint = identities.checkpoint
 
         let checkpointURL = fingerprint.map {
             runDirectory.appendingPathComponent("checkpoint-\(loadedPlan.workUnitID)-\($0.shortDigest).jsonl")
@@ -258,37 +266,7 @@ extension RunCommand {
         // computation failure means coverage is re-measured, not a failed run.
         let coverageCacheRoot = runDirectory.appendingPathComponent("coverage-cache")
         let coverageCache = CoverageProfileCache(root: coverageCacheRoot)
-        let coverageCacheKey: CoverageProfileCache.Key?
-        do {
-            // "coverageProfileCache3": the scope of the *tool identity* this
-            // digest is computed over changed too (see
-            // `IdentityScope.toolIdentityComponents`) — entries keyed under
-            // the previous scheme are claims this build cannot check, for the
-            // same reason the previous bump gave.
-            //
-            // "coverageProfileCache2", not "coverageProfileCache": the
-            // scope of the configuration this digest is computed over
-            // changed (see `ConfigurationScope.coverageAttribution`), so
-            // every pre-existing entry on disk was keyed by a scheme this
-            // build no longer implements. Bumping this purpose's own tag
-            // rather than the shared `v4` marker is exact — the result
-            // cache's scheme is untouched, and its entries are far cheaper
-            // to lose anyway.
-            let digest = try await RunContextProbe.computeContextDigest(
-                projectRoot: root, configuration: settings, toolchain: toolchain, purpose: "coverageProfileCache3",
-                identityScope: .coverageAttribution,
-                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
-            )
-            coverageCacheKey = CoverageProfileCache.Key(contextDigest: digest)
-        } catch {
-            // Printed, not swallowed: "no cache this run" is a real slowdown
-            // (the per-test coverage pass is the most expensive thing a
-            // baseline does), and a user staring at an unexpectedly slow run
-            // deserves the reason rather than having to guess at it. The run
-            // itself continues — recomputing is always correct, just slower.
-            print("\(error)")
-            coverageCacheKey = nil
-        }
+        let coverageCacheKey = identities.coverageCacheDigest.map { CoverageProfileCache.Key(contextDigest: $0) }
 
         // Cross-run result cache: a mutant whose MutationID was already
         // evaluated against an identical execution context (same source,
@@ -317,44 +295,93 @@ extension RunCommand {
         } else {
             let resultCacheRoot = runDirectory.appendingPathComponent("result-cache")
             resultCache = MutationResultCache(root: resultCacheRoot, policy: verificationPolicy)
-            // "resultCache2", not "resultCache": a codex review found that
-            // stored MutationResults from before ResultClassifier required
-            // proven activation for a scorable outcome (see
-            // `unprovenActivation` in ResultClassifier.swift) could be
-            // loaded from an on-disk cache written by an older build and
-            // re-enter a score unexamined — the cache's own store-time gate
-            // only checks `outcome.isCacheableResult`/`isReportable`, never
-            // `activationEvidence`. Bumping the purpose tag changes the
-            // digest, which misses on every pre-existing cache entry and
-            // forces a fresh, correctly-gated classification instead of
-            // trusting whatever an older classifier once wrote. Any future
-            // change to what makes a `MutationResult` trustworthy enough to
-            // cache must bump this tag again the same way, precisely
-            // because the cache has no other way to know which classifier
-            // version produced an entry it is being asked to reuse.
-            do {
-                resultCacheDigest = try await RunContextProbe.computeContextDigest(
-                    projectRoot: root,
-                    configuration: settings,
-                    toolchain: toolchain,
-                    purpose: "resultCache2",
-                    toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
-                )
-            } catch {
-                // Deliberately not printed a second time. This digest and the
-                // coverage one above differ only in their `purpose` tag, and
-                // nothing that can fail here depends on it — the failure is
-                // always the same git/filesystem problem, already reported
-                // once above with the same wording. The coverage block runs
-                // unconditionally, so the reason is never lost.
-                resultCacheDigest = nil
-            }
+            resultCacheDigest = identities.resultCacheDigest
         }
 
         return RunExecutionContext(
             toolchain: toolchain, checkpoints: checkpoints, coverageCache: coverageCache,
             coverageCacheKey: coverageCacheKey, resultCache: resultCache, resultCacheDigest: resultCacheDigest
         )
+    }
+
+    /// The checkpoint fingerprint and both cross-run cache digests, each
+    /// derived from the same `RunInputState`. A `nil` state gives `nil` for
+    /// all three: no resumable checkpoint, and neither cache this run.
+    struct RunIdentities: Equatable {
+        let checkpoint: RunContextFingerprint?
+        let coverageCacheDigest: String?
+        let resultCacheDigest: String?
+    }
+
+    /// The run's input state, or `nil` with the reason printed once.
+    ///
+    /// Not computed at all when the toolchain identity is already known to
+    /// be incomplete: every identity would refuse it anyway, and the
+    /// worktree and package walks are the slow part.
+    static func runInputState(
+        root: URL,
+        layout: SandboxLayout,
+        scratchRoots: [URL],
+        toolchainCacheIdentityComplete: Bool,
+        processRunner: RunContextProbe.ProcessRunner = RunContextProbe.defaultProcessRunner
+    ) async -> RunInputState? {
+        guard toolchainCacheIdentityComplete else {
+            print("\(RunContextProbeError.incompleteToolchainIdentity)")
+            return nil
+        }
+        do {
+            return try await RunInputState.compute(
+                projectRoot: root, layout: layout, scratchRoots: scratchRoots, processRunner: processRunner
+            )
+        } catch {
+            // Printed, not swallowed: "no cache this run" is a real slowdown
+            // (the per-test coverage pass is the most expensive thing a
+            // baseline does), and a user staring at an unexpectedly slow run
+            // deserves the reason. The run itself continues — recomputing is
+            // always correct, just slower.
+            print("\(error)")
+            return nil
+        }
+    }
+
+    static func runIdentities(
+        inputState: RunInputState?,
+        configuration: Configuration,
+        toolchain: ToolchainFingerprint,
+        workUnitID: String
+    ) -> RunIdentities {
+        guard let inputState else {
+            return RunIdentities(checkpoint: nil, coverageCacheDigest: nil, resultCacheDigest: nil)
+        }
+        // Keyed by work unit and by everything the checkpoint's cached
+        // results depend on; see `prepareRunExecutionContext`.
+        let checkpoint = try? RunContextProbe.compute(
+            inputState: inputState, configuration: configuration, toolchain: toolchain, workUnitID: workUnitID
+        )
+        // "coverageProfileCache4": the input state now covers local
+        // packages outside the project. An entry keyed under the previous
+        // scheme was computed without them, so for a project that loads
+        // such a package it may describe other package contents; none is
+        // reused. Earlier bumps: "3" when the tool identity this digest is
+        // computed over changed (`IdentityScope.toolIdentityComponents`),
+        // "2" when its configuration scope did
+        // (`IdentityScope.coverageAttribution`).
+        let coverage = try? RunContextProbe.computeContextDigest(
+            inputState: inputState, configuration: configuration, toolchain: toolchain,
+            purpose: "coverageProfileCache4", identityScope: .coverageAttribution
+        )
+        // "resultCache3", for the same reason as "coverageProfileCache4".
+        // "resultCache2" was the bump that stopped results classified before
+        // `ResultClassifier` required proven activation (see
+        // `unprovenActivation`) from re-entering a score: the cache's own
+        // store-time gate never checks `activationEvidence`. Any future
+        // change to what makes a `MutationResult` trustworthy enough to cache
+        // must bump this tag again, because the cache has no other way to
+        // know which rules produced an entry it is asked to reuse.
+        let result = try? RunContextProbe.computeContextDigest(
+            inputState: inputState, configuration: configuration, toolchain: toolchain, purpose: "resultCache3"
+        )
+        return RunIdentities(checkpoint: checkpoint, coverageCacheDigest: coverage, resultCacheDigest: result)
     }
 
     /// Everything `writeManifest` needs that stays identical across

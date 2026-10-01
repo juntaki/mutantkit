@@ -26,10 +26,13 @@ struct SchemataWorkspaceSeparationRegressionTests {
     @Test("RunCommand constructs exactly two independent WorkspaceManagers for a schemata run")
     func exactlyTwoIndependentWorkspaceManagers() throws {
         let text = try Support.read("CLI/Commands/RunCommand.swift")
-        #expect(text.contains("let workspaces = try WorkspaceManager("))
-        #expect(text.contains("let schemataWorkspaces = try WorkspaceManager("))
+        // Both are built over the run's one sandbox layout, through the
+        // same helper; none is built around it.
+        #expect(text.contains("let workspaces = try LocalPackageLayout.workspaceManager("))
+        #expect(text.contains("let schemataWorkspaces = try LocalPackageLayout.workspaceManager("))
+        #expect(Support.occurrenceCount(of: "WorkspaceManager(", in: text) == 0)
         #expect(
-            Support.occurrenceCount(of: "try WorkspaceManager(", in: text) == 2,
+            Support.occurrenceCount(of: "try LocalPackageLayout.workspaceManager(", in: text) == 2,
             """
             expected exactly 2 WorkspaceManager constructions in RunCommand.swift (workspaces, schemataWorkspaces); \
             a third would mean either a new pass was added (update this test deliberately) or the two got merged

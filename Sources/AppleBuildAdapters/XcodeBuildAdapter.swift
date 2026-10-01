@@ -66,6 +66,10 @@ public struct XcodeBuildAdapter: Sendable {
     /// one) relative to the primary pass this feature already parallelizes
     /// correctly.
     let workerDevicesByWorkspace: [String: SimulatorDevice]?
+    /// Where each workspace sits inside its sandbox container, which is
+    /// what `workerDevicesByWorkspace` is keyed by. `nil` means a
+    /// project-only layout: the workspace is the container.
+    var sandboxLayout: SandboxLayout?
     /// How `uninstallStaleApp` actually spawns `simctl` —
     /// `AdapterSupport.swift`'s `ProcessRunner` seam. Every production path
     /// gets `defaultProcessRunner`; only the test-only initializer below
@@ -139,10 +143,12 @@ public struct XcodeBuildAdapter: Sendable {
         projectFile: URL?,
         projectRoot: URL,
         resolvedDestination: ResolvedDestination? = nil,
-        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil,
+        sandboxLayout: SandboxLayout? = nil
     ) {
         self.configuration = configuration
         self.kind = kind
+        self.sandboxLayout = sandboxLayout
         projectFileRelativePath = projectFile.flatMap { Self.relativePath(of: $0, under: projectRoot) }
         resultReader = XCResultAdapter()
         simulators = SimulatorPool(workingDirectory: projectRoot)
@@ -628,7 +634,11 @@ extension XcodeBuildAdapter: TestAdapter {
         // passed as `preferredDevice` — this is the *only* one of the three
         // call sites that does (plan §5.1); the other two always pass `nil`.
         return try await leaseCoordinator.withLease(
-            preferredDevice: workerDevicesByWorkspace?[workspace.lastPathComponent],
+            preferredDevice: workerDevicesByWorkspace.flatMap { devices in
+                (try? SandboxLayout.container(
+                    ofWorkspace: workspace, workspaceRelativePath: sandboxLayout?.workspaceRelativePath ?? ""
+                ).lastPathComponent).flatMap { devices[$0] }
+            },
             rawDestination: destination(),
             run: run
         )
@@ -1671,7 +1681,8 @@ public struct XcodeBuildProjectAdapter: ProjectAdapter {
         projectFile: URL?,
         projectRoot: URL,
         resolvedDestination: ResolvedDestination? = nil,
-        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil,
+        sandboxLayout: SandboxLayout? = nil
     ) {
         self.kind = kind
         self.resolvedDestination = resolvedDestination
@@ -1681,7 +1692,8 @@ public struct XcodeBuildProjectAdapter: ProjectAdapter {
             projectFile: projectFile,
             projectRoot: projectRoot,
             resolvedDestination: resolvedDestination,
-            workerDevicesByWorkspace: workerDevicesByWorkspace
+            workerDevicesByWorkspace: workerDevicesByWorkspace,
+            sandboxLayout: sandboxLayout
         )
         simulatorBearingAdapter = adapter
         build = adapter

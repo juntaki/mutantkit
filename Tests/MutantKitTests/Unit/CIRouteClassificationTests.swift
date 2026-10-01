@@ -268,7 +268,24 @@ struct CIRouteClassificationTests {
             changedFiles: ["Sources/AppleBuildAdapters/SwiftPackageMacOSAdapter.swift"]
         )
         #expect(!result.runFull)
-        #expect(Set(result.selectedFixtures) == ["swift-package", "swift-package-coverage", "swift-package-ios", "shard-merge"])
+        #expect(Set(result.selectedFixtures) == [
+            "swift-package", "swift-package-coverage", "swift-package-ios", "shard-merge", "local-path-dependencies"
+        ])
+    }
+
+    @Test("a SwiftPM local-package path selects the swift-package fixture family")
+    func swiftPMLocalPackagePathSelectsSwiftPackageSet() throws {
+        for path in [
+            "Sources/AppleBuildAdapters/SwiftPMLocalDependencyResolver.swift",
+            "Sources/AppleBuildAdapters/SwiftPMManifestDump.swift",
+            "Sources/AppleBuildAdapters/SwiftPMSandboxContainmentProof.swift"
+        ] {
+            let result = try route(event: "pull_request", changedFiles: [path])
+            #expect(!result.runFull, "\(path)")
+            #expect(Set(result.selectedFixtures) == [
+                "swift-package", "swift-package-coverage", "swift-package-ios", "shard-merge", "local-path-dependencies"
+            ], "\(path)")
+        }
     }
 }
 

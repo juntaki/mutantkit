@@ -53,8 +53,8 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         let oldWorkspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: oldScratch, cleanSubtreeCloning: false)
         let newWorkspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: newScratch, cleanSubtreeCloning: true)
 
-        let oldSandbox = try await oldWorkspaces.createSandbox(id: "mut_parity")
-        let newSandbox = try await newWorkspaces.createSandbox(id: "mut_parity")
+        let oldSandbox = try await oldWorkspaces.createSandbox(id: "mut_parity").workspaceRoot
+        let newSandbox = try await newWorkspaces.createSandbox(id: "mut_parity").workspaceRoot
 
         let oldSnapshot = try CleanSubtreeCloningFixture.snapshot(at: oldSandbox)
         let newSnapshot = try CleanSubtreeCloningFixture.snapshot(at: newSandbox)
@@ -114,8 +114,8 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         let oldWorkspaces = try WorkspaceManager(projectRoot: sourcesCLI, scratchRoot: oldScratch, cleanSubtreeCloning: false)
         let newWorkspaces = try WorkspaceManager(projectRoot: sourcesCLI, scratchRoot: newScratch, cleanSubtreeCloning: true)
 
-        let oldSandbox = try await oldWorkspaces.createSandbox(id: "mut_real")
-        let newSandbox = try await newWorkspaces.createSandbox(id: "mut_real")
+        let oldSandbox = try await oldWorkspaces.createSandbox(id: "mut_real").workspaceRoot
+        let newSandbox = try await newWorkspaces.createSandbox(id: "mut_real").workspaceRoot
 
         let oldSnapshot = try CleanSubtreeCloningFixture.snapshot(at: oldSandbox)
         let newSnapshot = try CleanSubtreeCloningFixture.snapshot(at: newSandbox)
@@ -139,7 +139,7 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         let scratch = CleanSubtreeCloningFixture.makeTempDir(prefix: "csc-nested-exclude-scratch")
         defer { try? FileManager.default.removeItem(at: scratch) }
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratch, cleanSubtreeCloning: true)
-        let sandbox = try await workspaces.createSandbox(id: "mut_nested")
+        let sandbox = try await workspaces.createSandbox(id: "mut_nested").workspaceRoot
 
         #expect(!FileManager.default.fileExists(atPath: sandbox.appendingPathComponent("Sources/Pkg/Nested/Deep/debug.log").path))
         #expect(FileManager.default.fileExists(atPath: sandbox.appendingPathComponent("Sources/Pkg/Nested/Deep/Real.swift").path))
@@ -164,8 +164,8 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         defer { try? FileManager.default.removeItem(at: scratch) }
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratch, cleanSubtreeCloning: true)
 
-        let sandboxA = try await workspaces.createSandbox(id: "mut_contam_a")
-        let sandboxB = try await workspaces.createSandbox(id: "mut_contam_b")
+        let sandboxA = try await workspaces.createSandbox(id: "mut_contam_a").workspaceRoot
+        let sandboxB = try await workspaces.createSandbox(id: "mut_contam_b").workspaceRoot
 
         let targetInA = sandboxA.appendingPathComponent("Sources/Pkg/File1.swift")
         let targetInB = sandboxB.appendingPathComponent("Sources/Pkg/File1.swift")
@@ -199,7 +199,7 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
 
         // First sandbox: "Sources/Extra" is genuinely clean, gets classified
         // (and cached) as such.
-        let firstSandbox = try await workspaces.createSandbox(id: "mut_reuse_a")
+        let firstSandbox = try await workspaces.createSandbox(id: "mut_reuse_a").workspaceRoot
         #expect(FileManager.default.fileExists(atPath: firstSandbox.appendingPathComponent("Sources/Extra/Keep.swift").path))
 
         // New excluded content appears in the *source* tree after the index
@@ -208,7 +208,7 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
             to: projectRoot.appendingPathComponent("Sources/Extra/late.log")
         )
 
-        let secondSandbox = try await workspaces.createSandbox(id: "mut_reuse_b")
+        let secondSandbox = try await workspaces.createSandbox(id: "mut_reuse_b").workspaceRoot
 
         // This is the documented, accepted trade-off `ExecutionSettings
         // .cleanSubtreeCloning`'s own doc comment names as the reason this
@@ -241,7 +241,7 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         let scratch = CleanSubtreeCloningFixture.makeTempDir(prefix: "csc-symlink-scratch")
         defer { try? FileManager.default.removeItem(at: scratch) }
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratch, cleanSubtreeCloning: true)
-        let sandbox = try await workspaces.createSandbox(id: "mut_symlink")
+        let sandbox = try await workspaces.createSandbox(id: "mut_symlink").workspaceRoot
 
         let fm = FileManager.default
         for (relativePath, expectedTarget) in [
@@ -270,7 +270,7 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         let scratch = CleanSubtreeCloningFixture.makeTempDir(prefix: "csc-boundary-symlink-scratch")
         defer { try? FileManager.default.removeItem(at: scratch) }
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratch, cleanSubtreeCloning: true)
-        let sandbox = try await workspaces.createSandbox(id: "mut_boundary")
+        let sandbox = try await workspaces.createSandbox(id: "mut_boundary").workspaceRoot
 
         let cloned = sandbox.appendingPathComponent("Sources/LinkedModule")
         let values = try cloned.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
@@ -298,11 +298,11 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         try Data("clean".utf8).write(to: projectRoot.appendingPathComponent("BuildScratch/Keep.swift"))
 
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratch, cleanSubtreeCloning: true)
-        let firstSandbox = try await workspaces.createSandbox(id: "mut_guard_a")
+        let firstSandbox = try await workspaces.createSandbox(id: "mut_guard_a").workspaceRoot
         // A second sandbox exists on disk, inside the scratch root, by the
         // time the *next* sandbox is populated -- exactly the shape that
         // would leak if "BuildScratch" were ever wrongly whole-cloned.
-        let secondSandbox = try await workspaces.createSandbox(id: "mut_guard_b")
+        let secondSandbox = try await workspaces.createSandbox(id: "mut_guard_b").workspaceRoot
 
         for sandbox in [firstSandbox, secondSandbox] {
             #expect(FileManager.default.fileExists(atPath: sandbox.appendingPathComponent("BuildScratch/Keep.swift").path))
@@ -356,8 +356,8 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
         }
         let oldWorkspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: oldScratch, cleanSubtreeCloning: false)
         let newWorkspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: newScratch, cleanSubtreeCloning: true)
-        let oldSandbox = try await oldWorkspaces.createSandbox(id: "mut_permbits")
-        let newSandbox = try await newWorkspaces.createSandbox(id: "mut_permbits")
+        let oldSandbox = try await oldWorkspaces.createSandbox(id: "mut_permbits").workspaceRoot
+        let newSandbox = try await newWorkspaces.createSandbox(id: "mut_permbits").workspaceRoot
 
         // What the old walk's freshly-created directories actually land on
         // in *this* environment -- read from a directory this same scratch

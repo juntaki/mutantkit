@@ -18,19 +18,18 @@ struct SharedModuleCacheNamespaceTests {
         let namespace = SharedModuleCacheNamespace()
         let scratchRoot = Self.makeTempDir(prefix: "smc-namespace-scratch")
         try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
-        let sandbox = scratchRoot.appendingPathComponent("sbx_probe")
 
         // Pre-create the exact directory a real resolution will land on,
         // with a marker file inside, so "was it actually deleted" is
         // directly observable rather than inferred from behavior.
         let fingerprint = await ToolchainCacheFingerprintProbe.shared.fingerprint(workingDirectory: scratchRoot)
-        let expectedPath = WorkspaceManager.moduleCachePath(forSandbox: sandbox, fingerprint: fingerprint.digest)
+        let expectedPath = WorkspaceManager.moduleCachePath(underScratchRoot: scratchRoot, fingerprint: fingerprint.digest)
         try FileManager.default.createDirectory(at: expectedPath, withIntermediateDirectories: true)
         let marker = expectedPath.appendingPathComponent("stale-from-a-previous-invocation")
         try Data("stale".utf8).write(to: marker)
         #expect(FileManager.default.fileExists(atPath: marker.path))
 
-        let resolved = await namespace.moduleCachePath(forSandbox: sandbox, workingDirectory: scratchRoot)
+        let resolved = await namespace.moduleCachePath(scratchRoot: scratchRoot, workingDirectory: scratchRoot)
 
         #expect(resolved.path == expectedPath.path)
         #expect(!FileManager.default.fileExists(atPath: marker.path), "a stale entry must not survive the first resolution")
@@ -41,10 +40,8 @@ struct SharedModuleCacheNamespaceTests {
         let namespace = SharedModuleCacheNamespace()
         let scratchRoot = Self.makeTempDir(prefix: "smc-namespace-scratch")
         try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
-        let sandboxA = scratchRoot.appendingPathComponent("sbx_a")
-        let sandboxB = scratchRoot.appendingPathComponent("sbx_b")
 
-        let firstPath = await namespace.moduleCachePath(forSandbox: sandboxA, workingDirectory: scratchRoot)
+        let firstPath = await namespace.moduleCachePath(scratchRoot: scratchRoot, workingDirectory: scratchRoot)
         try FileManager.default.createDirectory(at: firstPath, withIntermediateDirectories: true)
         let marker = firstPath.appendingPathComponent("warmed-by-an-earlier-mutant-this-run")
         try Data("warm".utf8).write(to: marker)
@@ -53,7 +50,7 @@ struct SharedModuleCacheNamespaceTests {
         // shape of a run's second mutant — must resolve to the identical
         // path (same toolchain, same scratch root) and must never delete
         // what the first resolution's caller already populated.
-        let secondPath = await namespace.moduleCachePath(forSandbox: sandboxB, workingDirectory: scratchRoot)
+        let secondPath = await namespace.moduleCachePath(scratchRoot: scratchRoot, workingDirectory: scratchRoot)
 
         #expect(secondPath.path == firstPath.path)
         #expect(
@@ -67,9 +64,8 @@ struct SharedModuleCacheNamespaceTests {
         let namespace = SharedModuleCacheNamespace()
         let scratchRoot = Self.makeTempDir(prefix: "smc-namespace-scratch")
         try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
-        let sandbox = scratchRoot.appendingPathComponent("sbx_probe")
 
-        let path = await namespace.moduleCachePath(forSandbox: sandbox, workingDirectory: scratchRoot)
+        let path = await namespace.moduleCachePath(scratchRoot: scratchRoot, workingDirectory: scratchRoot)
         try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
         #expect(FileManager.default.fileExists(atPath: path.path))
 
@@ -101,10 +97,9 @@ struct SharedModuleCacheNamespaceTests {
         let namespace = SharedModuleCacheNamespace()
         let scratchRoot = Self.makeTempDir(prefix: "smc-namespace-scratch")
         try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
-        let sandbox = scratchRoot.appendingPathComponent("sbx_probe")
 
         let fingerprint = await ToolchainCacheFingerprintProbe.shared.fingerprint(workingDirectory: scratchRoot)
-        let path = WorkspaceManager.moduleCachePath(forSandbox: sandbox, fingerprint: fingerprint.digest)
+        let path = WorkspaceManager.moduleCachePath(underScratchRoot: scratchRoot, fingerprint: fingerprint.digest)
 
         // The "other process" claims this exact path *first*, before this
         // suite's own `namespace` ever resolves it — mirroring the real
@@ -119,7 +114,7 @@ struct SharedModuleCacheNamespaceTests {
         // return the correct path — building against a shared cache this
         // process does not itself own the claim on is safe by design (see
         // `claims`'s own doc comment); only the *delete* is gated.
-        let resolved = await namespace.moduleCachePath(forSandbox: sandbox, workingDirectory: scratchRoot)
+        let resolved = await namespace.moduleCachePath(scratchRoot: scratchRoot, workingDirectory: scratchRoot)
         #expect(resolved.path == path.path)
 
         // Simulate the other process's own live build having written real

@@ -53,7 +53,7 @@ struct WorkspaceManagerCloneProductsTests {
         let products = try makeFakeProductsDirectory()
 
         let first = try await workspaces.cloneProducts(from: products, id: "mut_a")
-        try await workspaces.destroySandbox(at: first)
+        try await workspaces.destroyProductsClone(at: first)
         let firstAgain = try await workspaces.cloneProducts(from: products, id: "mut_a")
         let second = try await workspaces.cloneProducts(from: products, id: "mut_b")
 
@@ -127,14 +127,14 @@ struct WorkspaceManagerCloneProductsTests {
         #expect(try Data(contentsOf: binary) == Data("binary-bytes".utf8))
     }
 
-    @Test("destroySandbox deletes a products clone unmodified, same as a sandbox")
-    func destroySandboxDeletesAClone() async throws {
+    @Test("destroyProductsClone deletes a products clone unmodified")
+    func destroyProductsCloneDeletesAClone() async throws {
         let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratchRoot)
         let products = try makeFakeProductsDirectory()
         let clone = try await workspaces.cloneProducts(from: products, id: "mut_a")
         #expect(FileManager.default.fileExists(atPath: clone.path))
 
-        try await workspaces.destroySandbox(at: clone)
+        try await workspaces.destroyProductsClone(at: clone)
 
         #expect(!FileManager.default.fileExists(atPath: clone.path))
     }

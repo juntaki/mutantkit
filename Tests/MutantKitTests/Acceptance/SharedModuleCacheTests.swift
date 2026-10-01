@@ -6,7 +6,7 @@ import Testing
 
 /// Real, end-to-end coverage for `Configuration.execution.sharedModuleCache`
 /// — see that property's own doc comment, `WorkspaceManager
-/// .moduleCachePath(forSandbox:fingerprint:)`, `SharedModuleCacheNamespace`,
+/// .moduleCachePath(underScratchRoot:fingerprint:)`, `SharedModuleCacheNamespace`,
 /// and this project's internal isolated-build-reuse research (not part of
 /// this public repo) for the
 /// measurements and reasoning this flag rests on. Every test here spawns
@@ -110,7 +110,7 @@ struct SharedModuleCacheTests {
     private func build(
         id: String, sourceDir: URL, workspaces: WorkspaceManager, sharedModuleCache: Bool
     ) async throws -> SandboxBuild {
-        let sandbox = try await workspaces.createSandbox(id: id)
+        let sandbox = try await workspaces.createSandbox(id: id).workspaceRoot
         try FileManager.default.removeItem(at: sandbox)
         try FileManager.default.copyItem(at: sourceDir, to: sandbox)
 
@@ -159,7 +159,9 @@ struct SharedModuleCacheTests {
         // prefix — not merely "some path", and not the old, unnamespaced
         // `.module-cache` name.
         let fingerprint = await ToolchainCacheFingerprintProbe.shared.fingerprint(workingDirectory: sharedBuild.sandbox)
-        let expectedCachePath = WorkspaceManager.moduleCachePath(forSandbox: sharedBuild.sandbox, fingerprint: fingerprint.digest)
+        let expectedCachePath = WorkspaceManager.moduleCachePath(
+            underScratchRoot: sharedBuild.sandbox.deletingLastPathComponent(), fingerprint: fingerprint.digest
+        )
         #expect(
             sharedBuild.artifact.command.arguments.contains(expectedCachePath.path),
             "the build must point -module-cache-path at the real, toolchain-fingerprint-namespaced directory"
@@ -214,7 +216,7 @@ struct SharedModuleCacheTests {
         let adapter = SwiftPackageMacOSAdapter(configuration: configuration)
 
         async let mutantA: (BuildArtifact, TestRunResult) = {
-            let sandbox = try await workspaces.createSandbox(id: "mut_a_addBroken")
+            let sandbox = try await workspaces.createSandbox(id: "mut_a_addBroken").workspaceRoot
             try FileManager.default.removeItem(at: sandbox)
             try FileManager.default.copyItem(at: projectRootA, to: sandbox)
             let artifact = try await adapter.buildBaseline(in: sandbox)
@@ -222,7 +224,7 @@ struct SharedModuleCacheTests {
             return (artifact, run)
         }()
         async let mutantB: (BuildArtifact, TestRunResult) = {
-            let sandbox = try await workspaces.createSandbox(id: "mut_b_subtractBroken")
+            let sandbox = try await workspaces.createSandbox(id: "mut_b_subtractBroken").workspaceRoot
             try FileManager.default.removeItem(at: sandbox)
             try FileManager.default.copyItem(at: projectRootB, to: sandbox)
             let artifact = try await adapter.buildBaseline(in: sandbox)
@@ -307,7 +309,9 @@ struct SharedModuleCacheTests {
         // scratch root is safe: `SharedModuleCacheNamespace` only resets
         // (deletes) on the *first* resolution per scratch root, and that
         // first resolution already happened inside `warm`'s own build.
-        let cachePath = await SharedModuleCacheNamespace.shared.moduleCachePath(forSandbox: warm.sandbox, workingDirectory: warm.sandbox)
+        let cachePath = await SharedModuleCacheNamespace.shared.moduleCachePath(
+            scratchRoot: warm.sandbox.deletingLastPathComponent(), workingDirectory: warm.sandbox
+        )
         // The cache root holds a mix of per-invocation bucket directories
         // and loose top-level files (e.g. a `.swiftmodule` sitting right
         // beside the bucket directories) — walk it generically instead of
@@ -375,7 +379,7 @@ struct SharedModuleCacheTests {
         )
         let referenceHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: reference.binary))
 
-        let sandbox = try await workspaces.createSandbox(id: "recovery-afflicted")
+        let sandbox = try await workspaces.createSandbox(id: "recovery-afflicted").workspaceRoot
         try FileManager.default.removeItem(at: sandbox)
         try FileManager.default.copyItem(at: projectRoot, to: sandbox)
 
@@ -387,7 +391,9 @@ struct SharedModuleCacheTests {
         // same reset before the build gets a chance to hit it. Mirrors
         // `corruptedCacheEntryStillBuildsCorrectly`'s own "warm first, then
         // sabotage" ordering above.
-        let cachePath = await SharedModuleCacheNamespace.shared.moduleCachePath(forSandbox: sandbox, workingDirectory: sandbox)
+        let cachePath = await SharedModuleCacheNamespace.shared.moduleCachePath(
+            scratchRoot: sandbox.deletingLastPathComponent(), workingDirectory: sandbox
+        )
         try FileManager.default.createDirectory(at: cachePath, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: cachePath.path)
         defer {

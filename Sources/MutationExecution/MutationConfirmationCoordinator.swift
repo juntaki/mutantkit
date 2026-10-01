@@ -247,7 +247,7 @@ struct MutationConfirmationCoordinator: Sendable {
             )
         }
 
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-crash-confirm")
         } catch {
@@ -258,7 +258,7 @@ struct MutationConfirmationCoordinator: Sendable {
         do {
             sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
         }
 
@@ -266,22 +266,22 @@ struct MutationConfirmationCoordinator: Sendable {
         do {
             applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
         }
 
         let artifact: BuildArtifact
         do {
-            artifact = try await build.buildMutant(applied, in: sandbox)
+            artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The confirmation rebuild did not build: \(error)")
         }
 
         let confirmingRun: TestRunResult
         do {
             confirmingRun = try await runMutantTests(
-                point, artifact: artifact, in: sandbox,
+                point, artifact: artifact, in: sandbox.workspaceRoot,
                 // Same per-mutant timeout the primary run this is confirming
                 // used — derived the same way, from the same
                 // `selectedTests`, never recomputed independently or widened
@@ -290,11 +290,11 @@ struct MutationConfirmationCoordinator: Sendable {
                 selectedTests: selectedTests
             )
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
         }
 
-        try? await workspaces.destroySandbox(at: sandbox)
+        try? await workspaces.destroySandbox(sandbox)
 
         let normalizedOriginal = originalDiagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedConfirming = confirmingRun.diagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -356,7 +356,7 @@ struct MutationConfirmationCoordinator: Sendable {
             )
         }
 
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-timeout-confirm")
         } catch {
@@ -367,7 +367,7 @@ struct MutationConfirmationCoordinator: Sendable {
         do {
             sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
         }
 
@@ -375,15 +375,15 @@ struct MutationConfirmationCoordinator: Sendable {
         do {
             applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
         }
 
         let artifact: BuildArtifact
         do {
-            artifact = try await build.buildMutant(applied, in: sandbox)
+            artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The confirmation rebuild did not build: \(error)")
         }
 
@@ -415,7 +415,7 @@ struct MutationConfirmationCoordinator: Sendable {
         let confirmingRun: TestRunResult
         do {
             confirmingRun = try await runMutantTests(
-                point, artifact: artifact, in: sandbox,
+                point, artifact: artifact, in: sandbox.workspaceRoot,
                 // Same per-mutant timeout the primary run this is confirming
                 // used — derived the same way, from the same
                 // `selectedTests`, never recomputed independently or widened
@@ -424,8 +424,8 @@ struct MutationConfirmationCoordinator: Sendable {
                 selectedTests: selectedTests
             )
         } catch {
-            if let innerConfirmationSandbox { try? await workspaces.destroySandbox(at: innerConfirmationSandbox) }
-            try? await workspaces.destroySandbox(at: sandbox)
+            if let innerConfirmationSandbox { try? await workspaces.destroyProductsClone(at: innerConfirmationSandbox) }
+            try? await workspaces.destroySandbox(sandbox)
             return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
         }
 
@@ -452,8 +452,8 @@ struct MutationConfirmationCoordinator: Sendable {
             observations.append(observation)
         }
 
-        if let innerConfirmationSandbox { try? await workspaces.destroySandbox(at: innerConfirmationSandbox) }
-        try? await workspaces.destroySandbox(at: sandbox)
+        if let innerConfirmationSandbox { try? await workspaces.destroyProductsClone(at: innerConfirmationSandbox) }
+        try? await workspaces.destroySandbox(sandbox)
 
         // A crash, unlike an assertion kill, is never confirmed on the same
         // artifact (see `confirmCrashKill`'s doc comment) — its own fresh,

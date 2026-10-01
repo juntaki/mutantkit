@@ -24,8 +24,15 @@ struct DryRunCommand: AsyncParsableCommand {
 
         try ConfigurationPreflight.run(settings)
 
-        let resolution = try await AppleAdapterFactory.resolve(configuration: settings, in: root)
+        let scratch = root.appendingPathComponent(".mutantkit/dry-run")
+        let manifestDumps = SwiftPMManifestDumps()
+        let resolution = try await LocalPackageLayout.resolve(
+            AppleAdapterFactory.resolve(configuration: settings, in: root, manifestDumps: manifestDumps),
+            configuration: settings, projectRoot: root, scratchRoot: scratch, manifestDumps: manifestDumps
+        )
+        let layout = resolution.sandboxLayout ?? .projectOnly(root)
         print("Project: \(resolution.detection.kind.rawValue) — \(resolution.detection.reason)")
+        print(LocalPackageLayout.summary(of: layout))
 
         // Same preflight `run` performs before its baseline, and for the same
         // reasons: a simulator that cannot pass `bootstatus` should fail here,
@@ -65,20 +72,19 @@ struct DryRunCommand: AsyncParsableCommand {
         \(resourceSnapshot.freeMemoryBytes.map { "\($0 / 1_048_576) MB free" } ?? "memory unknown")
         """)
 
-        let scratch = root.appendingPathComponent(".mutantkit/dry-run")
-        let workspaces = try WorkspaceManager(projectRoot: root, scratchRoot: scratch)
+        let workspaces = try LocalPackageLayout.workspaceManager(
+            layout: layout, kind: resolution.detection.kind, projectPath: settings.project.path, scratchRoot: scratch
+        )
         let id = "dry-run-baseline"
-        let expected = scratch.appendingPathComponent(WorkspaceManager.directoryName(for: id))
-        if FileManager.default.fileExists(atPath: expected.path) {
-            try await workspaces.destroySandbox(at: expected)
-        }
-        let sandbox = try await workspaces.createSandbox(id: id)
+        try await workspaces.destroyExistingSandbox(id: id)
+        let sandbox = try await LocalPackageLayout.createSandbox(id: id, in: workspaces)
+        print("Sandbox workspace: \(sandbox.workspaceRoot.path)")
 
         do {
             print("Building baseline…")
             let artifact: BuildArtifact
             do {
-                artifact = try await resolution.adapter.build.buildBaseline(in: sandbox)
+                artifact = try await resolution.adapter.build.buildBaseline(in: sandbox.workspaceRoot)
             } catch let failure as BuildFailure {
                 // v0.5 Stable Contracts: diagnostics go to stderr, not
                 // stdout — both lines here are the failure report itself
@@ -92,7 +98,7 @@ struct DryRunCommand: AsyncParsableCommand {
             print("Testing baseline…")
             let result = try await resolution.adapter.test.runBaseline(
                 artifact,
-                in: sandbox,
+                in: sandbox.workspaceRoot,
                 timeoutSeconds: settings.timeouts.baselineSeconds
             )
 
@@ -110,9 +116,9 @@ struct DryRunCommand: AsyncParsableCommand {
             if let warning = passed.stderrWarning { FileHandle.standardError.write(Data(warning.utf8)) }
             print("Build: \(artifact.command.displayString)")
             print("Test:  \(result.command.displayString)")
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await workspaces.destroySandbox(sandbox)
             throw error
         }
     }

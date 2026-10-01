@@ -14,10 +14,14 @@ public enum AppleAdapterFactory {
     public struct Resolution: Sendable {
         public let adapter: any ProjectAdapter
         public let detection: ProjectDetection
+        /// The layout `adapter` was built with, once one is resolved (see
+        /// `withSandboxLayout(_:configuration:projectRoot:)`).
+        public let sandboxLayout: SandboxLayout?
 
-        public init(adapter: any ProjectAdapter, detection: ProjectDetection) {
+        public init(adapter: any ProjectAdapter, detection: ProjectDetection, sandboxLayout: SandboxLayout? = nil) {
             self.adapter = adapter
             self.detection = detection
+            self.sandboxLayout = sandboxLayout
         }
     }
 
@@ -31,11 +35,15 @@ public enum AppleAdapterFactory {
     /// `DestinationResolver` — so every caller of `resolve` (`mutantkit run`,
     /// `reproduce`, `doctor`) gets the same one-time-resolved destination for
     /// free, rather than each needing its own copy of this step.
+    ///
+    /// `manifestDumps`, when given, keeps the package manifest evaluation
+    /// detection makes for local-package discovery to reuse.
     public static func resolve(
         configuration: Configuration,
-        in directory: URL
+        in directory: URL,
+        manifestDumps: SwiftPMManifestDumps? = nil
     ) async throws -> Resolution {
-        let detection = try await detect(configuration: configuration, in: directory)
+        let detection = try await detect(configuration: configuration, in: directory, manifestDumps: manifestDumps)
         let resolvedDestination = try await resolveDestinationIfNeeded(
             for: detection.kind, configuration: configuration, in: directory
         )
@@ -63,7 +71,7 @@ public enum AppleAdapterFactory {
         in directory: URL,
         replaying resolvedDestination: ResolvedDestination
     ) async throws -> Resolution {
-        let detection = try await detect(configuration: configuration, in: directory)
+        let detection = try await detect(configuration: configuration, in: directory, manifestDumps: nil)
         return Resolution(
             adapter: adapter(
                 for: detection, configuration: configuration, projectRoot: directory,
@@ -83,11 +91,12 @@ public enum AppleAdapterFactory {
         configuration: Configuration,
         projectRoot: URL,
         resolvedDestination: ResolvedDestination? = nil,
-        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil
+        workerDevicesByWorkspace: [String: SimulatorDevice]? = nil,
+        sandboxLayout: SandboxLayout? = nil
     ) -> any ProjectAdapter {
         switch detection.kind {
         case .swiftPackageMacOS:
-            SwiftPackageMacOSProjectAdapter(configuration: configuration)
+            SwiftPackageMacOSProjectAdapter(configuration: configuration, sandboxLayout: sandboxLayout)
 
         case .swiftPackageApple, .xcodeProject, .xcodeWorkspace:
             XcodeBuildProjectAdapter(
@@ -96,14 +105,15 @@ public enum AppleAdapterFactory {
                 projectFile: detection.projectFile,
                 projectRoot: projectRoot,
                 resolvedDestination: resolvedDestination,
-                workerDevicesByWorkspace: workerDevicesByWorkspace
+                workerDevicesByWorkspace: workerDevicesByWorkspace,
+                sandboxLayout: sandboxLayout
             )
 
         case .auto:
             // Unreachable via `resolve`, which resolves `.auto` before it gets here.
             // The host adapter is the safe fallback: it fails loudly and cheaply
             // rather than launching a simulator against a guess.
-            SwiftPackageMacOSProjectAdapter(configuration: configuration)
+            SwiftPackageMacOSProjectAdapter(configuration: configuration, sandboxLayout: sandboxLayout)
         }
     }
 
@@ -141,7 +151,8 @@ public enum AppleAdapterFactory {
     /// not seen, and overriding them there is unfixable from their side.
     private static func detect(
         configuration: Configuration,
-        in directory: URL
+        in directory: URL,
+        manifestDumps: SwiftPMManifestDumps?
     ) async throws -> ProjectDetection {
         guard configuration.project.kind == .auto else {
             return ProjectDetection(
@@ -150,7 +161,7 @@ public enum AppleAdapterFactory {
                 projectFile: locateProjectFile(for: configuration.project.kind, in: directory)
             )
         }
-        return try await ProjectDetector.detect(in: directory)
+        return try await ProjectDetector.detect(in: directory, manifestDumps: manifestDumps)
     }
 
     /// Finds the file a configured kind implies, so an explicit kind still gets
@@ -172,5 +183,70 @@ public enum AppleAdapterFactory {
         case .auto:
             return nil
         }
+    }
+}
+
+// MARK: - Sandbox layout
+
+public extension AppleAdapterFactory {
+    /// How the project at `directory` is identified, without resolving an
+    /// adapter or a destination: for a caller that needs only the kind.
+    static func detection(
+        configuration: Configuration, in directory: URL, manifestDumps: SwiftPMManifestDumps? = nil
+    ) async throws -> ProjectDetection {
+        try await detect(configuration: configuration, in: directory, manifestDumps: manifestDumps)
+    }
+
+    /// Where the project and the local packages its build reads sit in
+    /// every sandbox, resolved once per run before any sandbox exists.
+    ///
+    /// A host Swift package gets its local path dependencies discovered and
+    /// laid out beside it. Every other kind is project-only: local packages
+    /// an Xcode project references are not analysed yet.
+    static func sandboxLayout(
+        for kind: ProjectKind,
+        projectRoot: URL,
+        projectPath: String?,
+        scratchRoot: URL,
+        excludes: [String] = WorkspaceManager.defaultExcludes,
+        manifestDumps: SwiftPMManifestDumps = SwiftPMManifestDumps()
+    ) async throws -> SandboxLayout {
+        guard kind == .swiftPackageMacOS else { return .projectOnly(projectRoot) }
+        // Discovery starts at the package, which is below `projectRoot` when
+        // `project.path` says so; the layout is still of `projectRoot`, the
+        // directory every sandbox copies.
+        let packages = try await SwiftPMLocalDependencyResolver(manifestDumps: manifestDumps).localPackageClosure(
+            of: ProjectPathResolution.packageDirectory(in: projectRoot, projectPath: projectPath)
+        )
+        let layout = SandboxLayout.make(
+            canonicalProjectRoot: CanonicalPath.resolve(projectRoot.path) ?? CanonicalPath.lexical(projectRoot.path),
+            localPackages: packages
+        )
+        try SandboxExternalRootValidator.validate(layout: layout, excludes: excludes, scratchRoot: scratchRoot)
+        return layout
+    }
+
+    /// The check each `WorkspaceManager` runs on its first sandbox: the same
+    /// discovery as `sandboxLayout(for:...)`, evaluated inside the sandbox.
+    /// It applies to project-only layouts too, which is what catches an
+    /// absolute package path in a project that looks dependency-free.
+    static func containmentProof(for kind: ProjectKind, projectPath: String?) -> (any SandboxContainmentProving)? {
+        kind == .swiftPackageMacOS ? SwiftPMSandboxContainmentProof(projectPath: projectPath) : nil
+    }
+
+    /// `resolution` with its adapter rebuilt for `layout`, keeping the
+    /// destination it already resolved.
+    static func withSandboxLayout(
+        _ layout: SandboxLayout, resolution: Resolution, configuration: Configuration, projectRoot: URL
+    ) -> Resolution {
+        Resolution(
+            adapter: adapter(
+                for: resolution.detection, configuration: configuration, projectRoot: projectRoot,
+                resolvedDestination: (resolution.adapter as? XcodeBuildProjectAdapter)?.resolvedDestination,
+                sandboxLayout: layout
+            ),
+            detection: resolution.detection,
+            sandboxLayout: layout
+        )
     }
 }

@@ -800,12 +800,12 @@ public struct SchemataMutationRunner: Sendable {
         let spanStart = GateTimingRecorder.shared.now()
         let sandbox = try await session.workspaces.createSandbox(id: "schemata-baseline")
         do {
-            let established = try await establishBaseline(in: sandbox, startedAt: started)
-            try? await session.workspaces.destroySandbox(at: sandbox)
+            let established = try await establishBaseline(in: sandbox.workspaceRoot, startedAt: started)
+            try? await session.workspaces.destroySandbox(sandbox)
             await GateTimingRecorder.shared.record("schemata.baseline.total", start: spanStart)
             return established
         } catch {
-            try? await session.workspaces.destroySandbox(at: sandbox)
+            try? await session.workspaces.destroySandbox(sandbox)
             await GateTimingRecorder.shared.record("schemata.baseline.total.failed", start: spanStart)
             throw error
         }
@@ -948,7 +948,7 @@ public struct SchemataMutationRunner: Sendable {
         let embeddedEntries = program.entries.filter(\.isEmbedded)
         guard !embeddedEntries.isEmpty else { return .empty }
 
-        let sandbox: URL
+        let sandbox: Sandbox
         do {
             let sandboxCreateStart = GateTimingRecorder.shared.now()
             sandbox = try await session.workspaces.createSandbox(id: program.chunkID)
@@ -966,12 +966,12 @@ public struct SchemataMutationRunner: Sendable {
             expectedPlacementsByMutationID: expectedPlacementsByMutationID,
             tracker: tracker
         )
-        try? await session.workspaces.destroySandbox(at: sandbox)
+        try? await session.workspaces.destroySandbox(sandbox)
         return result
     }
 
     private func runChunk(
-        _ program: SchemataProgram, entries embeddedEntries: [SchemataPlanEntry], in sandbox: URL,
+        _ program: SchemataProgram, entries embeddedEntries: [SchemataPlanEntry], in sandbox: Sandbox,
         timeoutController: TimeoutController,
         perTestCoverage: PerTestCoverageMap?,
         coverage: CoverageMap?,
@@ -1000,9 +1000,19 @@ public struct SchemataMutationRunner: Sendable {
     /// value, never mutated in place: a rebuild produces an entirely new
     /// `ChunkExecutionState`, it never patches an existing one.
     private struct ChunkExecutionState {
-        let sandbox: URL
+        /// Destroyed and recreated as a unit by a recovery rebuild.
+        let container: Sandbox
         let artifact: BuildArtifact
         let receipt: SchemataBuildReceipt?
+        /// The workspace the chunk is built and run in.
+        var sandbox: URL {
+            container.workspaceRoot
+        }
+
+        /// The container's directory name, which timing spans label a chunk by.
+        var chunkLabel: String {
+            container.containerRoot.lastPathComponent
+        }
     }
 
     /// `prepareChunkState`'s result: either a usable `ChunkExecutionState`,
@@ -1040,8 +1050,9 @@ public struct SchemataMutationRunner: Sendable {
     /// `.buildReceiptUnavailable` isolated fallback — no schemata execution
     /// ever proceeds without a proven receipt.
     private func prepareChunkState(
-        program: SchemataProgram, entries embeddedEntries: [SchemataPlanEntry], in sandbox: URL
+        program: SchemataProgram, entries embeddedEntries: [SchemataPlanEntry], in container: Sandbox
     ) async -> ChunkPreparationOutcome {
+        let sandbox = container.workspaceRoot
         let artifact: BuildArtifact
         do {
             artifact = try await build.buildSchemataChunk(loweredSources: program.loweredSources, in: sandbox)
@@ -1143,7 +1154,7 @@ public struct SchemataMutationRunner: Sendable {
             let receipt = try await build.resolveSchemataBuildReceipt(
                 for: Array(uniqueRequestsByUnit.values), artifact: artifact, in: sandbox, context: receiptContext
             )
-            return .ready(ChunkExecutionState(sandbox: sandbox, artifact: artifact, receipt: receipt))
+            return .ready(ChunkExecutionState(container: container, artifact: artifact, receipt: receipt))
         } catch {
             return .failed(
                 embeddedEntries.map { .isolatedFallback(mutationID: $0.mutationID, reason: .buildReceiptUnavailable) },
@@ -1179,8 +1190,8 @@ public struct SchemataMutationRunner: Sendable {
     private func rebuildChunkState(
         program: SchemataProgram, entries remainingEntries: [SchemataPlanEntry], state: ChunkExecutionState
     ) async -> ChunkPreparationOutcome {
-        try? await session.workspaces.destroySandbox(at: state.sandbox)
-        let sandbox: URL
+        try? await session.workspaces.destroySandbox(state.container)
+        let sandbox: Sandbox
         do {
             let sandboxCreateStart = GateTimingRecorder.shared.now()
             sandbox = try await session.workspaces.createSandbox(id: program.chunkID)
@@ -1663,13 +1674,13 @@ public struct SchemataMutationRunner: Sendable {
             )
         } catch {
             await GateTimingRecorder.shared.record(
-                "token.total.failed", chunkID: state.sandbox.lastPathComponent, mutationID: entry.mutationID.rawValue, start: tokenSpanStart
+                "token.total.failed", chunkID: state.chunkLabel, mutationID: entry.mutationID.rawValue, start: tokenSpanStart
             )
             try? FileManager.default.removeItem(at: dispatch.evidenceDirectory)
             return processLaunchFailure(entry, point: dispatch.point, startedAt: dispatch.started, error: error)
         }
         await GateTimingRecorder.shared.record(
-            "token.total", chunkID: state.sandbox.lastPathComponent, mutationID: entry.mutationID.rawValue, start: tokenSpanStart
+            "token.total", chunkID: state.chunkLabel, mutationID: entry.mutationID.rawValue, start: tokenSpanStart
         )
 
         return await processPrimaryObservation(entry, dispatch: dispatch, run: run, state: state)
@@ -1943,7 +1954,7 @@ public struct SchemataMutationRunner: Sendable {
                 nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
             )
             await GateTimingRecorder.shared.record(
-                "token.batch.total", chunkID: state.sandbox.lastPathComponent, start: tokenSpanStart
+                "token.batch.total", chunkID: state.chunkLabel, start: tokenSpanStart
             )
 
             for (mutationID, dispatch) in group {
@@ -2031,14 +2042,14 @@ public struct SchemataMutationRunner: Sendable {
             )
         } catch {
             await GateTimingRecorder.shared.record(
-                "token.batchAmbiguityRecovery.failed", chunkID: state.sandbox.lastPathComponent,
+                "token.batchAmbiguityRecovery.failed", chunkID: state.chunkLabel,
                 mutationID: entry.mutationID.rawValue, start: recoverySpanStart
             )
             try? FileManager.default.removeItem(at: freshDispatch.evidenceDirectory)
             return processLaunchFailure(entry, point: freshDispatch.point, startedAt: freshDispatch.started, error: error)
         }
         await GateTimingRecorder.shared.record(
-            "token.batchAmbiguityRecovery.total", chunkID: state.sandbox.lastPathComponent,
+            "token.batchAmbiguityRecovery.total", chunkID: state.chunkLabel,
             mutationID: entry.mutationID.rawValue, start: recoverySpanStart
         )
 

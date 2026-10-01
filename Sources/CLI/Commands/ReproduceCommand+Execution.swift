@@ -16,32 +16,35 @@ import SwiftFrontend
 /// exactly that reason — their only caller, `run()`, lives in
 /// `ReproduceCommand.swift`.
 extension ReproduceCommand {
-    /// A fresh, deterministic sandbox for one reproduction — moved with its
-    /// own comment from `run()`.
+    /// A fresh, deterministic sandbox for one reproduction, laid out like a
+    /// run's: the project and every local package outside it.
     ///
     /// Deliberately outside `.mutantkit/sandboxes`: the runner destroys those,
     /// and the whole point of this command is a directory that survives.
-    func prepareFreshSandbox(root: URL, mutationID: String) async throws -> URL {
+    func prepareFreshSandbox(
+        root: URL, settings: Configuration, mutationID: String
+    ) async throws -> (sandbox: Sandbox, layout: SandboxLayout) {
         let sandboxRoot = root.appendingPathComponent(".mutantkit/reproduce")
-        let workspaces = try WorkspaceManager(projectRoot: root, scratchRoot: sandboxRoot)
+        let kind = try await AppleAdapterFactory.detection(configuration: settings, in: root).kind
+        let layout = try await LocalPackageLayout.layout(
+            kind: kind, projectRoot: root, projectPath: settings.project.path, scratchRoot: sandboxRoot
+        )
+        let workspaces = try LocalPackageLayout.workspaceManager(
+            layout: layout, kind: kind, projectPath: settings.project.path, scratchRoot: sandboxRoot
+        )
 
         // `WorkspaceManager.createSandbox` is intentionally incremental: it may
         // keep destination files whose size and mtime match, which is useful for
         // normal mutation throughput but wrong for an independent reproduction.
         // A previous reproduce attempt may contain mutated source, DerivedData,
-        // generated files or test artifacts that no longer correspond to the
-        // current tree. Reproduction therefore always starts by deleting the
-        // deterministic sandbox path before repopulating it.
-        let expectedSandbox = sandboxRoot.appendingPathComponent(
-            WorkspaceManager.directoryName(for: mutationID)
-        )
-        if FileManager.default.fileExists(atPath: expectedSandbox.path) {
-            try await workspaces.destroySandbox(at: expectedSandbox)
-        }
+        // generated files, test artifacts or local package copies that no
+        // longer correspond to the current tree. Reproduction therefore always
+        // starts by deleting the deterministic sandbox before repopulating it.
+        try await workspaces.destroyExistingSandbox(id: mutationID)
 
-        let sandbox = try await workspaces.createSandbox(id: mutationID)
-        print("Sandbox: \(sandbox.path) (fresh)")
-        return sandbox
+        let sandbox = try await LocalPackageLayout.createSandbox(id: mutationID, in: workspaces)
+        print("Sandbox: \(sandbox.workspaceRoot.path) (fresh)")
+        return (sandbox, layout)
     }
 
     /// Applies one mutation in place and prints the diff — moved with its
@@ -75,6 +78,18 @@ extension ReproduceCommand {
     /// The adapter resolution and mutant timeout this reproduction builds
     /// and tests against — moved with its own branches from `run()`.
     func resolveExecutionContext(
+        settings: Configuration, loadedPlan: MutationPlan, root: URL, layout: SandboxLayout
+    ) async throws -> (resolution: AppleAdapterFactory.Resolution, mutantTimeoutSeconds: Double) {
+        let (resolution, mutantTimeoutSeconds) = try await resolveAdapterAndTimeout(
+            settings: settings, loadedPlan: loadedPlan, root: root
+        )
+        return (
+            AppleAdapterFactory.withSandboxLayout(layout, resolution: resolution, configuration: settings, projectRoot: root),
+            mutantTimeoutSeconds
+        )
+    }
+
+    private func resolveAdapterAndTimeout(
         settings: Configuration, loadedPlan: MutationPlan, root: URL
     ) async throws -> (resolution: AppleAdapterFactory.Resolution, mutantTimeoutSeconds: Double) {
         if replay {
@@ -124,13 +139,13 @@ extension ReproduceCommand {
         resolution: AppleAdapterFactory.Resolution,
         applied: AppliedMutation,
         point: MutationPoint,
-        sandbox: URL,
+        sandbox: Sandbox,
         mutantTimeoutSeconds: Double
     ) async throws {
         print("Building…")
         let artifact: BuildArtifact
         do {
-            artifact = try await resolution.adapter.build.buildMutant(applied, in: sandbox)
+            artifact = try await resolution.adapter.build.buildMutant(applied, in: sandbox.workspaceRoot)
         } catch let failure as BuildFailure {
             // Display-only, not a scored verdict — this command builds one
             // mutant in isolation with no baseline to compare it against
@@ -149,7 +164,7 @@ extension ReproduceCommand {
         let result = try await resolution.adapter.test.runMutant(
             point,
             artifact: artifact,
-            in: sandbox,
+            in: sandbox.workspaceRoot,
             timeoutSeconds: mutantTimeoutSeconds
         )
 
@@ -181,7 +196,7 @@ extension ReproduceCommand {
         Build: \(artifact.command.displayString)
         Test:  \(result.command.displayString)
 
-        Sandbox kept at \(sandbox.path)
+        Sandbox kept at \(sandbox.workspaceRoot.path)
         """)
     }
 }

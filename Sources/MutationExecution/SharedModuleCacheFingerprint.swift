@@ -4,7 +4,7 @@ import MutationModel
 /// Hardening pass for `Configuration.execution.sharedModuleCache`: a real,
 /// actually-queried snapshot of the toolchain identity the shared module
 /// cache directory is namespaced under -- see `WorkspaceManager
-/// .moduleCachePath(forSandbox:fingerprint:)`.
+/// .moduleCachePath(underScratchRoot:fingerprint:)`.
 ///
 /// `WorkspaceManager.init`'s own unconditional wipe-at-construction (see its
 /// doc comment) already makes the shared cache run-scoped in the common
@@ -274,10 +274,8 @@ public actor ToolchainCacheFingerprintProbe {
 /// this process happens to construct (`RunCommand` alone constructs two --
 /// the isolated run's own, and a second for schemata's shared chunk build)
 /// -- there is exactly one right answer for a given scratch root, not one
-/// per `WorkspaceManager` instance, and threading a per-instance cache
-/// through every adapter-construction call site is exactly what
-/// `WorkspaceManager.moduleCachePath(forSandbox:fingerprint:)`'s own doc
-/// comment already rejected doing for the sandbox path itself.
+/// per `WorkspaceManager` instance, so no per-instance cache is threaded
+/// through every adapter-construction call site.
 public actor SharedModuleCacheNamespace {
     public static let shared = SharedModuleCacheNamespace()
 
@@ -300,7 +298,9 @@ public actor SharedModuleCacheNamespace {
 
     public init() {}
 
-    /// The path a build in `sandbox` should point `-module-cache-path` at.
+    /// The path a build in a sandbox under `scratchRoot` should point
+    /// `-module-cache-path` at. The caller names the scratch root
+    /// explicitly; see `SandboxLayout.scratchRoot(ofWorkspace:)`.
     ///
     /// Reset-once semantics: the *first* call this process makes for a given
     /// scratch root deletes any pre-existing directory at the resolved path
@@ -325,10 +325,9 @@ public actor SharedModuleCacheNamespace {
     /// `forceRemove(_:)` below) -- one attempt per path, made right
     /// alongside the reset it is meant to protect the *next* one of, not
     /// repeated on every call.
-    public func moduleCachePath(forSandbox sandbox: URL, workingDirectory: URL) async -> URL {
-        let scratchRoot = sandbox.deletingLastPathComponent()
+    public func moduleCachePath(scratchRoot: URL, workingDirectory: URL) async -> URL {
         let fingerprint = await ToolchainCacheFingerprintProbe.shared.fingerprint(workingDirectory: workingDirectory)
-        let path = WorkspaceManager.moduleCachePath(forSandbox: sandbox, fingerprint: fingerprint.digest)
+        let path = WorkspaceManager.moduleCachePath(underScratchRoot: scratchRoot, fingerprint: fingerprint.digest)
 
         if resetScratchRoots.insert(scratchRoot.path).inserted {
             acquireClaim(for: path, scratchRoot: scratchRoot)
@@ -365,7 +364,7 @@ public actor SharedModuleCacheNamespace {
 
     /// Deletes the shared module cache directory at `path` -- but *only*
     /// when this process itself holds the exclusive claim on it acquired in
-    /// `moduleCachePath(forSandbox:workingDirectory:)` above. Otherwise a
+    /// `moduleCachePath(scratchRoot:workingDirectory:)` above. Otherwise a
     /// no-op.
     ///
     /// This exists for `SwiftPackageMacOSAdapter`'s corruption-recovery
