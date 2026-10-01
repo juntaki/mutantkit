@@ -1190,8 +1190,8 @@ jobs:
   # success", and the shape this repository's own trust invariants exist to
   # rule out.
   #
-  # Deliberately simpler than the private repo's own merge-gate, which
-  # derives each job's expected result from a `route` job's declared
+  # Deliberately simpler than a `route`-driven merge-gate, which derives
+  # each job's expected result from a `route` job's declared
   # execution plan. With no `route` here there is no plan to compare
   # against, so mirroring that machinery would add a permissive failure mode
   # (a mis-derived expectation reading as an intentional skip) in exchange

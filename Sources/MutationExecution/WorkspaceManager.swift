@@ -329,7 +329,7 @@ public actor WorkspaceManager {
     /// `clonefile(2)` recursively clones a directory hierarchy atomically,
     /// and nothing downstream of a build (`XCTestRunLocator`, a `.xctestrun`'s
     /// own `__TESTROOT__`-relative paths) ever looks outside this directory —
-    /// see `XcodeBuildAdapter.productsDirectory(in:)` and `XCTestRunLocator`.
+    /// see `XcodeBuildDriver`'s own `productsDirectory(in:)` and `XCTestRunLocator`.
     public func cloneProducts(from productsDirectory: URL, id: String) async throws -> URL {
         guard !id.isEmpty, !id.contains("/"), id != ".", id != ".." else {
             throw WorkspaceError.invalidSandboxID(id)

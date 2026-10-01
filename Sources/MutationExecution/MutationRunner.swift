@@ -38,29 +38,25 @@ private struct ConfirmationSandboxRequest {
 public struct MutationRunner: Sendable {
     private let plan: MutationPlan
     private let configuration: Configuration
-    private let projectRoot: URL
-    private let toolchain: ToolchainFingerprint
     private let build: any BuildAdapter
     private let test: any TestAdapter
-    private let workspaces: WorkspaceManager
+    /// `test`'s `BatchTestable` conformance, resolved once here — `test` is
+    /// a `let`, fixed for this runner's whole lifetime, so memoizing is
+    /// bit-for-bit equivalent to re-casting on every call. Wrapper-aware
+    /// (`testAdapterCapability`), never a bare `as?`, per the same
+    /// reasoning as `MutationConfirmationCoordinator`'s memoized
+    /// properties. See this project's internal execution-engine
+    /// restructuring notes (not part of this public repo) for the full
+    /// rationale.
+    private let batchableTest: (any BatchTestable)?
     private let checkpoints: CheckpointStore?
     private let artifactsRoot: URL?
-    private let coverageCache: CoverageProfileCache?
-    private let coverageCacheKey: CoverageProfileCache.Key?
     private let resultCache: MutationResultCache?
     private let resultCacheDigest: String?
     private let priorityStore: TestPriorityStore?
     private let monotonicNow: @Sendable () -> TimeInterval
     private let operationalIssues = OperationalIssueLog()
     private let progress: ProgressReporter?
-    /// When supplied, `establishBaseline()` uses this instead of building
-    /// and testing the project itself — `SchemataRunOrchestration`'s own
-    /// mechanism for sharing one baseline between the schemata and
-    /// isolated-fallback passes (see `SharedBaselineEstablisher`'s own doc
-    /// comment). `nil` for every other caller, which is every existing one:
-    /// this parameter changes nothing about a plain `mutantkit run
-    /// --strategy isolated`.
-    private let preEstablishedBaseline: SharedBaselineEstablisher.Outcome?
 
     /// Retesting a decided outcome (same-artifact confirmation for a kill,
     /// fresh-rebuild confirmation for a crash or a timeout) and the
@@ -78,6 +74,59 @@ public struct MutationRunner: Sendable {
     /// so a warning `finalize` records still reaches this run's own
     /// `RunReport.operationalIssues` below.
     private let evidenceAssembler: MutationEvidenceAssembler
+
+    /// The shared, immutable execution-session type both this runner and
+    /// `SchemataMutationRunner` construct internally — see `RunSession`'s
+    /// own doc comment. Built once, at the end of `init`, from parameters
+    /// this initializer already receives (or derives, for
+    /// `toolchain`/`policy`). An earlier restructuring pass migrated every
+    /// one of this runner's own internal reads of
+    /// `projectRoot`/`toolchain`/`workspaces`/`coverageCache`/
+    /// `coverageCacheKey`/`preEstablishedBaseline` onto `session` — see the
+    /// computed properties immediately below, which are now those fields'
+    /// one reading path. `plan`/`configuration`/`build`/`test` and the
+    /// isolated-only fields above stay this runner's own stored properties —
+    /// `RunSession` carries no `configuration` field at all (see that type's
+    /// own doc comment): it is read in far more places in this file than
+    /// every field below combined, and the plan's Step 7 deliberately stops
+    /// the migration short of it — a mechanical, low-information rename left
+    /// for a future step if wanted.
+    private let session: RunSession
+
+    /// `session.projectRoot`, unwrapped: never `nil` for a `MutationRunner`
+    /// itself — this runner's own `init` always supplies a real value.
+    /// Only `SchemataMutationRunner`'s own session ever leaves this field
+    /// `nil` (see `RunSession`'s doc comment for why the field is Optional
+    /// at the shared-type level at all).
+    private var projectRoot: URL { session.projectRoot! }
+
+    /// `session.toolchain`, unwrapped — the toolchain doing the running,
+    /// which is not necessarily the one that did the planning; defaults to
+    /// the plan's own (see `init`). Same non-`nil` guarantee as
+    /// `projectRoot` above.
+    private var toolchain: ToolchainFingerprint { session.toolchain! }
+
+    /// `session.workspaces` — the sandbox lifecycle every build/test/
+    /// confirmation path in this file goes through.
+    private var workspaces: WorkspaceManager { session.workspaces }
+
+    /// `session.coverageCache` — when supplied with `coverageCacheKey`, the
+    /// baseline pass's per-test coverage attribution is loaded from this
+    /// cache instead of re-measured when the key matches a prior run. See
+    /// `init`'s own doc comment for the full contract.
+    private var coverageCache: CoverageProfileCache? { session.coverageCache }
+
+    /// `session.coverageCacheKey` — see `coverageCache` above.
+    private var coverageCacheKey: CoverageProfileCache.Key? { session.coverageCacheKey }
+
+    /// `session.preEstablishedBaseline` — when supplied, `establishBaseline()`
+    /// uses this instead of building and testing the project itself —
+    /// `SchemataRunOrchestration`'s own mechanism for sharing one baseline
+    /// between the schemata and isolated-fallback passes (see
+    /// `SharedBaselineEstablisher`'s own doc comment). `nil` for every other
+    /// caller, which is every existing one: this parameter changes nothing
+    /// about a plain `mutantkit run --strategy isolated`.
+    private var preEstablishedBaseline: SharedBaselineEstablisher.Outcome? { session.preEstablishedBaseline }
 
     /// Cannot collide with a mutant's sandbox: every mutation ID starts `mut_`.
     private static let baselineSandboxID = "baseline"
@@ -151,33 +200,45 @@ public struct MutationRunner: Sendable {
     ) {
         self.plan = plan
         self.configuration = configuration
-        self.projectRoot = projectRoot
         self.build = build
         self.test = test
-        self.workspaces = workspaces
+        batchableTest = testAdapterCapability((any BatchTestable).self, for: test)
         self.checkpoints = checkpoints
         self.artifactsRoot = artifactsRoot
-        self.toolchain = toolchain ?? plan.toolchain
-        self.coverageCache = coverageCache
-        self.coverageCacheKey = coverageCacheKey
         self.resultCache = resultCache
         self.resultCacheDigest = resultCacheDigest
         self.priorityStore = priorityStore
         self.progress = progress
-        self.preEstablishedBaseline = preEstablishedBaseline
         self.monotonicNow = monotonicNow
+        // Computed once, here, and handed to every collaborator below that
+        // needs it (`confirmationCoordinator`, `evidenceAssembler`,
+        // `session`) — the Step 1 factory this calls is already the one
+        // canonical derivation from `Configuration.execution`, so computing
+        // it three times inline (as before Step 9) was itself a small
+        // instance of the exact duplication Step 1 exists to remove, even
+        // though every call always agreed bit-for-bit.
+        let policy = MutationVerdictVerifier.VerdictVerificationPolicy(configuration.execution)
         self.confirmationCoordinator = MutationConfirmationCoordinator(
-            workspaces: workspaces, build: build, test: test, configuration: configuration, projectRoot: projectRoot
+            workspaces: workspaces, build: build, test: test, policy: policy, projectRoot: projectRoot
         )
         self.evidenceAssembler = MutationEvidenceAssembler(
             plan: plan,
-            configuration: configuration,
+            policy: policy,
             checkpoints: checkpoints,
             artifactsRoot: artifactsRoot,
             resultCache: resultCache,
             resultCacheDigest: resultCacheDigest,
             progress: progress,
             operationalIssues: operationalIssues
+        )
+        self.session = RunSession(
+            projectRoot: projectRoot,
+            toolchain: toolchain ?? plan.toolchain,
+            workspaces: workspaces,
+            policy: policy,
+            coverageCache: coverageCache,
+            coverageCacheKey: coverageCacheKey,
+            preEstablishedBaseline: preEstablishedBaseline
         )
     }
 
@@ -265,7 +326,7 @@ public struct MutationRunner: Sendable {
         _ pending: [MutationPoint], baseline: BaselineContext
     ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary?) {
         if let batchSize = configuration.execution.testBatchSize, batchSize > 0,
-           test is any BatchTestable {
+           batchableTest != nil {
             if configuration.execution.incrementalBuild {
                 // Wave-based early kill (`testInWaves`, dispatched from
                 // `testAndFinish`) has no pipelined equivalent: it tests one
@@ -735,7 +796,7 @@ public struct MutationRunner: Sendable {
         // only place that call is made. Abandoning the drain here would
         // leave every worker's outstanding count stuck above zero forever,
         // and their sandboxes never destroyed.
-        guard let batchable = test as? any BatchTestable else {
+        guard let batchable = batchableTest else {
             while let next = await coordinator.receive() {
                 let result = await finishAfterTest(
                     next.item, baseline: baseline,
@@ -971,7 +1032,7 @@ public struct MutationRunner: Sendable {
         // attribution path) every other batched path here uses.
         if configuration.execution.earlyAbortSelectedTests,
            let store = priorityStore,
-           let batchable = test as? any BatchTestable,
+           let batchable = batchableTest,
            !readyToTest.isEmpty {
             return await testInWaves(
                 readyToTest: readyToTest, baseline: baseline, store: store, batchable: batchable, batchSize: batchSize
@@ -980,7 +1041,7 @@ public struct MutationRunner: Sendable {
 
         var collected: [MutationResult] = []
 
-        guard let batchable = test as? any BatchTestable, !readyToTest.isEmpty else {
+        guard let batchable = batchableTest, !readyToTest.isEmpty else {
             // Nothing built successfully, or the adapter stopped conforming
             // between the dispatch check and here (it cannot, but the
             // fallback costs nothing): destroy any leftover sandboxes and

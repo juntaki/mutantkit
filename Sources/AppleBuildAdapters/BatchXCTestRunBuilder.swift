@@ -30,7 +30,7 @@ public struct BatchTestItem: Sendable {
     /// selected.
     public let onlyTestingIdentifiers: [TestIdentifier]?
     /// Merged into every target dict's own `EnvironmentVariables` (additive,
-    /// same target-scoped merge `XcodeBuildAdapter.xctestrunVariant` already
+    /// same target-scoped merge `XCTestRunLocator.writingVariant` already
     /// does for a single, unbatched schemata token) — `nil` for every
     /// isolated-mode caller, which needs no per-configuration environment at
     /// all. Schemata batching (`runSchemataTokenBatch`) is the one caller

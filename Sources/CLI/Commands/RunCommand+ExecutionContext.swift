@@ -173,23 +173,6 @@ extension RunCommand {
         )
     }
 
-    /// The isolated-mode-only pieces `execute` threads into `MutationRunner`
-    /// — none of these participate in schemata mode v1 (no checkpoint,
-    /// coverage cache, or cross-run result cache; schemata mode does not
-    /// yet support them) —
-    /// bundled so `execute` itself stays within SwiftLint's parameter-count
-    /// threshold.
-    struct IsolatedRunOptions {
-        let checkpoints: CheckpointStore
-        let artifactsRoot: URL
-        let coverageCache: CoverageProfileCache
-        let coverageCacheKey: CoverageProfileCache.Key?
-        let resultCache: MutationResultCache?
-        let resultCacheDigest: String?
-        let priorityStore: TestPriorityStore?
-        let progress: ProgressReporter?
-    }
-
     /// Everything `runAfterSimulatorPoolProvisioned` needs from the
     /// toolchain/checkpoint/cache setup below, bundled so the caller reads
     /// one destructuring assignment instead of the setup's own six local
@@ -258,11 +241,7 @@ extension RunCommand {
         if noResume || fingerprint == nil {
             try? FileManager.default.removeItem(at: checkpointURL)
         }
-        let verificationPolicy = MutationVerdictVerifier.VerdictVerificationPolicy(
-            retestKilledMutants: settings.execution.retestKilledMutants,
-            confirmCrashKills: settings.execution.confirmCrashKills,
-            confirmTimedOutMutants: settings.execution.confirmTimedOutMutants
-        )
+        let verificationPolicy = MutationVerdictVerifier.VerdictVerificationPolicy(settings.execution)
         let checkpoints = CheckpointStore(url: checkpointURL, policy: verificationPolicy)
         let alreadyDone = (try? await checkpoints.completedIDs(plan: loadedPlan).count) ?? 0
         if alreadyDone > 0 {

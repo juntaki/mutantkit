@@ -216,7 +216,22 @@ public struct SchemataMutationRunner: Sendable {
     private let originalSources: [String: Data]
     private let build: any SchemataBuildable
     private let test: any SchemataTestable
-    private let workspaces: WorkspaceManager
+    /// `test`'s `TestSelecting` conformance, resolved once here rather than
+    /// re-cast in `establishBaseline`'s per-test-coverage branch — `test`
+    /// is a `let`, fixed for this runner's whole lifetime. This is the
+    /// recommended-but-not-load-bearing half of row C (plan §6 Step 8):
+    /// the site it replaces runs at most once per execution already, so
+    /// this buys nothing functionally, but keeps this runner consistent
+    /// with `MutationRunner`'s own equivalent migration rather than being
+    /// the one inconsistent holdout. Wrapper-aware (`testAdapterCapability`),
+    /// never a bare `as?`.
+    private let selectingTest: (any TestSelecting)?
+    /// `test`'s `SchemataBatchTestable` conformance, resolved once here —
+    /// same reasoning as `selectingTest` above, for row I
+    /// (`prepareBatchedPrimaries`).
+    private let batchableTest: (any SchemataBatchTestable)?
+    // `workspaces` migrated to `session.workspaces` — Step 8 of the
+    // extraction plan; the same value, just read from the shared session.
     /// The whole `TimeoutSettings` block, not a single pre-resolved number
     /// — because schemata mode needs *two* structurally different limits and
     /// an earlier single-`timeoutSeconds` parameter silently collapsed them
@@ -247,7 +262,9 @@ public struct SchemataMutationRunner: Sendable {
     /// against, so schemata mode gathers exactly the confirmations
     /// `retestKilledMutants`/`confirmCrashKills`/`confirmTimedOutMutants`
     /// promise, never a policy this runner invents on its own.
-    private let policy: MutationVerdictVerifier.VerdictVerificationPolicy
+    /// Migrated to `session.policy` — Step 8 of the extraction plan (the
+    /// same value: `session.policy` is built from this exact `policy`
+    /// parameter, in `init`, below).
     /// `configuration.execution.selectCoveringTests`, mirrored the same way
     /// `MutationRunner` reads it: covering-test selection is opt-in, and
     /// `false` (the config schema's own default) must reproduce this
@@ -283,19 +300,20 @@ public struct SchemataMutationRunner: Sendable {
     /// entry under the same key. `nil` (the default) means "not configured",
     /// which reproduces this runner's exact pre-cache behaviour: measure on
     /// every run, consult nothing, store nothing.
-    private let coverageCache: CoverageProfileCache?
+    /// Migrated to `session.coverageCache` — Step 8 of the extraction plan.
     /// The digest identifying *which* measured attribution a cache entry is
     /// (`RunContextProbe.computeContextDigest`, computed in the CLI layer).
     /// `nil` means the CLI could not compute one — a best-effort degradation,
     /// never a failed run — and, exactly as in `MutationRunner`, that means
     /// coverage is measured fresh and nothing is stored.
-    private let coverageCacheKey: CoverageProfileCache.Key?
+    /// Migrated to `session.coverageCacheKey` — Step 8 of the extraction plan.
     /// When supplied, `establishBaseline()` uses this instead of building
     /// and testing the project itself — see `SharedBaselineEstablisher`'s
     /// own doc comment. `nil` for every existing caller (a plain schemata
     /// run with no isolated-fallback portion), which is unaffected by this
     /// parameter's existence.
-    private let preEstablishedBaseline: SharedBaselineEstablisher.Outcome?
+    /// Migrated to `session.preEstablishedBaseline` — Step 8 of the
+    /// extraction plan.
     /// The most primary token attempts `runEntries` will fold into one
     /// shared `runSchemataTokenBatch` call, mirroring isolated mode's own
     /// `execution.testBatchSize` (the identical setting `testOneBatch`/
@@ -313,6 +331,23 @@ public struct SchemataMutationRunner: Sendable {
     /// actually waiting on. The isolated backend counts mutants for the same
     /// reason — there, one mutant is one build-and-test cycle.
     private let progress: ProgressReporter?
+
+    /// The shared, immutable execution-session type `MutationRunner` also
+    /// constructs internally — see `RunSession`'s own doc comment. Built
+    /// once, at the end of `init`, from the subset of this initializer's
+    /// parameters `RunSession`
+    /// can actually represent (`workspaces`, `policy`, `coverageCache`,
+    /// `coverageCacheKey`, `preEstablishedBaseline`) — `projectRoot`/
+    /// `toolchain` are `nil` for this runner, since it never receives either
+    /// (see `RunSession`'s doc comment; `configuration` isn't a `RunSession`
+    /// field at all, for the same reason). This
+    /// runner's own former `workspaces`/`policy`/`coverageCache`/
+    /// `coverageCacheKey`/`preEstablishedBaseline` stored properties were
+    /// removed in Step 8 in favor of reading these same values from
+    /// `session` — a rename, not a re-derivation: every one of these fields
+    /// is still set, once, straight from the identical `init` parameter it
+    /// always came from.
+    private let session: RunSession
 
     public init(
         planID: String,
@@ -343,19 +378,25 @@ public struct SchemataMutationRunner: Sendable {
         self.originalSources = originalSources
         self.build = build
         self.test = test
-        self.workspaces = workspaces
+        selectingTest = testAdapterCapability((any TestSelecting).self, for: test)
+        batchableTest = testAdapterCapability((any SchemataBatchTestable).self, for: test)
         self.timeouts = timeouts
         self.toolchainHash = SHA256Digest.of(Data(toolchainHash.utf8))
         self.buildArgumentsHash = SHA256Digest.of(Data(buildArgumentsHash.utf8))
-        self.policy = policy
         self.maxVerifiedTimeoutsPerChunk = maxVerifiedTimeoutsPerChunk
         self.selectCoveringTests = selectCoveringTests
         self.workers = workers
-        self.coverageCache = coverageCache
-        self.coverageCacheKey = coverageCacheKey
-        self.preEstablishedBaseline = preEstablishedBaseline
         self.schemataTokenBatchSize = schemataTokenBatchSize
         self.progress = progress
+        self.session = RunSession(
+            projectRoot: nil,
+            toolchain: nil,
+            workspaces: workspaces,
+            policy: policy,
+            coverageCache: coverageCache,
+            coverageCacheKey: coverageCacheKey,
+            preEstablishedBaseline: preEstablishedBaseline
+        )
     }
 
     public func run() async throws -> Outcome {
@@ -746,7 +787,7 @@ public struct SchemataMutationRunner: Sendable {
     /// baseline whose suite ran nothing: `0 of 0`) that names neither what
     /// failed nor that nothing ran at all.
     private func establishBaseline() async throws -> BaselineEstablishment {
-        if let preEstablishedBaseline {
+        if let preEstablishedBaseline = session.preEstablishedBaseline {
             switch preEstablishedBaseline {
             case let .failed(record, diagnosis):
                 throw RunError.baselineDidNotPass(record: record, diagnosis: diagnosis)
@@ -757,14 +798,14 @@ public struct SchemataMutationRunner: Sendable {
 
         let started = Date()
         let spanStart = GateTimingRecorder.shared.now()
-        let sandbox = try await workspaces.createSandbox(id: "schemata-baseline")
+        let sandbox = try await session.workspaces.createSandbox(id: "schemata-baseline")
         do {
             let established = try await establishBaseline(in: sandbox, startedAt: started)
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await session.workspaces.destroySandbox(at: sandbox)
             await GateTimingRecorder.shared.record("schemata.baseline.total", start: spanStart)
             return established
         } catch {
-            try? await workspaces.destroySandbox(at: sandbox)
+            try? await session.workspaces.destroySandbox(at: sandbox)
             await GateTimingRecorder.shared.record("schemata.baseline.total.failed", start: spanStart)
             throw error
         }
@@ -827,15 +868,15 @@ public struct SchemataMutationRunner: Sendable {
         var perTestCoverage: PerTestCoverageMap?
         if selectCoveringTests {
             let coverageSpanStart = GateTimingRecorder.shared.now()
-            if let key = coverageCacheKey, let cached = await coverageCache?.load(key) {
+            if let key = session.coverageCacheKey, let cached = await session.coverageCache?.load(key) {
                 perTestCoverage = cached
                 await GateTimingRecorder.shared.record("schemata.coverage.cacheHit", start: coverageSpanStart)
-            } else if let selecting = test as? any TestSelecting {
+            } else if let selecting = selectingTest {
                 perTestCoverage = await selecting.measurePerTestCoverage(
                     artifact: artifact, in: sandbox, timeoutSeconds: TimeoutController(settings: timeouts).baselineLimitSeconds
                 )
-                if let measured = perTestCoverage, let key = coverageCacheKey {
-                    await coverageCache?.store(measured, for: key)
+                if let measured = perTestCoverage, let key = session.coverageCacheKey {
+                    await session.coverageCache?.store(measured, for: key)
                 }
                 await GateTimingRecorder.shared.record("schemata.coverage.measured", start: coverageSpanStart)
             }
@@ -910,7 +951,7 @@ public struct SchemataMutationRunner: Sendable {
         let sandbox: URL
         do {
             let sandboxCreateStart = GateTimingRecorder.shared.now()
-            sandbox = try await workspaces.createSandbox(id: program.chunkID)
+            sandbox = try await session.workspaces.createSandbox(id: program.chunkID)
             await GateTimingRecorder.shared.record("chunk.sandboxCreate", chunkID: program.chunkID, start: sandboxCreateStart)
         } catch {
             let outcomes = embeddedEntries.compactMap {
@@ -925,7 +966,7 @@ public struct SchemataMutationRunner: Sendable {
             expectedPlacementsByMutationID: expectedPlacementsByMutationID,
             tracker: tracker
         )
-        try? await workspaces.destroySandbox(at: sandbox)
+        try? await session.workspaces.destroySandbox(at: sandbox)
         return result
     }
 
@@ -1138,11 +1179,11 @@ public struct SchemataMutationRunner: Sendable {
     private func rebuildChunkState(
         program: SchemataProgram, entries remainingEntries: [SchemataPlanEntry], state: ChunkExecutionState
     ) async -> ChunkPreparationOutcome {
-        try? await workspaces.destroySandbox(at: state.sandbox)
+        try? await session.workspaces.destroySandbox(at: state.sandbox)
         let sandbox: URL
         do {
             let sandboxCreateStart = GateTimingRecorder.shared.now()
-            sandbox = try await workspaces.createSandbox(id: program.chunkID)
+            sandbox = try await session.workspaces.createSandbox(id: program.chunkID)
             await GateTimingRecorder.shared.record("chunk.sandboxCreate", chunkID: program.chunkID, start: sandboxCreateStart)
         } catch {
             return .failed(remainingEntries.compactMap {
@@ -1199,7 +1240,7 @@ public struct SchemataMutationRunner: Sendable {
             confirmations: confirmations,
             infrastructureFailureDiagnosis: infrastructureFailureDiagnosis
         )
-        return MutationVerdictVerifier.verify(observations, policy: policy)
+        return MutationVerdictVerifier.verify(observations, policy: session.policy)
     }
 
     /// The same `MutationObservations` shape `finalize` will eventually
@@ -1741,7 +1782,7 @@ public struct SchemataMutationRunner: Sendable {
         // a kill — proven by `SchemataConfirmationCrashTimeoutVerifierTests
         // .timeoutConfirmationFinishingNormallyIsFlakyNotCascaded`. There is
         // therefore no second confirmation for this runner to ever gather.
-        let requirement = MutationVerdictVerifier.confirmationRequirement(for: preliminary, policy: policy)
+        let requirement = MutationVerdictVerifier.confirmationRequirement(for: preliminary, policy: session.policy)
         let primaryTimedOut = run.status == .timedOut
 
         guard requirement != .none else {
@@ -1807,7 +1848,7 @@ public struct SchemataMutationRunner: Sendable {
         // conformance is optional, mirroring `BatchTestable`: one that does
         // not conform simply never gets asked, and every entry runs the
         // unbatched way exactly as it always has.
-        guard schemataTokenBatchSize > 1, let batchable = test as? any SchemataBatchTestable else { return [:] }
+        guard schemataTokenBatchSize > 1, let batchable = batchableTest else { return [:] }
 
         var dispatchesByMutationID: [MutationID: PrimaryDispatch] = [:]
         for entry in embeddedEntries {
