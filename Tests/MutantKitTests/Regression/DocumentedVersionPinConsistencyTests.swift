@@ -61,18 +61,16 @@ struct DocumentedVersionPinConsistencyTests {
     /// `version:` example naming a since-superseded release), in a place
     /// the workflow linter itself never checks for a MutantKit version
     /// string. Handles both trees this test file ships in unchanged: the
-    /// public projection's real `.github/workflows/`, and the private
-    /// repo's own source for that overlay, `oss-public/.github/workflows/`
-    /// (see `.public-tree.toml`'s `[overlay]` section).
+    /// published tree's real `.github/workflows/`, and the full development
+    /// checkout's own source for that overlay, `oss-public/.github/workflows/`.
     ///
     /// Deliberately checks for `oss-public/` itself, not `.github/workflows`'
-    /// own existence, to pick the right one: the private repo has a real
-    /// `.github/workflows/` of its own too (`codeql.yml`/`release.yml`,
-    /// unrelated internal CI, billing-blocked and never actually run —
-    /// see `.public-tree.toml`'s own `".github"` exclusion comment), which
-    /// looked like a false match for "we're in the public tree" and would
-    /// have silently scanned the wrong, unrelated 2-file set instead of the
-    /// real 5-file overlay source.
+    /// own existence, to pick the right one: the development checkout has a
+    /// real `.github/workflows/` of its own too (`codeql.yml`/`release.yml`,
+    /// unrelated internal CI that never actually runs there), which looked
+    /// like a false match for "we're in the published tree" and would have
+    /// silently scanned the wrong, unrelated 2-file set instead of the real
+    /// 5-file overlay source.
     private static var scannedFiles: [URL] {
         let root = repositoryRoot
         var files = [root.appendingPathComponent("README.md"), root.appendingPathComponent("action.yml")]
@@ -83,9 +81,9 @@ struct DocumentedVersionPinConsistencyTests {
                 files.append(url)
             }
         }
-        let privateWorkflowSource = root.appendingPathComponent("oss-public/.github/workflows")
-        let isPrivateRepoCheckout = FileManager.default.fileExists(atPath: root.appendingPathComponent("oss-public").path)
-        let workflowsDirectory = isPrivateRepoCheckout ? privateWorkflowSource : root.appendingPathComponent(".github/workflows")
+        let overlayWorkflowSource = root.appendingPathComponent("oss-public/.github/workflows")
+        let isFullDevelopmentCheckout = FileManager.default.fileExists(atPath: root.appendingPathComponent("oss-public").path)
+        let workflowsDirectory = isFullDevelopmentCheckout ? overlayWorkflowSource : root.appendingPathComponent(".github/workflows")
         if let walker = FileManager.default.enumerator(at: workflowsDirectory, includingPropertiesForKeys: nil) {
             for case let url as URL in walker where ["yml", "yaml"].contains(url.pathExtension) {
                 files.append(url)
@@ -467,12 +465,12 @@ struct SwiftSyntaxVersionPinConsistencyTests {
     }
 
     /// The second copy of the same fact, and the one that bit first: the
-    /// public projection does not use the root `Package.swift` at all — the
+    /// published tree does not use the root `Package.swift` at all — the
     /// hand-maintained `oss-public/Package.swift` overlay is copied verbatim
     /// over it (see that file's own header, which says it must be kept in
-    /// sync by hand). Bumping only the private manifest left the projected
+    /// sync by hand). Bumping only the root manifest left the projected
     /// tree resolving the old parser while `ToolVersion` claimed the new
-    /// one, and the projection's own build was the first thing to notice.
+    /// one, and the projected tree's own build was the first thing to notice.
     ///
     /// Compares every external package requirement, not just SwiftSyntax's:
     /// the drift is a property of the hand-copy, so nothing about it is
@@ -499,7 +497,7 @@ struct SwiftSyntaxVersionPinConsistencyTests {
             """
             oss-public/Package.swift declares different dependency requirements from Package.swift.
             The overlay is copied verbatim over the root manifest when the public tree is projected, so
-            the public build resolves what it says, not what the private manifest says.
+            the published build resolves what it says, not what the root manifest says.
             root:    \(rootRequirements.sorted(by: { $0.key < $1.key }))
             overlay: \(overlayRequirements.sorted(by: { $0.key < $1.key }))
             """

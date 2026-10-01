@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# release-gate.sh — the full local test gate to run by hand before any public
-# projection/publish (`git-projector publish` or equivalent).
+# release-gate.sh — the full local test gate to run by hand before any
+# public release.
 #
 # Why this exists: two real, serious correctness bugs (batch-attribution
 # cross-contamination across mutants, and a worker-sandbox-lifetime bug that

@@ -18,9 +18,9 @@ import Testing
 /// `DocumentedVersionPinConsistencyTests`'s own reasoning for its
 /// hand-written scanner.
 ///
-/// Private-repo-checkout only: `.public-tree.toml` itself is the one file
-/// that would have to describe its own exclusion to get excluded, so
-/// git-projector never copies it to a public snapshot.
+/// Full-development-checkout only: `.public-tree.toml` itself is the one
+/// file that would have to describe its own exclusion to get excluded, so
+/// it never reaches the published tree.
 @Suite("Regression: .public-tree.toml leak-scan config stays complete")
 struct PublicTreeConfigRegressionTests {
     private static var repositoryRoot: URL {
@@ -35,13 +35,13 @@ struct PublicTreeConfigRegressionTests {
         repositoryRoot.appendingPathComponent(".public-tree.toml")
     }
 
-    private static var isPrivateRepoCheckout: Bool {
+    private static var isFullDevelopmentCheckout: Bool {
         FileManager.default.fileExists(atPath: configPath.path)
     }
 
     @Test(
         "forbidden_strings still lists every known-leaked internal project name, exclude lists still cover known-sensitive files/dirs",
-        .enabled(if: PublicTreeConfigRegressionTests.isPrivateRepoCheckout)
+        .enabled(if: PublicTreeConfigRegressionTests.isFullDevelopmentCheckout)
     )
     func floorEntriesArePresent() throws {
         let config = try String(contentsOf: Self.configPath, encoding: .utf8)
@@ -76,7 +76,7 @@ struct PublicTreeConfigRegressionTests {
     /// `scannable_suffixes`.
     @Test(
         "scannable_suffixes covers every file extension actually present under Sources/ and Tests/",
-        .enabled(if: PublicTreeConfigRegressionTests.isPrivateRepoCheckout)
+        .enabled(if: PublicTreeConfigRegressionTests.isFullDevelopmentCheckout)
     )
     func scannableSuffixesCoverRealExtensions() throws {
         let config = try String(contentsOf: Self.configPath, encoding: .utf8)
@@ -142,7 +142,7 @@ struct PublicTreeConfigRegressionTests {
     /// in `forbidden_strings`.
     @Test(
         "every non-excluded name in Scripts/local-project-names.txt is covered by forbidden_strings",
-        .enabled(if: PublicTreeConfigRegressionTests.isPrivateRepoCheckout)
+        .enabled(if: PublicTreeConfigRegressionTests.isFullDevelopmentCheckout)
     )
     func localProjectNamesAreSyncedToForbiddenStrings() throws {
         let namesPath = Self.repositoryRoot.appendingPathComponent("Scripts/local-project-names.txt")

@@ -59,6 +59,26 @@ enum ExecutionProfileSupport {
         // .kind`, means this stays correct even for a future adapter that
         // ships without either conformance, with no lookup table to keep in
         // sync.
+        //
+        // Deliberately kept as a direct `is` cast against
+        // `resolution.adapter.test`, not migrated to `resolution.adapter`'s
+        // own `coverageMeasuring`/`testSelecting`/`batchTestable`
+        // properties (Step 3 of the v2 execution-engine extraction, which
+        // otherwise replaced this exact idiom elsewhere): tried migrating
+        // it and reverted after `ExecutionProfileSupportTests
+        // .conformingAdapterReportsCapable` failed — that test's
+        // `resolution(kind:test:)` fixture builds a `ProjectAdapter` whose
+        // `test` genuinely conforms to these protocols but whose separate
+        // capability properties are never populated (they default to
+        // `nil` via `ProjectAdapter`'s own protocol extension). Real,
+        // demonstrated proof that "`test` conforms" and "the capability
+        // property is populated" are not actually the same fact for every
+        // `ProjectAdapter`, only for the two production adapters that
+        // happen to wire both consistently today — checking `test`
+        // directly is the one query that stays correct for *any*
+        // `ProjectAdapter`, present or future, matching this function's
+        // own stated intent above ("stays correct even for a future
+        // adapter").
         let perTestCoverageAdapterCapable = resolution.adapter.test is any CoverageMeasuring
             && resolution.adapter.test is any TestSelecting
         let testAdapterBatchTestable = resolution.adapter.test is any BatchTestable

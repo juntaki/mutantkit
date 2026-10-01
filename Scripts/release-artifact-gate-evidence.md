@@ -1,7 +1,7 @@
 # `release-artifact-gate.sh` — real confirmation run evidence
 
 A real, complete, passing run of `Scripts/release-artifact-gate.sh 0.0.0-f7-test`
-against private main commit `5236b167f9d34b122e70ef7e47a9e84bda94f0d7`,
+against commit `5236b167f9d34b122e70ef7e47a9e84bda94f0d7`,
 with the gate script itself at `cd091f8e10a869894682a79b9f401dbba254e6f5`.
 
 Full pipeline: `Scripts/release-build.sh` → SHA256SUMS verification →
@@ -10,8 +10,8 @@ extraction to a temp dir outside the repo → package-layout allowlist check →
 per-archive SHA-256 digest + architecture (`lipo`) verification → a real
 `mutantkit plan`/`mutantkit run` against a fresh clone of `swift-numerics`
 (pinned at `899af71c0256d0ad181e3b7eb3453c1065d928a5`), run from a directory
-with no relationship to any `mutantkit`/`mutantkit-private`/`mutantkit-f7`
-checkout and with `MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` explicitly unset —
+with no relationship to any `mutantkit` checkout and with
+`MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE` explicitly unset —
 proving the extracted binary resolves its schemata runtime purely from what
 it bundles, the real end-user path.
 

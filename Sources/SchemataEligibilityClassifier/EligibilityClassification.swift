@@ -5,9 +5,8 @@ import MutationPlanner
 import SwiftFrontend
 
 /// Research-only, outcome-blind classification core for an internal
-/// adr-0008-validation protocol document's Protocol v3 addendum
-/// (not part of this public repo)
-/// (Corpus B calibration population selection rule). Separated from
+/// design-validation protocol's Protocol v3 addendum (Corpus B calibration
+/// population selection rule). Separated from
 /// `main.swift` so a test target can call it directly without going
 /// through `ParsableCommand`/process argv.
 ///
