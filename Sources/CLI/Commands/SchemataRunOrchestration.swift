@@ -3,7 +3,6 @@ import Foundation
 import MutationExecution
 import MutationModel
 import MutationPlanner
-import SwiftFrontend
 
 /// Combines the schemata backend's `SchemataMutationRunner` with the
 /// existing, unmodified `MutationRunner` into one `RunReport` (ADR-0006

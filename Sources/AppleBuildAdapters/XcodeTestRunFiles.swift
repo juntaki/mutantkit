@@ -1,5 +1,4 @@
 import Foundation
-import MutationExecution
 import MutationModel
 
 // MARK: - .xctestrun

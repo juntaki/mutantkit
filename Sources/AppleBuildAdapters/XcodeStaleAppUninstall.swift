@@ -1,6 +1,5 @@
 import Foundation
 import MutationExecution
-import MutationModel
 
 //
 // Extracted from `XcodeBuildAdapter.swift` as part of this project's
