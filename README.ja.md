@@ -156,7 +156,7 @@ MutantKitは、mutationの適用と実行を検証します。確認できない
 * coverageを使い、実際に実行されたmutationと未到達のmutationを区別
 * evidenceを整合できない結果は通常のscoreへ含めない
 
-現在の最新リリースは `v1.0.3` です。SwiftPMとXcode project / workspace、isolatedとschemata実行、CI gating、coverage-based test selection、caching、sharding、resumable runsに対応しています。既定で有効なoperatorは6種類で、残りは検証が進み次第、順次追加していく方針です。詳しくは[Operators](docs/operators.md)と後述の「対応状況」を参照してください。
+現在の最新リリースは `v1.1.0` です。SwiftPMとXcode project / workspace、isolatedとschemata実行、CI gating、coverage-based test selection、caching、sharding、resumable runsに対応しています。既定で有効なoperatorは6種類で、残りは検証が進み次第、順次追加していく方針です。詳しくは[Operators](docs/operators.md)と後述の「対応状況」を参照してください。
 
 ## 結果の見方
 
