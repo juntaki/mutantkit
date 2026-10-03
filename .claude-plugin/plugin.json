@@ -1,7 +1,7 @@
 {
   "name": "mutantkit",
   "displayName": "MutantKit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Run and interpret MutantKit mutation testing for Swift and Apple-platform projects: check readiness, plan, run, inspect survivors, and gate CI on real test-suite strength rather than line coverage.",
   "author": {
     "name": "juntaki",
