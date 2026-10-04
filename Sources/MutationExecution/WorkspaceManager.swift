@@ -90,9 +90,14 @@ public actor WorkspaceManager {
     /// Run on the first sandbox this instance creates; see
     /// `proveContainmentOnce(_:)`.
     private let containmentProof: (any SandboxContainmentProving)?
+    /// Called once, after `containmentProof` has accepted the layout and
+    /// before the first sandbox is returned (or, with no proof, when the first
+    /// sandbox is created). Never called on a refusal.
+    private let onContainmentProven: (@Sendable () -> Void)?
     /// The one evaluation of `containmentProof`, shared by every sandbox
     /// created while it runs and remembered, success or failure, after.
     private var containmentProofRun: Task<Void, any Error>?
+    private var announcedWithoutProof = false
 
     /// Directories that hold build output, VCS state or previous runs. Copying
     /// them is pure cost: the build regenerates them, and DerivedData alone can
@@ -145,10 +150,12 @@ public actor WorkspaceManager {
         scratchRoot: URL,
         excludes: [String] = WorkspaceManager.defaultExcludes,
         cleanSubtreeCloning: Bool = false,
-        containmentProof: (any SandboxContainmentProving)? = nil
+        containmentProof: (any SandboxContainmentProving)? = nil,
+        onContainmentProven: (@Sendable () -> Void)? = nil
     ) throws {
         self.layout = layout
         self.containmentProof = containmentProof
+        self.onContainmentProven = onContainmentProven
         self.excludes = excludes
         self.cleanSubtreeCloning = cleanSubtreeCloning
 
@@ -820,13 +827,25 @@ extension WorkspaceManager {
     /// for the rest of this instance's lifetime, so after a refusal no
     /// sandbox is ever returned. A refused sandbox's container is removed.
     private func proveContainmentOnce(_ sandbox: Sandbox) async throws {
-        guard let containmentProof else { return }
+        guard let containmentProof else {
+            // Nothing can be refused later, so the first accepted sandbox is
+            // the moment the layout is known good.
+            if !announcedWithoutProof {
+                announcedWithoutProof = true
+                onContainmentProven?()
+            }
+            return
+        }
         let run: Task<Void, any Error>
         if let containmentProofRun {
             run = containmentProofRun
         } else {
             let layout = layout
-            run = Task { try await containmentProof.proveContainment(of: sandbox, layout: layout) }
+            let onProven = onContainmentProven
+            run = Task {
+                try await containmentProof.proveContainment(of: sandbox, layout: layout)
+                onProven?()
+            }
             containmentProofRun = run
         }
         do {
