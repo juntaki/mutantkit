@@ -199,7 +199,7 @@ public struct HTMLReporter: Reporter {
             return """
             <section class="card">
               <h2>Actionable test gaps (0)</h2>
-              <p>Every mutant that ran was killed.</p>
+              <p>\(noActionableGapsMessage(report))</p>
             </section>
             """
         }
@@ -387,4 +387,10 @@ extension String {
         out = out.replacingOccurrences(of: "'", with: "&#39;")
         return out
     }
+}
+
+/// "Every mutant that ran was killed" is vacuous when none ran (a red
+/// baseline, a baseline mismatch), so say what happened instead.
+private func noActionableGapsMessage(_ report: RunReport) -> String {
+    report.integrity.executed == 0 ? "No mutants were executed." : "Every mutant that ran was killed."
 }

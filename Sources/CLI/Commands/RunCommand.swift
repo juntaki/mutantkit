@@ -238,9 +238,6 @@ struct RunCommand: AsyncParsableCommand {
             scratchRoot: runDirectory.appendingPathComponent("sandboxes"), manifestDumps: manifestDumps
         )
         print("Project: \(resolution.detection.kind.rawValue) — \(resolution.detection.reason)")
-        if let layout = resolution.sandboxLayout, !layout.externalRoots.isEmpty {
-            print(LocalPackageLayout.summary(of: layout))
-        }
         return resolution
     }
 
