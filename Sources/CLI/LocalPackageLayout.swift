@@ -61,15 +61,36 @@ enum LocalPackageLayout {
 
     /// A manager whose sandboxes reproduce `layout`, proving on its first
     /// sandbox that every local package the build loads is inside it.
+    ///
+    /// The layout's local packages are announced once, when that proof
+    /// accepts them: a refused layout is never described as copied.
     static func workspaceManager(
         layout: SandboxLayout, kind: ProjectKind, projectPath: String?, scratchRoot: URL, cleanSubtreeCloning: Bool = false
     ) throws -> WorkspaceManager {
-        try WorkspaceManager(
+        var announcer: (@Sendable () -> Void)?
+        if !layout.externalRoots.isEmpty {
+            announcer = { LocalPackageLayout.announce(layout) }
+        }
+        return try WorkspaceManager(
             layout: layout,
             scratchRoot: scratchRoot,
             cleanSubtreeCloning: cleanSubtreeCloning,
-            containmentProof: AppleAdapterFactory.containmentProof(for: kind, projectPath: projectPath)
+            containmentProof: AppleAdapterFactory.containmentProof(for: kind, projectPath: projectPath),
+            onContainmentProven: announcer
         )
+    }
+
+    private static let announcement = NSLock()
+    nonisolated(unsafe) private static var announced = false
+
+    /// Prints `summary(of:)` the first time it is called in this process,
+    /// so the managers a run creates share one line.
+    private static func announce(_ layout: SandboxLayout) {
+        announcement.lock()
+        defer { announcement.unlock() }
+        guard !announced else { return }
+        announced = true
+        print(summary(of: layout))
     }
 
     /// One line for `dry-run` and `run`.

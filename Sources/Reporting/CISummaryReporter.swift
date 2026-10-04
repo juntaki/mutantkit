@@ -103,7 +103,8 @@ public struct CISummaryReporter: Reporter {
             .filter { $0.reason != .mutationSiteNotCovered }
 
         guard !rows.isEmpty else {
-            return report.score == nil ? "" : "No mutants survived."
+            guard report.score != nil else { return "" }
+            return report.integrity.executed == 0 ? "No mutants were executed." : "No mutants survived."
         }
 
         let aggregate = rows.aggregate

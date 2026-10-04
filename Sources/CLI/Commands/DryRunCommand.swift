@@ -32,7 +32,9 @@ struct DryRunCommand: AsyncParsableCommand {
         )
         let layout = resolution.sandboxLayout ?? .projectOnly(root)
         print("Project: \(resolution.detection.kind.rawValue) — \(resolution.detection.reason)")
-        print(LocalPackageLayout.summary(of: layout))
+        // With local packages, the line is printed once the first sandbox has
+        // been proven to carry them (see `LocalPackageLayout.workspaceManager`).
+        if layout.externalRoots.isEmpty { print(LocalPackageLayout.summary(of: layout)) }
 
         // Same preflight `run` performs before its baseline, and for the same
         // reasons: a simulator that cannot pass `bootstatus` should fail here,

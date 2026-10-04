@@ -196,10 +196,13 @@ public struct HTMLReporter: Reporter {
     private func survivorsHTML(_ report: RunReport) -> String {
         let rows = SurvivorPresentationBuilder.build(from: report).rows
         guard !rows.isEmpty else {
+            let verdict = report.integrity.executed == 0
+                ? "No mutants were executed."
+                : "Every mutant that ran was killed."
             return """
             <section class="card">
               <h2>Actionable test gaps (0)</h2>
-              <p>Every mutant that ran was killed.</p>
+              <p>\(verdict)</p>
             </section>
             """
         }

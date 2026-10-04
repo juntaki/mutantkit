@@ -182,10 +182,12 @@ public struct ConsoleReporter: Reporter {
         let rows = SurvivorPresentationBuilder.build(from: report).rows
 
         guard !rows.isEmpty else {
-            return [
-                palette.bold("Actionable test gaps (0)"),
-                "  none — every mutant that ran was killed"
-            ].joined(separator: "\n")
+            // "Every mutant that ran was killed" is vacuous when none ran (a red
+            // baseline, a baseline mismatch): say what happened instead.
+            let verdict = report.integrity.executed == 0
+                ? "  none — no mutants were executed"
+                : "  none — every mutant that ran was killed"
+            return [palette.bold("Actionable test gaps (0)"), verdict].joined(separator: "\n")
         }
 
         let notCovered = rows.filter { $0.reason == .mutationSiteNotCovered }

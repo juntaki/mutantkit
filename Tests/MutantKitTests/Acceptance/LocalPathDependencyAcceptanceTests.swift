@@ -109,6 +109,7 @@ struct LocalPathDependencyAcceptanceTests {
 
         #expect(dryRun.exitCode == 0, "\(dryRun.output)")
         #expect(dryRun.output.contains("Local packages: Logging (../Logging), SwiftMapper (../SwiftMapper)"), "\(dryRun.output)")
+        #expect(dryRun.output.components(separatedBy: "Local packages:").count == 2, "printed exactly once: \(dryRun.output)")
     }
 
     @Test("run gives every mutant a real outcome, including through the transitive sibling")
@@ -310,5 +311,31 @@ struct LocalPathDependencyAcceptanceTests {
 
         #expect(dryRun.exitCode != 0, "\(dryRun.output)")
         #expect(dryRun.output.contains("sandbox cannot be built in"), "\(dryRun.output)")
+        // A refused package is never described as copied into each sandbox.
+        #expect(!dryRun.output.contains("Local packages:"), "\(dryRun.output)")
+        #expect(!dryRun.output.contains("copied into each sandbox"), "\(dryRun.output)")
+    }
+
+    /// A plan made while the dependency was relative, then the manifest edited to
+    /// an absolute path: the run fails closed with no score, and prints neither a
+    /// "copied" claim nor a success summary for mutants that never ran.
+    @Test("An absolute dependency path at run time prints no package line and no success summary")
+    func absolutePathRunPrintsNoSuccessClaims() throws {
+        let (staged, core) = try Self.stageCore()
+        defer { try? FileManager.default.removeItem(at: staged) }
+        let plan = try Acceptance.run(["plan", "--output", "plan.json"], in: core)
+        #expect(plan.exitCode == 0, "\(plan.output)")
+        let absolute = try #require(CanonicalPath.resolve(staged.appendingPathComponent("SwiftMapper").path))
+        let manifest = core.appendingPathComponent("Package.swift")
+        let text = try String(contentsOf: manifest, encoding: .utf8)
+            .replacingOccurrences(of: #".package(path: "../SwiftMapper")"#, with: #".package(path: "\#(absolute)")"#)
+        try Data(text.utf8).write(to: manifest, options: .atomic)
+
+        let run = try Acceptance.run(["run", "--plan", "plan.json"], in: core)
+
+        #expect(run.exitCode != 0, "\(run.output)")
+        #expect(!run.output.contains("Local packages:"), "\(run.output)")
+        #expect(!run.output.contains("copied into each sandbox"), "\(run.output)")
+        #expect(!run.output.contains("every mutant that ran was killed"), "\(run.output)")
     }
 }
