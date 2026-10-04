@@ -85,7 +85,12 @@ struct TrustCommand: ParsableCommand {
         printConfirmation("killed by crash", trust.crashKills)
         printConfirmation("killed by verified timeout", trust.timeoutKills)
         let assertionLabel = "killed by assertion"
-        print("  \(assertionLabel + String(repeating: " ", count: Self.confirmationLabelWidth - assertionLabel.count))\(trust.assertionKillConfirmationLimitation)")
+        if let assertionKills = trust.assertionKills {
+            printConfirmation(assertionLabel, assertionKills)
+            print("  \(String(repeating: " ", count: Self.confirmationLabelWidth))\(trust.assertionKillConfirmationLimitation)")
+        } else {
+            print("  \(assertionLabel + String(repeating: " ", count: Self.confirmationLabelWidth - assertionLabel.count))\(trust.assertionKillConfirmationLimitation)")
+        }
 
         print("")
         if let score = trust.score {

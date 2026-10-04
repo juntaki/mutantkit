@@ -34,6 +34,66 @@ public enum ActivationEvidence: Codable, Sendable, Hashable {
     }
 }
 
+/// What a `killedByAssertion` verdict's confirming retest found (and, for a
+/// result reclassified to `.flaky`/`.infrastructureFailure` because of that
+/// retest, why it was not confirmed).
+///
+/// Authored by `MutationVerdictVerifier` from the recorded observations, never
+/// by the runner. `nil` means only "no confirmation was recorded" (older
+/// report, cache or checkpoint entry, or the run's retest was off); it is
+/// never evidence of confirmation, and nothing may read it as such.
+public struct AssertionKillConfirmation: Codable, Sendable, Hashable {
+    /// What the confirming retest concluded. Deliberately not a `Bool`:
+    /// every way a retest can fail to confirm gets its own case so a later
+    /// reader can tell them apart, and new cases can be added without
+    /// reshaping the schema.
+    public enum Disposition: String, Codable, Sendable, Hashable {
+        /// The retest failed on exactly the same set of tests.
+        case confirmed
+        /// The retest did not fail (the primary failure was not reproduced).
+        case retestNotFailed
+        /// The retest failed, but on a different set of tests.
+        case failingSetDiffers
+        /// At least one of the two runs reported no per-test breakdown, so
+        /// the failing sets could not be compared.
+        case perTestBreakdownMissing
+        /// The confirming run's own activation chain was rejected.
+        case chainUnproven
+
+        public var isConfirmed: Bool { self == .confirmed }
+    }
+
+    /// How the confirmation was gathered.
+    public enum Method: String, Codable, Sendable, Hashable {
+        /// A second run of the identical, already-built mutant.
+        case retestOfBuiltMutant
+    }
+
+    public let disposition: Disposition
+    public let method: Method
+    /// The primary run's full failing-test list. `nil` when the primary run
+    /// reported no per-test breakdown; never `[]` as a stand-in for unknown.
+    public let primaryFailingTests: [String]?
+    /// The confirming run's full failing-test list; `nil` when unknown.
+    public let confirmingFailingTests: [String]?
+    /// The confirming run's `TestRunStatus` raw value.
+    public let confirmingStatus: String
+
+    public init(
+        disposition: Disposition,
+        method: Method = .retestOfBuiltMutant,
+        primaryFailingTests: [String]? = nil,
+        confirmingFailingTests: [String]? = nil,
+        confirmingStatus: String
+    ) {
+        self.disposition = disposition
+        self.method = method
+        self.primaryFailingTests = primaryFailingTests
+        self.confirmingFailingTests = confirmingFailingTests
+        self.confirmingStatus = confirmingStatus
+    }
+}
+
 /// What a `killedByCrash` verdict's confirmation rebuild found.
 ///
 /// Present only when `Configuration.execution.confirmCrashKills` is on and
@@ -202,6 +262,9 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
     /// Present only for a `.verifiedTimeout` verdict that was confirmed with
     /// an independent rebuild. See `TimeoutConfirmation`.
     public let timeoutConfirmation: TimeoutConfirmation?
+    /// The structured result of the same-artifact confirming retest, when one
+    /// was recorded for a kill. `nil` is "none recorded", never "confirmed".
+    public let assertionKillConfirmation: AssertionKillConfirmation?
     /// Every test invocation this mutant went through before its final
     /// verdict. Empty outside wave-based early kill — see
     /// `TestAttemptEvidence`.
@@ -218,7 +281,8 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         resultArtifact: String? = nil,
         crashConfirmation: CrashConfirmation? = nil,
         timeoutConfirmation: TimeoutConfirmation? = nil,
-        testAttempts: [TestAttemptEvidence] = []
+        testAttempts: [TestAttemptEvidence] = [],
+        assertionKillConfirmation: AssertionKillConfirmation? = nil
     ) {
         self.sourceBeforeHash = sourceBeforeHash
         self.sourceAfterHash = sourceAfterHash
@@ -231,11 +295,24 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         self.crashConfirmation = crashConfirmation
         self.timeoutConfirmation = timeoutConfirmation
         self.testAttempts = testAttempts
+        self.assertionKillConfirmation = assertionKillConfirmation
+    }
+
+    /// A copy carrying `confirmation`; used by the verifier, the only author
+    /// of this field.
+    func withAssertionKillConfirmation(_ confirmation: AssertionKillConfirmation?) -> MutationEvidence {
+        MutationEvidence(
+            sourceBeforeHash: sourceBeforeHash, sourceAfterHash: sourceAfterHash, sourceDiff: sourceDiff,
+            buildProductHash: buildProductHash, applicationEvidence: applicationEvidence,
+            buildCommand: buildCommand, testCommand: testCommand, resultArtifact: resultArtifact,
+            crashConfirmation: crashConfirmation, timeoutConfirmation: timeoutConfirmation,
+            testAttempts: testAttempts, assertionKillConfirmation: confirmation
+        )
     }
 
     enum CodingKeys: String, CodingKey {
         case sourceBeforeHash, sourceAfterHash, sourceDiff, buildProductHash, applicationEvidence
-        case buildCommand, testCommand, resultArtifact, crashConfirmation, timeoutConfirmation, testAttempts
+        case buildCommand, testCommand, resultArtifact, crashConfirmation, timeoutConfirmation, testAttempts, assertionKillConfirmation
         /// Pre-schemata reports/checkpoints wrote a bare `ActivationEvidence`
         /// under this key. Not in `applicationEvidence`'s own coding path —
         /// only ever consulted as a fallback, see `init(from:)`.
@@ -274,6 +351,7 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         crashConfirmation = try container.decodeIfPresent(CrashConfirmation.self, forKey: .crashConfirmation)
         timeoutConfirmation = try container.decodeIfPresent(TimeoutConfirmation.self, forKey: .timeoutConfirmation)
         testAttempts = try container.decodeIfPresent([TestAttemptEvidence].self, forKey: .testAttempts) ?? []
+        assertionKillConfirmation = try container.decodeIfPresent(AssertionKillConfirmation.self, forKey: .assertionKillConfirmation)
     }
 
     /// Explicit `Encodable` conformance is needed now that `init(from:)` is
@@ -295,6 +373,7 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         try container.encodeIfPresent(crashConfirmation, forKey: .crashConfirmation)
         try container.encodeIfPresent(timeoutConfirmation, forKey: .timeoutConfirmation)
         try container.encode(testAttempts, forKey: .testAttempts)
+        try container.encodeIfPresent(assertionKillConfirmation, forKey: .assertionKillConfirmation)
     }
 
     /// The minimum bar for "this mutation was really applied to the source".

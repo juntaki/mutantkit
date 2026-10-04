@@ -482,7 +482,7 @@
   {
     "text": "public enum MutationVerdictVerifier {",
     "violation": {
-      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 715 lines",
+      "reason": "Enum body should span 300 lines or less excluding comments and whitespace: currently spans 637 lines",
       "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
@@ -1217,7 +1217,7 @@
   {
     "text": "struct MutationVerdictVerifierTests {",
     "violation": {
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 673 lines",
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 569 lines",
       "severity": "warning",
       "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",

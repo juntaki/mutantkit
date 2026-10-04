@@ -147,6 +147,14 @@ public struct TrustReport: Codable, Sendable, Equatable {
     /// claim this tool's own trust philosophy refuses to make.
     public let assertionKillConfirmationLimitation: String
 
+    /// Assertion-kill confirmation counts, present only when at least one
+    /// result in the report carries a structured
+    /// `MutationEvidence.assertionKillConfirmation`. `nil` means "no result
+    /// carries one" (an older report, or a run with retest off), never "all
+    /// confirmed": `unconfirmed` counts every assertion kill without a
+    /// `.confirmed` record, including those with none at all.
+    public let assertionKills: ConfirmationSection?
+
     /// `report.score`, verbatim, but only when `integrity.passed` is `true`
     /// — `TrustReport.build(from:)` itself withholds it otherwise, rather
     /// than trusting `report.score` to already be `nil`. `RunReport.init`
@@ -170,7 +178,8 @@ public struct TrustReport: Codable, Sendable, Equatable {
         planID: String, mutationCount: Int, trustworthy: Bool, integrity: IntegritySection,
         sourceApplication: SourceApplicationSection, activationEvidence: ActivationEvidenceSection,
         phantomMutantCount: Int, crashKills: ConfirmationSection, timeoutKills: ConfirmationSection,
-        assertionKillConfirmationLimitation: String, score: MutationScore?, operationalIssueCount: Int
+        assertionKillConfirmationLimitation: String, score: MutationScore?, operationalIssueCount: Int,
+        assertionKills: ConfirmationSection? = nil
     ) {
         schemaVersion = SchemaVersion.trustReport
         self.planID = planID
@@ -185,6 +194,7 @@ public struct TrustReport: Codable, Sendable, Equatable {
         self.assertionKillConfirmationLimitation = assertionKillConfirmationLimitation
         self.score = score
         self.operationalIssueCount = operationalIssueCount
+        self.assertionKills = assertionKills
     }
 
     /// The one real construction path — every field derived from `report`
@@ -224,6 +234,25 @@ public struct TrustReport: Codable, Sendable, Equatable {
             return ConfirmationSection(killed: matching.count, confirmed: confirmedCount, unconfirmed: matching.count - confirmedCount)
         }
 
+        let assertionKills = confirmationSection(outcome: .killedByAssertion) {
+            $0.evidence?.assertionKillConfirmation?.disposition == .confirmed
+        }
+        let recordedAssertionConfirmations = report.results.filter { $0.evidence?.assertionKillConfirmation != nil }.count
+        let assertionLimitation: String
+        if recordedAssertionConfirmations > 0 {
+            assertionLimitation = """
+            \(assertionKills.confirmed) of \(assertionKills.killed) assertion kills carry a structured confirmed \
+            retest; the rest predate that field or ran with retest off, so an unconfirmed count here does not \
+            by itself say which.
+            """
+        } else {
+            assertionLimitation = """
+            retestKilledMutants' own assertion-kill confirmation detail is not present as a structured \
+            field in report.json today, so this command cannot report a confirmed or unconfirmed count \
+            for assertion kills — only for crash and timeout kills, whose confirmation evidence is structured.
+            """
+        }
+
         return TrustReport(
             planID: report.planID,
             mutationCount: report.results.count,
@@ -240,18 +269,15 @@ public struct TrustReport: Codable, Sendable, Equatable {
             phantomMutantCount: integrity.violations.count { $0.kind == .phantomMutant },
             crashKills: confirmationSection(outcome: .killedByCrash) { $0.evidence?.crashConfirmation?.crashedAgain == true },
             timeoutKills: confirmationSection(outcome: .verifiedTimeout) { $0.evidence?.timeoutConfirmation?.timedOutAgain == true },
-            assertionKillConfirmationLimitation: """
-            retestKilledMutants' own assertion-kill confirmation detail is not present as a structured \
-            field in report.json today, so this command cannot report a confirmed or unconfirmed count \
-            for assertion kills — only for crash and timeout kills, whose confirmation evidence is structured.
-            """,
+            assertionKillConfirmationLimitation: assertionLimitation,
             // `report.score` is only carried through when integrity actually
             // passed — never trusted at face value, since a decoded
             // `RunReport` (unlike a freshly-built one) can hold a populated
             // `score` alongside real integrity violations. See this type's
             // own `score` doc comment.
             score: integrity.passed ? report.score : nil,
-            operationalIssueCount: report.operationalIssues.count
+            operationalIssueCount: report.operationalIssues.count,
+            assertionKills: recordedAssertionConfirmations > 0 ? assertionKills : nil
         )
     }
 }
