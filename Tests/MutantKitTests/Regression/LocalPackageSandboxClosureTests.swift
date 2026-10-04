@@ -103,6 +103,50 @@ struct LocalPackageSandboxClosureTests {
         #expect(outcome.isRefusedOrContained, "\(outcome)")
     }
 
+    /// What `run` and `dry-run` announce ("Local packages: ... copied into each
+    /// sandbox") hangs off this signal, so it must fire for an accepted layout
+    /// and never for a refused one.
+    @Test("The containment-proven signal fires for a sibling package and not for an absolute path")
+    func provenSignalFollowsValidation() async throws {
+        let accepted = try LocalPackageFixture.makeLayoutRoot(label: "proven-sibling")
+        defer { try? FileManager.default.removeItem(at: accepted) }
+        let acceptedCore = accepted.appendingPathComponent("Core")
+        try LocalPackageFixture.writePackage(named: "Core", at: acceptedCore, pathDependencies: ["../SwiftMapper"])
+        try LocalPackageFixture.writePackage(named: "SwiftMapper", at: accepted.appendingPathComponent("SwiftMapper"))
+        let acceptedCalls = Counter()
+        _ = try await Self.workspaces(for: acceptedCore, onContainmentProven: { acceptedCalls.increment() })
+            .createSandbox(id: "baseline")
+        #expect(acceptedCalls.value == 1)
+
+        let refused = try LocalPackageFixture.makeCanonicalLayoutRoot(label: "proven-absolute")
+        defer { try? FileManager.default.removeItem(at: refused) }
+        let mapper = refused.appendingPathComponent("SwiftMapper")
+        try LocalPackageFixture.writePackage(named: "SwiftMapper", at: mapper)
+        let refusedCore = refused.appendingPathComponent("Core")
+        try LocalPackageFixture.writePackage(named: "Core", at: refusedCore, pathDependencies: [mapper.path])
+        let refusedCalls = Counter()
+        let manager = try await Self.workspaces(for: refusedCore, onContainmentProven: { refusedCalls.increment() })
+        await #expect(throws: (any Error).self) { try await manager.createSandbox(id: "baseline") }
+        #expect(refusedCalls.value == 0)
+    }
+
+    @Test("Without a containment proof the signal fires once, on the first sandbox")
+    func provenSignalFiresWithoutProof() async throws {
+        let root = try LocalPackageFixture.makeLayoutRoot(label: "proven-noproof")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let core = root.appendingPathComponent("Core")
+        try LocalPackageFixture.writePackage(named: "Core", at: core)
+        let calls = Counter()
+        let manager = try WorkspaceManager(
+            layout: .projectOnly(core), scratchRoot: LocalPackageFixture.scratchRoot(for: core),
+            onContainmentProven: { calls.increment() }
+        )
+        #expect(calls.value == 0)
+        _ = try await manager.createSandbox(id: "a")
+        _ = try await manager.createSandbox(id: "b")
+        #expect(calls.value == 1)
+    }
+
     /// Refused by the containment proof. This is the dangerous one: the
     /// build would compile the original `Vendor/Inner`, not the sandbox's
     /// copy, so a mutant placed there would never reach the binary. Spelled
@@ -275,7 +319,9 @@ struct LocalPackageSandboxClosureTests {
     /// A manager for `projectRoot` built as a run builds one: local
     /// packages resolved, then laid out, with the containment proof on the
     /// first sandbox.
-    static func workspaces(for projectRoot: URL) async throws -> WorkspaceManager {
+    static func workspaces(
+        for projectRoot: URL, onContainmentProven: (@Sendable () -> Void)? = nil
+    ) async throws -> WorkspaceManager {
         let scratch = LocalPackageFixture.scratchRoot(for: projectRoot)
         let packages = try await SwiftPMLocalDependencyResolver().localPackageClosure(of: projectRoot)
         let layout = SandboxLayout.make(
@@ -283,7 +329,8 @@ struct LocalPackageSandboxClosureTests {
         )
         try SandboxExternalRootValidator.validate(layout: layout, excludes: WorkspaceManager.defaultExcludes, scratchRoot: scratch)
         return try WorkspaceManager(
-            layout: layout, scratchRoot: scratch, containmentProof: SwiftPMSandboxContainmentProof(projectPath: nil)
+            layout: layout, scratchRoot: scratch, containmentProof: SwiftPMSandboxContainmentProof(projectPath: nil),
+            onContainmentProven: onContainmentProven
         )
     }
 
@@ -300,4 +347,11 @@ struct LocalPackageSandboxClosureTests {
             container: sandbox.containerRoot, closure: LocalPackageFixture.localDependencyClosure(from: sandbox.workspaceRoot)
         )
     }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func increment() { lock.withLock { count += 1 } }
 }

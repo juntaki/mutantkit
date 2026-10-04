@@ -131,8 +131,33 @@ struct ConsoleReporterTests {
         let output = try ConsoleReporter(colorEnabled: false).render(report)
 
         #expect(output.contains("MutantKit mutation run"))
-        // No surviving mutants — the section says so plainly rather than
-        // disappearing.
+        // Nothing ran, so the success claim would be vacuous.
+        #expect(output.contains("none — no mutants were executed"))
+        #expect(!output.contains("every mutant that ran was killed"))
+    }
+
+    @Test("A failed baseline with zero executed mutants never claims every mutant was killed")
+    func failedBaselineDoesNotClaimSuccess() throws {
+        let report = makeReport(plan: makePlan(mutations: []), results: [], baselinePassed: false)
+        #expect(report.integrity.executed == 0)
+
+        let console = try ConsoleReporter(colorEnabled: false).render(report)
+        let html = try HTMLReporter().render(report)
+        let ci = try CISummaryReporter().render(report)
+
+        #expect(!console.contains("every mutant that ran was killed"))
+        #expect(!html.localizedCaseInsensitiveContains("every mutant that ran was killed"))
+        #expect(!ci.contains("No mutants survived."))
+        #expect(console.contains("no mutants were executed"))
+    }
+
+    @Test("When mutants ran and were all killed, the success line is kept")
+    func killedRunKeepsSuccessLine() throws {
+        let ran = try makeAnchoredPoint()
+        let report = makeReport(
+            plan: makePlan(mutations: [ran]), results: [makeResult(point: ran, outcome: .killedByAssertion)]
+        )
+        let output = try ConsoleReporter(colorEnabled: false).render(report)
         #expect(output.contains("none — every mutant that ran was killed"))
     }
 }
