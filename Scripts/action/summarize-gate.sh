@@ -3,10 +3,9 @@
 # summarize-gate.sh — renders $GITHUB_STEP_SUMMARY from mutantkit gate's own
 # --json output and (if present) the ci-summary reporter's markdown.
 #
-# Classifies the JSON's *shape*; never recomputes a verdict from it (P13
-# review, item 8 — this repo's own design principle: the Action presents,
-# it does not re-judge). `mutantkit gate --json` has two genuinely different
-# shapes on disk, and conflating them was a real bug in the P13 prototype,
+# Classifies the JSON's *shape*; never recomputes a verdict from it (the Action
+# presents, it does not re-judge). `mutantkit gate --json` has two genuinely different
+# shapes on disk, and conflating them was a real bug in an earlier version,
 # which assumed `gate-result.json` was always a QualityGateResult and read
 # `.violations[]` unconditionally — which is simply absent on the other
 # shape, turning an operational failure into a jq crash that hid the real

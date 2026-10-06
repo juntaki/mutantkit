@@ -150,9 +150,9 @@ enum SwiftTestingEventStreamParser {
     }
 
     /// Internal-only signal for the small `throws`-based helpers below; never
-    /// escapes this file. `parse(_:)` catches it once and converts it to
+    /// escapes this type. `parse(_:)` catches it once and converts it to
     /// `ParseResult.unsupported`.
-    private struct UnsupportedEvidence: Error {
+    struct UnsupportedEvidence: Error {
         let reason: String
     }
 
@@ -254,6 +254,7 @@ enum SwiftTestingEventStreamParser {
     ) throws -> RunEvidence {
         var evidence = RunEvidence()
         evidence.declaredTests = declaredTests
+        var pending = PendingVerdicts()
 
         for record in records where record["kind"] as? String == "event" {
             // A known top-level record kind -- its payload is always
@@ -267,13 +268,18 @@ enum SwiftTestingEventStreamParser {
 
             switch eventKind {
             case "runStarted", "runEnded":
-                _ = try requiredMessages(in: payload, eventKind: eventKind)
-                if eventKind == "runStarted" { evidence.runStarted = true } else { evidence.runEnded = true }
+                let runMessages = try requiredMessages(in: payload, eventKind: eventKind)
+                if eventKind == "runStarted" {
+                    evidence.runStarted = true
+                } else {
+                    evidence.runEnded = true
+                    pending.runSummarySymbols = Set(runMessages.compactMap { $0["symbol"] as? String })
+                }
 
             case _ where functionScopedEventKinds.contains(eventKind):
                 try recordFunctionScopedEvent(
                     kind: eventKind, payload: payload, declaredSuiteIDs: declaredSuiteIDs,
-                    declaredTests: declaredTests, evidence: &evidence
+                    declaredTests: declaredTests, evidence: &evidence, pending: &pending
                 )
 
             case _ where caseScopedEventKinds.contains(eventKind):
@@ -285,7 +291,11 @@ enum SwiftTestingEventStreamParser {
                 // on pass/fail) -- validated for shape only, so a malformed
                 // one still fails the whole stream closed rather than
                 // silently passing through as "no issue".
-                _ = try requiredMessages(in: payload, eventKind: eventKind)
+                let issueMessages = try requiredMessages(in: payload, eventKind: eventKind)
+                recordIssue(
+                    symbols: Set(issueMessages.compactMap { $0["symbol"] as? String }),
+                    payload: payload, declaredTests: declaredTests, pending: &pending
+                )
 
             default:
                 // A genuinely unrecognized event kind -- a schema extension
@@ -296,6 +306,7 @@ enum SwiftTestingEventStreamParser {
             }
         }
 
+        try resolveTestsEndedWithoutMessages(pending: pending, evidence: &evidence)
         return evidence
     }
 
@@ -313,7 +324,8 @@ enum SwiftTestingEventStreamParser {
         payload: [String: Any],
         declaredSuiteIDs: Set<String>,
         declaredTests: Set<TestIdentifier>,
-        evidence: inout RunEvidence
+        evidence: inout RunEvidence,
+        pending: inout PendingVerdicts
     ) throws {
         let messages = try requiredMessages(in: payload, eventKind: kind)
         guard let rawID = payload["testID"] as? String else {
@@ -336,7 +348,13 @@ enum SwiftTestingEventStreamParser {
             evidence.startedTests.insert(identifier)
         case "testEnded":
             evidence.endedTests.insert(identifier)
-            try recordTerminalOutcome(for: identifier, messages: messages, evidence: &evidence)
+            if messages.isEmpty {
+                // No verdict on the event itself; decided once the whole
+                // stream is read (see `resolveTestsEndedWithoutMessages`).
+                pending.endedWithoutMessages.insert(identifier)
+            } else {
+                try recordTerminalOutcome(for: identifier, messages: messages, evidence: &evidence)
+            }
         case "testSkipped":
             evidence.skippedTests.insert(identifier)
         case "testCancelled":

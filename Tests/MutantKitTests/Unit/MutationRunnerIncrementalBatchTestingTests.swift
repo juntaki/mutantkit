@@ -165,7 +165,7 @@ struct MutationRunnerIncrementalBatchTestingTests {
         )
     }
 
-    @Test("A mutant missing from the batch's returned results is recovered via a fresh, individual standalone reverify, not left infrastructureFailure (Gate 3 Phase H15C)")
+    @Test("A mutant missing from a batch's results is recovered via a fresh standalone reverify, not left infrastructureFailure")
     func missingFromBatchResultsIsRecoveredStandalone() async throws {
         // `SpyIncrementalBatchAdapter.runMutant`'s own individual-dispatch
         // default is `.passed` when unscripted, so the recovered result
@@ -352,6 +352,8 @@ private actor SpyIncrementalBatchAdapter: TestSelecting, BatchTestable {
         selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
         individualRunMutantCalls.append((point.id, workspace))
+        // A run against the baseline's own build is the unmutated control.
+        if artifact.productHash == "baseline-hash" { return Self.result(.passed) }
         let status = batchOutcomes[point.id] ?? .passed
         return Self.result(status)
     }
@@ -397,7 +399,9 @@ private actor SpyIncrementalBatchAdapter: TestSelecting, BatchTestable {
         TestRunResult(
             status: status,
             summary: status == .failed
-                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: [], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "xcodebuild", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,

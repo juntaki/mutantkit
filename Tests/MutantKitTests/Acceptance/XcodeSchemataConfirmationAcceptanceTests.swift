@@ -142,7 +142,7 @@ struct XcodeSchemataConfirmationAcceptanceTests {
         let originalSources = [Self.relativePath: Data(Self.librarySource.utf8)]
 
         let adapter = XcodeBuildAdapter(
-            configuration: Configuration(), kind: .xcodeProject, projectFile: projectFile, projectRoot: directory
+            configuration: Acceptance.macOSConfiguration(), kind: .xcodeProject, projectFile: projectFile, projectRoot: directory
         )
         let workspaces = try WorkspaceManager(projectRoot: directory, scratchRoot: scratchRoot)
         let policy = MutationVerdictVerifier.VerdictVerificationPolicy(

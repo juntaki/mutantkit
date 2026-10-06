@@ -211,7 +211,7 @@ private actor CountingSelectiveTestAdapter: TestSelecting {
         TestRunResult(
             status: status,
             summary: status == .failed
-                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,

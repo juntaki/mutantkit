@@ -62,12 +62,18 @@ struct SchemataRuntimeProtocolV3Tests {
         let includeDir = Acceptance.packageRoot.appendingPathComponent("Sources/MutantKitSchemataRuntimeC/include")
         let libDir = Acceptance.packageRoot.appendingPathComponent(".build/debug")
 
+        // A package built with code coverage instruments the runtime
+        // library, and Xcode 27's linker then needs the profile runtime that
+        // `-fprofile-instr-generate` brings in. Add it only when the library
+        // asks for it, so a plain build links exactly as before.
+        let instrumented = libraryReferencesProfileRuntime(libDir.appendingPathComponent("libMutantKitSchemataRuntime.a"))
+        profileOutputDirectory = instrumented ? root : nil
+
         let compile = Process()
         compile.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        compile.arguments = [
-            "clang", "-I", includeDir.path, sourceURL.path,
-            "-L", libDir.path, "-lMutantKitSchemataRuntime", "-o", binaryURL.path
-        ]
+        compile.arguments = ["clang", "-I", includeDir.path, sourceURL.path]
+            + (instrumented ? ["-fprofile-instr-generate"] : [])
+            + ["-L", libDir.path, "-lMutantKitSchemataRuntime", "-o", binaryURL.path]
         let pipe = Pipe()
         // Close-on-exec, immediately -- see AcceptanceSupport.cloexecPipe's
         // own doc comment for why: a real CI stack sample caught the
@@ -88,6 +94,24 @@ struct SchemataRuntimeProtocolV3Tests {
             throw HarnessCompileError.failed(output)
         }
         return binaryURL
+    }
+
+    /// Set when the harness was linked with the profile runtime; the harness
+    /// then writes its own coverage data, which belongs in the scratch
+    /// directory and not in the working directory.
+    private nonisolated(unsafe) static var profileOutputDirectory: URL?
+
+    private static func libraryReferencesProfileRuntime(_ library: URL) -> Bool {
+        let nm = Process()
+        nm.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        nm.arguments = ["nm", "-u", library.path]
+        let pipe = Pipe()
+        nm.standardOutput = pipe
+        nm.standardError = FileHandle.nullDevice
+        guard (try? nm.run()) != nil else { return false }
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        nm.waitUntilExit()
+        return output.contains("___llvm_profile_runtime")
     }
 
     private enum HarnessCompileError: Error, CustomStringConvertible {
@@ -112,7 +136,11 @@ struct SchemataRuntimeProtocolV3Tests {
         let process = Process()
         process.executableURL = try Self.harnessBinary()
         process.arguments = arguments
-        process.environment = environment
+        var processEnvironment = environment
+        if let directory = Self.profileOutputDirectory {
+            processEnvironment["LLVM_PROFILE_FILE"] = directory.appendingPathComponent("harness-%p.profraw").path
+        }
+        process.environment = processEnvironment
         let pipe = Pipe()
         // Close-on-exec, immediately -- see AcceptanceSupport.cloexecPipe's
         // own doc comment for why: a real CI stack sample caught the

@@ -18,8 +18,9 @@ struct TrustCommandJSONTests {
     @Test("--json's JSON is schema-versioned and structurally valid for a trustworthy report")
     func trustworthyReportJSONShape() throws {
         let point = try makeAnchoredPoint(file: "Sources/A.swift")
-        let report = makeReport(plan: makePlan(mutations: [point]), results: [makeResult(point: point, outcome: .killedByAssertion)])
-        let trust = TrustReport.build(from: report)
+        let plan = makePlan(mutations: [point])
+        let report = makeReport(plan: plan, results: [anchoredKill(point)])
+        let trust = TrustReport.build(from: report, verifyingAgainst: plan)
         #expect(trust.trustworthy)
 
         let data = try MutationPlan.encoder().encode(trust)
@@ -59,9 +60,11 @@ struct TrustCommandJSONTests {
         let dir = try makeScratchDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let point = try makeAnchoredPoint(file: "Sources/A.swift")
-        let report = makeReport(plan: makePlan(mutations: [point]), results: [makeResult(point: point, outcome: .killedByAssertion)])
+        let plan = makePlan(mutations: [point])
+        let report = makeReport(plan: plan, results: [anchoredKill(point)])
         let reportPath = dir.appendingPathComponent("report.json")
         try report.encoded().write(to: reportPath, options: .atomic)
+        try plan.encoded().write(to: dir.appendingPathComponent("plan.json"), options: .atomic)
 
         let command = try TrustCommand.parse(["--report", reportPath.path, "--json", "--project-root", dir.path])
         try command.run()
@@ -72,9 +75,11 @@ struct TrustCommandJSONTests {
         let dir = try makeScratchDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let point = try makeAnchoredPoint(file: "Sources/A.swift")
-        let report = makeReport(plan: makePlan(mutations: [point]), results: [makeResult(point: point, outcome: .killedByAssertion)])
+        let plan = makePlan(mutations: [point])
+        let report = makeReport(plan: plan, results: [anchoredKill(point)])
         let reportPath = dir.appendingPathComponent("report.json")
         try report.encoded().write(to: reportPath, options: .atomic)
+        try plan.encoded().write(to: dir.appendingPathComponent("plan.json"), options: .atomic)
 
         let command = try TrustCommand.parse(["--report", reportPath.path, "--project-root", dir.path])
         try command.run()
@@ -170,6 +175,21 @@ struct TrustCommandJSONTests {
     }
 
     // MARK: - Helpers
+
+    /// A kill whose evidence is anchored to the point, so it also passes the
+    /// re-verification `trust` runs (the default fixture hashes are synthetic).
+    private func anchoredKill(_ point: MutationPoint) -> MutationResult {
+        let evidence = MutationEvidence(
+            sourceBeforeHash: point.sourceFileHash,
+            sourceAfterHash: ContentHash.of("after"),
+            sourceDiff: "--- a/Sources/A.swift\n+++ b/Sources/A.swift\n@@ -1,1 +1,1 @@\n-true\n+false\n",
+            buildProductHash: ContentHash.of("mutant-binary"),
+            applicationEvidence: .isolated(.buildProductDiffersFromBaseline(
+                mutantHash: ContentHash.of("mutant-binary"), baselineHash: ContentHash.of("baseline-binary")
+            ))
+        )
+        return makeResult(point: point, outcome: .killedByAssertion, evidence: evidence)
+    }
 
     private func makeScratchDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("TrustCommandJSONTests-\(UUID().uuidString)")

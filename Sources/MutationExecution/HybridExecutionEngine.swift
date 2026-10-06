@@ -5,13 +5,9 @@ import SwiftFrontend
 /// Combines the schemata backend's `SchemataMutationRunner` with the
 /// existing, unmodified `MutationRunner` into one `RunReport` (ADR-0006
 /// Stage 3) — the shared engine `Sources/CLI/Commands/
-/// SchemataRunOrchestration.swift` is being migrated onto (part of this
-/// project's internal execution-engine restructuring; see its own,
-/// private planning notes, not part of this public repo, for the full
-/// rationale). This file is filled in incrementally,
-/// one plan step at a time; each addition here is a verbatim relocation of
-/// code that already lived (and was already tested) in
-/// `SchemataRunOrchestration`, never a rewrite.
+/// SchemataRunOrchestration.swift` runs on. Each addition here is a
+/// verbatim relocation of code that already lived (and was already tested)
+/// in `SchemataRunOrchestration`, never a rewrite.
 ///
 /// Populated so far (plan §3 Steps 1-4): the pure, already-directly-tested
 /// helpers from Step 1 — `SchemataPortionResult`, `BaselineResolution`,
@@ -130,7 +126,7 @@ public enum HybridExecutionEngine {
         public let programs: [SchemataProgram]
         public let embeddedIDs: Set<MutationID>
         public let sources: [String: Data]
-        /// Gate 3 Phase H19: every non-embedded entry's own
+        /// Every non-embedded entry's own
         /// `SchemataPlanEntry.fallbackReason` — already computed by
         /// `SchemataChunkPlanner.plan`/each lowerer's own
         /// `analyze(_:source:)`, previously read only for `embeddedIDs`
@@ -199,7 +195,7 @@ public enum HybridExecutionEngine {
             build: context.adapter.build, test: context.testAdapter, in: sandbox.workspaceRoot,
             configuration: context.configuration, projectRoot: context.projectRoot,
             coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey,
-            operationalIssues: operationalIssues
+            operationalIssues: operationalIssues, workspaces: workspaces
         )
         try? await workspaces.destroySandbox(sandbox)
         return outcome
@@ -252,9 +248,9 @@ public enum HybridExecutionEngine {
             // never builds or tests the unmutated project itself either —
             // see `SharedBaselineEstablisher`'s own doc comment for why.
             preEstablishedBaseline: inputs.sharedBaseline,
-            // Gate 3 Phase H5: the same `execution.testBatchSize` isolated
+            // The same `execution.testBatchSize` isolated
             // mode's own batching already reads (`MutationRunner
-            // .testOneBatch`/`testWaveChunk`, Phase H3), not a separate
+            // .testOneBatch`/`testWaveChunk`), not a separate
             // schemata-specific setting — `nil`/unset resolves to `1`
             // (batching disabled), the identical "no value configured, no
             // batching" fallback isolated mode uses at its own call site.
@@ -343,7 +339,7 @@ public enum HybridExecutionEngine {
     /// One report from two passes that now share a single baseline (see
     /// `runHybrid`'s own `sharedBaseline` — previously each built and tested
     /// the unmutated project separately, ADR-0006's accepted v1
-    /// inefficiency; Gate 3 measured that at ~9.5% of total wall on a real
+    /// inefficiency; that was measured at ~9.5% of total wall on a real
     /// iOS project, so it is shared now, not duplicated). Only one
     /// `BaselineRecord` can go in the final report regardless — both
     /// passes' records are the *same* record by construction today, not
@@ -513,6 +509,7 @@ public enum HybridExecutionEngine {
             context, fallbackIDs: fallbackIDs, workspaces: workspaces, sharedBaseline: sharedBaseline
         )
         await GateTimingRecorder.shared.record("fallback.portion.total", start: fallbackPortionStart)
+        if case let .established(shared) = sharedBaseline { await shared.control?.teardown() }
 
         let mergeStart = GateTimingRecorder.shared.now()
         let report = merge(
@@ -524,7 +521,7 @@ public enum HybridExecutionEngine {
                 // it must not still be counted in `effectiveCount` — it is
                 // already folded into `fallbackIDs.count` above instead.
                 embedded: classification.embeddedIDs.count - dynamicFallbackIDs.count, fallback: fallbackIDs.count,
-                // Gate 3 Phase H19: `classification.plannerFallbackReasons`'
+                // `classification.plannerFallbackReasons`'
                 // keys are already exactly the planner-time fallback set (every
                 // `MutationID` not in `embeddedIDs`) — never overlaps
                 // `dynamicFallbackIDs`, so no further filtering is needed here.
@@ -558,13 +555,15 @@ public enum HybridExecutionEngine {
         public let resultCache: MutationResultCache?
         public let resultCacheDigest: String?
         public let priorityStore: TestPriorityStore?
-        public let progress: ProgressReporter?
+        public let progress: MutationModel.ProgressReporter?
+        public let evidenceArchive: EvidenceArchiveWriter?
 
         public init(
             checkpoints: CheckpointStore, artifactsRoot: URL, coverageCache: CoverageProfileCache,
             coverageCacheKey: CoverageProfileCache.Key?, resultCache: MutationResultCache?, resultCacheDigest: String?,
-            priorityStore: TestPriorityStore?, progress: ProgressReporter?
+            priorityStore: TestPriorityStore?, progress: MutationModel.ProgressReporter?, evidenceArchive: EvidenceArchiveWriter? = nil
         ) {
+            self.evidenceArchive = evidenceArchive
             self.checkpoints = checkpoints
             self.artifactsRoot = artifactsRoot
             self.coverageCache = coverageCache
@@ -599,7 +598,8 @@ public enum HybridExecutionEngine {
             resultCache: options.resultCache,
             resultCacheDigest: options.resultCacheDigest,
             priorityStore: options.priorityStore,
-            progress: options.progress
+            progress: options.progress,
+            evidenceArchive: options.evidenceArchive
         ).run()
     }
 }
@@ -740,7 +740,7 @@ public extension HybridExecutionEngine {
         return counts
     }
 
-    /// Gate 3 Phase H19: the *planner-time* counterpart to
+    /// The *planner-time* counterpart to
     /// `fallbackReasonCounts` above, for
     /// `ExecutionStrategyReport.plannerFallbackReasonCounts` — a candidate a
     /// lowerer's own `analyze(_:source:)` (or `SchemataChunkPlanner.plan`,

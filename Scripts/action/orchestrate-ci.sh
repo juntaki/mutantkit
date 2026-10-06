@@ -3,8 +3,7 @@
 # orchestrate-ci.sh — the entire effect of `mode: ci`, once `mutantkit` is
 # already on PATH: doctor -> (diff-ref preflight ->) plan -> run -> gate.
 #
-# Pulled out of action.yml into its own script for two reasons (P13 review,
-# item 3): first, action-smoke-test.yml's CI-mode job needs to exercise this
+# Pulled out of action.yml into its own script for two reasons: first, action-smoke-test.yml's CI-mode job needs to exercise this
 # exact orchestration against a `mutantkit` binary built from the PR HEAD
 # under test — installing a *published* release cannot prove a change to
 # this orchestration itself works, since the change has not shipped yet.
@@ -51,7 +50,7 @@ set -euo pipefail
 # modes can end it early (doctor/plan failing is fatal, above) — without
 # this, an invocation that fails before `run` writes a fresh report.json
 # would have `gate` read a *previous* invocation's stale one instead of
-# correctly finding none at all (P13 review: multi-invocation report
+# correctly finding none at all (multi-invocation report
 # contamination). Clearing them here, before anything else runs, makes "no
 # fresh report this invocation" and "no report on disk at all" the same
 # state, which is the state every downstream consumer (gate, the job
@@ -114,7 +113,7 @@ echo "::endgroup::"
 
 echo "::group::mutantkit run"
 # `--also-report`, never `--report`: report formats belong to the project's
-# own mutantkit.yml (P13 review, item 4) — this Action only guarantees these
+# own mutantkit.yml — this Action only guarantees these
 # four are *also* produced, on top of whatever the project already
 # configured, never in place of it. `json` so `gate`/this script's own
 # artifact staging have report.json; `github-actions` for inline
@@ -147,7 +146,7 @@ gate_args=("${common_args[@]}" --report "$REPORT_JSON_PATH" --json)
 # tested/effective score has a different denominator than a whole-project
 # baseline's, so comparing the two is not apples to apples. Nothing in
 # report.json today records enough to *prove* two reports share a comparable
-# scope (see P13 review, item 12 — `RunReport.planID` is a content hash of
+# scope (`RunReport.planID` is a content hash of
 # the exact source tree + mutation set, so it is equal only for a literal
 # re-run, never useful across two different commits); the only scope
 # distinction this Action can make honestly is "was --diff-base used at

@@ -60,12 +60,22 @@ jobs:
 
   install-mode:
     name: "mode: install (${{ matrix.version }})"
-    runs-on: macos-26
+    runs-on: xcode-27
     strategy:
       fail-fast: false
       matrix:
         version: ["latest"]
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install mutantkit via this repo's own action.yml
@@ -152,8 +162,18 @@ jobs:
 
   mode-validation:
     name: "Unknown mode fails closed, before any download"
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: "mode: not-a-real-mode"
         id: bogus-mode
@@ -172,8 +192,18 @@ jobs:
 
   newline-in-input-rejected:
     name: "An input value containing a newline fails closed (GITHUB_OUTPUT / workflow-command injection)"
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # `mode: install` on purpose — the newline-rejection step runs
@@ -218,8 +248,18 @@ jobs:
 
   incompatible-cli-fails-closed:
     name: "mode: ci against a pre-P13 release fails at preflight, not mid-campaign"
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -278,8 +318,18 @@ jobs:
 
   build-from-source:
     name: Build mutantkit from PR HEAD (shared by every mode:ci job below)
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: swift build -c release --product mutantkit
       - name: Stage the built binary for other jobs
@@ -297,8 +347,18 @@ jobs:
   ci-mode-happy-path:
     name: "mode: ci happy path — doctor/plan/run/gate/summary/artifacts, reporter preservation"
     needs: build-from-source
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -425,8 +485,18 @@ jobs:
   ci-mode-quality-gate-failure:
     name: "mode: ci — an unmeetable threshold fails the job, artifacts still upload"
     needs: build-from-source
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -516,8 +586,18 @@ jobs:
 
   ci-mode-gate-operational-failure:
     name: "gate operational failure (missing/malformed report) never reads as a pass"
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Drives Scripts/action/summarize-gate.sh directly, against
@@ -615,8 +695,18 @@ jobs:
   ci-mode-diff:
     name: "diff: missing ref fails closed; a fetched ref succeeds"
     needs: build-from-source
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       # Shallow (default fetch-depth: 1): `origin/main` is not fetched, so
       # it must not resolve. `ref: github.sha` (a bare commit, not a branch
       # name) is load-bearing here, not decoration: when this workflow's
@@ -743,8 +833,18 @@ jobs:
   ci-mode-report-isolation:
     name: "multi-invocation isolation: a failed invocation never inherits or leaks a prior invocation's stale report/summary/artifact"
     needs: build-from-source
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       # Shallow (default fetch-depth: 1): `origin/main` is not fetched, so
       # invocation B below (diff: origin/main) is guaranteed to fail at the
       # diff-ref preflight — the same deterministic failure `ci-mode-diff`
@@ -865,8 +965,18 @@ jobs:
   ci-mode-input-hardening:
     name: "inputs are treated as data, never as shell source (a spaced project-root, an adversarial baseline-scope)"
     needs: build-from-source
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -965,7 +1075,7 @@ jobs:
   ci-mode-baseline:
     name: "baseline cache: fresh miss, same-SHA rerun has no save collision, scopes stay isolated"
     needs: build-from-source
-    runs-on: macos-26
+    runs-on: xcode-27
     # action.yml's own baseline-save steps require `github.event_name !=
     # 'pull_request'` on purpose (a PR run must never write the target
     # branch's baseline before it has merged — see action.yml's own
@@ -977,6 +1087,16 @@ jobs:
     # weekly `schedule`, both real non-PR events.
     if: github.event_name != 'pull_request'
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - name: Checkout mutantkit (action.yml)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

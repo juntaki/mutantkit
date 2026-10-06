@@ -46,7 +46,9 @@ struct MutationVerdictVerifierSchemataChainTests {
                 sourceApplication: .applied(makeEvidence(buildProductHash: "h1", applicationEvidence: .schemata(observation))),
                 build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
                 coverage: coverage,
-                test: SingleTestObservation(run: run(status: status), applicationEvidence: .schemata(observation))
+                test: SingleTestObservation(
+                    run: run(status: status), applicationEvidence: .schemata(observation), execution: wholeSuiteExecution
+                )
             )
         }
     }
@@ -418,7 +420,7 @@ struct MutationVerdictVerifierSchemataChainTests {
         #expect(try schemataOutcome(observation) == .infrastructureFailure)
     }
 
-    @Test("I: failed (not passed) + no HIT -> no fallback (Phase 1 is passing-only)")
+    @Test("I: failed (not passed) + no HIT -> no fallback (the fallback is passing-only)")
     func failedStatusNeedsNoFallbackEvenWithNoHit() throws {
         #expect(try fallbackReason(startupObservation(includeHit: false), status: .failed) == nil)
     }

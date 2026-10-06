@@ -39,6 +39,28 @@ func makeToolchain(
     )
 }
 
+/// A baseline control the verifier accepts: the unmutated build ran the same
+/// tests and every one passed.
+func makePassingBaselineControl(selectedTests: [String]? = nil) -> BaselineControlObservation {
+    BaselineControlObservation(
+        method: .unmutatedBuildProducts,
+        run: TestRunResult(
+            status: .passed, summary: makeTestSummary(),
+            command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/tmp"),
+            resultArtifactPath: nil, diagnosis: "control passed"
+        ),
+        selectedTests: selectedTests
+    )
+}
+
+/// The structured control a confirmed kill carries once the verifier has judged
+/// `makePassingBaselineControl()`.
+func makePassedControl() -> AssertionKillConfirmation.Control {
+    AssertionKillConfirmation.Control(
+        status: .passedOnBaseline, method: .unmutatedBuildProducts, runStatus: "passed", selectedTestCount: nil, failingTests: []
+    )
+}
+
 func makeTestSummary(total: Int = 10, passed: Int = 10, failed: Int = 0) -> TestOutcomeSummary {
     TestOutcomeSummary(
         total: total,
@@ -257,9 +279,18 @@ func makeResult(
     durationSeconds: Double = 2,
     buildDurationSeconds: Double? = nil,
     testDurationSeconds: Double? = nil,
-    confirmationDurationSeconds: Double? = nil
+    confirmationDurationSeconds: Double? = nil,
+    attributeKill: Bool = true
 ) -> MutationResult {
     let ref = PlannedMutationRef.forPoint(point, planID: planID, workUnitID: workUnitID)
+    var evidence = evidence
+    if attributeKill, outcome == .killedByAssertion, let recorded = evidence, recorded.assertionKillAttribution == nil {
+        // A verified assertion kill always carries its attribution; the
+        // fixture mimics that unless a test opts out to model a stripped record.
+        evidence = recorded.withAssertionKillAttribution(
+            .evaluate(execution: wholeSuiteExecution, failingTests: testSummary?.failingTests)
+        )
+    }
     let proof: VerdictProof = switch outcome {
     case .killedByAssertion, .killedByCrash, .verifiedTimeout, .survived:
         .executed(ExecutedMutationProof(
@@ -282,6 +313,23 @@ func makeResult(
         confirmationDurationSeconds: confirmationDurationSeconds
     )
 }
+
+extension MutationEvidence {
+    func withAssertionKillAttribution(_ attribution: AssertionKillAttribution?) -> MutationEvidence {
+        MutationEvidence(
+            sourceBeforeHash: sourceBeforeHash, sourceAfterHash: sourceAfterHash, sourceDiff: sourceDiff,
+            buildProductHash: buildProductHash, applicationEvidence: applicationEvidence,
+            buildCommand: buildCommand, testCommand: testCommand, resultArtifact: resultArtifact,
+            crashConfirmation: crashConfirmation, timeoutConfirmation: timeoutConfirmation,
+            testAttempts: testAttempts, assertionKillConfirmation: assertionKillConfirmation,
+            assertionKillAttribution: attribution, confirmationChain: confirmationChain
+        )
+    }
+}
+
+/// A recorded execution for a test run that ran the full configured list,
+/// standalone — the minimum an assertion kill needs to be credited.
+let wholeSuiteExecution = TestExecutionRecord(attribution: .standalone, selection: .wholeSuite)
 
 private func makeCommand() -> CommandRecord {
     CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/tmp")
@@ -324,7 +372,10 @@ func makeObservations(
         return MutationObservations(
             plannedMutation: ref, sourceApplication: .applied(evidence),
             build: BuildObservation(outcome: .succeeded(buildProductHash: ContentHash.of("mutant-binary"), command: makeCommand())),
-            test: SingleTestObservation(run: run(.failed), applicationEvidence: provenActivation)
+            test: SingleTestObservation(
+                run: run(.failed), applicationEvidence: provenActivation,
+                execution: TestExecutionRecord(attribution: .standalone, selection: .wholeSuite)
+            )
         )
     case .killedByCrash:
         return MutationObservations(

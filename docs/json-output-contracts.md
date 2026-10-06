@@ -57,7 +57,112 @@ each carry their own `schemaVersion` — see
 | `testObligationFixPlan` | 1 | `mutantkit fix-plan --json` (`TestObligationFixPlan`) | object |
 | `nextFixRecommendation` | 1 | `mutantkit next --json` (`NextFixRecommendation`) | object |
 | `verifyResult` | 1 | `mutantkit verify --json` (`VerifyResult`) | object |
+| `verifyRunResult` | 1 | `mutantkit verify-run --json` (`VerifyRunResult`) | object |
 | `commandError` | 1 | Every `--json`-supporting command's failure path (`JSONErrorEnvelope`) | object |
+
+`trust --json` carries an optional `verification` object (the re-verification
+`trust` runs internally: `planSupplied`, `planSource`, `planPath`, `passCount`,
+`failCount`, `notVerifiableCount`, `unverifiedRequiredChecks`, `checks`).
+`trustworthy` is fail-closed: `true` only when the stored `integrity.passed` is
+true, no check failed, and every required check (`report.results`,
+`plan.identity`, `plan.mutationIDs`, `result.identity`, `result.provenance`,
+`integrity.recompute`, `score.recompute`) was verifiable and passed. The new
+`trustStatus` says which case applies: `trustworthy`, `mismatch` (a check
+failed, or the stored integrity did not pass; exit code `2`) or
+`notFullyVerified` (nothing failed but a required check could not be verified,
+named in `verification.unverifiedRequiredChecks`; exit code `5`). Without
+`--plan`, `trust` first looks for a `plan.json` with the report's `planID` next
+to the report and in the project root; if none is found, the plan-dependent
+checks are not verifiable and a clean report is `notFullyVerified`, never
+`trustworthy`. A mismatch outranks `notFullyVerified`. A report whose results were verified by an
+older verifier version than the current one is also `notFullyVerified` (exit
+code `5`), even with `--plan`: `result.provenance` is then not verifiable,
+because a report cannot be re-judged without its observations. The required
+checks are not relaxed for it; `trust` prints "report was produced by an older
+verifier" with the versions and says to re-run for a verifiable report.
+`trustworthy` therefore means "every required check re-verified". That is a
+semantic tightening of the existing key: a report that earlier versions called
+trustworthy can now be `false` when it carries older-verifier results. `planSource` is
+`supplied`, `discovered` or `none`. Not-verifiable checks are never counted as
+passed. `score` is withheld on a `mismatch`; on `notFullyVerified` it is the
+stored value and unverified. Existing keys are unchanged.
+
+`verify-run --json` and `trust --json`'s `verification` object carry
+`complete`, an additive boolean that is `true` only when every check passed:
+none failed and none is not verifiable. `passed` keeps its meaning (no check
+failed), so `passed: true, complete: false` is a PARTIAL verification, and the
+`verify-run` text output ends with `PARTIAL: ...` instead of
+`Fully verified: every check passed.` A partial report must never be read as
+fully verified.
+
+`verify-run --json` and `trust --json` report `tierBPerformed: true` only when
+an evidence archive (written by a run with `evidence.archive: true`) was read
+and at least one result was re-judged from its raw observations under the
+confirmation policy the run recorded; a `tierB` object then gives the counts.
+`report.json` gains an optional `evidenceArchive` (`runID`, `manifestHash`,
+`entryCount`); `--evidence <dir>` selects an archive explicitly. Without an
+archive both commands behave as before and results that need raw observations
+stay not verifiable. The archive's hashes show an edited archive is not the one
+the run wrote; they are not a signature.
+
+Tier B is a consistency check with two explicit limits. An archive passed with
+`--evidence` for a report that records no `evidenceArchive` is an unbound
+archive: only its own consistency is checked (`archive.binding` is not
+verifiable), nothing is re-judged from it and `tierBPerformed` stays `false`.
+And the confirmation policy Tier B re-judges under is read from the archive's
+own manifest. When a project configuration whose `configurationHash` equals the
+plan's is available, the policy it implies is compared with the manifest's and a
+disagreement fails `archive.policy`; otherwise `archive.policy` is not
+verifiable ("policy taken from the archive itself, not independently bound").
+No Tier B check is among the required checks, so a Tier B pass never makes a
+report `trustworthy` on its own.
+
+`trust --json` also carries an optional `killEvidence` object counting how
+the assertion kills were credited (`withinSelection`, `wholeSuiteRan`,
+`failingTestsUnnamed`, `attributionNotRecorded`, `batchAttributed`) and how many
+results went through more than one confirmation round
+(`cascadeConfirmations`). In `report.json`, a result's `evidence` may carry
+`assertionKillAttribution` and `confirmationChain`, both optional and both
+written only by the verifier; a result without them is never read as one whose
+kill stayed inside its test selection. A verifier version bump (13) means a
+cached or checkpointed assertion kill whose observation recorded no test
+execution is re-verified and is no longer credited as a kill.
+
+With `retestKilledMutants` on, a confirmed assertion kill's
+`assertionKillConfirmation` also carries an optional `control` (`status`:
+`passedOnBaseline`, `failedOnBaseline` or `notEstablished`, the `method`, the
+control run's status and failing tests): the unmutated build run against the
+same tests. A kill is confirmed only with `passedOnBaseline`; a failing control
+makes the result `flaky` (disposition `baselineControlFailed`) and a missing or
+unusable one makes it `infrastructureFailure` (`baselineControlNotEstablished`).
+A record without `control` is unknown, never controlled, and `verify-run`
+reports it as not verifiable (older result) or failed (current rules). The
+evidence archive stores the control run with the observations, so Tier B
+re-derives the same status. A verifier version bump (14) means an older cached
+or checkpointed kill is re-verified and, lacking a control, is no longer
+credited as a kill.
+
+Whether a failing test lies inside the run's selection is decided from the full
+test identifier (target, suites, type, method and parameter list), not its last
+two path components: a failing test that only shares a type and method name
+with a selected one (another target or enclosing suite, another overload or
+parameterized variant) is not inside the selection. A tolerated difference is
+only decoration (a trailing `()`, a missing target or suite prefix, a module
+prefix on the type). The kill then becomes `infrastructureFailure` with
+`assertionKillAttribution.disposition` `outsideSelection` and the names in
+`unmatchedFailingTests`, visible in `trust`'s `killEvidence`. A verifier version
+bump (15) means an older cached kill is re-verified under this rule. Version
+16 reads a Swift Testing selection recorded with a doubled trailing `()` as the
+same test.
+
+Every result records the `verificationVersion` of the verifier that judged it.
+A cached result from an earlier version is never served: the cache treats it as
+a miss and the mutant is run again. A resumed checkpoint is re-judged from its
+raw observations under the current rules, never taken as stored. A result in a
+finished report keeps the version it was judged under, which is why `trust`
+cannot call an older report `trustworthy` (exit code `5`) and a fresh run is
+needed. None of this changes a stored report's contents or can produce a wrong
+result: the worst case is a re-run.
 
 Two more `--json` outputs exist outside this registry, both intentionally:
 

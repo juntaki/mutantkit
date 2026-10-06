@@ -84,9 +84,10 @@ struct MutationRunnerFlakyRetestTests {
 
     /// With the flag on, a mutant that fails twice in a row stays killed — the
     /// second run confirms rather than overturns the first.
-    @Test("retestKilledMutants on: two failures in a row stay killedByAssertion")
+    @Test("retestKilledMutants on: two failures in a row and a passing baseline control stay killedByAssertion")
     func retestOnConsistentKillStaysKilled() async throws {
-        let report = try await run(retestKilledMutants: true, mutantSequence: [.failed, .failed])
+        // Third response: the unmutated baseline control run.
+        let report = try await run(retestKilledMutants: true, mutantSequence: [.failed, .failed, .passed])
 
         let result = try #require(report.results.first)
         #expect(result.outcome == .killedByAssertion)
@@ -95,6 +96,31 @@ struct MutationRunnerFlakyRetestTests {
         // recorded.
         let confirmationDuration = try #require(result.confirmationDurationSeconds)
         #expect(confirmationDuration >= 0)
+        let confirmation = try #require(result.evidence?.assertionKillConfirmation)
+        #expect(confirmation.disposition == .confirmed)
+        #expect(confirmation.control?.status == .passedOnBaseline)
+    }
+
+    /// The same-artifact retest reproduces any failure that comes from the
+    /// environment; a control that fails on the unmutated build is what shows it.
+    @Test("retestKilledMutants on: a failure the unmutated build reproduces is flaky, not a kill")
+    func retestOnFailingControlIsNotAKill() async throws {
+        let report = try await run(retestKilledMutants: true, mutantSequence: [.failed, .failed, .failed])
+
+        let result = try #require(report.results.first)
+        #expect(result.outcome == .flaky)
+        let confirmation = try #require(result.evidence?.assertionKillConfirmation)
+        #expect(confirmation.disposition == .baselineControlFailed)
+        #expect(confirmation.control?.status == .failedOnBaseline)
+    }
+
+    @Test("retestKilledMutants on: a control that reached no verdict leaves the kill unconfirmed")
+    func retestOnInconclusiveControlIsNotAKill() async throws {
+        let report = try await run(retestKilledMutants: true, mutantSequence: [.failed, .failed, .infrastructureFailure])
+
+        let result = try #require(report.results.first)
+        #expect(result.outcome == .infrastructureFailure)
+        #expect(result.evidence?.assertionKillConfirmation?.disposition == .baselineControlNotEstablished)
     }
 
     // MARK: - On, and inconsistent
@@ -181,6 +207,8 @@ private actor ScriptedTestAdapter: TestAdapter {
             status: status,
             summary: status == .failed
                 ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,

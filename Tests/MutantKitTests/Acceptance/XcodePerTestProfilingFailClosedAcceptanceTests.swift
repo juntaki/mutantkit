@@ -4,8 +4,7 @@ import MutationExecution
 import MutationModel
 import Testing
 
-/// F1-P0: parity with `PerTestProfilingFailClosedAcceptanceTests` (the
-/// SwiftPM/P12-B Finding D fix) for `XcodeBuildAdapter`.
+/// Parity with `PerTestProfilingFailClosedAcceptanceTests` for `XcodeBuildAdapter`.
 /// `measurePerTestCoverage`'s per-test loop must never let one test's
 /// unprovable isolated run quietly become "this test covers nothing"
 /// instead of "this test's coverage is unknown" -- a version of this
@@ -22,7 +21,11 @@ import Testing
 /// acceptance suite sharing this fixture uses.
 @Suite(
     "Acceptance: Xcode per-test coverage fails closed when one test cannot be measured",
-    .enabled(if: Acceptance.simulatorEnabled)
+    .enabled(if: Acceptance.simulatorEnabled),
+    // Both tests lease simulators for the same device. Run side by side, the
+    // failing-test baseline reliably came back as a killed test runner
+    // ("Test crashed with signal kill") instead of an ordinary test failure.
+    .serialized
 )
 struct XcodePerTestProfilingFailClosedAcceptanceTests {
     @Test("The unavailable fast profiler falls back to the serial reference profiler")
@@ -54,8 +57,8 @@ struct XcodePerTestProfilingFailClosedAcceptanceTests {
         )
     }
 
-    @Test("An unmeasurable test invalidates the whole per-test coverage map, not just its own entry")
-    func unmeasurableTestProducesNoUsableMap() async throws {
+    @Test("An unmeasurable test stays in every selection instead of becoming \"covers nothing\"")
+    func unmeasurableTestIsCarriedAsUnattributed() async throws {
         let workspace = try Acceptance.stageFixture("XcodeProject")
         defer { try? FileManager.default.removeItem(at: workspace) }
 
@@ -67,17 +70,32 @@ struct XcodePerTestProfilingFailClosedAcceptanceTests {
 
         let artifact = try await adapter.buildBaseline(in: workspace)
         let baseline = try await adapter.runBaseline(artifact, in: workspace, timeoutSeconds: 120)
-        #expect(baseline.status == .failed, "the fixture's own testWidgetBNeverProfiles must fail the baseline run unconditionally")
+        #expect(baseline.status == .failed, "testWidgetBNeverProfiles must fail the baseline run unconditionally; got \(baseline)")
 
-        let map = await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: 120)
-
-        #expect(
-            map == nil,
-            """
-            testWidgetBNeverProfiles() can never be proven measured (it fails unconditionally), so the map must be nil \
-            -- an unrestricted full-suite fallback -- rather than a map that silently omits widgetB()'s real \
-            coverage while still looking complete. Got: \(String(describing: map))
-            """
+        let map = try #require(
+            await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: 120),
+            "the per-test pass should keep the measurable test's attribution and carry the unmeasurable one explicitly"
         )
+
+        // testWidgetBNeverProfiles() fails unconditionally, so its coverage can never be proven. It must be
+        // carried as unattributed -- never silently dropped, which would read as "this test covers nothing".
+        let unmeasurable = map.unattributedTests.filter { $0.qualifiedName.hasSuffix("testWidgetBNeverProfiles") }
+        #expect(unmeasurable.count == 1, "unattributed: \(map.unattributedTests)")
+        #expect(!map.isComplete)
+
+        // The measurable test stays attributed, so the map still narrows.
+        let attributed = Set(map.coveringTests.values.flatMap(\.values).flatMap { $0 })
+        #expect(attributed.contains { $0.qualifiedName.hasSuffix("testWidgetANeverFails") })
+        #expect(attributed.isDisjoint(with: map.unattributedTests))
+
+        // Fail-closed: every selection includes the unattributed test, for covered and uncovered lines alike.
+        for (file, lines) in map.coveringTests {
+            for line in lines.keys {
+                let selection = try #require(map.testsCovering(file: file, line: line))
+                #expect(selection.isSuperset(of: unmeasurable), "\(file):\(line) selection omits the unmeasurable test")
+            }
+        }
+        let unseen = try #require(map.testsCovering(file: "PerTestWidgets/NoSuchFile.swift", line: 1))
+        #expect(unseen.isSuperset(of: unmeasurable), "a line no test was attributed must still select the unmeasurable test")
     }
 }

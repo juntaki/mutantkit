@@ -137,6 +137,14 @@
           "properties": { "maximum": { "type": ["integer", "null"] } }
         }
       }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "archive": { "type": "boolean" },
+        "keep": { "type": ["integer", "null"], "minimum": 1 }
+      }
     }
   }
 }

@@ -28,7 +28,7 @@ public enum MutationConfidence: String, Codable, Sendable, CaseIterable, Compara
 ///
 /// v0.1 only ever produces `.isolated`. `.schemata` exists in the model now so
 /// that plan files written today stay readable once schemata lands, and so the
-/// differential test in Phase 4 has something to compare against.
+/// differential test has something to compare against.
 public enum ExecutionMode: String, Codable, Sendable {
     /// One mutant per source rewrite, per build. The reference implementation.
     case isolated
@@ -164,6 +164,10 @@ public enum SchemaVersion {
     public static let nextFixRecommendation = 1
     /// `mutantkit verify --json` — `VerifyResult`.
     public static let verifyResult = 1
+    /// `mutantkit verify-run --json` — `VerifyRunResult`.
+    public static let verifyRunResult = 1
+    /// The evidence archive's manifest and observation files.
+    public static let evidenceArchive = 1
     /// Shared by every command's `--json` error path (`JSONErrorEnvelope`),
     /// unlike every constant above, which is one per command's *success*
     /// shape. An agent recognizes "this command failed" the same way

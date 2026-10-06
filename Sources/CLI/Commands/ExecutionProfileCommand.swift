@@ -141,9 +141,10 @@ extension ExecutionProfileCommand {
             "Shared module cache (manual opt-in only — never enabled by optimized/experimental): " + (
                 characteristics.sharedModuleCacheSupported
                     ? "this project's build shape supports it (SwiftPackageMacOSAdapter). " +
-                    "Internal measurement on a small fixture found 7.5s real / 3.9s user vs. 24.4s real / 13.4s " +
+                    "On Xcode 26 and earlier a small fixture measured 7.5s real / 3.9s user vs. 24.4s real / 13.4s " +
                     "user cold (not re-measured for this project — the saving scales " +
                     "with how much Foundation/XCTest/SwiftShims compilation this project's own build pays for). " +
+                    "On Xcode 27 SwiftPM no longer stores module files in this cache, so no speedup is expected. " +
                     "Before setting execution.sharedModuleCache: true, read its own doc comment's warning against " +
                     "CI setups that run multiple concurrent destinations against this same project/scratch root."
                     : "not supported here — requires SwiftPackageMacOSAdapter (never an Xcode/simulator project)."

@@ -12,7 +12,7 @@ import Testing
 /// the same mutants still enter its denominator — while the Tested score
 /// becomes honest about *why* a mutant got through.
 ///
-/// This is also the empirical proof the HANDOVER demanded: instrumentation
+/// This is also the empirical proof that instrumentation
 /// changes the baseline binary, and the activation evidence that compares a
 /// mutant's hash against the baseline's has to keep working under that change.
 /// If this suite fails the "every scored mutant is proven active" check, the
@@ -65,10 +65,10 @@ struct SwiftPackageMacOSCoverageAcceptanceTests {
         ])
 
         // Covered lines whose mutations still go undetected.
-        #expect(run.mutations(withOutcome: .survived) == [
+        #expect(run.mutations(withOutcome: .survived) == run.expectedSurvivors([
             .init(declaration: "init(loyaltyDiscountEnabled:)", original: "true", replacement: "false"),
             .init(declaration: "bulkDiscountRate(itemCount:)", original: ">", replacement: ">=")
-        ])
+        ]))
 
         // The kills are unchanged.
         #expect(run.killed == [
@@ -79,7 +79,7 @@ struct SwiftPackageMacOSCoverageAcceptanceTests {
     }
 
     /// Activation evidence has to keep working under instrumentation. This is
-    /// the load-bearing empirical check the HANDOVER demanded: every covered
+    /// the load-bearing empirical check: every covered
     /// mutant — the ones that were actually built and tested — must still be
     /// proven active in the build product, otherwise `MachOCodeHash`'s
     /// allow-list is letting coverage sections into the comparison and every
@@ -91,7 +91,8 @@ struct SwiftPackageMacOSCoverageAcceptanceTests {
         // noCoverage mutants are not built, so they carry no activation evidence
         // by design. The remaining mutants — killed — were built and tested,
         // and every one of them must carry proof the mutation reached the binary.
-        for result in run.report.results where result.outcome != .noCoverage {
+        for result in run.report.results
+            where result.outcome != .noCoverage && !AcceptanceRun.isStrippedDefaultArgument(result) {
             let activation = try #require(
                 result.evidence?.applicationEvidence?.isolatedActivation,
                 "\(result.point.displayLocation) has no activation evidence"
@@ -136,7 +137,7 @@ struct SwiftPackageMacOSCoverageAcceptanceTests {
         #expect(integrity.sourceApplied == 7)
         // The two noCoverage mutants skipped the build; the other five did not.
         #expect(integrity.buildObserved == 5)
-        #expect(integrity.executed == 5)
+        #expect(integrity.executed == 5 - run.strippedCount)
         #expect(integrity.classified == 7)
         #expect(integrity.reported == 7)
 
@@ -156,11 +157,13 @@ struct SwiftPackageMacOSCoverageAcceptanceTests {
 
         // 3 killed, 2 survived, 2 noCoverage.
         #expect(score.killed == 3)
-        #expect(score.survived == 2)
+        // A mutant whose test image is identical to the baseline's is not scored.
+        let stripped = Double(run.strippedCount)
+        #expect(score.survived == 2 - run.strippedCount)
         #expect(score.noCoverage == 2)
         // tested  = 3 / (3+2) = 0.6
         // effective = 3 / (3+2+2) = 0.4286...
-        #expect(score.tested == 0.6)
-        #expect(score.effective == 3.0 / 7.0)
+        #expect(score.tested == 3.0 / (5.0 - stripped))
+        #expect(score.effective == 3.0 / (7.0 - stripped))
     }
 }

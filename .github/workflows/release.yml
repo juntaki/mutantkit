@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     permissions:
       contents: read
       id-token: write
@@ -32,8 +32,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
 
       - name: Toolchain
         run: swift --version && xcodebuild -version
@@ -101,8 +101,142 @@ jobs:
 
   clean-machine-e2e:
     needs: build
+    runs-on: xcode-27
+    steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
+      # Deliberately no actions/checkout here — the point of this job is to
+      # prove the quick-start path works with no repo present at all, the
+      # way a real user experiences it.
+      - name: Download the packaged binary only
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutantkit-macos-arm64
+          path: download
+
+      - name: Verify checksum
+        working-directory: download
+        run: shasum -a 256 -c SHA256SUMS
+
+      - name: Extract
+        working-directory: download
+        run: tar xzf mutantkit-macos-arm64.tar.gz
+
+      - name: mutantkit --version
+        run: download/mutantkit-macos-arm64/mutantkit --version
+
+      - name: mutantkit doctor (no project yet — must report that honestly)
+        working-directory: download
+        run: |
+          set -euo pipefail
+          ./mutantkit-macos-arm64/mutantkit doctor || true
+
+      - name: Generate a minimal SwiftPM fixture project (no clone of this repo)
+        run: |
+          set -euo pipefail
+          mkdir -p fixture/Sources/Calc fixture/Tests/CalcTests
+          cat > fixture/Package.swift <<'EOF'
+          // swift-tools-version:6.0
+          import PackageDescription
+
+          let package = Package(
+              name: "Calc",
+              targets: [
+                  .target(name: "Calc"),
+                  .testTarget(name: "CalcTests", dependencies: ["Calc"])
+              ]
+          )
+          EOF
+          cat > fixture/Sources/Calc/Calc.swift <<'EOF'
+          public func calcAdd(_ a: Int, _ b: Int) -> Int {
+              a + b
+          }
+
+          public func isPositive(_ x: Int) -> Bool {
+              x > 0
+          }
+          EOF
+          cat > fixture/Tests/CalcTests/CalcTests.swift <<'EOF'
+          import XCTest
+          @testable import Calc
+
+          final class CalcTests: XCTestCase {
+              func testCalcAdd() {
+                  XCTAssertEqual(calcAdd(2, 3), 5)
+              }
+              func testIsPositive() {
+                  XCTAssertTrue(isPositive(1))
+                  XCTAssertFalse(isPositive(-1))
+              }
+          }
+          EOF
+
+      - name: mutantkit doctor (fixture present)
+        working-directory: fixture
+        run: ../download/mutantkit-macos-arm64/mutantkit doctor
+
+      - name: mutantkit init
+        working-directory: fixture
+        run: |
+          set -euo pipefail
+          ../download/mutantkit-macos-arm64/mutantkit init
+          # Asserts init's own test-target auto-detection actually found
+          # CalcTests unassisted — this used to be hand-edited into
+          # mutantkit.yml by a Python script after init ran, which meant a
+          # real regression in init's auto-detection could break silently
+          # (the hand-edit would keep "fixing" the file even if init itself
+          # stopped detecting anything). No hand-edit now: if init's own
+          # detection ever regresses, this step fails loudly instead.
+          grep -A2 '^tests:' mutantkit.yml
+          grep -qx '    - CalcTests' mutantkit.yml || {
+            echo "::error::mutantkit init did not auto-detect CalcTests as a test target"
+            exit 1
+          }
+
+      - name: mutantkit plan
+        working-directory: fixture
+        run: ../download/mutantkit-macos-arm64/mutantkit plan
+
+      - name: mutantkit run
+        working-directory: fixture
+        run: |
+          set -euo pipefail
+          ../download/mutantkit-macos-arm64/mutantkit run --plan plan.json --output report.json
+          python3 -c "
+          import json
+          report = json.load(open('report.json'))
+          assert len(report['integrity']['violations']) == 0, report['integrity']['violations']
+          assert len(report['results']) == 2, report['results']
+          print('clean-machine E2E gate: PASSED')
+          "
+
+  # Same packaged binary as `clean-machine-e2e` (downloaded, never rebuilt), run
+  # on an OLDER OS/toolchain than the one that built it (macOS 26 host, Xcode
+  # 26.6; the build job uses the macOS 27 image). Catches a runtime
+  # incompatibility of the Xcode 27 / macOS 27 SDK build with older macOS.
+  clean-machine-e2e-macos26:
+    name: clean-machine E2E, macOS package on a macOS 26 host
+    needs: build
     runs-on: macos-26
     steps:
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Assert pinned Xcode (26.6)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "26.6" ]; then
+            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       # Deliberately no actions/checkout here — the point of this job is to
       # prove the quick-start path works with no repo present at all, the
       # way a real user experiences it.
@@ -304,7 +438,7 @@ jobs:
   # it. `finalize-release` below is the only place that promotes it.
   publish-release:
     if: github.ref_type == 'tag'
-    needs: [build, clean-machine-e2e, require-validation]
+    needs: [build, clean-machine-e2e, clean-machine-e2e-macos26, require-validation]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -374,9 +508,19 @@ jobs:
   verify-published-action-install:
     if: github.ref_type == 'tag'
     needs: [build, publish-release]
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 10
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: "Install mutantkit exactly as a real `uses: juntaki/mutantkit@<tag>` consumer's install step would"

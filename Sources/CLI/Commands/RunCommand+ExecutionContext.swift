@@ -187,6 +187,8 @@ extension RunCommand {
         let coverageCacheKey: CoverageProfileCache.Key?
         let resultCache: MutationResultCache?
         let resultCacheDigest: String?
+        /// Present only when `evidence.archive` is on.
+        var evidenceArchive: EvidenceArchiveWriter?
     }
 
     /// Computed once, up front, so both the checkpoint file name and the run
@@ -300,7 +302,12 @@ extension RunCommand {
 
         return RunExecutionContext(
             toolchain: toolchain, checkpoints: checkpoints, coverageCache: coverageCache,
-            coverageCacheKey: coverageCacheKey, resultCache: resultCache, resultCacheDigest: resultCacheDigest
+            coverageCacheKey: coverageCacheKey, resultCache: resultCache, resultCacheDigest: resultCacheDigest,
+            evidenceArchive: settings.evidence?.archive == true
+                ? EvidenceArchiveWriter(
+                    evidenceRoot: runDirectory.appendingPathComponent("evidence"), plan: loadedPlan, policy: verificationPolicy
+                )
+                : nil
         )
     }
 

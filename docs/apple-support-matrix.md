@@ -37,6 +37,34 @@ is preserved as a historical record internally (not part of this public
 repo), not deleted, but it no longer describes MutantKit's current
 contract.
 
+**Xcode 27.0 is the CI-enforced baseline; Xcode 26.6 is a CI-enforced
+compatibility lane.** Hosted CI runs on GitHub's `xcode-27` runner image
+(macOS 27, default Xcode 27.0, Swift 6.4, iOS 27.0 simulator runtime). That
+image is in preview, so jobs can queue longer than on a generally available
+image and an image change can break a run without any change in this
+repository. Before CI moved there, the maintainer ran the full unit suite
+(2,970 tests) and all 22 acceptance fixtures of the CI matrix
+(`Scripts/ci-fixtures.json`) on Xcode 27.0 (27A266a) with the iOS 27.0
+runtime; Xcode 26.5 passed the unit suite and the SwiftPM, direct coverage
+runner, local path dependency, Swift Testing selection, Xcode project
+(isolated and schemata), batch testing and cache and checkpoint acceptance
+classes. Building MutantKit from source on Xcode 27 is supported as of that
+release. Differences you can observe on Xcode 27:
+
+- **SwiftPM schemata with two or more test targets runs isolated.** Every
+  chunk forfeits schemata and its mutants run in isolated mode (scores stay
+  correct, there is no schemata speedup). See
+  [`docs/schemata-support-matrix.md`](schemata-support-matrix.md). A package
+  with one test target is not affected.
+- **Dead-stripped code can report `infrastructureFailure`.** The newer
+  toolchain removes code nothing references (an unused default-argument
+  generator, for example), so a mutant in it can produce a build product
+  identical to the baseline's. It is reported as `infrastructureFailure`
+  ("build product identical to baseline"), not as a survivor and not scored.
+- **`execution.sharedModuleCache` is not expected to help.** In
+  maintainer testing SwiftPM no longer placed module files in that cache, so
+  do not expect the speedup described for earlier toolchains.
+
 Two different questions get conflated under "what Swift/Xcode/macOS
 version does MutantKit need" — this matrix answers them separately.
 
@@ -45,23 +73,25 @@ version does MutantKit need" — this matrix answers them separately.
 | | Requirement | Status | Proof |
 |---|---|---|---|
 | macOS (running the release binary) | 14+, Apple Silicon | **Supported** | `README.md`'s own `## Install`; `Package.swift`'s `platforms: [.macOS(.v14)]` — this is the compiled artifact's own deployment target, a separate claim from the row below |
-| macOS / Xcode (developing, building, and CI-testing MutantKit itself) | macOS 26 (Tahoe) + **Xcode 26.6**, pinned | **Supported**, CI-enforced | Every macOS job across `ci.yml`/`release.yml`/`release-validation.yml`/`codeql.yml` runs on the GitHub-hosted `macos-26` runner image and explicitly runs `sudo xcode-select -s /Applications/Xcode_26.6.app` before building — not the runner image's own implicit default, which could otherwise drift underneath this repo's CI without a single line here changing. `ci.yml`'s `lint` job additionally fails the build if the selected Xcode does not report exactly `26.6` or Swift's major version is below 6, so a broken pin (a runner image that drops that exact bundle) is a loud CI failure, not a silent fallback. |
+| macOS / Xcode (developing, building, and CI-testing MutantKit itself) | **Xcode 27.0**, pinned (baseline) | **Supported**, CI-enforced | Every macOS job across `ci.yml`/`release.yml`/`release-validation.yml`/`action-smoke-test.yml`/`fuzz.yml` runs on GitHub's `xcode-27` runner image (preview) and explicitly runs `sudo xcode-select -s /Applications/Xcode_27.0.app` before building, not the image's implicit default. `ci.yml`'s `lint` job and `release-validation.yml`'s `release-package` job fail the build if the selected Xcode does not report exactly `27.0`; jobs that previously used the implicit default carry the same assertion. A unit test (`WorkflowXcodePinTests`) fails if a macOS job loses its pin. |
+| Xcode 26.6 (compatibility lane) | macOS 26 + **Xcode 26.6**, pinned | **Supported**, CI-enforced, reduced | Required by `ci.yml`'s `merge-gate`, on the `macos-26` image with `xcode-select -s /Applications/Xcode_26.6.app`: the unit tests (`unit-xcode-26`) and, in `acceptance-xcode-26`, the SwiftPM package (`swift-package`), local path dependency (`local-path-dependencies`) and Xcode project isolated (`xcode-project-isolated`) fixtures. Not run on 26.6: SwiftPM schemata, Xcode project schemata, workspace, XCUITest, batch testing and coverage selection fixtures, the differential and runtime-artifact jobs, lint, release validation and the action smoke tests. |
+| CodeQL | Xcode 26.6 on `macos-26` | Scanned | `codeql.yml` stays on `macos-26` with Xcode 26.6: CodeQL's Swift support for the Swift 6.4 toolchain is not confirmed, so the analysis does not run on Xcode 27. |
 | Swift | 6.0+ | **Supported**, hard-enforced | `Package.swift:1` — `// swift-tools-version:6.0`, unchanged since the project's first commit; SwiftPM refuses to resolve a `6.0`-tools package on an older toolchain, so this floor cannot silently regress |
 | Intel Mac | building from source only, no prebuilt binary | **Supported** for source builds, **unsupported** for `brew install`'s prebuilt path | `README.md`'s own `### Building from source`: "platforms the prebuilt binary does not cover yet (Intel Macs, ...)" |
 
 The macOS 14+ deployment target (compiled-artifact compatibility) and the
-Xcode 26.6-pinned development/CI environment are deliberately two separate
+Xcode 27.0-pinned development/CI environment are deliberately two separate
 claims — a project built to run on older macOS does not imply MutantKit is
 developed, tested, or verified with an older Xcode. Bumping the pinned
-Xcode 26.6 reference to a newer 26.x patch/minor is a deliberate edit to
-every workflow's `xcode-select -s` path, not automatic; moving to Xcode 27
-is a separate, future support-contract decision, made only after it is
-independently verified, not implied by this policy.
+Xcode 27.0 reference to a newer 27.x patch/minor is a deliberate edit to
+every workflow's `xcode-select -s` path, not automatic. Because the `xcode-27`
+image is in preview, a run that fails only on image availability or an image
+update is not by itself evidence of a MutantKit regression.
 
 ### What toolchain a target project (the project under test) can use
 
 A separate, real question: once MutantKit is built (with the current
-Xcode 26.x baseline), what toolchain can a project it mutates itself use?
+Xcode 27.x baseline), what toolchain can a project it mutates itself use?
 **No specific older-toolchain claim is made.** A target project using an
 older Swift/Xcode than MutantKit's own build toolchain may well work —
 nothing in MutantKit deliberately rejects one — but this is explicitly
@@ -277,8 +307,9 @@ every push (`ci.yml`) or before every release (`release-validation.yml`).
 | Axis | Status |
 |---|---|
 | Swift 6.0+ (build MutantKit) | Supported, hard-enforced by `Package.swift` |
-| Xcode 26.6, pinned / macOS 14+ Apple Silicon runtime (develop, build, CI-test MutantKit) | Supported, CI-enforced (`xcode-select -s` pin in every macOS job; `ci.yml`'s `lint` job fails on drift) |
-| Target project's own toolchain (older than Xcode 26.x) | Best-effort, untested — no compatibility CI lane maintained (v0.8 policy) |
+| Xcode 27.0, pinned / macOS 14+ Apple Silicon runtime (develop, build, CI-test MutantKit) | Supported, CI-enforced on the preview `xcode-27` image (`xcode-select -s` pin in every macOS job; `lint` and `release-package` fail on drift) |
+| Xcode 26.6 compatibility lane | Supported, CI-enforced, reduced (unit tests, SwiftPM package, local path dependencies, Xcode project isolated); CodeQL stays on 26.6 |
+| Target project's own toolchain (older than Xcode 26.6) | Best-effort, untested — no compatibility CI lane maintained (v0.8 policy) |
 | SwiftPM (macOS) × XCTest / Swift Testing | Supported, both modes |
 | Xcode project/workspace × XCTest / Swift Testing | Supported, `isolated`; `xcodeProject`+XCTest also `schemata`-supported |
 | iOS Simulator | Supported, both modes (per the table above) |

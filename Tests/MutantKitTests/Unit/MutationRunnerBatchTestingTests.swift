@@ -11,8 +11,8 @@ import Testing
 /// mutant with no known selection still run individually rather than being
 /// silently dropped, does a mutant missing from a batch's returned results
 /// get recovered via a fresh, individual standalone reverify rather than
-/// being terminally marked `.infrastructureFailure` or dropped (Gate 3
-/// Phase H15C — mirrors `testWaveChunk`'s identical, earlier fix for the
+/// being terminally marked `.infrastructureFailure` or dropped
+/// (mirrors `testWaveChunk`'s identical, earlier fix for the
 /// wave path), and does a batched mutant's crash confirmation still get its
 /// own independent, unbatched rebuild.
 @Suite("Mutation runner: batch testing")
@@ -123,7 +123,7 @@ struct MutationRunnerBatchTestingTests {
         // Both narrowed mutants must have a scripted batch outcome here —
         // an unscripted one is `SpyBatchAdapter`'s own way of simulating a
         // batch member missing from the returned results (see its own doc
-        // comment), which Gate 3 Phase H15C now recovers via an individual
+        // comment), which is now recovered via an individual
         // standalone reverify. Leaving these unscripted would make this
         // test about that recovery path instead of the batching/grouping
         // mechanics it actually means to verify.
@@ -140,12 +140,12 @@ struct MutationRunnerBatchTestingTests {
         #expect(individualCalls.count == 1, "expected exactly one individually-run mutant")
     }
 
-    // MARK: - Native XCTest timeout containment (Gate 3 Phase H3)
+    // MARK: - Native XCTest timeout containment
 
     //
     // This is the actual default, non-wave batching path (`testOneBatch`,
     // dispatched whenever `earlyAbortSelectedTests` is left at its default
-    // `false`) — the one Gate 3's own real-production-app run used, and the one the
+    // `false`) — the one a real-production-app run used, and the one the
     // original batch-hang-containment finding (a hang's own summed
     // `batchTimeout` share holding an entire multi-mutant batch hostage)
     // came from. `testWaveChunk` (`MutationRunnerWaveEarlyKillTests`) gets
@@ -167,7 +167,7 @@ struct MutationRunnerBatchTestingTests {
         #expect(allowances == [nil, nil])
     }
 
-    @Test("A multi-mutant batch call below Phase H1's validated floor does not request native timeout containment")
+    @Test("A multi-mutant batch call below the validated floor does not request native timeout containment")
     func nativeTimeoutAllowanceIsNilBelowThePhaseH1Floor() async throws {
         let (_, adapter) = try await run(testBatchSize: 10, mutantTimeoutSeconds: 45)
 
@@ -184,7 +184,7 @@ struct MutationRunnerBatchTestingTests {
         #expect(batchCalls.allSatisfy { $0.count == 1 })
     }
 
-    // MARK: - Batched-result ambiguity recovery (Gate 3 Phase H15C)
+    // MARK: - Batched-result ambiguity recovery
 
     @Test(
         "A mutant missing from a batch's results is recovered via a fresh, individual reverify, not dropped or left infrastructureFailure"
@@ -228,6 +228,13 @@ struct MutationRunnerBatchTestingTests {
         // attempt — never a second retry of the retry.
         let individualCalls = await adapter.individualRunMutantCalls
         #expect(individualCalls.count == 2, "expected exactly one recovery attempt, never a retry of the retry")
+    }
+
+    @Test("A kill read from the shared batch is recorded as batch-attributed")
+    func batchKillIsRecordedAsBatchAttributed() async throws {
+        let (report, _) = try await run(testBatchSize: 10, batchOutcomeOverrides: [0: .failed, 1: .passed])
+        let first = try #require(report.results.min { $0.id < $1.id })
+        #expect(first.outcome == .killedByAssertion && first.evidence?.assertionKillAttribution?.attribution == .batch)
     }
 
     @Test("A batched mutant's crash confirmation still gets its own independent, unbatched rebuild")
@@ -565,7 +572,7 @@ private actor SpyBatchAdapter: TestSelecting, BatchTestable {
         TestRunResult(
             status: status,
             summary: status == .failed
-                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "xcodebuild", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,

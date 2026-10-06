@@ -46,6 +46,7 @@ struct MutationRunnerTestSelectionTests {
         attribution: Set<TestIdentifier>??,
         confirmCrashKills: Bool = false,
         confirmTimedOutMutants: Bool = false,
+        failingTestOverride: String? = nil,
         mutantSequence: [TestRunStatus]
     ) async throws -> (RunReport, ScriptedSelectiveTestAdapter) {
         try writeSingleMutantProject()
@@ -72,7 +73,7 @@ struct MutationRunnerTestSelectionTests {
 
         let workspaces = try WorkspaceManager(projectRoot: root, scratchRoot: scratchRoot)
         let adapter = ScriptedSelectiveTestAdapter(
-            mutantSequence: mutantSequence, perTestCoverage: perTestCoverage
+            mutantSequence: mutantSequence, perTestCoverage: perTestCoverage, failingTestOverride: failingTestOverride
         )
         let runner = MutationRunner(
             plan: plan,
@@ -95,6 +96,24 @@ struct MutationRunnerTestSelectionTests {
         #expect(report.results.first?.outcome == .killedByAssertion)
         let selections = await adapter.recordedSelections
         #expect(selections == [[addTest]])
+
+        // The selection the run was narrowed to is recorded as evidence, and the
+        // failing test it named lies inside it.
+        let attribution = try #require(report.results.first?.evidence?.assertionKillAttribution)
+        #expect(attribution.disposition == .withinSelection)
+        #expect(attribution.attribution == .standalone)
+        #expect(attribution.selectedTestCount == 1)
+    }
+
+    @Test("A failure reported by a test outside the attributed selection is not credited as a kill")
+    func failureOutsideTheSelectionIsNotAKill() async throws {
+        let (report, _) = try await run(
+            selectCoveringTests: true, attribution: .some([addTest]), failingTestOverride: "FakeTests/Unrelated/testElsewhere()",
+            mutantSequence: [.failed]
+        )
+
+        #expect(report.results.first?.outcome == .infrastructureFailure)
+        #expect(report.results.first?.evidence?.assertionKillAttribution?.disposition == .outsideSelection)
     }
 
     @Test("selectCoveringTests on, attribution unknown: falls back to the unrestricted run, not an empty one")
@@ -109,6 +128,8 @@ struct MutationRunnerTestSelectionTests {
         #expect(report.results.first?.outcome == .killedByAssertion)
         let selections = await adapter.recordedSelections
         #expect(selections == [nil])
+        // No narrowing happened and the fake names no failing test.
+        #expect(report.results.first?.evidence?.assertionKillAttribution?.disposition == .failingTestsUnnamed)
     }
 
     @Test("selectCoveringTests on, no per-test coverage measured at all: falls back to the unrestricted run")
@@ -151,11 +172,10 @@ struct MutationRunnerTestSelectionTests {
 
     // A `10...30`s, `selectedTests.count`-scaled clamp lived here
     // previously — narrowing a known selection's timeout well below the
-    // whole-suite number. Gate 3's real-iOS-project run found it
+    // whole-suite number. A real-iOS-project run found it
     // uncalibrated for Xcode/Simulator's fixed per-invocation overhead (see
     // `TimeoutController.mutantLimitSeconds(selectedTests:)`'s own doc
-    // comment and the internal Gate 3 benchmark research, not part of this
-    // public repo), so a
+    // comment), so a
     // known selection now resolves to the same whole-suite number an
     // unknown one always did — the three tests below assert that identical
     // outcome instead of a narrower one.
@@ -239,10 +259,12 @@ private actor ScriptedSelectiveTestAdapter: TestSelecting {
     private let perTestCoverage: PerTestCoverageMap?
     private(set) var recordedSelections: [Set<TestIdentifier>?] = []
     private(set) var recordedTimeoutSeconds: [Double] = []
+    private let failingTestOverride: String?
 
-    init(mutantSequence: [TestRunStatus], perTestCoverage: PerTestCoverageMap?) {
+    init(mutantSequence: [TestRunStatus], perTestCoverage: PerTestCoverageMap?, failingTestOverride: String? = nil) {
         remaining = mutantSequence
         self.perTestCoverage = perTestCoverage
+        self.failingTestOverride = failingTestOverride
     }
 
     func runBaseline(_ artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double) async throws -> TestRunResult {
@@ -271,14 +293,19 @@ private actor ScriptedSelectiveTestAdapter: TestSelecting {
         recordedSelections.append(selectedTests)
         recordedTimeoutSeconds.append(timeoutSeconds)
         precondition(!remaining.isEmpty, "runMutant called more times than the test scripted")
-        return Self.result(remaining.removeFirst())
+        return Self.result(remaining.removeFirst(), selectedTests: selectedTests, override: failingTestOverride)
     }
 
-    private static func result(_ status: TestRunStatus) -> TestRunResult {
-        TestRunResult(
+    /// A failing run names a test the run was actually allowed to run: the
+    /// first selected one, or none when the whole suite ran.
+    private static func result(
+        _ status: TestRunStatus, selectedTests: Set<TestIdentifier>? = nil, override: String? = nil
+    ) -> TestRunResult {
+        let named = override.map { [$0] } ?? Array(selectedTests?.map(\.onlyTestingArgument).sorted().prefix(1) ?? [])
+        return TestRunResult(
             status: status,
             summary: status == .failed
-                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: named, durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,

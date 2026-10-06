@@ -48,6 +48,9 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
     case ambiguousAcrossRuntimes(name: String, expectedRuntime: String, foundUnder: [String])
     /// No device with this name exists under any installed runtime at all.
     case notFound(name: String, knownNames: [String])
+    /// Same condition as `notFound`, but the name came from the built-in
+    /// default literal because no `project.destination` is configured.
+    case defaultDestinationNotFound(name: String, knownNames: [String])
     /// A destination already pinned to `id=<udid>` names a UDID nothing on
     /// this machine has.
     case unknownUDID(String)
@@ -68,6 +71,13 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
         case let .notFound(name, knownNames):
             """
             No simulator named "\(name)" is available. Known device names: \
+            \(knownNames.isEmpty ? "(none)" : knownNames.joined(separator: ", ")).
+            """
+        case let .defaultDestinationNotFound(name, knownNames):
+            """
+            No `project.destination` is configured, and the built-in default "\(name)" does not \
+            exist on this machine. Run `mutantkit setup` (or `mutantkit init`) to pick an installed \
+            simulator, or set `project.destination` in mutantkit.yml. Known device names: \
             \(knownNames.isEmpty ? "(none)" : knownNames.joined(separator: ", ")).
             """
         case let .unknownUDID(udid):
@@ -133,7 +143,11 @@ public enum DestinationResolver {
     /// are only listed (an actual `simctl` call) when `requested` actually
     /// names a simulator; a macOS or physical-device destination never
     /// touches `simctl` at all.
-    public static func resolve(_ requested: String, using pool: SimulatorPool) async throws -> ResolvedDestination {
+    public static func resolve(
+        _ requested: String,
+        using pool: SimulatorPool,
+        isBuiltInDefault: Bool = false
+    ) async throws -> ResolvedDestination {
         guard isSimulatorDestination(requested) else {
             return ResolvedDestination(requested: requested, device: nil)
         }
@@ -145,14 +159,18 @@ public enum DestinationResolver {
             throw DestinationResolutionError.simulatorPoolFailure(error.description)
         }
 
-        return try resolve(requested, against: devices)
+        return try resolve(requested, against: devices, isBuiltInDefault: isBuiltInDefault)
     }
 
     /// The pure decision, given the device list already in hand — separated
     /// from `resolve(_:using:)` so the ambiguity/not-found/latest-runtime
     /// logic can be pinned in a unit test without any of them needing a real
     /// simulator or a `simctl` call to do it.
-    static func resolve(_ requested: String, against devices: [SimulatorDevice]) throws -> ResolvedDestination {
+    static func resolve(
+        _ requested: String,
+        against devices: [SimulatorDevice],
+        isBuiltInDefault: Bool = false
+    ) throws -> ResolvedDestination {
         guard isSimulatorDestination(requested) else {
             // macOS, a physical device, or something this tool does not
             // model: nothing to pin, and nothing to be ambiguous about.
@@ -175,10 +193,11 @@ public enum DestinationResolver {
 
         let matches = devices.filter { $0.name == name }
         guard !matches.isEmpty else {
-            throw DestinationResolutionError.notFound(
-                name: name,
-                knownNames: Array(Set(devices.map(\.name))).sorted()
-            )
+            let knownNames = Array(Set(devices.map(\.name))).sorted()
+            if isBuiltInDefault {
+                throw DestinationResolutionError.defaultDestinationNotFound(name: name, knownNames: knownNames)
+            }
+            throw DestinationResolutionError.notFound(name: name, knownNames: knownNames)
         }
 
         if let explicitOS = Self.explicitOS(inDestination: requested) {

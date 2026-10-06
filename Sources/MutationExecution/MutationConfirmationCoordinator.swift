@@ -23,8 +23,7 @@ struct TimeoutInnerRetestRequest {
 /// test-running primitive (`runMutantTests`) every one of those retests, and
 /// `MutationRunner`'s own primary test run, executes through.
 ///
-/// Extracted out of `MutationRunner` (Phase A1 of the execution-pipeline
-/// decomposition): every method here closes over exactly the dependencies a
+/// Extracted out of `MutationRunner`: every method here closes over exactly the dependencies a
 /// retest needs to run in true isolation — `workspaces`/`build`/`test` to
 /// stand up an independent sandbox and drive it, `policy` for the
 /// `retestKilledMutants`/`confirmCrashKills` gates a retest itself checks
@@ -213,7 +212,16 @@ struct MutationConfirmationCoordinator: Sendable {
         } catch {
             confirmingRun = infrastructureFailureRun("a confirmation run could not be started: \(error)")
         }
-        return ConfirmationObservation(kind: .kill, run: confirmingRun, originalFailingTests: originalFailingTests)
+        // Only a retest that reproduced the failure can still become a
+        // confirmed kill, so only then is the unmutated build run against the
+        // same tests (see `baselineControl`); a retest that did not fail
+        // already keeps the verdict out of the kill column.
+        let control = confirmingRun.status == .failed
+            ? await baselineControl(for: point, baseline: baseline, selectedTests: selectedTests)
+            : nil
+        return ConfirmationObservation(
+            kind: .kill, run: confirmingRun, originalFailingTests: originalFailingTests, baselineControl: control
+        )
     }
 
     /// Rebuilds a mutant from scratch in an independent sandbox and re-tests
