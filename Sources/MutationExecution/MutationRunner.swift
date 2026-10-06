@@ -56,20 +56,20 @@ public struct MutationRunner: Sendable {
     private let priorityStore: TestPriorityStore?
     private let monotonicNow: @Sendable () -> TimeInterval
     private let operationalIssues = OperationalIssueLog()
-    private let progress: ProgressReporter?
+    private let progress: MutationModel.ProgressReporter?
 
     /// Retesting a decided outcome (same-artifact confirmation for a kill,
     /// fresh-rebuild confirmation for a crash or a timeout) and the
     /// test-running primitive every one of those, and this runner's own
     /// primary test run, executes through — see that type's own doc
-    /// comment. Phase A1 extraction out of this type: constructed once in
+    /// comment. Extracted out of this type: constructed once in
     /// `init`, from the same `workspaces`/`build`/`test`/`configuration`
     /// this runner itself was given.
     private let confirmationCoordinator: MutationConfirmationCoordinator
 
     /// Turning raw build/test/application observations into a reportable
-    /// `MutationResult` — see that type's own doc comment. Phase A1
-    /// extraction out of this type: constructed once in `init`, sharing
+    /// `MutationResult` — see that type's own doc comment. Extracted
+    /// out of this type: constructed once in `init`, sharing
     /// this runner's own `operationalIssues` log by reference (not a copy),
     /// so a warning `finalize` records still reaches this run's own
     /// `RunReport.operationalIssues` below.
@@ -192,11 +192,10 @@ public struct MutationRunner: Sendable {
         resultCache: MutationResultCache? = nil,
         resultCacheDigest: String? = nil,
         priorityStore: TestPriorityStore? = nil,
-        progress: ProgressReporter? = nil,
+        progress: MutationModel.ProgressReporter? = nil,
+        evidenceArchive: EvidenceArchiveWriter? = nil,
         preEstablishedBaseline: SharedBaselineEstablisher.Outcome? = nil,
-        monotonicNow: @escaping @Sendable () -> TimeInterval = {
-            Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
-        }
+        monotonicNow: @escaping @Sendable () -> TimeInterval = { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000 }
     ) {
         self.plan = plan
         self.configuration = configuration
@@ -229,7 +228,8 @@ public struct MutationRunner: Sendable {
             resultCache: resultCache,
             resultCacheDigest: resultCacheDigest,
             progress: progress,
-            operationalIssues: operationalIssues
+            operationalIssues: operationalIssues,
+            evidenceArchive: evidenceArchive
         )
         self.session = RunSession(
             projectRoot: projectRoot,
@@ -255,6 +255,12 @@ public struct MutationRunner: Sendable {
             baseline = context
         }
 
+        // An injected baseline's retained control products belong to its owner.
+        let owned = preEstablishedBaseline == nil ? baseline.control : nil
+        return try await BaselineControlSource.disposing(owned) { try await finishRun(startedAt: startedAt, baseline: baseline) }
+    }
+
+    private func finishRun(startedAt: Date, baseline: BaselineContext) async throws -> RunReport {
         // Checkpoint hits first: same-run resume is always-trusted, so it
         // takes priority over the cross-run cache. A mutant already
         // recorded in a checkpoint is removed from the pool the cache is
@@ -804,7 +810,8 @@ public struct MutationRunner: Sendable {
                         status: .infrastructureFailure, summary: nil, command: next.item.artifact.command,
                         resultArtifactPath: nil,
                         diagnosis: "The batch test adapter no longer conforms to BatchTestable."
-                    )
+                    ),
+                    attribution: .standalone
                 )
                 try? await workspaces.destroy(next.item.workspace)
                 await collector.add(result)
@@ -877,7 +884,7 @@ public struct MutationRunner: Sendable {
     /// same-sandbox retest testing the actual mutant it is confirming,
     /// rather than whatever the worker has since rebuilt.
     ///
-    /// Phase A1 extraction: `internal` (not `private`), because
+    /// Extracted from this type: `internal` (not `private`), because
     /// `MutationConfirmationCoordinator.confirmKillIfNeeded`, in its own
     /// file, calls this too — see that method's own doc comment.
     static func relocating(_ prepared: PreparedMutant, to clone: URL) -> PreparedMutant {
@@ -1062,6 +1069,7 @@ public struct MutationRunner: Sendable {
                         status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
                         resultArtifactPath: nil, diagnosis: "The mutant's tests could not be run."
                     ),
+                    attribution: .standalone,
                     testDurationSeconds: testDurationSeconds
                 )
                 try? await workspaces.destroy(prepared.workspace)
@@ -1126,7 +1134,9 @@ public struct MutationRunner: Sendable {
                     status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
                     resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its batch."
                 )
-                let result = await finishAfterTest(prepared, baseline: baseline, run: run, testDurationSeconds: duration)
+                let result = await finishAfterTest(
+                    prepared, baseline: baseline, run: run, attribution: .batch, testDurationSeconds: duration
+                )
                 try? await workspaces.destroy(prepared.workspace)
                 results.append(result)
                 try? await workspaces.destroySandbox(batchSandbox)
@@ -1136,7 +1146,8 @@ public struct MutationRunner: Sendable {
                     run: TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
                         resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
-                    )
+                    ),
+                    attribution: .standalone
                 )
                 try? await workspaces.destroy(prepared.workspace)
                 results.append(result)
@@ -1325,6 +1336,7 @@ public struct MutationRunner: Sendable {
                     resultArtifactPath: lastRun?.resultArtifactPath,
                     diagnosis: "All \(survivor.prepared.selectedTests?.count ?? 0) covering test(s) passed across every wave."
                 ),
+                attribution: .batch,
                 testDurationSeconds: survivor.cumulativeTestSeconds,
                 priorTestAttempts: survivor.attempts
             )
@@ -1373,7 +1385,7 @@ public struct MutationRunner: Sendable {
                 survivor.prepared, selectedTests: Set(survivor.remainingTests), baseline: baseline
             )
             let result = await finishAfterTest(
-                survivor.prepared, baseline: baseline, run: standaloneRun,
+                survivor.prepared, baseline: baseline, run: standaloneRun, attribution: .standalone,
                 testDurationSeconds: survivor.cumulativeTestSeconds + standaloneDuration,
                 priorTestAttempts: survivor.attempts, appendCurrentAttempt: true
             )
@@ -1441,7 +1453,7 @@ public struct MutationRunner: Sendable {
             }
             // Containment, layered underneath `batchTimeout` above (which
             // stays the outer, aggregate fail-safe, unchanged): confirmed
-            // (Gate 3 Phase H1/H2) that XCTest's own per-test allowance
+            // that XCTest's own per-test allowance
             // cuts one hanging configuration off — reported `.timedOut` by
             // `XCResultAdapter.classifyBatch`'s native-timeout branch,
             // routed into the same confirmation path a single-mutant
@@ -1458,7 +1470,7 @@ public struct MutationRunner: Sendable {
             // still applies exactly as before — in two cases: a chunk of
             // exactly one member has no attribution ambiguity for the
             // outer timeout to begin with, so there is nothing for this to
-            // contain; and a resolved allowance below Phase H1's own
+            // contain; and a resolved allowance below the
             // empirically-validated value (60s — the only value actually
             // exercised against a real hang) is not a value this has
             // evidence is safe against false positives from Xcode/Simulator
@@ -1500,6 +1512,7 @@ public struct MutationRunner: Sendable {
                 // as opposed to `perMutantShare`, the estimate everyone in
                 // this chunk gets by default.
                 var verifiedDurationSeconds: Double?
+                var attribution = TestExecutionRecord.Attribution.batch
 
                 // `.infrastructureFailure`, or missing from the batch's
                 // results at all, is a definitive signal about THIS mutant —
@@ -1519,10 +1532,10 @@ public struct MutationRunner: Sendable {
                 // the batch's non-answers are.
                 //
                 // `.timedOut` is different from the other two, and is only
-                // ambiguous when `isBatchAttributedTimeout` says so (Gate 3
-                // Phase H2's own field, introduced for exactly this
-                // distinction, previously unused on this path — Gate 3 Phase
-                // H12.1/H12.2). A native-XCTest-timeout classification
+                // ambiguous when `isBatchAttributedTimeout` says so (a
+                // field introduced for exactly this
+                // distinction, previously unused
+                // on this path). A native-XCTest-timeout classification
                 // (`isBatchAttributedTimeout == false`) already names the one
                 // configuration responsible; rerunning it standalone here
                 // before `finishAfterTest` below triggers its own, separate
@@ -1540,6 +1553,7 @@ public struct MutationRunner: Sendable {
                     )
                     run = standaloneRun
                     verifiedDurationSeconds = standaloneDuration
+                    attribution = .standalone
                 }
 
                 if run.status != .passed {
@@ -1556,7 +1570,7 @@ public struct MutationRunner: Sendable {
                     // a mutant killed on wave 3 would report only wave 3's
                     // duration, silently dropping waves 1 and 2's.
                     let result = await finishAfterTest(
-                        survivor.prepared.narrowed(to: test), baseline: baseline, run: run,
+                        survivor.prepared.narrowed(to: test), baseline: baseline, run: run, attribution: attribution,
                         testDurationSeconds: survivor.cumulativeTestSeconds + (verifiedDurationSeconds ?? perMutantShare),
                         priorTestAttempts: survivor.attempts, appendCurrentAttempt: true, currentAttemptWaveIndex: waveIndex
                     )
@@ -1631,6 +1645,7 @@ public struct MutationRunner: Sendable {
                         status: .infrastructureFailure, summary: nil, command: survivor.prepared.artifact.command,
                         resultArtifactPath: nil, diagnosis: "No wave sandbox could be created: \(error)"
                     ),
+                    attribution: .standalone,
                     testDurationSeconds: survivor.cumulativeTestSeconds
                 )
                 try? await workspaces.destroy(survivor.prepared.workspace)
@@ -1722,7 +1737,8 @@ public struct MutationRunner: Sendable {
                     run: TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
                         resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
-                    )
+                    ),
+                    attribution: .standalone
                 )
                 try? await workspaces.destroy(prepared.workspace)
                 collected.append(result)
@@ -1747,7 +1763,7 @@ public struct MutationRunner: Sendable {
         // left at its default `false`) actually runs, the same path Gate
         // 3's real-production-app batch-hang-containment finding came from. See
         // `testWaveChunk`'s identical native-timeout block for the full
-        // rationale (Gate 3 Phase H1/H2/H3) — repeated here rather than
+        // rationale — repeated here rather than
         // shared because the two chunk shapes (`[WaveSurvivor]` vs
         // `[PreparedMutant]`) don't share a common type to factor a helper
         // over without a bigger refactor than this phase calls for.
@@ -1786,15 +1802,18 @@ public struct MutationRunner: Sendable {
             // individually-attributed timeout from a batch-wide one), which
             // this gate must not duplicate or race against.
             var verifiedDurationSeconds: Double?
+            var attribution = TestExecutionRecord.Attribution.batch
             if run.status == .infrastructureFailure {
                 let (standaloneRun, standaloneDuration) = await standaloneVerify(
                     prepared, selectedTests: prepared.selectedTests, baseline: baseline
                 )
                 run = standaloneRun
                 verifiedDurationSeconds = standaloneDuration
+                attribution = .standalone
             }
             let result = await finishAfterTest(
-                prepared, baseline: baseline, run: run, testDurationSeconds: verifiedDurationSeconds ?? batchTestDuration
+                prepared, baseline: baseline, run: run, attribution: attribution,
+                testDurationSeconds: verifiedDurationSeconds ?? batchTestDuration
             )
             try? await workspaces.destroy(prepared.workspace)
             collected.append(result)
@@ -1806,7 +1825,7 @@ public struct MutationRunner: Sendable {
 
     // MARK: - Baseline
 
-    // Phase A1 extraction: `internal` (not `fileprivate`) because
+    // Extracted from this type: `internal` (not `fileprivate`) because
     // `MutationConfirmationCoordinator`, in its own file, takes this as a
     // parameter to every confirmation retest method.
     struct BaselineContext: Sendable {
@@ -1822,6 +1841,8 @@ public struct MutationRunner: Sendable {
         /// means every mutant runs the full configured test list — the same
         /// safe fallback `coverage == nil` is for the `.noCoverage` check.
         let perTestCoverage: PerTestCoverageMap?
+        /// Unmutated products kept for kill baseline controls, when needed.
+        var control: BaselineControlSource?
     }
 
     private enum BaselineAttempt {
@@ -1875,6 +1896,8 @@ public struct MutationRunner: Sendable {
             )
         }
 
+        let control = await BaselineControlSource.establish(configuration.execution, from: artifact, workspaces: workspaces, test: test)
+
         let testStarted = Date()
         let run: TestRunResult
         do {
@@ -1884,6 +1907,7 @@ public struct MutationRunner: Sendable {
                 timeoutSeconds: timeouts.baselineLimitSeconds
             )
         } catch {
+            await control?.teardown()
             return .failed(
                 record: unusableBaseline(startedAt: startedAt, buildCommand: artifact.command),
                 diagnosis: "The baseline test run could not be completed: \(error)"
@@ -1916,6 +1940,7 @@ public struct MutationRunner: Sendable {
         )
 
         guard run.status == .passed else {
+            await control?.teardown()
             return .failed(
                 record: record,
                 diagnosis: """
@@ -1983,7 +2008,8 @@ public struct MutationRunner: Sendable {
             productHash: artifact.productHash,
             timeouts: timeouts.recordingBaseline(durationSeconds: testDuration),
             coverage: coverage,
-            perTestCoverage: perTestCoverage
+            perTestCoverage: perTestCoverage,
+            control: control
         ))
     }
 
@@ -2008,7 +2034,8 @@ public struct MutationRunner: Sendable {
                 productHash: shared.record.buildProductHash,
                 timeouts: TimeoutController(settings: configuration.timeouts).recordingBaseline(durationSeconds: shared.testDurationSeconds),
                 coverage: shared.coverage,
-                perTestCoverage: shared.perTestCoverage
+                perTestCoverage: shared.perTestCoverage,
+                control: shared.control
             ))
         }
     }
@@ -2064,7 +2091,7 @@ public struct MutationRunner: Sendable {
     /// for a test run — shared shape between the per-mutant path and
     /// `evaluateInBatches`.
     ///
-    /// Phase A1 extraction: `internal` (not `fileprivate`) because
+    /// Extracted from this type: `internal` (not `fileprivate`) because
     /// `MutationConfirmationCoordinator`, in its own file, takes this as a
     /// parameter to `confirmKillIfNeeded`.
     struct PreparedMutant: Sendable {
@@ -2175,7 +2202,9 @@ public struct MutationRunner: Sendable {
                 )
             }
             let testDurationSeconds = Date().timeIntervalSince(testStarted)
-            return await finishAfterTest(prepared, baseline: baseline, run: run, testDurationSeconds: testDurationSeconds)
+            return await finishAfterTest(
+                prepared, baseline: baseline, run: run, attribution: .standalone, testDurationSeconds: testDurationSeconds
+            )
         }
     }
 
@@ -2518,6 +2547,10 @@ public struct MutationRunner: Sendable {
     /// (inside `finalize`) is the only place that turns the resulting
     /// observation set into an outcome.
     /// - Parameters:
+    ///   - attribution: whether `run` was observed for this mutant alone
+    ///     (`.standalone`, including a synthetic infrastructure failure that
+    ///     never reached a runner) or taken from a shared batch invocation's
+    ///     per-configuration result (`.batch`). Recorded as evidence only.
     ///   - priorTestAttempts: earlier waves' evidence this mutant already
     ///     went through (see `WaveSurvivor.attempts`) — empty outside
     ///     wave-based early kill.
@@ -2535,6 +2568,7 @@ public struct MutationRunner: Sendable {
         _ prepared: PreparedMutant,
         baseline: BaselineContext,
         run: TestRunResult,
+        attribution: TestExecutionRecord.Attribution,
         testDurationSeconds: Double? = nil,
         priorTestAttempts: [TestAttemptEvidence] = [],
         appendCurrentAttempt: Bool = false,
@@ -2653,7 +2687,10 @@ public struct MutationRunner: Sendable {
             )),
             build: BuildObservation(outcome: .succeeded(buildProductHash: prepared.artifact.productHash, command: prepared.artifact.command)),
             coverage: prepared.observation,
-            test: SingleTestObservation(run: run, applicationEvidence: prepared.activation.map { .isolated($0) }),
+            test: SingleTestObservation(
+                run: run, applicationEvidence: prepared.activation.map { .isolated($0) },
+                execution: TestExecutionRecord(attribution: attribution, selectedTests: prepared.selectedTests?.map(\.onlyTestingArgument))
+            ),
             confirmations: confirmations,
             durationSeconds: Date().timeIntervalSince(prepared.startedAt),
             buildDurationSeconds: prepared.buildDurationSeconds,

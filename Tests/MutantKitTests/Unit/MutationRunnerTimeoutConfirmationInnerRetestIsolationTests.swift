@@ -68,13 +68,13 @@ struct MutationRunnerTimeoutConfirmationInnerRetestIsolationTests {
         let runner = MutationRunner(
             plan: plan, configuration: configuration, projectRoot: root,
             build: RecordingBuildAdapter(log: log),
-            test: RecordingTestAdapter(log: log, sequence: [.timedOut, .failed, .failed]),
+            test: RecordingTestAdapter(log: log, sequence: [.timedOut, .failed, .failed, .passed]),
             workspaces: workspaces
         )
         let report = try await runner.run()
 
         let calls = await log.workspaces
-        #expect(calls.count == 3, "expected the original timeout, the confirming rebuild, and the inner retest")
+        #expect(calls.count == 4, "expected the original timeout, the confirming rebuild, the inner retest and the baseline control")
         let confirmingRebuildWorkspace = calls[1]
         let innerRetestWorkspace = calls[2]
 
@@ -117,7 +117,7 @@ struct MutationRunnerTimeoutConfirmationInnerRetestIsolationTests {
         let report = try await runner.run()
 
         let calls = await log.workspaces
-        #expect(calls.count == 3, "expected the original timeout, the confirming rebuild, and the inner retest")
+        #expect(calls.count == 4, "expected the original timeout, the confirming rebuild, the inner retest and the baseline control")
 
         let escapeeConfirmedWriting = await log.escapeeMarkerInRebuildWorkspace
         #expect(
@@ -230,6 +230,8 @@ private actor RecordingTestAdapter: TestAdapter {
             status: status,
             summary: status == .failed
                 ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil, diagnosis: "scripted \(status.rawValue)",
@@ -281,12 +283,15 @@ private actor EscapingDescendantAtConfirmingRebuildAdapter: TestAdapter {
             }
             await log.recordEscapeeMarkerObservedInConfirmingRebuildWorkspace(observed)
             return Self.result(.failed)
-        default:
+        case 2:
             let markerPath = workspace.appendingPathComponent(markerFileName).path
             await log.recordEscapeeMarkerObservedInInnerRetestWorkspace(
                 FileManager.default.fileExists(atPath: markerPath)
             )
             return Self.result(.failed)
+        default:
+            // The baseline control on the unmutated build.
+            return Self.result(.passed)
         }
     }
 
@@ -359,6 +364,8 @@ private actor EscapingDescendantAtConfirmingRebuildAdapter: TestAdapter {
             status: status,
             summary: status == .failed
                 ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil, diagnosis: "scripted \(status.rawValue)",

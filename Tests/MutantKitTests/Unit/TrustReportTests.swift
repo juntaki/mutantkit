@@ -13,15 +13,17 @@ import Testing
 struct TrustReportTests {
     // MARK: - Healthy report
 
-    @Test("A clean report with proven isolated activation is trustworthy, with zero phantom mutants")
-    func cleanReportIsTrustworthy() throws {
+    @Test("A clean report with proven isolated activation tallies with zero phantom mutants (a plain build is not a trust verdict)")
+    func cleanReportTalliesWithZeroPhantomMutants() throws {
         let point = try makeAnchoredPoint(file: "Sources/A.swift")
         let plan = makePlan(mutations: [point])
         let report = makeReport(plan: plan, results: [makeResult(point: point, outcome: .killedByAssertion)])
 
         let trust = TrustReport.build(from: report)
 
-        #expect(trust.trustworthy)
+        // A tally over stored facts re-verifies nothing, so it is never a trust verdict.
+        #expect(!trust.trustworthy)
+        #expect(trust.trustStatus == .notFullyVerified)
         #expect(trust.integrity.passed)
         #expect(trust.integrity.violationCount == 0)
         #expect(trust.phantomMutantCount == 0)

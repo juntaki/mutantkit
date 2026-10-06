@@ -137,9 +137,10 @@ public enum AppleAdapterFactory {
         case .swiftPackageMacOS, .auto:
             return nil
         case .swiftPackageApple, .xcodeProject, .xcodeWorkspace:
-            let requested = configuration.project.destination ?? DestinationResolver.defaultDestination(for: kind)
+            let configured = configuration.project.destination
+            let requested = configured ?? DestinationResolver.defaultDestination(for: kind)
             let pool = SimulatorPool(workingDirectory: directory)
-            return try await DestinationResolver.resolve(requested, using: pool)
+            return try await DestinationResolver.resolve(requested, using: pool, isBuiltInDefault: configured == nil)
         }
     }
 

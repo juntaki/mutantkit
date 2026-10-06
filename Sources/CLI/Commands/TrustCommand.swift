@@ -7,16 +7,18 @@ import Reporting
 /// `report.json` — and fails loudly, with a non-zero exit code, when that
 /// report cannot be trusted.
 ///
-/// This is a NEW SUMMARY VIEW over data `mutantkit run` already computed and
-/// wrote, not a new execution path: every line comes from `TrustReport.build`
-/// reading `RunReport`'s own `integrity`/`results`/`score` fields (see that
-/// type's own doc comment for exactly which fields, and why none of them are
-/// re-derived rather than reused). Nothing here re-verifies a mutant, re-runs
-/// a test, or recomputes a score — that authority stays exactly where
-/// `MutationVerdictVerifier` already put it.
-///
-/// would collide two real, different jobs onto one command, so they remain
-/// separate, purpose-named commands rather than one overloaded name.
+/// The verdict never rests on the report's stored `integrity.passed` alone:
+/// `TrustReport.build(from:verifyingAgainst:)` re-verifies the report through
+/// `ReportReverifier` (the checks `verify-run` runs, which stays the detailed
+/// view) and any failed check makes the report untrustworthy. Claims a report
+/// cannot prove by itself are listed as not verifiable and never counted as
+/// verified. Pass `--plan` so the plan-dependent checks, including the
+/// integrity recompute, can run; without `--plan` the plan the report names is
+/// looked for next to the report and in the project root. A report whose
+/// required checks cannot all be verified is never `trustworthy`: it exits
+/// `MutantKitExit.notFullyVerified`, distinct from the `integrityFailure` of a
+/// mismatch. Nothing here re-runs a test or decides a
+/// verdict; that authority stays with `MutationVerdictVerifier`.
 struct TrustCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "trust",
@@ -28,25 +30,59 @@ struct TrustCommand: ParsableCommand {
     @Option(name: .long, help: "A report to summarize and check.")
     var report = ".mutantkit/report.json"
 
+    @Option(
+        name: .long,
+        help: """
+        The plan the report was produced from. Without it the plan named by the report is looked for next \
+        to the report and in the project root; if none is found the report is not fully verified.
+        """
+    )
+    var plan: String?
+
+    @Option(
+        name: .long,
+        help: "The evidence archive directory. Default: the archive the report records, under .mutantkit/evidence/."
+    )
+    var evidence: String?
+
     @Flag(name: .long, help: "Emit the trust summary as JSON instead of the text summary below.")
     var json = false
 
     func run() throws {
-        let runReport = try decode(reportPath: report)
-        let trust = TrustReport.build(from: runReport)
+        let runReport = try load(path: report, role: "report", code: "report") { try RunReport.decode(from: $0) }
+        var loadedPlan = try plan.map { path in try load(path: path, role: "plan", code: "plan") { try MutationPlan.decode(from: $0) } }
+        var planSource = loadedPlan == nil ? TrustReport.VerificationSection.PlanSource.none : .supplied
+        var planPath = plan
+        if loadedPlan == nil,
+           let found = PlanLocator.discover(for: runReport, reportPath: report, root: common.resolvedProjectRoot) {
+            loadedPlan = found.plan
+            planSource = .discovered
+            planPath = found.path
+        }
+        let archive = try EvidenceArchiveLocator.resolve(
+            for: runReport, explicit: evidence, root: common.resolvedProjectRoot, json: json
+        )
+        let trust = TrustReport.build(
+            from: runReport, verifyingAgainst: loadedPlan, evidence: archive, planSource: planSource, planPath: planPath,
+            expectedPolicy: archive == nil ? nil : EvidenceArchiveLocator.policyBoundToPlan(
+                loadedPlan, configPath: common.configPath, root: common.resolvedProjectRoot
+            )
+        )
 
         if json {
             try JSONOutput.emit(trust)
         } else {
-            printText(trust)
+            printText(trust, report: runReport)
         }
 
-        guard trust.trustworthy else {
-            throw ExitCode(MutantKitExit.integrityFailure)
+        switch trust.trustStatus {
+        case .trustworthy: return
+        case .mismatch: throw ExitCode(MutantKitExit.integrityFailure)
+        case .notFullyVerified: throw ExitCode(MutantKitExit.notFullyVerified)
         }
     }
 
-    private func printText(_ trust: TrustReport) {
+    private func printText(_ trust: TrustReport, report: RunReport) {
         print("Trust summary for \(trust.planID) — \(trust.mutationCount) mutation(s)\n")
 
         if trust.integrity.passed {
@@ -72,6 +108,10 @@ struct TrustCommand: ParsableCommand {
             print("✗ Phantom mutants        \(trust.phantomMutantCount) — see Integrity violations above")
         }
 
+        if let verification = trust.verification {
+            printVerification(verification)
+        }
+
         let ae = trust.activationEvidence
         print("")
         print("Activation evidence (does each mutant's edit provably reach the tested binary?)")
@@ -85,13 +125,22 @@ struct TrustCommand: ParsableCommand {
         printConfirmation("killed by crash", trust.crashKills)
         printConfirmation("killed by verified timeout", trust.timeoutKills)
         let assertionLabel = "killed by assertion"
-        print("  \(assertionLabel + String(repeating: " ", count: Self.confirmationLabelWidth - assertionLabel.count))\(trust.assertionKillConfirmationLimitation)")
+        if let assertionKills = trust.assertionKills {
+            printConfirmation(assertionLabel, assertionKills)
+            print("  \(String(repeating: " ", count: Self.confirmationLabelWidth))\(trust.assertionKillConfirmationLimitation)")
+        } else {
+            print("  \(assertionLabel + String(repeating: " ", count: Self.confirmationLabelWidth - assertionLabel.count))\(trust.assertionKillConfirmationLimitation)")
+        }
+
+        if let kills = trust.killEvidence {
+            printKillEvidence(kills)
+        }
 
         print("")
         if let score = trust.score {
             let tested = score.killed + score.survived
             let effective = tested + score.noCoverage
-            print("Score (reused from the report, not recomputed)")
+            print("Score (as stored in the report; see re-verification above)")
             print(
                 "  Tested Mutation Score     \(score.killed)/\(tested) = " +
                     (score.tested.map { String(format: "%.2f%%", $0 * 100) } ?? "n/a")
@@ -101,7 +150,7 @@ struct TrustCommand: ParsableCommand {
                     (score.effective.map { String(format: "%.2f%%", $0 * 100) } ?? "n/a")
             )
         } else {
-            print("Score                    WITHHELD — integrity failed, so this report makes no score claim")
+            print("Score                    WITHHELD — the report did not hold up, so it makes no score claim")
         }
 
         if trust.operationalIssueCount > 0 {
@@ -109,11 +158,75 @@ struct TrustCommand: ParsableCommand {
         }
 
         print("")
-        print(
-            trust.trustworthy
-                ? "This report is trustworthy: its own invariants reconciled."
-                : "This report is NOT trustworthy: at least one invariant above failed to reconcile. No score claim stands."
-        )
+        printVerdict(trust)
+        if trust.trustStatus != .trustworthy, let notice = Self.olderVerifierNotice(for: report) {
+            print(notice)
+        }
+    }
+
+    private func printVerdict(_ trust: TrustReport) {
+        switch trust.trustStatus {
+        case .mismatch:
+            print("This report is NOT trustworthy: at least one check above failed. No score claim stands.")
+        case .notFullyVerified:
+            let missing = trust.verification?.unverifiedRequiredChecks ?? []
+            print(
+                "This report is NOT FULLY VERIFIED, so it is not called trustworthy. No mismatch was found, but required " +
+                    "check(s) could not be verified" + (missing.isEmpty ? "" : ": " + missing.joined(separator: ", ")) +
+                    ". Pass --plan (or keep plan.json next to the report) to verify them."
+            )
+        case .trustworthy:
+            print("This report is trustworthy: every required check re-verified and its own invariants reconciled.")
+            if let verification = trust.verification, verification.notVerifiableCount > 0 {
+                print(
+                    "\(verification.notVerifiableCount) other check(s) could not be verified and are not counted as verified."
+                )
+            }
+        }
+    }
+
+    private func printVerification(_ verification: TrustReport.VerificationSection) {
+        print("")
+        print("Re-verification (recomputed from the report, not read from its own claims)")
+        if let path = verification.planPath {
+            print("  Plan (\(verification.planSource.rawValue)): \(path)")
+        }
+        print("  \(verification.passCount) passed, \(verification.failCount) failed, \(verification.notVerifiableCount) not verifiable" +
+            (verification.passed && !verification.complete ? " (PARTIAL: not fully verified)" : ""))
+        for check in verification.checks where check.status != .pass {
+            let mark = check.status == .fail ? "✗" : "?"
+            print("  \(mark) \(check.name): \(check.detail)")
+        }
+        if let tierB = verification.tierB {
+            print(
+                "  Tier B (archived raw observations re-run through the verifier): \(tierB.reverifiedCount) re-verified, " +
+                    "\(tierB.matchedCount) matched, \(tierB.mismatchedCount) mismatched, " +
+                    "\(tierB.notVerifiableCount) without usable observations"
+            )
+        } else {
+            let archiveChecked = verification.checks.contains { $0.name.hasPrefix("archive.") }
+            print(
+                archiveChecked
+                    ? "  Tier B not performed: the evidence archive was not usable or is not bound to the report (see above)."
+                    : "  Tier B not performed: no usable evidence archive (set evidence.archive for a run to write one)."
+            )
+        }
+        if !verification.planSupplied {
+            print("  No plan found: integrity was not recomputed. `mutantkit verify-run` shows every check.")
+        }
+    }
+
+    private func printKillEvidence(_ kills: TrustReport.KillEvidenceSection) {
+        print("")
+        print("Which tests credited the assertion kills (\(kills.assertionKills) total)")
+        print("  inside the run's selection        \(kills.withinSelection)")
+        print("  whole suite ran, tests named      \(kills.wholeSuiteRan)")
+        print("  no failing test named             \(kills.failingTestsUnnamed)  (accepted on the run status alone)")
+        print("  attribution not recorded          \(kills.attributionNotRecorded)  (not shown to be inside the selection)")
+        print("  failure from a shared batch run   \(kills.batchAttributed)")
+        if kills.cascadeConfirmations > 0 {
+            print("  results with a cascade of confirmations: \(kills.cascadeConfirmations)")
+        }
     }
 
     private func printConfirmation(_ label: String, _ section: TrustReport.ConfirmationSection) {
@@ -137,23 +250,21 @@ struct TrustCommand: ParsableCommand {
     /// this was measured explicitly rather than guessed.
     private static let confirmationLabelWidth = 28
 
-    /// Same shape as `GateCommand`/`SurvivorsCommand`'s own `decode(reportPath:)`:
-    /// a structured `--json` error instead of thrown prose when the report is
+    /// Same shape as `GateCommand`/`SurvivorsCommand`'s own decode: a
+    /// structured `--json` error instead of thrown prose when an input is
     /// missing or malformed, and the same operational-error exit code on the
     /// text path.
-    private func decode(reportPath: String) throws -> RunReport {
+    private func load<T>(path: String, role: String, code: String, decode: (Data) throws -> T) throws -> T {
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: reportPath))
-            return try RunReport.decode(from: data)
+            return try decode(Data(contentsOf: URL(fileURLWithPath: path)))
         } catch {
             guard json else {
                 return try MutantKitExit.onFailure { throw error }
             }
-            let code = error is DecodingError ? "reportMalformed" : "reportUnreadable"
             try JSONOutput.emitError(
-                code: code,
-                message: "Could not read the report at \"\(reportPath)\" as a MutantKit JSON report: \(error)",
-                remedy: "Check --report points at a real report.json written by `mutantkit run`."
+                code: error is DecodingError ? "\(code)Malformed" : "\(code)Unreadable",
+                message: "Could not read the \(role) at \"\(path)\" as a MutantKit JSON \(role): \(error)",
+                remedy: "Check --\(role) points at a real \(role) written by `mutantkit`."
             )
             throw ExitCode(MutantKitExit.operationalError)
         }

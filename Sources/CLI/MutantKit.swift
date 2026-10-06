@@ -55,6 +55,7 @@ struct MutantKit: AsyncParsableCommand {
             PerfCommand.self,
             HistoryCommand.self,
             VerifyCommand.self,
+            VerifyRunCommand.self,
             TrustCommand.self,
             InspectCommand.self,
             SurvivorsCommand.self,
@@ -89,6 +90,10 @@ enum MutantKitExit {
     static let survivorsFound: Int32 = 3
     /// A trusted report missed an explicit CI mutation-quality threshold.
     static let qualityGateFailure: Int32 = 4
+    /// `trust` found nothing wrong but could not verify every required check
+    /// (typically: no plan was available), so it does not vouch for the
+    /// report. Distinct from `integrityFailure`, which means a mismatch.
+    static let notFullyVerified: Int32 = 5
 
     /// Runs `body`, mapping any error it throws — other than one that
     /// already carries its own deliberate exit code (`ExitCode`) — to
@@ -137,7 +142,7 @@ struct OverrideOptions: ParsableArguments {
     @Option(name: .long, help: "Xcode scheme to build.")
     var scheme: String?
 
-    @Option(name: .long, help: "xcodebuild destination, e.g. 'platform=iOS Simulator,name=iPhone 16'.")
+    @Option(name: .long, help: "xcodebuild destination, e.g. 'platform=iOS Simulator,name=<device name>' (an installed simulator).")
     var destination: String?
 
     @Option(name: .long, help: "Concurrent mutants. Defaults to half the core count.")

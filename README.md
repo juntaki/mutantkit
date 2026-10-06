@@ -200,6 +200,7 @@ The detection rate across the whole suite, including coverage gaps.
 | SwiftPM (Apple platforms) | Supported |
 | Xcode project / workspace | Supported |
 | iOS Simulator | Supported |
+| Xcode toolchain | Xcode 27.0: Supported, CI-enforced baseline. Xcode 26.6: Supported, CI-enforced compatibility lane (reduced) |
 | Isolated execution | Supported |
 | Schemata execution | Supported for specific operators/project kinds |
 | XCUITest | Supported for Xcode + iOS Simulator + isolated mode |
@@ -329,7 +330,8 @@ fix-plan / next
 An agent analyzing an existing report can also use these commands instead of just the raw score:
 
 ```bash
-mutantkit trust --report report.json
+mutantkit trust --report report.json        # exit 5: could not fully verify
+mutantkit verify-run report.json --plan plan.json
 mutantkit survivors --report report.json
 mutantkit fix-plan --report report.json --format agent
 mutantkit next --report report.json --format agent

@@ -124,7 +124,9 @@ struct XcodeSchemataIsolatedDifferentialAcceptanceTests {
     }
 
     private func makeAdapter(projectRoot: URL, projectFile: URL) -> XcodeBuildAdapter {
-        XcodeBuildAdapter(configuration: Configuration(), kind: .xcodeProject, projectFile: projectFile, projectRoot: projectRoot)
+        XcodeBuildAdapter(
+            configuration: Acceptance.macOSConfiguration(), kind: .xcodeProject, projectFile: projectFile, projectRoot: projectRoot
+        )
     }
 
     private func runIsolated(directory: URL, projectFile: URL, points: [MutationPoint], scratchRoot: URL) async throws -> [MutationResult] {
@@ -141,7 +143,8 @@ struct XcodeSchemataIsolatedDifferentialAcceptanceTests {
         let adapter = makeAdapter(projectRoot: directory, projectFile: projectFile)
         let workspaces = try WorkspaceManager(projectRoot: directory, scratchRoot: scratchRoot)
         let runner = MutationRunner(
-            plan: plan, configuration: Configuration(), projectRoot: directory, build: adapter, test: adapter, workspaces: workspaces
+            plan: plan, configuration: Acceptance.macOSConfiguration(), projectRoot: directory,
+            build: adapter, test: adapter, workspaces: workspaces
         )
         let report = try await runner.run()
         #expect(report.results.count == 2)

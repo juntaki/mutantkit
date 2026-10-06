@@ -34,6 +34,122 @@ public enum ActivationEvidence: Codable, Sendable, Hashable {
     }
 }
 
+/// What a `killedByAssertion` verdict's confirming retest found (and, for a
+/// result reclassified to `.flaky`/`.infrastructureFailure` because of that
+/// retest, why it was not confirmed).
+///
+/// Authored by `MutationVerdictVerifier` from the recorded observations, never
+/// by the runner. `nil` means only "no confirmation was recorded" (older
+/// report, cache or checkpoint entry, or the run's retest was off); it is
+/// never evidence of confirmation, and nothing may read it as such.
+public struct AssertionKillConfirmation: Codable, Sendable, Hashable {
+    /// What the confirming retest concluded. Deliberately not a `Bool`:
+    /// every way a retest can fail to confirm gets its own case so a later
+    /// reader can tell them apart, and new cases can be added without
+    /// reshaping the schema.
+    public enum Disposition: String, Codable, Sendable, Hashable {
+        /// The retest failed on exactly the same set of tests.
+        case confirmed
+        /// The retest did not fail (the primary failure was not reproduced).
+        case retestNotFailed
+        /// The retest failed, but on a different set of tests.
+        case failingSetDiffers
+        /// At least one of the two runs reported no per-test breakdown, so
+        /// the failing sets could not be compared.
+        case perTestBreakdownMissing
+        /// The confirming run's own activation chain was rejected.
+        case chainUnproven
+        /// The retest reproduced the failure, but the unmutated baseline also
+        /// failed in the control run, so the failure is not shown to come from
+        /// the mutation.
+        case baselineControlFailed
+        /// The retest reproduced the failure, but no usable baseline control
+        /// was recorded (never gathered, or it could not be established).
+        /// Unknown is never treated as controlled.
+        case baselineControlNotEstablished
+
+        public var isConfirmed: Bool { self == .confirmed }
+    }
+
+    /// How the confirmation was gathered.
+    public enum Method: String, Codable, Sendable, Hashable {
+        /// A second run of the identical, already-built mutant.
+        case retestOfBuiltMutant
+    }
+
+    /// What the baseline control found (see `BaselineControlObservation`).
+    /// Carried only when a control was recorded; `nil` on the confirmation
+    /// means "no control recorded", never "controlled".
+    public struct Control: Codable, Sendable, Hashable {
+        public enum Status: String, Codable, Sendable, Hashable {
+            /// The unmutated build passed the same tests in the same context.
+            case passedOnBaseline
+            /// The unmutated build failed in the control run.
+            case failedOnBaseline
+            /// The control did not run to a usable verdict, or its recorded
+            /// selection does not cover the tests that failed.
+            case notEstablished
+        }
+
+        public enum Method: String, Codable, Sendable, Hashable {
+            /// The unmutated build products, in a fresh clone.
+            case unmutatedBuildProducts
+            /// The already-built schemata chunk run with no mutation selected.
+            case unmutatedSchemataRun
+        }
+
+        public let status: Status
+        public let method: Method
+        /// The control run's `TestRunStatus` raw value.
+        public let runStatus: String
+        /// Size of the selection the control was narrowed to; `nil` when the
+        /// full configured list ran.
+        public let selectedTestCount: Int?
+        /// Tests that failed in the control run; `nil` when unknown.
+        public let failingTests: [String]?
+
+        public init(status: Status, method: Method, runStatus: String, selectedTestCount: Int?, failingTests: [String]?) {
+            self.status = status
+            self.method = method
+            self.runStatus = runStatus
+            self.selectedTestCount = selectedTestCount
+            self.failingTests = failingTests
+        }
+    }
+
+    public let disposition: Disposition
+    public let method: Method
+    /// The primary run's full failing-test list. `nil` when the primary run
+    /// reported no per-test breakdown; never `[]` as a stand-in for unknown.
+    public let primaryFailingTests: [String]?
+    /// The confirming run's full failing-test list; `nil` when unknown.
+    public let confirmingFailingTests: [String]?
+    /// The confirming run's `TestRunStatus` raw value.
+    public let confirmingStatus: String
+    /// The baseline control recorded for this kill; `nil` when none was.
+    /// A kill is confirmed only with `control?.status == .passedOnBaseline`.
+    public let control: Control?
+
+    /// Whether a control was recorded and the unmutated build passed it.
+    public var isControlled: Bool { control?.status == .passedOnBaseline }
+
+    public init(
+        disposition: Disposition,
+        method: Method = .retestOfBuiltMutant,
+        primaryFailingTests: [String]? = nil,
+        confirmingFailingTests: [String]? = nil,
+        confirmingStatus: String,
+        control: Control? = nil
+    ) {
+        self.disposition = disposition
+        self.method = method
+        self.primaryFailingTests = primaryFailingTests
+        self.confirmingFailingTests = confirmingFailingTests
+        self.confirmingStatus = confirmingStatus
+        self.control = control
+    }
+}
+
 /// What a `killedByCrash` verdict's confirmation rebuild found.
 ///
 /// Present only when `Configuration.execution.confirmCrashKills` is on and
@@ -202,6 +318,17 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
     /// Present only for a `.verifiedTimeout` verdict that was confirmed with
     /// an independent rebuild. See `TimeoutConfirmation`.
     public let timeoutConfirmation: TimeoutConfirmation?
+    /// The structured result of the same-artifact confirming retest, when one
+    /// was recorded for a kill. `nil` is "none recorded", never "confirmed".
+    public let assertionKillConfirmation: AssertionKillConfirmation?
+    /// Verifier-authored record of the tests that credited an assertion kill:
+    /// inside the run's selection or not, named or not, standalone or batch
+    /// attributed. `nil` is "none recorded", never "inside the selection".
+    public let assertionKillAttribution: AssertionKillAttribution?
+    /// Every confirmation round the verifier folded into this verdict, in
+    /// order (more than one for a cascade). Empty when none was folded, or for
+    /// an older record; never a claim that a confirmation happened.
+    public let confirmationChain: [ConfirmationStep]
     /// Every test invocation this mutant went through before its final
     /// verdict. Empty outside wave-based early kill — see
     /// `TestAttemptEvidence`.
@@ -218,7 +345,10 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         resultArtifact: String? = nil,
         crashConfirmation: CrashConfirmation? = nil,
         timeoutConfirmation: TimeoutConfirmation? = nil,
-        testAttempts: [TestAttemptEvidence] = []
+        testAttempts: [TestAttemptEvidence] = [],
+        assertionKillConfirmation: AssertionKillConfirmation? = nil,
+        assertionKillAttribution: AssertionKillAttribution? = nil,
+        confirmationChain: [ConfirmationStep] = []
     ) {
         self.sourceBeforeHash = sourceBeforeHash
         self.sourceAfterHash = sourceAfterHash
@@ -231,11 +361,15 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         self.crashConfirmation = crashConfirmation
         self.timeoutConfirmation = timeoutConfirmation
         self.testAttempts = testAttempts
+        self.assertionKillConfirmation = assertionKillConfirmation
+        self.assertionKillAttribution = assertionKillAttribution
+        self.confirmationChain = confirmationChain
     }
 
     enum CodingKeys: String, CodingKey {
         case sourceBeforeHash, sourceAfterHash, sourceDiff, buildProductHash, applicationEvidence
-        case buildCommand, testCommand, resultArtifact, crashConfirmation, timeoutConfirmation, testAttempts
+        case buildCommand, testCommand, resultArtifact, crashConfirmation, timeoutConfirmation, testAttempts, assertionKillConfirmation
+        case assertionKillAttribution, confirmationChain
         /// Pre-schemata reports/checkpoints wrote a bare `ActivationEvidence`
         /// under this key. Not in `applicationEvidence`'s own coding path —
         /// only ever consulted as a fallback, see `init(from:)`.
@@ -274,6 +408,9 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         crashConfirmation = try container.decodeIfPresent(CrashConfirmation.self, forKey: .crashConfirmation)
         timeoutConfirmation = try container.decodeIfPresent(TimeoutConfirmation.self, forKey: .timeoutConfirmation)
         testAttempts = try container.decodeIfPresent([TestAttemptEvidence].self, forKey: .testAttempts) ?? []
+        assertionKillConfirmation = try container.decodeIfPresent(AssertionKillConfirmation.self, forKey: .assertionKillConfirmation)
+        assertionKillAttribution = try container.decodeIfPresent(AssertionKillAttribution.self, forKey: .assertionKillAttribution)
+        confirmationChain = try container.decodeIfPresent([ConfirmationStep].self, forKey: .confirmationChain) ?? []
     }
 
     /// Explicit `Encodable` conformance is needed now that `init(from:)` is
@@ -295,6 +432,9 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         try container.encodeIfPresent(crashConfirmation, forKey: .crashConfirmation)
         try container.encodeIfPresent(timeoutConfirmation, forKey: .timeoutConfirmation)
         try container.encode(testAttempts, forKey: .testAttempts)
+        try container.encodeIfPresent(assertionKillConfirmation, forKey: .assertionKillConfirmation)
+        try container.encodeIfPresent(assertionKillAttribution, forKey: .assertionKillAttribution)
+        if !confirmationChain.isEmpty { try container.encode(confirmationChain, forKey: .confirmationChain) }
     }
 
     /// The minimum bar for "this mutation was really applied to the source".

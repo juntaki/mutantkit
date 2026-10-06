@@ -40,6 +40,15 @@ struct DoctorDiagnosisUniquenessTests {
         #expect(combined.filter { $0.name == "Shared module cache" }.count == 1, "\(names)")
     }
 
+    @Test("The shared module cache diagnosis does not promise a speedup on Xcode 27")
+    func sharedModuleCacheDiagnosisNamesXcode27() async throws {
+        let dir = try makeMinimalPackageFixture()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let item = await DoctorCommand.sharedModuleCacheDiagnosis(root: dir, configuration: Configuration())
+        #expect(item.detail.contains("on Xcode 27 it is not expected to speed anything up"))
+    }
+
     /// The mechanism itself, independent of what real code happens to
     /// produce today: two same-named items — one standing in for
     /// whatever `ReadinessCheck.diagnose` produced, one for whatever

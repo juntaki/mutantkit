@@ -19,6 +19,11 @@ public struct Configuration: Codable, Sendable, Hashable {
     /// see `QualityGateSettings`'s own comment for why it is excluded from
     /// `configurationHash`.
     public var qualityGate: QualityGateSettings
+    /// Opt-in evidence archive. `nil` (and omitted from the encoded
+    /// configuration) unless set, so an unset section leaves every identity
+    /// derived from the configuration unchanged; like `qualityGate` it never
+    /// affects what a run computes and is dropped from those identities.
+    public var evidence: EvidenceSettings?
 
     public init(
         version: Int = 1,
@@ -29,7 +34,8 @@ public struct Configuration: Codable, Sendable, Hashable {
         execution: ExecutionSettings = ExecutionSettings(),
         timeouts: TimeoutSettings = TimeoutSettings(),
         reports: [ReportKind] = [.console, .json],
-        qualityGate: QualityGateSettings = QualityGateSettings()
+        qualityGate: QualityGateSettings = QualityGateSettings(),
+        evidence: EvidenceSettings? = nil
     ) {
         self.version = version
         self.project = project
@@ -40,6 +46,7 @@ public struct Configuration: Codable, Sendable, Hashable {
         self.timeouts = timeouts
         self.reports = reports
         self.qualityGate = qualityGate
+        self.evidence = evidence
     }
 
     public init(from decoder: Decoder) throws {
@@ -53,6 +60,7 @@ public struct Configuration: Codable, Sendable, Hashable {
         timeouts = try container.decodeIfPresent(TimeoutSettings.self, forKey: .timeouts) ?? TimeoutSettings()
         reports = try container.decodeIfPresent([ReportKind].self, forKey: .reports) ?? [.console, .json]
         qualityGate = try container.decodeIfPresent(QualityGateSettings.self, forKey: .qualityGate) ?? QualityGateSettings()
+        evidence = try container.decodeIfPresent(EvidenceSettings.self, forKey: .evidence)
     }
 
     /// Hash of the canonical JSON encoding. Goes into the plan so that a plan
@@ -64,6 +72,7 @@ public struct Configuration: Codable, Sendable, Hashable {
     public var configurationHash: String {
         var hashed = self
         hashed.qualityGate = QualityGateSettings()
+        hashed.evidence = nil
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
@@ -117,6 +126,7 @@ public struct Configuration: Codable, Sendable, Hashable {
         hashed.timeouts = TimeoutSettings()
         hashed.reports = []
         hashed.qualityGate = QualityGateSettings()
+        hashed.evidence = nil
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
@@ -158,6 +168,7 @@ public struct Configuration: Codable, Sendable, Hashable {
         hashed.timeouts = TimeoutSettings()
         hashed.reports = []
         hashed.qualityGate = QualityGateSettings()
+        hashed.evidence = nil
         let planningExecution = (budget: execution.budget, diffBase: execution.diffBase)
         hashed.execution = ExecutionSettings()
         hashed.execution.budget = planningExecution.budget
@@ -436,7 +447,7 @@ public struct BudgetSettings: Codable, Sendable, Hashable {
     /// Opts into Budget Selection v2 (ADR-0007). See
     /// `BudgetSelectionAlgorithm`'s doc comment.
     public var selection: BudgetSelectionAlgorithm?
-    /// `selection: .v2` only: the outer stratum's (operator's) Phase 1
+    /// `selection: .v2` only: the outer stratum's (operator's)
     /// minimum-reservation floor — the v2 analogue of `minimumPerOperator`.
     /// Defaults to 1 when `.v2` is active and this is unset. Ignored under
     /// `.v1`/`nil`.

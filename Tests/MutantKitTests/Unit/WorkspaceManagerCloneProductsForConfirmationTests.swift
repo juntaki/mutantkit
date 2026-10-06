@@ -167,4 +167,30 @@ struct WorkspaceManagerCloneProductsForConfirmationTests {
         let nestedBinary = destination.appendingPathComponent("arm64-apple-macosx/debug/Fake.xctest/Fake")
         #expect(FileManager.default.fileExists(atPath: nestedBinary.path))
     }
+
+    /// Swift 6.4 builds into `.build/out/Products/Debug` (no `<triple>/<config>`
+    /// level) and still exposes `.build/debug` as a symlink to it. The nested
+    /// clone must keep the layout SwiftPM itself will look for.
+    @Test("A products directory symlinked to `out/Products/Debug` keeps that layout in the clone")
+    func clonesTheOutProductsLayoutVerbatim() async throws {
+        let workspaces = try WorkspaceManager(projectRoot: projectRoot, scratchRoot: scratchRoot)
+
+        let buildDir = projectRoot.appendingPathComponent(".build-\(UUID().uuidString)")
+        let realProducts = buildDir.appendingPathComponent("out/Products/Debug")
+        let bundle = realProducts.appendingPathComponent("Fake.xctest")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try Data("binary-bytes".utf8).write(to: bundle.appendingPathComponent("Fake"))
+        let debugSymlink = buildDir.appendingPathComponent("debug")
+        try FileManager.default.createSymbolicLink(
+            atPath: debugSymlink.path, withDestinationPath: "out/Products/Debug"
+        )
+
+        let destination = try await workspaces.cloneProductsForConfirmation(from: debugSymlink, id: "mut_out")
+
+        let nested = destination.appendingPathComponent("out/Products/Debug/Fake.xctest/Fake")
+        #expect(try Data(contentsOf: nested) == Data("binary-bytes".utf8))
+        #expect(!FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("Products/Debug").path
+        ))
+    }
 }

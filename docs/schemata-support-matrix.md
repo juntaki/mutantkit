@@ -54,6 +54,23 @@ these platforms/destinations — that is a separate question this matrix does
 not answer, and no claim about it should be inferred from schemata's own
 scope here.
 
+## SwiftPM packages with more than one test target on Xcode 27
+
+The `swiftPackageMacOS` rows above were measured with one test target. With
+Xcode 27 (Swift 6.4), `swift build --build-tests` links each test target into
+its own bundle (`<Target>.xctest`) instead of one combined
+`<Package>PackageTests.xctest`, and a package's library code is statically
+linked into every one of them. For a package with two or more test targets the
+chunk's build receipt cannot say which single image holds a target's code, and
+the resolver refuses to pick one (`more than one built image was discovered and
+none exactly matches a declared product containing target <name>`). Every
+chunk then forfeits schemata and its mutants run in isolated mode, reported in
+`fallbackReasonCounts["buildReceiptUnavailable"]`. Results stay correct; there
+is no schemata speedup for such a package on Xcode 27. Xcode 26.5 and earlier
+resolve the single combined bundle and are not affected. Resolving it would
+need a receipt that names every image containing the code, which the current
+receipt format does not express.
+
 ## Why the two unsupported rows are unsupported
 
 **`swiftPackageApple` + iOS Simulator.** This project kind resolves its
@@ -68,7 +85,7 @@ buildSettings entry named <name>, found 0
 ```
 
 Every mutation forfeits schemata and re-runs isolated
-(`fallbackReasonCounts["buildReceiptUnavailable"]`, P2's own fail-closed
+(`fallbackReasonCounts["buildReceiptUnavailable"]`, the fail-closed
 fallback) — the report is still fully correct, just never actually
 schemata. Fixing the receipt resolver for this hybrid pairing is real
 production work, out of scope for the phase that measured this matrix.

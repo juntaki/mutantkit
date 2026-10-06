@@ -91,8 +91,8 @@ struct RunSessionForceUnwrapAsymmetryRegressionTests {
 /// would silently make isolated mode, schemata mode, and
 /// `CheckpointStore`/`MutationResultCache` construction disagree about which
 /// confirmations a run promises. This is a structural fact ("exactly one
-/// factory, exactly four total constructions of the type it produces"), not
-/// a runtime behavior — a fifth, independent construction elsewhere would
+/// factory, exactly five total constructions of the type it produces"), not
+/// a runtime behavior — a sixth, independent construction elsewhere would
 /// not change any single test's observed output today, only the number of
 /// places a future edit would have to remember to touch.
 @Suite("Regression: VerdictVerificationPolicy has exactly one canonical construction site")
@@ -119,18 +119,22 @@ struct VerdictVerificationPolicyCanonicalFactoryRegressionTests {
 
     /// The full, current set of places `Sources/` constructs a
     /// `VerdictVerificationPolicy(...)` — three real call sites deriving one
-    /// from a run's `ExecutionSettings`, plus the type's own `.permissive`
-    /// static default. Anything beyond these four is a new, independent
-    /// derivation this test does not yet know about.
+    /// from a run's `ExecutionSettings`, the verifier-side `policyBoundToPlan`
+    /// (which derives the expected policy from the project's configuration
+    /// only when its hash equals the plan's, so it can never be more
+    /// permissive than the run's), plus the type's own `.permissive` static
+    /// default. Anything beyond these five is a new, independent derivation
+    /// this test does not yet know about.
     private static let knownConstructionSites: Set<String> = [
         "MutationExecution/MutationRunner.swift",
         "MutationExecution/HybridExecutionEngine.swift",
         "CLI/Commands/RunCommand+ExecutionContext.swift",
+        "CLI/EvidenceArchiveLocator.swift",
         "MutationModel/MutationVerdictVerifier.swift"
     ]
 
-    @Test("Sources/ constructs VerdictVerificationPolicy in exactly the four known places")
-    func exactlyFourConstructionSites() throws {
+    @Test("Sources/ constructs VerdictVerificationPolicy in exactly the five known places")
+    func exactlyFiveConstructionSites() throws {
         var sitesFound: Set<String> = []
         var totalOccurrences = 0
         for file in try Self.productionSwiftFiles() {
@@ -152,8 +156,8 @@ struct VerdictVerificationPolicyCanonicalFactoryRegressionTests {
             """
         )
         #expect(
-            totalOccurrences == 4,
-            "expected exactly 4 total VerdictVerificationPolicy(...) constructions (3 call sites + .permissive), found \(totalOccurrences)"
+            totalOccurrences == 5,
+            "expected exactly 5 total VerdictVerificationPolicy(...) constructions (4 call sites + .permissive), found \(totalOccurrences)"
         )
     }
 
@@ -172,6 +176,12 @@ struct VerdictVerificationPolicyCanonicalFactoryRegressionTests {
 
         let runCommand = try Support.read("CLI/Commands/RunCommand+ExecutionContext.swift")
         #expect(runCommand.contains("VerdictVerificationPolicy(settings.execution)"))
+
+        // The verifier-side site derives from the same factory and only when
+        // the configuration is the one the plan was made under.
+        let locator = try Support.read("CLI/EvidenceArchiveLocator.swift")
+        #expect(locator.contains("VerdictVerificationPolicy(configuration.execution)"))
+        #expect(locator.contains("configuration.configurationHash == plan.configurationHash"))
     }
 }
 

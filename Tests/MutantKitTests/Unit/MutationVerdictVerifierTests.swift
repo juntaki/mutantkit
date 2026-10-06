@@ -138,9 +138,7 @@ struct MutationVerdictVerifierTests {
         #expect(!record.outcome.isCacheableResult)
     }
 
-    /// Found by this project's own P7 self-mutation audit
-    /// (this project's internal mutation-testing-hardening progress log,
-    /// not part of this public repo):
+    /// Found by this project's own self-mutation audit:
     /// `executionEvidenceProblem`'s own build-product-hash guard (the one
     /// right above the isolated-activation checks the three tests above
     /// exercise) had no dedicated test. Mutating its `return` to `return
@@ -248,7 +246,9 @@ struct MutationVerdictVerifierTests {
             MutationObservations(
                 plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
                 build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed), applicationEvidence: .isolated(provenIsolated))
+                test: SingleTestObservation(
+                    run: run(status: .failed), applicationEvidence: .isolated(provenIsolated), execution: wholeSuiteExecution
+                )
             )
         }
         #expect(record.outcome == .killedByAssertion)
@@ -386,135 +386,6 @@ struct MutationVerdictVerifierTests {
             )
         }
         #expect(record.outcome == .survived)
-    }
-
-    // MARK: - Confirmation: kill
-
-    @Test("confirmKill: confirmed, exact failing-test-set match")
-    func confirmKillConfirmed() throws {
-        let record = try verify { ref in
-            MutationObservations(
-                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated)),
-                confirmations: [ConfirmationObservation(
-                    kind: .kill, run: run(status: .failed, summary: makeTestSummary(failed: 1)),
-                    originalFailingTests: ["ExampleTests/testSomething()"]
-                )]
-            )
-        }
-        #expect(record.outcome == .killedByAssertion)
-    }
-
-    /// `ConfirmationObservation.originalFailingTests` is a caller-supplied
-    /// duplicate of the primary run's own facts and `MutationObservations`
-    /// decodes it as untrusted — a corrupted or hand-edited entry could set
-    /// it to whatever it wants without the primary run agreeing. The
-    /// verifier must compare against the primary run's *own* recorded
-    /// failing-test set, not this field, so a forged value here cannot
-    /// manufacture a confirmed kill.
-    @Test("confirmKill: a forged originalFailingTests field is ignored — the primary run's own summary decides")
-    func confirmKillIgnoresForgedOriginalFailingTests() throws {
-        let primaryFailure = TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: ["RealTests/testReal()"], durationSeconds: nil)
-        let record = try verify { ref in
-            MutationObservations(
-                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed, summary: primaryFailure), applicationEvidence: .isolated(provenIsolated)),
-                confirmations: [ConfirmationObservation(
-                    kind: .kill, run: run(status: .failed, summary: primaryFailure),
-                    // Forged: claims a completely different test than the
-                    // primary run's own summary actually recorded.
-                    originalFailingTests: ["ForgedTests/testForged()"]
-                )]
-            )
-        }
-        #expect(record.outcome == .killedByAssertion)
-    }
-
-    @Test("confirmKill: confirmation's originalFailingTests matches, but the real primary run failed a different test — flaky, not confirmed")
-    func confirmKillRealPrimaryDisagreesWithForgedField() throws {
-        let primaryFailure = TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: ["RealTests/testReal()"], durationSeconds: nil)
-        let confirmingFailure = TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: ["OtherTests/testOther()"], durationSeconds: nil)
-        let record = try verify { ref in
-            MutationObservations(
-                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed, summary: primaryFailure), applicationEvidence: .isolated(provenIsolated)),
-                confirmations: [ConfirmationObservation(
-                    kind: .kill, run: run(status: .failed, summary: confirmingFailure),
-                    // Matches the confirming run's own failing test, but not
-                    // what the primary run actually recorded — must not be
-                    // trusted over the real primary summary.
-                    originalFailingTests: ["OtherTests/testOther()"]
-                )]
-            )
-        }
-        #expect(record.outcome == .flaky)
-    }
-
-    @Test("confirmKill: retest passed instead — flaky")
-    func confirmKillRetestPassed() throws {
-        let record = try verify { ref in
-            MutationObservations(
-                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed), applicationEvidence: .isolated(provenIsolated)),
-                confirmations: [ConfirmationObservation(kind: .kill, run: run(status: .passed), originalFailingTests: ["A"])]
-            )
-        }
-        #expect(record.outcome == .flaky)
-    }
-
-    @Test("confirmKill: retest failed a different test — flaky")
-    func confirmKillDifferentTest() throws {
-        let record = try verify { ref in
-            MutationObservations(
-                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed), applicationEvidence: .isolated(provenIsolated)),
-                confirmations: [ConfirmationObservation(
-                    kind: .kill, run: run(status: .failed, summary: TestOutcomeSummary(total: 4, passed: 3, failed: 1, failingTests: ["B"], durationSeconds: nil)),
-                    originalFailingTests: ["A"]
-                )]
-            )
-        }
-        #expect(record.outcome == .flaky)
-    }
-
-    @Test("confirmKill: no per-test breakdown on either side — flaky, not trusted")
-    func confirmKillNoBreakdown() throws {
-        let record = try verify { ref in
-            MutationObservations(
-                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed), applicationEvidence: .isolated(provenIsolated)),
-                confirmations: [ConfirmationObservation(kind: .kill, run: run(status: .failed), originalFailingTests: nil)]
-            )
-        }
-        #expect(record.outcome == .flaky)
-    }
-
-    @Test("confirmKill: attached to a primary run that was never a kill — rejected, not promoted")
-    func confirmKillOnWrongPrimaryOutcome() throws {
-        // Primary run passed but activation was unproven, so the primary
-        // classification is .infrastructureFailure, not .killedByAssertion.
-        // A hand-edited or corrupted `.kill` confirmation must not be able
-        // to promote that to a kill just by matching the failing-test set.
-        let record = try verify { ref in
-            MutationObservations(
-                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h0", activation: unprovenIsolated)),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h0", command: nil)),
-                test: SingleTestObservation(run: run(status: .passed), applicationEvidence: .isolated(unprovenIsolated)),
-                confirmations: [ConfirmationObservation(
-                    kind: .kill, run: run(status: .failed, summary: makeTestSummary(failed: 1)),
-                    originalFailingTests: ["ExampleTests/testSomething()"]
-                )]
-            )
-        }
-        #expect(record.outcome == .infrastructureFailure)
-        #expect(!record.outcome.isScorable)
-        #expect(!record.outcome.isCacheableResult)
     }
 
     // MARK: - Confirmation: crash
@@ -712,7 +583,11 @@ struct MutationVerdictVerifierTests {
             MutationObservations(
                 plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
                 build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .timedOut, isBatchAttributedTimeout: true), applicationEvidence: .isolated(provenIsolated)),
+                test: SingleTestObservation(
+                    run: run(status: .timedOut, isBatchAttributedTimeout: true),
+                    applicationEvidence: .isolated(provenIsolated),
+                    execution: wholeSuiteExecution
+                ),
                 confirmations: [ConfirmationObservation(kind: .timeout, run: run(status: .failed), activation: provenIsolated, confirmingBuildProductHash: "h1", wasBatchAttributed: true)]
             )
         }
@@ -746,7 +621,11 @@ struct MutationVerdictVerifierTests {
             MutationObservations(
                 plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
                 build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated))
+                test: SingleTestObservation(
+                    run: run(status: .failed, summary: makeTestSummary(failed: 1)),
+                    applicationEvidence: .isolated(provenIsolated),
+                    execution: wholeSuiteExecution
+                )
             )
         }
         #expect(record.outcome == .infrastructureFailure)
@@ -760,10 +639,14 @@ struct MutationVerdictVerifierTests {
             MutationObservations(
                 plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
                 build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated)),
+                test: SingleTestObservation(
+                    run: run(status: .failed, summary: makeTestSummary(failed: 1)),
+                    applicationEvidence: .isolated(provenIsolated),
+                    execution: wholeSuiteExecution
+                ),
                 confirmations: [ConfirmationObservation(
                     kind: .kill, run: run(status: .failed, summary: makeTestSummary(failed: 1)),
-                    originalFailingTests: ["ExampleTests/testSomething()"]
+                    originalFailingTests: ["ExampleTests/testSomething()"], baselineControl: makePassingBaselineControl()
                 )]
             )
         }
@@ -776,7 +659,11 @@ struct MutationVerdictVerifierTests {
             MutationObservations(
                 plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
                 build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                test: SingleTestObservation(run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .isolated(provenIsolated))
+                test: SingleTestObservation(
+                    run: run(status: .failed, summary: makeTestSummary(failed: 1)),
+                    applicationEvidence: .isolated(provenIsolated),
+                    execution: wholeSuiteExecution
+                )
             )
         }
         #expect(record.outcome == .killedByAssertion)

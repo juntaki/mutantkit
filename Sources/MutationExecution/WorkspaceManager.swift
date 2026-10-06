@@ -404,13 +404,14 @@ public actor WorkspaceManager {
     /// file" if that nesting is not there, regardless of what `X`
     /// itself otherwise contains.
     ///
-    /// `<triple>` and `<configuration>` are read off `productsDirectory`'s
-    /// own resolved path — the same value SwiftPM itself already computed
-    /// when it built these products (its `.build/debug` symlink resolves to
-    /// exactly `.build/<triple>/<configuration>`) — never hardcoded, so this
-    /// stays correct across architectures, cross-compilation destinations,
-    /// and a non-`debug` configuration alike, with no toolchain-version- or
-    /// host-specific guessing.
+    /// The nested location is the resolved products directory's path relative
+    /// to the scratch directory that holds it (`productsDirectory`'s parent,
+    /// which is where SwiftPM puts its `debug` symlink) — the same value
+    /// SwiftPM itself computed when it built these products. That is
+    /// `<triple>/<configuration>` for the classic layout and
+    /// `out/Products/<Configuration>` for the Swift 6.4 layout; nothing about
+    /// either shape is hardcoded, so it stays correct across architectures,
+    /// cross-compilation destinations, configurations and layouts.
     public func cloneProductsForConfirmation(from productsDirectory: URL, id: String) async throws -> URL {
         guard !id.isEmpty, !id.contains("/"), id != ".", id != ".." else {
             throw WorkspaceError.invalidSandboxID(id)
@@ -437,11 +438,9 @@ public actor WorkspaceManager {
             )
         }
 
-        let triple = resolvedProductsDirectory.deletingLastPathComponent().lastPathComponent
-        let configuration = resolvedProductsDirectory.lastPathComponent
-        let nestedDestination = destination
-            .appendingPathComponent(triple, isDirectory: true)
-            .appendingPathComponent(configuration, isDirectory: true)
+        let nestedDestination = Self.nestedProductsDestination(
+            under: destination, productsDirectory: productsDirectory, resolved: resolvedProductsDirectory
+        )
 
         // Same reasoning as `cloneProducts`: refuses an existing
         // destination, so a stale prior clone under a reused `id` is

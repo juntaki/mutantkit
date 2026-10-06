@@ -2,7 +2,8 @@
 public struct TestIdentifier: Sendable, Hashable, Codable {
     /// The test target (bundle) this test belongs to, e.g. `"AppTests"`.
     public let target: String
-    /// `"<Class>/<method>"`, e.g. `"AddTests/testAdd"` — no trailing `()`.
+    /// `"<Class>/<method>"`, e.g. `"AddTests/testAdd"`. Xcode enumeration
+    /// leaves off the trailing `()`; SwiftPM's Swift Testing enumeration keeps it.
     public let qualifiedName: String
 
     public init(target: String, qualifiedName: String) {
@@ -40,7 +41,13 @@ public struct TestIdentifier: Sendable, Hashable, Codable {
     /// `resolvingTestRootPlaceholders`/`narrowed` construction if the
     /// identical Swift-Testing-matching question is ever raised for the
     /// batched-test-execution path specifically.
-    public var onlyTestingArgument: String { "\(target)/\(qualifiedName)()" }
+    ///
+    /// A `qualifiedName` that already ends in `()` (SwiftPM spells a Swift
+    /// Testing function that way, in `swift test list` and in the event
+    /// stream) is used as it is, not given a second `()`.
+    public var onlyTestingArgument: String {
+        qualifiedName.hasSuffix("()") ? "\(target)/\(qualifiedName)" : "\(target)/\(qualifiedName)()"
+    }
 }
 
 /// Which individual tests exercised which lines, at baseline.
@@ -80,9 +87,9 @@ public struct TestIdentifier: Sendable, Hashable, Codable {
 /// are exactly the ones in `unattributedTests`.
 ///
 /// The predecessor of this type had no such set and instead discarded the
-/// entire map the moment one test could not be proven (P12-B Finding D's own
-/// remedy, in each adapter's `measurePerTestCoverageSerial`). That was sound
-/// — and was itself the fix for the genuinely unsafe shape, which P12-B B1
+/// entire map the moment one test could not be proven (the earlier remedy, in each
+/// adapter's `measurePerTestCoverageSerial`). That was sound
+/// — and was itself the fix for the genuinely unsafe shape, which was
 /// confirmed live: a version that simply dropped the unprovable test's entry
 /// and kept the rest, yielding a map that looks complete while silently
 /// missing that test's real coverage, which turns a mutant only that test

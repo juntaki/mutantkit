@@ -51,6 +51,12 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// is. It only re-runs tests, never the build: the artifact is already known
     /// good, and rebuilding would not change whether the suite agrees with
     /// itself.
+    ///
+    /// The retest runs the same built artifact, so a failure the environment or
+    /// the test order causes reproduces identically. A kill whose retest fails
+    /// again is therefore also checked against the unmutated build (a baseline
+    /// control): the same tests must pass there, or the kill is not counted. One
+    /// control run is shared by every kill with the same test selection.
     public var retestKilledMutants: Bool
     /// Re-confirms a `killedByCrash` verdict with a full, independent
     /// rebuild in a fresh sandbox before trusting it, and reclassifies it as

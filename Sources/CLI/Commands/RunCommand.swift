@@ -314,6 +314,7 @@ struct RunCommand: AsyncParsableCommand {
         let coverageCacheKey = executionContext.coverageCacheKey
         let resultCache = executionContext.resultCache
         let resultCacheDigest = executionContext.resultCacheDigest
+        let evidenceArchive = executionContext.evidenceArchive
 
         // Deliberately not `sources.exclude`: that governs which files are
         // *mutated*, not which files a sandbox needs to build. Copying build
@@ -346,7 +347,7 @@ struct RunCommand: AsyncParsableCommand {
         )
         writeManifest(plan: loadedPlan, context: manifestContext, baselineDuration: 0, to: manifestURL)
 
-        let report = try await Self.execute(
+        let executed = try await Self.execute(
             strategy: settings.resolved.execution.strategy,
             context: HybridExecutionEngine.Context(
                 plan: loadedPlan, configuration: settings.resolved, projectRoot: root,
@@ -369,9 +370,11 @@ struct RunCommand: AsyncParsableCommand {
                 // on the *fallback* plan (see `runFallbackPortion`) — this
                 // total would stall short of completion there, since most of
                 // the plan never reaches that portion.
-                progress: ProgressReporter(total: loadedPlan.mutations.count, label: "mutants")
+                progress: ProgressReporter(total: loadedPlan.mutations.count, label: "mutants"),
+                evidenceArchive: evidenceArchive
             )
         )
+        let report = Self.sealEvidenceArchive(evidenceArchive, in: executed, keep: settings.resolved.evidence?.keep)
 
         // Rewritten with the *measured* baseline-adaptive timeout once the
         // baseline has actually run — the pre-run write above used
@@ -383,13 +386,13 @@ struct RunCommand: AsyncParsableCommand {
         }
 
         try emit(report, settings: settings.resolved, runDirectory: runDirectory)
-        // Gate 3 diagnostic instrumentation only (see
+        // Diagnostic timing instrumentation only (see
         // `GateTimingRecorder`'s own doc comment) — every other run leaves
         // this env var unset and pays nothing beyond the spans' already-
         // negligible recording cost.
         if let timingOutputPath = ProcessInfo.processInfo.environment["MUTANTKIT_GATE3_TIMING_OUTPUT"] {
             try await GateTimingRecorder.shared.write(to: URL(fileURLWithPath: timingOutputPath))
-            print("Wrote \(timingOutputPath) (Gate 3 timing spans)")
+            print("Wrote \(timingOutputPath) (timing spans)")
         }
         if !noHistory {
             Self.recordHistory(report, to: RunHistoryStore(root: runDirectory.appendingPathComponent("history")))
@@ -458,7 +461,7 @@ struct RunCommand: AsyncParsableCommand {
                 scratchRoot: schemataScratch,
                 cleanSubtreeCloning: context.configuration.execution.cleanSubtreeCloning
             )
-            // Same "classify" Gate 3 timing span `SchemataRunOrchestration
+            // Same "classify" timing span `SchemataRunOrchestration
             // .run`'s own former wrapper body used to wrap this call in
             // directly — preserved here, around the one place `classify(_:)`
             // is still actually called, rather than left inside `runHybrid`

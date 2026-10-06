@@ -3,7 +3,7 @@
 # stage-artifacts.sh — copies exactly the known, named report files into a
 # flat, non-hidden staging directory for actions/upload-artifact.
 #
-# Why this exists (P13 review, item 9): two of the four files this Action
+# Why this exists: two of the four files this Action
 # produces (.mutantkit/report.html, .mutantkit/summary.md) live under a
 # dotdir. `actions/upload-artifact@v4` does not upload hidden files/
 # directories unless told to, and the fix is deliberately *not* "tell it
@@ -27,8 +27,8 @@ staging="${4:?usage: stage-artifacts.sh <project-root> <report.json> <gate-resul
 # earlier invocation's own staged files sitting here. Left uncleared, a
 # later invocation that legitimately has fewer of the four files this run
 # (e.g. it failed before producing report.json) would silently upload the
-# earlier invocation's stale copy instead of correctly having none (P13
-# review: multi-invocation artifact contamination).
+# earlier invocation's stale copy instead of correctly having none
+# (multi-invocation artifact contamination).
 rm -rf "$staging"
 mkdir -p "$staging"
 

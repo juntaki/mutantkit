@@ -145,7 +145,7 @@ struct DoctorCommand: AsyncParsableCommand {
             detail: """
             execution.sharedModuleCache: \(configuration.execution.sharedModuleCache ? "on" : "off (default)") \
             (isolated SwiftPM/macOS builds only today — no effect on an Xcode project/workspace or a non-macOS \
-            Swift package). APFS clonefile: \(cloneSupported ? "supported" : "not supported — falls back to a plain copy"). \
+            Swift package; on Xcode 27 it is not expected to speed anything up). APFS clonefile: \(cloneSupported ? "supported" : "not supported — falls back to a plain copy"). \
             Toolchain fingerprint \(fingerprint.digest) (\(fingerprint.canonicalDescription)). \
             Resolved cache path for `mutantkit run`: \(cachePath.path).
             """

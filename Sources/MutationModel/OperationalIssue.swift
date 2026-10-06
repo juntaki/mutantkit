@@ -52,6 +52,16 @@ public struct OperationalIssue: Codable, Sendable, Hashable {
         /// pass as a whole, never per affected test, mirroring
         /// `schemataChunkBuildFailed`'s one-per-chunk rule.
         case perTestCoverageIncomplete
+        /// The opt-in evidence archive could not be written (an observation
+        /// file, or the manifest). Never affects score, integrity or any
+        /// verdict; results without an archived observation simply cannot be
+        /// re-verified offline.
+        case evidenceArchiveWriteFailed
+        /// The evidence archive covers fewer results than the report holds:
+        /// results resumed from a checkpoint, served from the cross-run cache
+        /// or embedded by the schemata strategy have no observations to
+        /// archive in this run.
+        case evidenceArchiveIncomplete
     }
 
     public let severity: Severity

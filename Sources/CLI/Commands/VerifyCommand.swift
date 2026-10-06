@@ -71,12 +71,18 @@ struct VerifyCommand: AsyncParsableCommand {
     /// `plan` — pulled out of `run()` so the loop's own branching doesn't
     /// count against that function's complexity budget, mirroring
     /// `resolveCompatibility`'s own reason for being a standalone function.
-    private struct AnchorCheckResult {
+    struct AnchorCheckResult {
         let rejected: [(MutationPoint, AnchorVerification)]
         let unreadable: [String]
     }
 
     private static func checkAnchors(in plan: MutationPlan, root: URL, verbose: Bool) -> AnchorCheckResult {
+        checkAnchors(of: plan.mutations, root: root, verbose: verbose)
+    }
+
+    /// Shared with `verify-run`, which checks the same anchors for the points
+    /// a report carries.
+    static func checkAnchors(of points: [MutationPoint], root: URL, verbose: Bool) -> AnchorCheckResult {
         // Read each file once: a plan typically holds many mutations per
         // file, and re-reading per mutation would make verify slower than
         // it needs to be.
@@ -84,7 +90,7 @@ struct VerifyCommand: AsyncParsableCommand {
         var rejected: [(MutationPoint, AnchorVerification)] = []
         var unreadable: [String] = []
 
-        for point in plan.mutations {
+        for point in points {
             let data: Data
             if let cached = sources[point.file] {
                 data = cached

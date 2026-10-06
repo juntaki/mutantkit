@@ -118,6 +118,8 @@ struct ExecutionProfileCommandRenderTests {
         )
         #expect(renderedSupported.contains("this project's build shape supports it"))
         #expect(renderedSupported.contains("concurrent destinations"))
+        #expect(renderedSupported.contains("On Xcode 27"))
+        #expect(renderedSupported.contains("no speedup is expected"))
 
         let unsupported = ProjectExecutionCharacteristics(
             schemataEligibleMutationCount: 0, totalMutationCount: 0, schemataEligibleOperatorIDs: [],

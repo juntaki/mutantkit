@@ -265,7 +265,7 @@ struct MutationRunnerTimeoutConfirmationTests {
     @Test("retestKilledMutants on: a kill discovered via timeout confirmation is retested")
     func killDiscoveredViaTimeoutConfirmationIsRetested() async throws {
         let report = try await runWithChainedConfirmation(
-            retestKilledMutants: true, mutantSequence: [.timedOut, .failed, .failed]
+            retestKilledMutants: true, mutantSequence: [.timedOut, .failed, .failed, .passed]
         )
 
         let result = try #require(report.results.first)
@@ -427,6 +427,8 @@ private actor ScriptedTestAdapter: TestAdapter {
             status: status,
             summary: status == .failed
                 ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,

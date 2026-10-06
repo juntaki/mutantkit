@@ -502,7 +502,7 @@ public struct ExecutionStrategyReport: Codable, Sendable, Hashable {
     /// scope: it is what makes a *systemic* cause visible at a glance, which
     /// is the failure this exists to catch.
     public let fallbackReasonCounts: [String: Int]?
-    /// Gate 3 Phase H19: how many mutations fell back for each *planner-time*
+    /// How many mutations fell back for each *planner-time*
     /// reason — a candidate `SchemataChunkPlanner`/a lowerer's own
     /// `analyze(_:source:)` never embedded at all, before any token was ever
     /// attempted (`resultBuilderBody`, `patternPosition`,
@@ -515,7 +515,7 @@ public struct ExecutionStrategyReport: Codable, Sendable, Hashable {
     /// Kept as a *separate* field from `fallbackReasonCounts` rather than
     /// merged into it: the two are computed at entirely different stages
     /// (planner-time classification vs. runtime execution) by different
-    /// code, and a Gate 3 100-mutant real-iOS run found `fallbackReasonCounts`
+    /// code, and a 100-mutant real-iOS run found `fallbackReasonCounts`
     /// alone undercounted `fallbackCount` by exactly the mutations this field
     /// now accounts for — `fallbackReasonCounts` was never meant to explain
     /// the whole of `fallbackCount` on its own, but nothing said so until
@@ -571,6 +571,10 @@ public struct RunReport: Codable, Sendable {
     /// for now. Decoded as `[]` for report JSON written before this field
     /// existed; see `init(from:)` below.
     public let operationalIssues: [OperationalIssue]
+    /// The evidence archive written for this run, when the run was asked to
+    /// write one. Absent for a run that did not, and for reports written
+    /// before archives existed.
+    public let evidenceArchive: EvidenceArchiveReference?
 
     /// The only real construction path (ADR-0006 Stage 1, second review
     /// round): `ledger`, not a plain `[MutationResult]`, so a caller cannot
@@ -609,6 +613,7 @@ public struct RunReport: Codable, Sendable {
         self.batchExecution = batchExecution
         self.executionStrategy = executionStrategy
         self.operationalIssues = operationalIssues
+        evidenceArchive = nil
     }
 
     public func encoded() throws -> Data {
@@ -634,7 +639,7 @@ public struct RunReport: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, planID, startedAt, finishedAt, projectRoot, toolchain, baseline, results, integrity, score,
-             batchExecution, executionStrategy, operationalIssues
+             batchExecution, executionStrategy, operationalIssues, evidenceArchive
     }
 
     public init(from decoder: Decoder) throws {
@@ -654,6 +659,7 @@ public struct RunReport: Codable, Sendable {
         // Absent from report JSON written before this field existed —
         // treated as "no operational issues recorded", not an error.
         operationalIssues = try container.decodeIfPresent([OperationalIssue].self, forKey: .operationalIssues) ?? []
+        evidenceArchive = try container.decodeIfPresent(EvidenceArchiveReference.self, forKey: .evidenceArchive)
     }
 }
 

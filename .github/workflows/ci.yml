@@ -45,7 +45,7 @@ jobs:
   # one deliberate change, not independently.
   lint:
     name: Lint & format check
-    runs-on: macos-26
+    runs-on: xcode-27
     # Generous relative to observed reality (~20-25s on this exact job) —
     # bounds a hang (a stuck `brew install`/download, say) rather than
     # tuning for the common case. See the `unit` job's own comment for
@@ -56,18 +56,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # v0.8: pins the exact CI reference toolchain (docs/apple-support-matrix.md
-      # "Toolchain floor") instead of accepting whatever the macos-26 runner
+      # "Toolchain floor") instead of accepting whatever the xcode-27 runner
       # image's own default happens to be — a runner image update that
       # changes its default Xcode must not silently change what this repo's
-      # CI actually built/tested with. `/Applications/Xcode_26.6.app` is the
-      # exact bundle GitHub's macos-26 runner image ships; if a future image
+      # CI actually built/tested with. `/Applications/Xcode_27.0.app` is the
+      # exact bundle GitHub's xcode-27 runner image ships; if a future image
       # renames or drops it, this step fails loudly (a missing bundle is a
       # hard `xcode-select` error) rather than silently falling back to a
-      # different version. Bumping to a newer Xcode 26.x patch/minor is a
+      # different version. Bumping to a newer Xcode 27.x patch/minor is a
       # deliberate edit to this path, not automatic.
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
-      - name: Toolchain (Xcode 26.6 pinned, Swift 6+)
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Toolchain (Xcode 27.0 pinned, Swift 6+)
         shell: bash
         run: |
           set -euo pipefail
@@ -84,8 +84,8 @@ jobs:
           swift --version
           xcode_version="$(head -n 1 <<<"$xcode_version_output" | awk '{print $2}')"
           swift_major="$(swift --version 2>&1 | grep -oE 'Apple Swift version [0-9]+' | grep -oE '[0-9]+')"
-          if [ "$xcode_version" != "26.6" ]; then
-            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}' — the select step above should have failed first if the bundle were missing. See docs/apple-support-matrix.md."
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}' — the select step above should have failed first if the bundle were missing. See docs/apple-support-matrix.md."
             exit 1
           fi
           if [ -z "$swift_major" ] || [ "$swift_major" -lt 6 ]; then
@@ -140,7 +140,7 @@ jobs:
   # this belongs in the same fast, always-required tier as `lint`.
   complexity:
     name: Complexity gate (swift-complexity)
-    runs-on: macos-26
+    runs-on: xcode-27
     # Generous relative to observed reality (a few seconds of analysis over
     # the whole tree) — bounds a stuck `brew install`, not the analysis.
     timeout-minutes: 10
@@ -155,6 +155,16 @@ jobs:
       # CI failure instead of a quietly different verdict.
       SWIFT_COMPLEXITY_VERSION: "1.5.0"
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned swift-complexity
         shell: bash
@@ -192,14 +202,14 @@ jobs:
   # unused-import finding again.
   analyze:
     name: Unused imports (swiftlint analyze)
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     env:
       SWIFTLINT_VERSION: "0.63.2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Install pinned SwiftLint
         run: |
           curl -fsSL -o portable_swiftlint.zip \
@@ -225,7 +235,7 @@ jobs:
   # Fast feedback: everything that does not build another project.
   unit:
     name: Unit tests
-    runs-on: macos-26
+    runs-on: xcode-27
     # A real, reproducible hang (this job's own `Test` step sitting for
     # 68+ minutes with no completion, versus ~15-20s for the identical
     # `swift test` locally) burned real Actions minutes on this account
@@ -244,6 +254,16 @@ jobs:
     # minute hang this ceiling exists to catch, not a loosening of it.
     timeout-minutes: 25
     steps:
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Assert pinned Xcode (27.0)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
       # fetch-depth: 0 (a full clone, not this action's normal shallow
       # default) so the Sonar/Codecov steps below have the git history they
       # need for blame/PR-diff coverage reporting.
@@ -530,7 +550,7 @@ jobs:
   # invisible to the unit tests and produced a confident, wrong score.
   acceptance:
     name: Acceptance (${{ matrix.fixture }})
-    runs-on: macos-26
+    runs-on: xcode-27
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit`'s own plain unit suite — but still bounded, per the same
     # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
@@ -728,8 +748,8 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
 
@@ -938,6 +958,144 @@ jobs:
             acceptance.log
             acceptance-first-attempt.log
 
+  # Xcode 26.6 compatibility lane (macos-26 image), unit tests. Required by
+  # merge-gate. Deliberately leaner than `unit`: no stall watchdog (the job
+  # ceiling bounds a hang), no coverage profile and no PR comment, so it
+  # cannot disturb the baseline lane's artifacts or coverage aggregation.
+  unit-xcode-26:
+    name: Unit tests (Xcode 26.6)
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Assert pinned Xcode (26.6)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "26.6" ]; then
+            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      - name: Test
+        shell: bash
+        env:
+          SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH: "2"
+        run: |
+          # `|| test_exit=$?`: errexit is on, so a bare failing pipeline would
+          # end the step before the zero-tests check ran.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build 2>&1 | tee test.log || test_exit=$?
+          Scripts/assert-tests-ran.sh test.log "unit (all suites, Xcode 26.6)" || test_exit=1
+          exit $test_exit
+      - name: Upload unit failure logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unit-xcode-26-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            test.log
+
+  # Xcode 26.6 compatibility lane (macos-26 image): the reduced set of
+  # fixtures that prove the previous toolchain generation still works for
+  # SwiftPM packages, local-path dependencies and an Xcode project in the
+  # isolated mode. Required by merge-gate, but deliberately not a copy of the
+  # whole acceptance matrix: it contributes no coverage profiles.
+  acceptance-xcode-26:
+    name: Acceptance (${{ matrix.fixture }}) (Xcode 26.6)
+    runs-on: macos-26
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - fixture: swift-package
+            filter: SwiftPackageMacOSAcceptanceTests|SwiftPackageMacOSProjectPathAcceptanceTests
+            simulator: "0"
+          - fixture: local-path-dependencies
+            filter: LocalPathDependencyAcceptanceTests
+            simulator: "0"
+          - fixture: xcode-project-isolated
+            filter: XcodeProjectAcceptanceTests
+            simulator: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Assert pinned Xcode (26.6)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "26.6" ]; then
+            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Available simulators
+        if: matrix.simulator == '1'
+        run: xcrun simctl list devices available | grep -i iphone || true
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build --build-tests 2>&1 | tee build.log
+      - name: Acceptance
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_ACCEPTANCE_SIMULATOR: ${{ matrix.simulator }}
+        run: |
+          # `|| test_exit=$?`: the step runs under `bash -eo pipefail`, so a
+          # bare failing pipeline would end the step before the zero-tests
+          # check below ran.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build --filter "${{ matrix.filter }}" 2>&1 \
+            | tee acceptance.log || test_exit=$?
+          Scripts/assert-tests-ran.sh acceptance.log "fixture ${{ matrix.fixture }} (filter ${{ matrix.filter }}, Xcode 26.6)" || test_exit=1
+          exit $test_exit
+      - name: Upload acceptance failure logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: acceptance-xcode-26-${{ matrix.fixture }}-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance.log
+
   # Merge the independently-produced unit and acceptance profiles before
   # exporting once. Every producer builds the same commit with the same
   # pinned Xcode and `--enable-code-coverage`, so LLVM function hashes and
@@ -946,7 +1104,7 @@ jobs:
   # over real runs before making either project or patch coverage blocking.
   coverage:
     name: Coverage aggregation (unit + acceptance)
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     continue-on-error: true
     needs:
@@ -966,8 +1124,8 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Download coverage profiles
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1051,7 +1209,7 @@ jobs:
   # zero disagreement — the real gate before that registration can happen.
   ror-schemata-differential:
     name: ROR schemata isolated-vs-schemata differential
-    runs-on: macos-26
+    runs-on: xcode-27
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
@@ -1070,8 +1228,8 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the schemata runtime static library
@@ -1125,7 +1283,7 @@ jobs:
   # laptop. This job is that wiring.
   ios-simulator-schemata-runtime:
     name: iOS-Simulator schemata runtime (build + link viability)
-    runs-on: macos-26
+    runs-on: xcode-27
     # Same reasoning as `acceptance`'s own ceiling: real build/link/test
     # work, bounded rather than unbounded.
     timeout-minutes: 30
@@ -1144,8 +1302,8 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Build the macOS schemata runtime static library (this suite's negative control)
@@ -1219,6 +1377,8 @@ jobs:
       - acceptance
       - ror-schemata-differential
       - ios-simulator-schemata-runtime
+      - unit-xcode-26
+      - acceptance-xcode-26
     if: always()
     steps:
       - name: Confirm every required job succeeded
@@ -1243,6 +1403,8 @@ jobs:
           check "acceptance" "${{ needs.acceptance.result }}"
           check "ror-schemata-differential" "${{ needs.ror-schemata-differential.result }}"
           check "ios-simulator-schemata-runtime" "${{ needs.ios-simulator-schemata-runtime.result }}"
+          check "unit-xcode-26" "${{ needs.unit-xcode-26.result }}"
+          check "acceptance-xcode-26" "${{ needs.acceptance-xcode-26.result }}"
 
           if [ "$failed" = "true" ]; then
             echo "::error::merge-gate: at least one required job did not succeed"

@@ -37,7 +37,11 @@ struct SchemataConfirmationVerifierTests {
             plannedMutation: ref,
             sourceApplication: .applied(evidence),
             build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-            test: SingleTestObservation(run: run(status: primaryStatus, summary: primarySummary), applicationEvidence: .schemata(primary)),
+            test: SingleTestObservation(
+                run: run(status: primaryStatus, summary: primarySummary),
+                applicationEvidence: .schemata(primary),
+                execution: wholeSuiteExecution
+            ),
             confirmations: confirmations
         )
         return MutationVerdictVerifier.verify(observations, policy: policy)
@@ -51,7 +55,8 @@ struct SchemataConfirmationVerifierTests {
         let ref = PlannedMutationRef.forPoint(point, planID: "plan-1", workUnitID: "unit-1")
         let primary = makeConsistentSchemataObservation()
         let testObservation = SingleTestObservation(
-            run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .schemata(primary)
+            run: run(status: .failed, summary: makeTestSummary(failed: 1)), applicationEvidence: .schemata(primary),
+            execution: wholeSuiteExecution
         )
         let observations = MutationObservations(
             plannedMutation: ref,
@@ -75,7 +80,7 @@ struct SchemataConfirmationVerifierTests {
         func observations(status: TestRunStatus) -> MutationObservations {
             let testObservation = SingleTestObservation(
                 run: run(status: status, summary: makeTestSummary(failed: status == .failed ? 1 : 0)),
-                applicationEvidence: .schemata(primary)
+                applicationEvidence: .schemata(primary), execution: wholeSuiteExecution
             )
             return MutationObservations(
                 plannedMutation: ref,
@@ -105,7 +110,8 @@ struct SchemataConfirmationVerifierTests {
             primary: primary, primaryStatus: .failed, primarySummary: makeTestSummary(total: 2, failed: 1),
             confirmations: [ConfirmationObservation(
                 kind: .kill, run: run(status: .failed, summary: makeTestSummary(total: 2, failed: 1)),
-                schemataObservation: confirmation, originalFailingTests: makeTestSummary(total: 2, failed: 1).failingTests
+                schemataObservation: confirmation, originalFailingTests: makeTestSummary(total: 2, failed: 1).failingTests,
+                baselineControl: makePassingBaselineControl()
             )]
         )
         #expect(record.outcome == .killedByAssertion)
