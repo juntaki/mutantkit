@@ -6,8 +6,7 @@ import SwiftFrontend
 /// structures a `MutationResult` carries, and — through `finalize` — is the
 /// single path from those observations to a reportable result.
 ///
-/// Extracted out of `MutationRunner` (Phase A1 of the execution-pipeline
-/// decomposition): every stored property here is one of `MutationRunner`'s
+/// Extracted out of `MutationRunner`: every stored property here is one of `MutationRunner`'s
 /// own dependencies for exactly this job — `plan` for the `planID`/
 /// `workUnitID` a result is stamped with, `policy` for the confirmation
 /// policy `MutationVerdictVerifier` is judged against,
@@ -35,8 +34,11 @@ struct MutationEvidenceAssembler: Sendable {
     let artifactsRoot: URL?
     let resultCache: MutationResultCache?
     let resultCacheDigest: String?
-    let progress: ProgressReporter?
+    let progress: MutationModel.ProgressReporter?
     let operationalIssues: OperationalIssueLog
+    /// Opt-in: when set, every finalized mutant's raw observations are also
+    /// written to the run's evidence archive (see `archiveEvidence`).
+    var evidenceArchive: EvidenceArchiveWriter?
 
     /// Whether the mutation reached the binary the tests ran against.
     ///
@@ -148,6 +150,7 @@ struct MutationEvidenceAssembler: Sendable {
                 OperationalIssue(severity: .warning, kind: .checkpointWriteFailed, mutationID: point.id, diagnosis: diagnosis)
             )
         }
+        await archiveEvidence(observations, mutationID: point.id)
         if let resultCache, let resultCacheDigest {
             await resultCache.store(
                 observations, durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,

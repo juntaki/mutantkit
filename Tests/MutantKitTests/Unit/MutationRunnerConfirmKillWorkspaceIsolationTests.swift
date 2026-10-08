@@ -69,13 +69,13 @@ struct MutationRunnerConfirmKillWorkspaceIsolationTests {
         let runner = MutationRunner(
             plan: plan, configuration: configuration, projectRoot: root,
             build: RecordingBuildAdapter(log: log),
-            test: RecordingTestAdapter(log: log, sequence: [.failed, .failed]),
+            test: RecordingTestAdapter(log: log, sequence: [.failed, .failed, .passed]),
             workspaces: workspaces
         )
         _ = try await runner.run()
 
         let calls = await log.workspaces
-        #expect(calls.count == 2, "expected exactly one primary run and one confirmation retest")
+        #expect(calls.count == 3, "expected one primary run, one confirmation retest and one baseline control run")
         let primaryWorkspace = calls[0]
         let confirmationWorkspace = calls[1]
 
@@ -129,7 +129,7 @@ struct MutationRunnerConfirmKillWorkspaceIsolationTests {
         // activity is proven synchronously instead, not by surviving that
         // race).
         let calls = await log.workspaces
-        #expect(calls.count == 2, "expected exactly one primary run and one confirmation retest")
+        #expect(calls.count == 3, "expected one primary run, one confirmation retest and one baseline control run")
 
         let escapeeConfirmedWriting = await log.escapeeMarkerObservedInPrimaryWorkspace
         #expect(
@@ -247,6 +247,8 @@ private actor RecordingTestAdapter: TestAdapter {
             status: status,
             summary: status == .failed
                 ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil, diagnosis: "scripted \(status.rawValue)"
@@ -306,7 +308,7 @@ private actor EscapingDescendantTestAdapter: TestAdapter {
                 observed = FileManager.default.fileExists(atPath: markerPath)
             }
             await log.recordEscapeeMarkerObservedInPrimaryWorkspace(observed)
-        } else {
+        } else if callIndex == 1 {
             // The confirmation retest, checked immediately, synchronously,
             // right now -- before `runner.run()` has any chance to destroy
             // either workspace. `confirmationSandbox` was cloned at
@@ -320,7 +322,8 @@ private actor EscapingDescendantTestAdapter: TestAdapter {
                 FileManager.default.fileExists(atPath: markerPath)
             )
         }
-        return Self.result(.failed)
+        // Call 2 is the baseline control run on the unmutated build.
+        return Self.result(callIndex >= 2 ? .passed : .failed)
     }
 
     /// Real, blocking pipe-read handshake (matching
@@ -407,6 +410,8 @@ private actor EscapingDescendantTestAdapter: TestAdapter {
             status: status,
             summary: status == .failed
                 ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil, diagnosis: "scripted \(status.rawValue)"

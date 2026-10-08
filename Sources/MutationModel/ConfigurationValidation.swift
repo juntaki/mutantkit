@@ -84,7 +84,7 @@ public enum ConfigurationValidator {
             ))
         }
 
-        issues += validateBudgetSampling(configuration.execution.budget)
+        issues += validateBudgetSampling(configuration.execution.budget) + validateEvidence(configuration.evidence)
 
         if configuration.timeouts.baselineSeconds <= 0 {
             issues.append(ConfigurationIssue(
@@ -203,6 +203,11 @@ public enum ConfigurationValidator {
     /// resolves a profile (`ExecutionProfileResolver.resolve` returns
     /// `current` unchanged for it), so setting this without also choosing
     /// `optimized`/`experimental` does nothing.
+    private static func validateEvidence(_ evidence: EvidenceSettings?) -> [ConfigurationIssue] {
+        guard let keep = evidence?.keep, keep < 1 else { return [] }
+        return [ConfigurationIssue(severity: .error, path: "evidence.keep", message: "Must be at least 1 when present.")]
+    }
+
     private static func validateProfileCoverageSkip(_ execution: ExecutionSettings) -> [ConfigurationIssue] {
         guard execution.profileCoverageSkip, execution.profile == .reference else { return [] }
         return [ConfigurationIssue(
@@ -648,6 +653,14 @@ public enum ConfigurationJSONSchema {
               "additionalProperties": false,
               "properties": { "maximum": { "type": ["integer", "null"] } }
             }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "archive": { "type": "boolean" },
+            "keep": { "type": ["integer", "null"], "minimum": 1 }
           }
         }
       }

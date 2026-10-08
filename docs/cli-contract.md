@@ -17,13 +17,57 @@ everywhere rather than improvised per command:
 | `2` | `integrityFailure` | The run happened but its own invariants did not reconcile, so no score was produced. Kept distinct from `operationalError` because the difference matters to whoever reads the CI log — this is "the evidence doesn't add up," not "the tool crashed." |
 | `3` | `survivorsFound` | Mutants survived and the caller asked for that to fail the build (e.g. `run --fail-on-survivors`). |
 | `4` | `qualityGateFailure` | A trusted report missed an explicit CI mutation-quality threshold (`mutantkit gate`). |
+| `5` | `notFullyVerified` | `mutantkit trust` found no mismatch but could not verify every required check (typically because the plan the report names was not found, or because the report's results were verified by an older verifier version than the current one), so it does not call the report trustworthy. Distinct from `2`, which means a check failed. |
 
 `MutantKitExit.onFailure` is the one place that maps an uncaught Swift error
 to `operationalError` explicitly, so a plain file-I/O or JSON-decode failure
 that reaches the top of a command doesn't fall through to
 `ArgumentParser`'s own default failure exit code by accident. An error that
-already carries a deliberate `ExitCode` (any of the four non-zero codes
+already carries a deliberate `ExitCode` (any of the non-zero codes
 above) passes through unchanged.
+
+## Re-verifying a finished report: `verify-run` and `trust`
+
+Both commands re-run the verifier's checks over a report instead of believing
+what it says about itself. They check internal consistency and
+re-derivability, not authenticity: the report is still assumed to be the one
+the run produced.
+
+```bash
+mutantkit verify-run report.json [--plan plan.json] [--evidence <dir>] [--json]
+mutantkit trust --report report.json [--plan plan.json] [--evidence <dir>] [--json]
+```
+
+- **Tier A** (always): plan identity, source anchors and recorded source evidence, per-result provenance,
+  and a recomputation of the integrity block and the score from the results.
+  `--plan` supplies the plan the report was produced from; `trust` also looks
+  for it next to the report and in the project root, `verify-run` does not.
+  Checks that need the plan are "not verifiable" without it.
+- **Tier B** (only with an evidence archive, see `evidence.archive` in
+  [configuration](configuration.md)): results are re-judged from the raw
+  observations the run archived. `--evidence <dir>` selects an archive; by
+  default the one the report records is used. Without an archive the checks
+  that need raw observations stay "not verifiable".
+- A check that cannot be verified is never counted as passed.
+
+| Command | Result | Exit |
+| --- | --- | --- |
+| `verify-run` | no check failed, every check passed ("Fully verified") | `0` |
+| `verify-run` | no check failed, but some could not be verified (`PARTIAL`; `complete: false` in `--json`) | `0` |
+| `verify-run` | a check failed ("MISMATCH") | `2` |
+| `verify-run` | report, plan or `--evidence` directory unreadable | `1` |
+| `trust` | every required check verified and passed (`trustworthy`) | `0` |
+| `trust` | a check failed, or the stored integrity did not pass (`mismatch`) | `2` |
+| `trust` | nothing failed but a required check could not be verified (`notFullyVerified`) | `5` |
+
+`verify-run` exits `0` for a partial verification, so a script that needs a
+full one must read `complete` from `--json` (or the text line `Fully verified`)
+rather than the exit code alone. `trust` is the fail-closed one: a report is
+`trustworthy` only when every required check was re-verified. A report whose
+results were judged by an older MutantKit verifier version than the current
+one can never be `trustworthy`: it exits `5` with "produced by an older
+verifier", and a fresh run is the way out. The `--json` shapes are in
+[json-output-contracts](json-output-contracts.md).
 
 ## stdout vs. stderr
 

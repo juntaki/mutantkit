@@ -197,6 +197,7 @@ coverage gapを含むテストスイート全体の検出率です。
 | SwiftPM（Apple platforms）  | Supported                                       |
 | Xcode project / workspace | Supported                                       |
 | iOS Simulator             | Supported                                       |
+| Xcodeツールチェーン              | Xcode 27.0はSupported（CIの基準環境）。Xcode 26.6はSupported（CIの互換レーン、検証範囲は限定）   |
 | Isolated execution        | Supported                                       |
 | Schemata execution        | 対応operator / project種別でSupported                |
 | XCUITest                  | Xcode + iOS Simulator + isolated modeでSupported |
@@ -328,7 +329,8 @@ fix-plan / next
 既存reportをagentに解析させる場合も、raw scoreだけを渡すのではなく次のcommandを利用できます。
 
 ```bash
-mutantkit trust --report report.json
+mutantkit trust --report report.json        # 終了コード5: 完全には検証できなかった
+mutantkit verify-run report.json --plan plan.json
 mutantkit survivors --report report.json
 mutantkit fix-plan --report report.json --format agent
 mutantkit next --report report.json --format agent

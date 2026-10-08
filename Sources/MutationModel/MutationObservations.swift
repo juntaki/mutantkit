@@ -32,10 +32,16 @@ public struct SingleTestObservation: Codable, Sendable {
     /// verifier is the only place either one is turned into "proven"; see
     /// `MutationApplicationEvidence`'s own doc comment.
     public let applicationEvidence: MutationApplicationEvidence?
+    /// Which tests this run was narrowed to and how its failure was
+    /// attributed. `nil` means the runner recorded nothing (an observation
+    /// from before this field existed): the verifier never reads that as
+    /// "inside the selection", so such a run cannot credit an assertion kill.
+    public let execution: TestExecutionRecord?
 
-    public init(run: TestRunResult, applicationEvidence: MutationApplicationEvidence?) {
+    public init(run: TestRunResult, applicationEvidence: MutationApplicationEvidence?, execution: TestExecutionRecord? = nil) {
         self.run = run
         self.applicationEvidence = applicationEvidence
+        self.execution = execution
     }
 }
 
@@ -83,6 +89,11 @@ public struct ConfirmationObservation: Codable, Sendable {
     /// The primary run's own diagnosis text — only consulted for `.crash`'s
     /// signature comparison.
     public let originalDiagnosis: String
+    /// For `.kill`: the unmutated build run against the same tests, gathered
+    /// when the retest reproduced the failure. `nil` means none was gathered
+    /// (older observation, or the control could not be run); the verifier
+    /// never reads that as "controlled".
+    public let baselineControl: BaselineControlObservation?
 
     public init(
         kind: Kind,
@@ -92,7 +103,8 @@ public struct ConfirmationObservation: Codable, Sendable {
         confirmingBuildProductHash: String? = nil,
         wasBatchAttributed: Bool = false,
         originalFailingTests: [String]? = nil,
-        originalDiagnosis: String = ""
+        originalDiagnosis: String = "",
+        baselineControl: BaselineControlObservation? = nil
     ) {
         self.kind = kind
         self.run = run
@@ -102,6 +114,7 @@ public struct ConfirmationObservation: Codable, Sendable {
         self.wasBatchAttributed = wasBatchAttributed
         self.originalFailingTests = originalFailingTests
         self.originalDiagnosis = originalDiagnosis
+        self.baselineControl = baselineControl
     }
 
     /// `activation`/`schemataObservation` folded into the same

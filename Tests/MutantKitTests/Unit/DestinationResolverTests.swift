@@ -55,6 +55,39 @@ struct DestinationResolverTests {
         }
     }
 
+    @Test("Built-in default literal missing: the error says no project.destination is configured")
+    func builtInDefaultNotFoundMessage() {
+        let defaultLiteral = DestinationResolver.defaultDestination(for: .xcodeProject)
+        do {
+            _ = try DestinationResolver.resolve(
+                defaultLiteral, against: [Self.device("Example iPad mini", runtime: "26-5")], isBuiltInDefault: true
+            )
+            Issue.record("expected resolution to fail")
+        } catch let error as DestinationResolutionError {
+            let message = error.description
+            #expect(message.contains("No `project.destination` is configured"))
+            #expect(message.contains("built-in default \"iPhone 16\""))
+            #expect(message.contains("mutantkit setup"))
+            #expect(message.contains("Example iPad mini"))
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+    }
+
+    @Test("Explicit destination missing keeps the plain not-found message")
+    func explicitDestinationNotFoundKeepsOldMessage() {
+        do {
+            _ = try DestinationResolver.resolve(
+                "platform=iOS Simulator,name=iPhone 16", against: [Self.device("Example iPad mini", runtime: "26-5")]
+            )
+            Issue.record("expected resolution to fail")
+        } catch let error as DestinationResolutionError {
+            #expect(error.description == "No simulator named \"iPhone 16\" is available. Known device names: Example iPad mini.")
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+    }
+
     // MARK: - name=, no explicit OS: resolves to the highest installed runtime overall
 
     @Test("A unique name resolves cleanly")

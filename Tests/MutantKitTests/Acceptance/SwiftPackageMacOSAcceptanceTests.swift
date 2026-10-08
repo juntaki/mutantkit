@@ -79,7 +79,9 @@ struct SwiftPackageMacOSAcceptanceTests {
     func survivorsAreExactlyTheUncoveredOnes() throws {
         let run = try self.run()
 
-        #expect(run.mutations(withOutcome: .survived) == [
+        // The default-argument mutant is not a survivor when the toolchain's
+        // linker stripped its never-referenced generator from the test image.
+        #expect(run.mutations(withOutcome: .survived) == run.expectedSurvivors([
             // The default is never exercised: both tests pass the flag explicitly.
             .init(declaration: "init(loyaltyDiscountEnabled:)", original: "true", replacement: "false"),
             // The off-by-one this suite cannot see.
@@ -87,7 +89,7 @@ struct SwiftPackageMacOSAcceptanceTests {
             // Untested outright.
             .init(declaration: "isFreeShipping(total:)", original: ">=", replacement: ">"),
             .init(declaration: "isFreeShipping(total:)", original: ">=", replacement: "<")
-        ])
+        ]))
 
         #expect(run.killed == [
             .init(declaration: "qualifiesForSeniorRate(age:)", original: ">=", replacement: ">"),

@@ -112,10 +112,21 @@ do it — they're evidence-grounded, not heuristics layered on top of yours:
 
 ```bash
 mutantkit trust --report report.json      # is this report trustworthy at all? fails closed if not
+mutantkit verify-run report.json --plan plan.json  # re-verify a finished report from what it contains
 mutantkit survivors --report report.json  # survivors grouped by declaration, one entry per root cause
 mutantkit fix-plan --report report.json --format agent  # per-survivor facts/inference/obligation/reproduce, terse
 mutantkit next --report report.json --format agent      # the single recommended-next survivor, with why
 ```
+
+`trust` exits `2` when a check failed (do not quote the score) and `5` when
+nothing failed but a required check could not be verified, for example the
+plan was not found (pass `--plan`) or the report was produced by an older
+MutantKit verifier (re-run to get a verifiable report). Only exit `0` /
+`trustworthy` means every required check was re-verified. `verify-run` prints
+`PARTIAL` instead of `Fully verified` when some checks could not be verified;
+never describe a partial verification as a full one. A run made with
+`evidence.archive: true` lets both commands re-judge results from the raw
+observations the run archived.
 
 Run `trust` before quoting a score from any report you didn't just produce
 yourself in this session — it catches the same integrity problems the

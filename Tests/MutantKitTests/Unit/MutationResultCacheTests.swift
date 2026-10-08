@@ -134,6 +134,10 @@ struct MutationResultCacheTests {
         // different verdict in without recomputing anything.
         run["status"] = "failed"
         test["run"] = run
+        // A failure is only credited as a kill when the observation records
+        // which tests the run was allowed to run; a survivor's stored
+        // observation has none, so the edit supplies one.
+        test["execution"] = ["attribution": "standalone", "selection": "wholeSuite", "selectedTests": [String]()]
         observations["test"] = test
         object["observations"] = observations
         try JSONSerialization.data(withJSONObject: object).write(to: url)
@@ -463,10 +467,10 @@ struct MutationResultCacheTests {
 
 /// Split from the primary suite above purely to stay under this project's
 /// `type_body_length` SwiftLint limit, not because these tests belong to a
-/// different feature — the P4 (cache soundness) gap-fix regressions for
+/// different feature — the cache-soundness gap-fix regressions for
 /// `ExecutionImplementationVersion`.
 extension MutationResultCacheTests {
-    // MARK: - P4 cache-soundness gap fix: executionVersion gating
+    // MARK: - Cache-soundness gap fix: executionVersion gating
 
     /// Mirrors `staleVerificationVersionMisses` exactly, for the sibling
     /// mechanism `ExecutionImplementationVersion` adds: a record stamped by
@@ -554,5 +558,42 @@ extension MutationResultCacheTests {
         let loaded = await load(cache, key, point: newPoint)
 
         #expect(loaded == nil, "a verdict measured against a different replacement text must never be served for the new one")
+    }
+
+    @Test("Under retest policy, a cached kill with a recorded confirmation reloads with it; one without still misses")
+    func cachedKillReverifiedCarriesAssertionKillConfirmation() async throws {
+        let point = try makeAnchoredPoint()
+        let policy = MutationVerdictVerifier.VerdictVerificationPolicy(
+            retestKilledMutants: true, confirmCrashKills: false, confirmTimedOutMutants: false
+        )
+        let cache = MutationResultCache(root: root, policy: policy)
+        let summary = TestOutcomeSummary(total: 3, passed: 2, failed: 1, failingTests: ["T/testA()"], durationSeconds: nil)
+        func failed() -> TestRunResult {
+            TestRunResult(
+                status: .failed, summary: summary,
+                command: CommandRecord(executable: "/usr/bin/true", arguments: [], workingDirectory: "/tmp"),
+                resultArtifactPath: nil, diagnosis: "d"
+            )
+        }
+        let base = makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID)
+        let confirmedObservations = MutationObservations(
+            plannedMutation: base.plannedMutation, sourceApplication: base.sourceApplication, build: base.build,
+            test: SingleTestObservation(
+                run: failed(), applicationEvidence: base.test?.applicationEvidence, execution: base.test?.execution
+            ),
+            confirmations: [ConfirmationObservation(kind: .kill, run: failed(), baselineControl: makePassingBaselineControl())]
+        )
+        let confirmedKey = MutationResultCache.Key(mutationID: point.id, contextDigest: "digest-confirmed")
+        await store(cache, observations: confirmedObservations, for: confirmedKey)
+        let loaded = await load(cache, confirmedKey, point: point)
+        #expect(loaded?.outcome == .killedByAssertion)
+        #expect(loaded?.origin == .crossRunCache)
+        #expect(loaded?.evidence?.assertionKillConfirmation?.disposition == .confirmed)
+
+        let bareKey = MutationResultCache.Key(mutationID: point.id, contextDigest: "digest-bare")
+        await store(cache, observations: base, for: bareKey)
+        let bare = await load(cache, bareKey, point: point)
+        #expect(bare?.evidence?.assertionKillConfirmation?.disposition != .confirmed)
+        #expect(bare?.outcome != .killedByAssertion)
     }
 }

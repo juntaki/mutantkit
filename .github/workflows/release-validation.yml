@@ -91,7 +91,7 @@ jobs:
   # deliberate decision that condition was approximating, so it is simply gone.
   release-package:
     name: Build release package (bundled schemata runtime)
-    runs-on: macos-26
+    runs-on: xcode-27
     # A real `swift build -c release` of the whole CLI plus the schemata runtime
     # archives for every supported platform. Legitimately slow, but bounded, per
     # this project's own "nothing runs unbounded" rule.
@@ -106,9 +106,9 @@ jobs:
       # expensive, and in this job specifically — both jobs below `needs:`
       # it, so a pin failure fails the whole workflow here rather than
       # three times over.
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
-      - name: Toolchain (Xcode 26.6 pinned, Swift 6+)
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
+      - name: Toolchain (Xcode 27.0 pinned, Swift 6+)
         shell: bash
         run: |
           set -euo pipefail
@@ -125,8 +125,8 @@ jobs:
           # fail closed; only this one says why.
           swift_major="$(swift --version 2>&1 | grep -oE 'Apple Swift version [0-9]+' | grep -oE '[0-9]+' || true)"
           echo "Xcode: ${xcode_version:-unknown}, Swift major: ${swift_major:-unknown}"
-          if [ "$xcode_version" != "26.6" ]; then
-            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+          if [ "$xcode_version" != "27.0" ]; then
+            echo "::error::Expected the pinned Xcode 27.0 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
             exit 1
           fi
           if [ -z "$swift_major" ] || [ "$swift_major" -lt 6 ]; then
@@ -345,7 +345,7 @@ jobs:
   # not merely a unit test against a synthetic fixture tree.
   release-bundled-schemata-macos:
     name: Release package's bundled schemata runtime (macOS, clean-machine E2E)
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: release-package
     # 35, not 25. This job inlines the work the private CI split into a separate
     # `build` job (`timeout-minutes: 15`) plus the acceptance job itself
@@ -372,8 +372,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Toolchain
         run: swift --version
 
@@ -481,6 +481,157 @@ jobs:
             acceptance-archive.log
             acceptance-run.log
 
+  # Same release package as `release-bundled-schemata-macos` (downloaded, never
+  # rebuilt), run on an OLDER OS/toolchain than the one that built it: macOS 26
+  # host, Xcode 26.6 (the package job uses the macOS 27 image). Catches a runtime
+  # incompatibility of the Xcode 27 / macOS 27 SDK build with older macOS. The
+  # test harness is rebuilt here with Xcode 26.6; the package under test is not.
+  release-bundled-schemata-macos26:
+    name: Release package's bundled schemata runtime (clean-machine E2E, macOS package on a macOS 26 host)
+    runs-on: macos-26
+    needs: release-package
+    # 35, not 25. This job inlines the work the private CI split into a separate
+    # `build` job (`timeout-minutes: 15`) plus the acceptance job itself
+    # (`timeout-minutes: 15`): a cold `swift build --build-tests` here means a
+    # full debug build of swift-syntax 603 (Package.swift) before the first test
+    # runs. Budget the sum, with headroom, because an overrun surfaces as
+    # `cancelled` — which the gate correctly treats as failure, producing a
+    # reliably red gate with no evidence rather than a false green.
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same cache as the private `build` job carried, for the same reason: the
+      # dependency resolve + checkout of swift-syntax is the bulk of the cold
+      # build this job now pays on its own.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Select pinned Xcode (26.6)
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Assert pinned Xcode (26.6)
+        shell: bash
+        run: |
+          xcode_version="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$xcode_version" != "26.6" ]; then
+            echo "::error::Expected the pinned Xcode 26.6 after 'xcode-select -s', found '${xcode_version:-unknown}'. See docs/apple-support-matrix.md."
+            exit 1
+          fi
+      - name: Toolchain
+        run: swift --version
+
+      # Built here rather than downloaded: the private CI this came from pulled a
+      # `build-tests` tarball from a shared `build` job, which does not exist in
+      # this repo. This is the *test harness* binary, distinct from the release
+      # package below — which is what the harness drives as a subprocess.
+      - name: Build tests
+        shell: bash
+        run: swift build --build-tests 2>&1 | tee build.log
+
+      - name: Download release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+
+      - name: Extract release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The package this job tests must be byte-identical to the one
+          # release-package built and verified; otherwise every assertion below
+          # is about some other file.
+          shasum -a 256 -c SHA256SUMS
+          mkdir -p release-install
+          tar -xzf mutantkit-macos-arm64.tar.gz -C release-install
+          # MUTANTKIT_RELEASE_PACKAGE_ROOT below is a hardcoded path while the
+          # directory name comes out of the tarball. Assert they agree here, so a
+          # rename fails with that sentence instead of as an opaque
+          # "release package binary not found" three steps later.
+          if [ ! -x release-install/mutantkit-macos-arm64/mutantkit ]; then
+            echo "::error::extracted tree has no executable at release-install/mutantkit-macos-arm64/mutantkit — MUTANTKIT_RELEASE_PACKAGE_ROOT below would point at nothing"
+            exit 1
+          fi
+
+      # No MUTANTKIT_SCHEMATA_RUNTIME_LIB_OVERRIDE in either env block below, on
+      # purpose: the CLI subprocess these tests spawn must have no way to resolve
+      # the runtime except its own bundled lib/mutantkit/schemata/. The suite
+      # itself re-checks this (`requireNoOverrideInEnvironment`) so a future edit
+      # that adds one fails loudly instead of quietly proving nothing.
+      #
+      # Two steps and two `assert-tests-ran.sh` calls, not one combined filter:
+      # that script proves "at least one test ran", never *which*. A single
+      # pair would let the real-E2E test be renamed or deleted while the
+      # archive-inspection test alone kept the count non-zero and the job green.
+      #
+      # SHELL CONTRACT, read this before editing any `run:` below. GitHub runs a
+      # `shell: bash` step as `bash --noprofile --norc -eo pipefail {0}`: `-e` and
+      # `pipefail` are ALREADY ON. An in-script `set -o pipefail` is therefore
+      # redundant, and — more importantly — under the inherited `-e` a failing
+      # `swift test` aborts the step at the pipeline, so `test_exit=$?` never runs
+      # and `assert-tests-ran.sh` never runs on a failing test. `set +e` below
+      # turns `-e` back off (keeping `pipefail`, which is what makes `$?` reflect
+      # `swift test` rather than `tee`) precisely so BOTH facts get reported: a
+      # run that failed AND matched zero tests should say both, not just the
+      # first. `|| test_exit=1` on the helper, never a bare call, for the same
+      # reason — with `-e` off, a bare call's non-zero status is discarded and the
+      # trailing `exit $test_exit` would report success.
+      - name: Bundled schemata acceptance (macOS, archive inspection)
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
+        run: |
+          # `|| test_exit=$?`, never a bare status read, and `pipefail`
+          # explicitly rather than left to the runner -- see `ci.yml`'s
+          # `Acceptance` step for the mechanism and the evidence. `set +e`
+          # would work here too and is what this said before, but it also
+          # silences every other command in the block; `||` exempts only the
+          # one line whose failure is being inspected.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build --filter "macOSArchiveResolvesFromBundle" 2>&1 \
+            | tee acceptance-archive.log || test_exit=$?
+          Scripts/assert-tests-ran.sh acceptance-archive.log "ReleaseBundledSchemataRuntimeAcceptanceTests (macOS archive inspection)" || test_exit=1
+          exit $test_exit
+
+      - name: Bundled schemata acceptance (macOS, real E2E run)
+        shell: bash
+        env:
+          MUTANTKIT_ACCEPTANCE: "1"
+          MUTANTKIT_RELEASE_PACKAGE_ROOT: ${{ github.workspace }}/release-install/mutantkit-macos-arm64
+        run: |
+          # `|| test_exit=$?`, never a bare status read, and `pipefail`
+          # explicitly rather than left to the runner -- see `ci.yml`'s
+          # `Acceptance` step for the mechanism and the evidence. `set +e`
+          # would work here too and is what this said before, but it also
+          # silences every other command in the block; `||` exempts only the
+          # one line whose failure is being inspected.
+          set -o pipefail
+          test_exit=0
+          swift test --skip-build --filter "schemataRunSucceedsFromBundledRuntimeAlone" 2>&1 \
+            | tee acceptance-run.log || test_exit=$?
+          Scripts/assert-tests-ran.sh acceptance-run.log "ReleaseBundledSchemataRuntimeAcceptanceTests (macOS real E2E run)" || test_exit=1
+          exit $test_exit
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-bundled-schemata-macos26-failure-logs
+          if-no-files-found: ignore
+          path: |
+            build.log
+            acceptance-archive.log
+            acceptance-run.log
+
   # The clean-machine proof, iOS-Simulator side. Two things, not one:
   #
   # - `iOSSimulatorArchiveResolvesFromBundle`: the bundled
@@ -499,7 +650,7 @@ jobs:
   #   end to end on nothing but what it bundles.
   release-bundled-schemata-ios-simulator:
     name: Release package's bundled schemata runtime (iOS Simulator, clean-machine E2E)
-    runs-on: macos-26
+    runs-on: xcode-27
     needs: release-package
     # 45, not 30 — same arithmetic as the macOS job: the private split was a
     # 15-minute shared `build` plus a 20-minute iOS acceptance job, and this one
@@ -520,8 +671,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      - name: Select pinned Xcode (26.6)
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Select pinned Xcode (27.0)
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Toolchain
         run: swift --version && xcodebuild -version
 
@@ -636,6 +787,7 @@ jobs:
     needs:
       - release-package
       - release-bundled-schemata-macos
+      - release-bundled-schemata-macos26
       - release-bundled-schemata-ios-simulator
     # `always()`, not the default `success()`: this job's entire purpose is to
     # report on every other job's outcome, including a failure or a
@@ -661,6 +813,7 @@ jobs:
 
           check "release-package" "${{ needs.release-package.result }}"
           check "release-bundled-schemata-macos" "${{ needs.release-bundled-schemata-macos.result }}"
+          check "release-bundled-schemata-macos26" "${{ needs.release-bundled-schemata-macos26.result }}"
           check "release-bundled-schemata-ios-simulator" "${{ needs.release-bundled-schemata-ios-simulator.result }}"
 
           if [ "$failed" = "true" ]; then

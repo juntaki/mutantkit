@@ -77,10 +77,14 @@ struct MutationRunnerManifestDependentConfirmationRetestTests {
         let primaryCalls = await log.runMutantCalls
         #expect(primaryCalls.count == 1, "the primary test must go through the ordinary runMutant path exactly once")
 
-        // The new, manifest-dependent retest must have been used exactly
-        // once — the confirmation — never falling back to the ordinary path.
+        // The manifest-dependent retest must have been used for the confirmation
+        // and for the baseline control run — never falling back to the ordinary
+        // path.
         let confirmationCalls = await log.confirmationRetestCalls
-        #expect(confirmationCalls.count == 1, "the confirmation retest must go through runConfirmationRetest, not runMutant")
+        #expect(
+            confirmationCalls.count == 2,
+            "the confirmation retest and the baseline control must go through runConfirmationRetest, not runMutant"
+        )
 
         let confirmation = try #require(confirmationCalls.first)
 
@@ -172,6 +176,7 @@ private struct RecordingBuildAdapter: BuildAdapter {
 /// `MutationVerdictVerifier.confirmKill` reaches a genuine confirmed kill.
 private actor ManifestDependentRecordingTestAdapter: TestAdapter, PackageManifestConfirmationRetesting {
     let log: ManifestDependentCallLog
+    private var retestCalls = 0
 
     init(log: ManifestDependentCallLog) {
         self.log = log
@@ -196,7 +201,10 @@ private actor ManifestDependentRecordingTestAdapter: TestAdapter, PackageManifes
         selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
         await log.recordConfirmationRetest(packageRoot: packageRoot, productsScratchRoot: productsScratchRoot)
-        return Self.result(.failed)
+        retestCalls += 1
+        // The first call is the confirming retest (fails again); the second is
+        // the baseline control on the unmutated build (passes).
+        return Self.result(retestCalls == 1 ? .failed : .passed)
     }
 
     /// This suite drives `MutationRunner` directly, never `RunCommand`'s own
@@ -209,6 +217,8 @@ private actor ManifestDependentRecordingTestAdapter: TestAdapter, PackageManifes
             status: status,
             summary: status == .failed
                 ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "swift", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil, diagnosis: "scripted \(status.rawValue)"

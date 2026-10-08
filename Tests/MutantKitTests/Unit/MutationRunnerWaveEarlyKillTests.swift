@@ -80,7 +80,7 @@ struct MutationRunnerWaveEarlyKillTests {
         mutantTimeoutSeconds: Double? = nil,
         waveDurationSeconds: Double = 0,
         unbatchedOverride: (_ points: [MutationPoint]) -> [MutationID: TestRunStatus] = { _ in [:] },
-        // Gate 3 Phase H12.2B: which mutants' wave `.timedOut` result should
+        // Which mutants' wave `.timedOut` result should
         // be scripted as batch-attributed (`isBatchAttributedTimeout: true`
         // — a whole shared invocation killed with no way to tell which
         // configuration caused it) rather than the default, native-XCTest-
@@ -515,7 +515,7 @@ struct MutationRunnerWaveEarlyKillTests {
         try #require(timeouts.count == 2)
         // A fixed 10s mutant timeout (`mutantTimeoutSeconds: 10` above) —
         // `TimeoutController.mutantLimitSeconds(selectedTests:)` no longer
-        // narrows by selection size (Gate 3 found that uncalibrated for
+        // narrows by selection size (that was found uncalibrated for
         // real Xcode/Simulator overhead; see its own doc comment), so this
         // test pins a small budget directly instead.
         // Wave 1: nothing spent yet, so the fresh 10s budget.
@@ -526,10 +526,10 @@ struct MutationRunnerWaveEarlyKillTests {
         #expect(timeouts[1] == 7, "expected wave 2's timeout to reflect the budget already spent, got \(timeouts[1])")
     }
 
-    // MARK: - Native XCTest timeout containment (Gate 3 Phase H3)
+    // MARK: - Native XCTest timeout containment
 
     /// A chunk with more than one member is exactly the case native
-    /// containment exists for (Phase H1/H2): the outer `batchTimeout` above
+    /// containment exists for: the outer `batchTimeout` above
     /// stays a shared, ambiguous fail-safe across every member, so this is
     /// where XCTest's own per-test allowance is asked to localize a hang to
     /// just the one member that has it.
@@ -581,13 +581,13 @@ struct MutationRunnerWaveEarlyKillTests {
         #expect(allowances == [nil, nil])
     }
 
-    /// Phase H1's spike only ever exercised a 60s allowance against a real
+    /// The validation only ever exercised a 60s allowance against a real
     /// hang — a resolved mutant limit below that has no evidence behind it,
     /// so containment is skipped rather than risking a false-positive
     /// timeout from Xcode/Simulator's own per-invocation startup overhead.
     /// The outer `batchTimeout` alone still applies, exactly as before this
     /// phase.
-    @Test("A multi-member wave chunk below Phase H1's validated floor does not request native timeout containment")
+    @Test("A multi-member wave chunk below the validated floor does not request native timeout containment")
     func nativeTimeoutAllowanceIsNilBelowThePhaseH1Floor() async throws {
         let testA = TestIdentifier(target: "FakeTests", qualifiedName: "SomeClass/testA")
 
@@ -635,7 +635,7 @@ struct MutationRunnerWaveEarlyKillTests {
             waveOutcomes: { points in [points[0].id: [testA: .passed, testB: .passed, testC: .timedOut]] },
             // A fixed 15s mutant timeout (`mutantTimeoutSeconds: 15` below)
             // — `TimeoutController.mutantLimitSeconds(selectedTests:)` no
-            // longer narrows by selection size (Gate 3 found that
+            // longer narrows by selection size (that was found
             // uncalibrated for real Xcode/Simulator overhead; see its own
             // doc comment), so this test pins the budget directly instead.
             // A real, controllable per-wave duration of 8s: after wave 1
@@ -724,8 +724,9 @@ struct MutationRunnerWaveEarlyKillTests {
         #expect(report.results[0].outcome == .killedByAssertion)
 
         let confirmationCalls = await adapter.runMutantSelectedTestsCalls
-        #expect(confirmationCalls.count == 1, "confirmation should run exactly once, individually, not through runBatch")
+        #expect(confirmationCalls.count == 2, "one individual confirmation and one baseline control, not through runBatch")
         #expect(confirmationCalls[0] == [testA], "confirmation must rerun only the test that produced the detection")
+        #expect(confirmationCalls[1] == [testA], "the baseline control must run the same narrowed selection")
     }
 
     /// Real-world regression, the same one `testAndFinish` was fixed for:
@@ -955,7 +956,7 @@ struct MutationRunnerWaveEarlyKillTests {
         #expect(calls[0].allSatisfy { $0.selectedTests == [sharedTest] })
     }
 
-    // MARK: - Native-timeout-vs-batch-attributed standalone-rerun gate (Gate 3 Phase H12.2B)
+    // MARK: - Native-timeout-vs-batch-attributed standalone-rerun gate
 
     @Test(
         """
@@ -1177,7 +1178,7 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
     /// disagreeing with the mutant's original wave-batch result, the way a
     /// genuinely flaky test would.
     private let unbatchedOverride: [MutationID: TestRunStatus]
-    /// Gate 3 Phase H12.2B: mutants whose wave `.timedOut` result should
+    /// Mutants whose wave `.timedOut` result should
     /// carry `isBatchAttributedTimeout: true`. Absent from this set (the
     /// default for every mutant) means the native-XCTest-timeout shape —
     /// `false`, this one configuration individually identified.
@@ -1229,6 +1230,10 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
         selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
         runMutantSelectedTestsCalls.append(selectedTests)
+        // A run against the baseline's own build is the unmutated control.
+        if artifact.productHash == "baseline-hash" {
+            return Self.result(.passed)
+        }
         if let override = unbatchedOverride[point.id] {
             return Self.result(override)
         }
@@ -1269,7 +1274,9 @@ private actor SpyWaveAdapter: TestSelecting, BatchTestable {
         TestRunResult(
             status: status,
             summary: status == .failed
-                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: ["testX"], durationSeconds: 0.01)
+                ? TestOutcomeSummary(total: 1, passed: 0, failed: 1, failingTests: [], durationSeconds: 0.01)
+                : status == .passed
+                ? TestOutcomeSummary(total: 1, passed: 1, failed: 0, failingTests: [], durationSeconds: 0.01)
                 : nil,
             command: CommandRecord(executable: "xcodebuild", arguments: ["test"], workingDirectory: "/t"),
             resultArtifactPath: nil,

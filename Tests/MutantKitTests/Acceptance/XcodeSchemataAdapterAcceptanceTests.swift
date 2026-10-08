@@ -132,7 +132,7 @@ struct XcodeSchemataAdapterAcceptanceTests {
     }
 
     private func makeAdapter(projectRoot: URL) -> XcodeBuildAdapter {
-        XcodeBuildAdapter(configuration: Configuration(), kind: .xcodeProject, projectFile: nil, projectRoot: projectRoot)
+        XcodeBuildAdapter(configuration: Acceptance.macOSConfiguration(), kind: .xcodeProject, projectFile: nil, projectRoot: projectRoot)
     }
 
     @Test("buildSchemataChunk writes lowered sources and links the runtime; runSchemataToken activates the requested token")

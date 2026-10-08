@@ -3,10 +3,10 @@
 # preflight-capabilities.sh — refuses to start a mutation campaign against a
 # `mutantkit` build that predates the CLI surface `mode: ci` depends on.
 #
-# Why this exists (P13 review, item 3): the latest published release at the
+# Why this exists: the latest published release at the
 # time this Action was written (v0.2.0) has no `gate --json` at all — it was
 # added by the same CLI work this Action's CI mode depends on. Without this
-# check, `with: { mode: ci }` against `version: latest` (or any pre-P13 pin)
+# check, `with: { mode: ci }` against `version: latest` (or any older pin)
 # would run doctor/plan/run all the way through — paying for a full mutation
 # campaign — before failing confusingly on the first flag `gate`/`run` does
 # not recognize. Checked via `--help` output, not by trying and parsing a

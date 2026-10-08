@@ -1,17 +1,16 @@
 # Composite GitHub Action with two distinct modes (`inputs.mode`):
 #
-#   mode: install (the default, and the ONLY behavior this action has ever
-#   had before P13) — installs the MutantKit CLI from a release tarball with
+#   mode: install (the default, and the ONLY behavior this action had before
+#   `mode: ci` existed) — installs the MutantKit CLI from a release tarball with
 #   GitHub artifact attestation (Sigstore-backed build provenance, not code
 #   signing), no Homebrew, no repo checkout required beyond this action
 #   itself, and adds it to PATH. A consumer who only ever wrote
 #
 #     - uses: juntaki/mutantkit@v1.1.1
 #
-#   for the binary keeps getting exactly that after adopting this version —
-#   see the P13 review this action.yml was rebuilt from: an earlier
-#   prototype made `install -> doctor -> plan -> run -> gate` unconditional,
-#   which would have started a mutation campaign under every existing
+#   for the binary keeps getting exactly that after adopting this version.
+#   An earlier design made `install -> doctor -> plan -> run -> gate`
+#   unconditional, which would have started a mutation campaign under every existing
 #   install-only consumer the next time they picked up a new tag. That is
 #   the one thing this file must never do again.
 #
@@ -25,8 +24,7 @@
 #         mode: ci
 #         diff: origin/main   # optional — see README "CI" section
 #
-# Design boundary (kept intentionally narrow — see ADR-style note in the P13
-# review this action was built from): this file's job is installation,
+# Design boundary (kept intentionally narrow): this file's job is installation,
 # orchestration, persistence (the baseline cache) and presentation (the job
 # summary, the artifact). It never recomputes a mutation score, never
 # re-derives a quality-gate verdict, and never treats an unrecognized or
@@ -56,7 +54,7 @@ inputs:
   mode:
     description: >-
       "install" (default) installs the mutantkit binary and stops there —
-      identical to every release of this action before P13. "ci" does that,
+      identical to every release of this action before `mode: ci` existed. "ci" does that,
       then runs doctor -> plan -> run -> gate against this project's own
       mutantkit.yml, restores/saves a baseline for gate's regression checks,
       writes a job summary, and uploads the reports as a build artifact. Any
@@ -265,8 +263,8 @@ runs:
       run: ${{ github.action_path }}/Scripts/action/install.sh
 
     # Everything below is mode: ci only. A plain `mode: install` consumer's
-    # job ends at the step above, identical to every pre-P13 release of this
-    # action.
+    # job ends at the step above, identical to every release of this
+    # action before `mode: ci` existed.
 
     - name: Resolve project paths
       id: resolve-paths
@@ -279,8 +277,8 @@ runs:
       run: |
         set -euo pipefail
         # One absolute path, computed once, used by every step below —
-        # never a `cd` mixed with a relative `--project-root` (P13 review,
-        # item 5): `mutantkit run --output`/`plan --output`/`gate --report`
+        # never a `cd` mixed with a relative `--project-root`:
+        # `mutantkit run --output`/`plan --output`/`gate --report`
         # are all CWD-relative regardless of `--project-root` (see
         # RunCommand/PlanCommand/GateCommand — none of them join a relative
         # output path against project-root), while `.mutantkit/report.html`/
@@ -309,7 +307,7 @@ runs:
         # `actions/cache/restore@v4`'s cache KEY is already scoped by
         # baseline-scope + project-root (below), but its on-disk `path:` was
         # a single fixed location shared by every invocation in the job
-        # (P13 review: multi-invocation baseline contamination). A
+        # (multi-invocation baseline contamination). A
         # differently-scoped invocation's cache miss does not clear that
         # path — `actions/cache/restore` never removes anything on a miss —
         # so a still-present file from an earlier, differently-scoped
@@ -338,7 +336,7 @@ runs:
     # run: see orchestrate-ci.sh's own comment on why a diff-scoped report
     # never gets a baseline applied regardless of what is cached.
     #
-    # Key includes project-root and baseline-scope (P13 review, item 11) so
+    # Key includes project-root and baseline-scope so
     # two different projects/matrix legs sharing one repo do not silently
     # share one baseline — project-root alone already separates a monorepo's
     # own projects by default; baseline-scope is for anything project-root
@@ -416,7 +414,7 @@ runs:
     # what makes a same-SHA workflow rerun safe: `actions/cache/save` errors
     # on saving an already-existing key, so retrying a rerun without this
     # guard would fail the job on this step alone, even after every real
-    # check passed (P13 review, item 11).
+    # check passed.
     - name: Save mutation baseline
       if: inputs.mode == 'ci' && inputs.diff == '' && success() && github.event_name != 'pull_request' && steps.restore-baseline.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -425,7 +423,7 @@ runs:
         key: mutantkit-baseline-v1-${{ inputs.baseline-scope }}::${{ inputs.project-root }}::${{ github.base_ref || github.ref_name }}::${{ github.sha }}
 
     # Copies only the four known report files into a flat, non-hidden
-    # staging directory first (P13 review, item 9): `.mutantkit/report.html`/
+    # staging directory first: `.mutantkit/report.html`/
     # `summary.md` live under a dotdir `actions/upload-artifact@v4` will not
     # pick up without an explicit hidden-files flag, and the fix here is
     # narrowing what gets uploaded to exactly these four files rather than

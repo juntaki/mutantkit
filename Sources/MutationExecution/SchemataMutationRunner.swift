@@ -326,11 +326,13 @@ public struct SchemataMutationRunner: Sendable {
     /// (see `prepareBatchedPrimaries`): a "batch" of one token has no
     /// containment benefit over the unbatched path.
     private let schemataTokenBatchSize: Int
+    /// Kill baseline controls already run against a built chunk.
+    private let baselineControls = BaselineControlMemo()
     /// Counts *chunks*, not mutants: a chunk is this backend's unit of
     /// build-and-test work, so it is what a human watching the run is
     /// actually waiting on. The isolated backend counts mutants for the same
     /// reason — there, one mutant is one build-and-test cycle.
-    private let progress: ProgressReporter?
+    private let progress: MutationModel.ProgressReporter?
 
     /// The shared, immutable execution-session type `MutationRunner` also
     /// constructs internally — see `RunSession`'s own doc comment. Built
@@ -369,7 +371,7 @@ public struct SchemataMutationRunner: Sendable {
         coverageCacheKey: CoverageProfileCache.Key? = nil,
         preEstablishedBaseline: SharedBaselineEstablisher.Outcome? = nil,
         schemataTokenBatchSize: Int = 1,
-        progress: ProgressReporter? = nil
+        progress: MutationModel.ProgressReporter? = nil
     ) {
         self.planID = planID
         self.workUnitID = workUnitID
@@ -1683,7 +1685,7 @@ public struct SchemataMutationRunner: Sendable {
             "token.total", chunkID: state.chunkLabel, mutationID: entry.mutationID.rawValue, start: tokenSpanStart
         )
 
-        return await processPrimaryObservation(entry, dispatch: dispatch, run: run, state: state)
+        return await processPrimaryObservation(entry, dispatch: dispatch, run: run, attribution: .standalone, state: state)
     }
 
     /// The post-run half of what used to be `runPrimary` end to end —
@@ -1696,7 +1698,8 @@ public struct SchemataMutationRunner: Sendable {
     /// lookup made by a *different* function than the one that created
     /// this directory.
     private func processPrimaryObservation(
-        _ entry: SchemataPlanEntry, dispatch: PrimaryDispatch, run: TestRunResult, state: ChunkExecutionState
+        _ entry: SchemataPlanEntry, dispatch: PrimaryDispatch, run: TestRunResult, attribution: TestExecutionRecord.Attribution,
+        state: ChunkExecutionState
     ) async -> PrimaryOutcome {
         defer { try? FileManager.default.removeItem(at: dispatch.evidenceDirectory) }
 
@@ -1719,7 +1722,10 @@ public struct SchemataMutationRunner: Sendable {
         let buildObservation = BuildObservation(
             outcome: .succeeded(buildProductHash: state.artifact.productHash, command: state.artifact.command)
         )
-        let testObservation = SingleTestObservation(run: run, applicationEvidence: .schemata(observation))
+        let testObservation = SingleTestObservation(
+            run: run, applicationEvidence: .schemata(observation),
+            execution: TestExecutionRecord(attribution: attribution, selectedTests: dispatch.selectedTests?.map(\.onlyTestingArgument))
+        )
 
         let preliminary = preliminaryObservations(
             point: dispatch.point, sourceApplication: .applied(evidence), build: buildObservation, test: testObservation
@@ -1975,7 +1981,7 @@ public struct SchemataMutationRunner: Sendable {
                 // never retried here.
                 outcomes[mutationID] = run.status == .infrastructureFailure
                     ? await recoverAmbiguousBatchedPrimary(entry, dispatch: dispatch, state: state)
-                    : await processPrimaryObservation(entry, dispatch: dispatch, run: run, state: state)
+                    : await processPrimaryObservation(entry, dispatch: dispatch, run: run, attribution: .batch, state: state)
             }
         }
         return outcomes
@@ -2053,7 +2059,7 @@ public struct SchemataMutationRunner: Sendable {
             mutationID: entry.mutationID.rawValue, start: recoverySpanStart
         )
 
-        return await processPrimaryObservation(entry, dispatch: freshDispatch, run: run, state: state)
+        return await processPrimaryObservation(entry, dispatch: freshDispatch, run: run, attribution: .standalone, state: state)
     }
 
     /// One entry whose test process never even started. Not a forced
@@ -2246,9 +2252,16 @@ private extension SchemataMutationRunner {
             selectorToken: request.token, runID: runID
         )
         let observation = schemataObservation(transcriptPath: transcriptPath, expectation: expectation, receipt: request.receipt)
+        // Only a retest that reproduced the failure can still become a confirmed kill.
+        let control = kind == .kill && run.status == .failed
+            ? await baselineControls.schemataControl(
+                test: test, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
+            )
+            : nil
         return ConfirmationObservation(
             kind: kind, run: run, schemataObservation: observation,
-            originalFailingTests: request.originalFailingTests, originalDiagnosis: request.originalDiagnosis
+            originalFailingTests: request.originalFailingTests, originalDiagnosis: request.originalDiagnosis,
+            baselineControl: control
         )
     }
 

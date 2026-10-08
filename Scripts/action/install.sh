@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # install.sh — the entire effect of the repo-root action.yml's `mode: install`
-# path (and the first phase of `mode: ci`): resolve which release to install,
+# path (and the first step of `mode: ci`): resolve which release to install,
 # download it (or substitute a test binary — see MUTANTKIT_ACTION_TEST_BINARY_DIR
 # below), verify it, put it on PATH, and report the installed version.
 #
@@ -56,7 +56,7 @@ if [ -n "${MUTANTKIT_ACTION_TEST_BINARY_DIR:-}" ]; then
   cp "$MUTANTKIT_ACTION_TEST_BINARY_DIR/mutantkit" "$bin_dir/mutantkit"
   chmod +x "$bin_dir/mutantkit"
 else
-  # Precedence (P13 review, item 2): an explicit `inputs.version` always wins.
+  # Precedence: an explicit `inputs.version` always wins.
   # Otherwise, a `uses: juntaki/mutantkit@vX.Y.Z` tag pin resolves to that
   # exact release, so pinning the Action ref also pins the binary version —
   # without this, `version: default: "latest"` would let a pinned Action ref

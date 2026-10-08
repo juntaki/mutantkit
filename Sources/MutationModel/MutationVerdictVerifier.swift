@@ -46,8 +46,32 @@ public enum MutationVerdictVerifier {
     /// `MutationObservations` that used to classify as
     /// `.infrastructureFailure` under a legitimate multi-process test run
     /// can now classify as `.survived`/`.killedByAssertion`, so a
-    /// pre-bump cached verdict must never be reused as-is.
-    public static let currentVersion = 12
+    /// pre-bump cached verdict must never be reused as-is. Bumped to 13: a
+    /// `killedByAssertion` is now credited only when its observation records
+    /// the tests the run was narrowed to and every named failing test lies
+    /// inside that selection — the identical `MutationObservations` (including
+    /// every older cache or checkpoint entry, none of which recorded the
+    /// execution) that used to classify as `.killedByAssertion` now classify as
+    /// `.infrastructureFailure`, so a pre-bump cached kill must never be
+    /// reused as-is. Bumped to 14: an assertion kill whose retest reproduced the
+    /// failure is now confirmed only when the unmutated build passed the same
+    /// tests (a baseline control); the identical `MutationObservations` (every
+    /// older entry, none of which recorded a control) that used to classify as
+    /// `.killedByAssertion` now classify as `.infrastructureFailure`, so a
+    /// pre-bump cached kill must never be reused as-is. Bumped to 15: whether a
+    /// failing test lies inside the run's selection is now decided from the full
+    /// identifier (target, suites, type, method and parameter list) instead of
+    /// its last two path components, so the identical `MutationObservations`
+    /// whose failing test only collided with a selected one (another target or
+    /// enclosing suite, another overload or parameterized variant) that used to
+    /// classify as `.killedByAssertion` now classify as `.infrastructureFailure`,
+    /// so a pre-bump cached kill must never be reused as-is. Bumped to 16: a
+    /// selection recorded as `method()()` (a Swift Testing test selected through
+    /// SwiftPM) is now read as `method()`, so the identical `MutationObservations`
+    /// whose failing test was that very test, which used to classify as
+    /// `.infrastructureFailure` (outside the selection), now classify as
+    /// `.killedByAssertion`; a pre-bump cached verdict must never be reused as-is.
+    public static let currentVersion = 16
 
     /// `verify(_:)` alone cannot tell a primary kill/crash that skipped its
     /// confirmation because the run's own configuration never enabled one
@@ -177,7 +201,7 @@ public enum MutationVerdictVerifier {
     /// interpretation of the raw transcript — so this can never drift from
     /// what `verify(_:policy:)` would actually classify.
     ///
-    /// Scoped to a *passing* test run only (Phase 1 of the no-HIT ->
+    /// Scoped to a *passing* test run only (the first step of the no-HIT ->
     /// isolated-fallback design): a `.failed`/`.crashed`/`.timedOut` run
     /// with no HIT is a materially different question (was the failure
     /// even caused by this mutation at all?) that a future phase can
@@ -213,7 +237,13 @@ public enum MutationVerdictVerifier {
         switch sourceApplication {
         case let .notApplied(diagnosis):
             return excluded(ref, outcome: .notApplied, diagnosis: diagnosis)
-        case let .applied(evidence):
+        case let .applied(recordedEvidence):
+            // The verifier is the only author of the kill-confirmation,
+            // kill-attribution and confirmation-chain records: whatever a
+            // stored observation carries is discarded, so a hand-edited
+            // entry cannot smuggle in a "confirmed" or "within selection"
+            // record.
+            let evidence = recordedEvidence.strippingVerifierAuthoredRecords()
             guard evidence.provesSourceApplication else {
                 return excluded(
                     ref, outcome: .infrastructureFailure,
@@ -298,17 +328,18 @@ public enum MutationVerdictVerifier {
             return excluded(ref, outcome: .infrastructureFailure, diagnosis: problem, evidence: evidence)
         }
 
-        var classification = classify(run: test.run, applicationEvidence: test.applicationEvidence, coverage: obs.coverage)
-
-        for confirmation in obs.confirmations {
-            classification = confirm(classification, confirmation: confirmation, primaryApplicationEvidence: test.applicationEvidence)
-        }
+        var (classification, chain) = foldConfirmations(
+            classify(run: test.run, applicationEvidence: test.applicationEvidence, coverage: obs.coverage),
+            confirmations: obs.confirmations, primaryApplicationEvidence: test.applicationEvidence
+        )
 
         if let problem = missingRequiredConfirmationProblem(classification, confirmations: obs.confirmations, policy: policy) {
             classification = Classification(outcome: .infrastructureFailure, diagnosis: problem, decidingRun: classification.decidingRun)
         }
 
-        return proof(for: classification, ref: ref, evidence: evidence, coverageSource: obs.coverage?.source)
+        classification = applyingKillAttribution(classification, execution: test.execution)
+
+        return proof(for: classification, ref: ref, evidence: evidence, confirmationChain: chain, coverageSource: obs.coverage?.source)
     }
 
     /// `verify(_:)` sees only `MutationObservations`, not the run's own
@@ -421,10 +452,16 @@ public enum MutationVerdictVerifier {
     /// separately, so a confirmation that flips the final outcome (a
     /// batch-attributed timeout trusted as a kill, say) attaches the run
     /// that actually decided it, not the original timed-out run's summary.
-    private struct Classification {
+    struct Classification {
         let outcome: MutationOutcome
         let diagnosis: String
         let decidingRun: TestRunResult?
+        /// Structured record of a `.kill` confirmation's result. Carried to
+        /// the proof's evidence only; it never influences `outcome`.
+        var killConfirmation: AssertionKillConfirmation?
+        /// Which tests credited an assertion kill; see
+        /// `AssertionKillAttribution`. Carried to the proof's evidence only.
+        var killAttribution: AssertionKillAttribution?
     }
 
     private static func classify(
@@ -556,173 +593,6 @@ public enum MutationVerdictVerifier {
         }
     }
 
-    // MARK: - Schemata chain verification (ADR-0006 Stage 2)
-
-    /// One process's own complete, unambiguous proof: a STARTUP that loaded
-    /// the expected unit/image under this run, and the one HIT that same
-    /// process recorded for the expected mutation.
-    private struct VerifiedProcessSchemataChain {
-        let startup: RuntimeStartupEvent
-        let hit: RuntimeHitEvent
-    }
-
-    /// A compilation unit, independently proven by the build receipt to
-    /// land in a real built image, plus at least one complete per-process
-    /// STARTUP -> HIT chain proving that unit's mutation was selected and
-    /// hit in this exact run.
-    ///
-    /// `processes` is never empty (`verifySchemataChain` throws rather than
-    /// construct one with zero) — but it is not required to hold exactly
-    /// one, either. A single `mutantkit run` invocation can genuinely
-    /// spawn more than one test process for the identical build (the test
-    /// runner's own multi-process execution model, not a MutantKit
-    /// decision) — every one of those processes independently loading the
-    /// same image and independently hitting the same mutation site is
-    /// *more* proof of activation, never ambiguity. What must stay unique
-    /// is each *process's own* STARTUP and HIT (`SchemataChainError
-    /// .duplicateStartup`/`.duplicateHit`) and the semantic identity every
-    /// chain is built from (unit/image/token/embedding/run) — never how
-    /// many processes ran it.
-    private struct VerifiedSchemataChain {
-        let unit: CompilationUnitReceipt
-        let image: BuiltImageReceipt
-        let processes: [VerifiedProcessSchemataChain]
-    }
-
-    private enum SchemataChainError: Error, CustomStringConvertible {
-        case noBuildReceipt
-        case nonUniqueCompilationUnit
-        case nonUniqueBuiltImage
-        case noStartup
-        case noHit
-        case duplicateStartup(processID: Int32)
-        case duplicateHit(processID: Int32)
-        case orphanHit(processID: Int32)
-
-        var description: String {
-            switch self {
-            case .noBuildReceipt:
-                "the build-time compilation-unit-to-image mapping could not be proven"
-            case .nonUniqueCompilationUnit:
-                "the build receipt does not name exactly one compilation unit matching this mutation's own identity"
-            case .nonUniqueBuiltImage:
-                "the build receipt does not name exactly one built image for the matched compilation unit's target"
-            case .noStartup:
-                "the transcript contains no STARTUP event matching this run's own expectation and the receipt's real image"
-            case .noHit:
-                "the transcript contains no HIT event from any process that started up under this run's own expectation"
-            case let .duplicateStartup(processID):
-                "process \(processID) recorded more than one STARTUP event matching this run's own expectation — the runtime's own at-most-once contract was violated"
-            case let .duplicateHit(processID):
-                "process \(processID) recorded more than one HIT event matching this run's own expectation — the runtime's own at-most-once contract was violated"
-            case let .orphanHit(processID):
-                "process \(processID) recorded a HIT event with no matching STARTUP in that same process — an inconsistent transcript"
-            }
-        }
-    }
-
-    /// Requires exactly one candidate, or throws — the shared discipline
-    /// every stage of `verifySchemataChain` uses: zero candidates and more
-    /// than one are both refused identically, never resolved by
-    /// `.first`/`.max` picking (ADR-0006 Finding 3).
-    private static func exactlyOne<T>(_ candidates: [T], or error: SchemataChainError) throws -> T {
-        guard candidates.count == 1, let only = candidates.first else { throw error }
-        return only
-    }
-
-    /// Builds the one, fully-proven chain from raw observations alone —
-    /// `PlannedMutationRef -> sourceEmbeddingID -> CompilationUnitReceipt ->
-    /// BuiltImageReceipt/architecture/LC_UUID -> {STARTUP -> HIT}+`. The
-    /// only place this proof chain is ever constructed (ADR-0006 Stage 2):
-    /// `SchemataMutationRunner` collects `observation` and decides nothing.
-    ///
-    /// Every raw STARTUP/HIT event not matching the expected semantic
-    /// identity (run/unit/embedding/token/image) is treated as noise from
-    /// an unrelated compilation unit or mutation sharing the same
-    /// transcript — filtered out before any cardinality check, never
-    /// itself a source of ambiguity. What remains is grouped *by process*:
-    /// a real test invocation can legitimately spawn more than one process
-    /// for the identical build (see `VerifiedSchemataChain`'s own doc
-    /// comment), so uniqueness is enforced per process, not across the
-    /// whole raw transcript.
-    private static func verifySchemataChain(_ observation: SchemataExecutionObservation) throws -> VerifiedSchemataChain {
-        guard let receipt = observation.buildReceipt else { throw SchemataChainError.noBuildReceipt }
-        let expectation = observation.expectation
-
-        let unit = try exactlyOne(
-            receipt.compilationUnits.filter {
-                $0.compilationUnitID == expectation.compilationUnitID && $0.sourceEmbeddingID == expectation.sourceEmbeddingID
-            },
-            or: .nonUniqueCompilationUnit
-        )
-        let image = try exactlyOne(receipt.images.filter { $0.buildTarget == unit.buildTarget }, or: .nonUniqueBuiltImage)
-
-        func matchesExpectedIdentity(
-            runID: RunID, compilationUnitID: CompilationUnitID, sourceEmbeddingID: SHA256Digest,
-            token: SchemataSelectorToken, imageUUID: ImageUUID
-        ) -> Bool {
-            runID == expectation.runID && compilationUnitID == unit.compilationUnitID && sourceEmbeddingID == unit.sourceEmbeddingID
-                && token == expectation.selectorToken && image.slices.contains { $0.imageUUID == imageUUID }
-        }
-
-        // Both collected before any absence is classified: a transcript
-        // that has a HIT but genuinely no matching STARTUP in that same
-        // process (an inconsistent transcript, `.orphanHit`) must never be
-        // misreported as `.noStartup` — which Group 2's isolated-fallback
-        // routing (`MutationVerdictVerifier.schemataIsolatedFallbackReason`)
-        // treats as "legitimately never executed" and would otherwise
-        // silently paper over a real inconsistency instead of failing
-        // closed.
-        let matchingStartups = observation.transcript.records.compactMap { record -> RuntimeStartupEvent? in
-            guard case let .startup(event) = record else { return nil }
-            return event
-        }.filter {
-            matchesExpectedIdentity(
-                runID: $0.runID, compilationUnitID: $0.compilationUnitID, sourceEmbeddingID: $0.sourceEmbeddingID,
-                token: $0.token, imageUUID: $0.imageUUID
-            )
-        }
-        let matchingHits = observation.transcript.records.compactMap { record -> RuntimeHitEvent? in
-            guard case let .hit(event) = record else { return nil }
-            return event
-        }.filter {
-            matchesExpectedIdentity(
-                runID: $0.runID, compilationUnitID: $0.compilationUnitID, sourceEmbeddingID: $0.sourceEmbeddingID,
-                token: $0.token, imageUUID: $0.imageUUID
-            )
-        }
-
-        let startupsByProcess = Dictionary(grouping: matchingStartups, by: \.processID)
-        let hitsByProcess = Dictionary(grouping: matchingHits, by: \.processID)
-
-        for processID in startupsByProcess.keys.sorted() where startupsByProcess[processID]!.count > 1 {
-            throw SchemataChainError.duplicateStartup(processID: processID)
-        }
-        for processID in hitsByProcess.keys.sorted() where hitsByProcess[processID]!.count > 1 {
-            throw SchemataChainError.duplicateHit(processID: processID)
-        }
-        let startupByProcess = startupsByProcess.compactMapValues(\.first)
-        for processID in hitsByProcess.keys.sorted() where startupByProcess[processID] == nil {
-            throw SchemataChainError.orphanHit(processID: processID)
-        }
-
-        guard !matchingStartups.isEmpty else { throw SchemataChainError.noStartup }
-
-        let processes = hitsByProcess.keys.sorted().map { processID in
-            VerifiedProcessSchemataChain(startup: startupByProcess[processID]!, hit: hitsByProcess[processID]!.first!)
-        }
-        guard !processes.isEmpty else { throw SchemataChainError.noHit }
-
-        return VerifiedSchemataChain(unit: unit, image: image, processes: processes)
-    }
-
-    private static func schemataChainDiagnosis(_ chain: Result<VerifiedSchemataChain, Error>) -> String {
-        guard case let .failure(error) = chain else {
-            return "the schemata evidence does not prove this mutation was built, selected, and hit in this run"
-        }
-        return "the schemata chain could not be verified: \((error as? SchemataChainError)?.description ?? "\(error)")"
-    }
-
     // MARK: - Confirmation (ported from ResultClassifier.confirmKill/confirmCrash/confirmTimeout)
 
     /// Each confirmation kind only means something applied on top of the
@@ -736,7 +606,7 @@ public enum MutationVerdictVerifier {
     /// unconfirmed/wrong-shaped classification to a kill just by being
     /// present in the list. Folding them unconditionally in order (the
     /// previous behavior) let it do exactly that.
-    private static func confirm(
+    static func confirm(
         _ original: Classification, confirmation: ConfirmationObservation, primaryApplicationEvidence: MutationApplicationEvidence?
     ) -> Classification {
         let expected: MutationOutcome
@@ -766,7 +636,12 @@ public enum MutationVerdictVerifier {
                 return Classification(
                     outcome: .infrastructureFailure,
                     diagnosis: "\(original.diagnosis) A confirmation was recorded, but \(problem)",
-                    decidingRun: confirmation.run
+                    decidingRun: confirmation.run,
+                    killConfirmation: confirmation.kind == .kill
+                        ? killConfirmationRecord(
+                            .chainUnproven, original: original, confirmingRun: confirmation.run
+                        )
+                        : nil
                 )
             }
         }
@@ -817,7 +692,8 @@ public enum MutationVerdictVerifier {
                 not fail the same way (\(confirmingRun.status.rawValue)): \(confirmingRun.diagnosis) \
                 The suite disagrees with itself, so this is not a proven kill.
                 """,
-                decidingRun: confirmingRun
+                decidingRun: confirmingRun,
+                killConfirmation: killConfirmationRecord(.retestNotFailed, original: original, confirmingRun: confirmingRun)
             )
         }
 
@@ -834,7 +710,8 @@ public enum MutationVerdictVerifier {
                 no way to prove the retest caught the same test rather than a different, \
                 unrelated flake. Without that proof this is not a confirmed kill.
                 """,
-                decidingRun: confirmingRun
+                decidingRun: confirmingRun,
+                killConfirmation: killConfirmationRecord(.perTestBreakdownMissing, original: original, confirmingRun: confirmingRun)
             )
         }
 
@@ -849,14 +726,34 @@ public enum MutationVerdictVerifier {
                 flaking rather than consistently catching this mutation the same way, so this is \
                 not a confirmed kill.
                 """,
-                decidingRun: confirmingRun
+                decidingRun: confirmingRun,
+                killConfirmation: killConfirmationRecord(.failingSetDiffers, original: original, confirmingRun: confirmingRun)
             )
         }
 
-        return Classification(
-            outcome: .killedByAssertion,
-            diagnosis: "\(original.diagnosis) Confirmed by a second run of the identical mutant, failing the same test(s).",
-            decidingRun: confirmingRun
+        return applyingBaselineControl(
+            confirmedKill: Classification(
+                outcome: .killedByAssertion,
+                diagnosis: "\(original.diagnosis) Confirmed by a second run of the identical mutant, failing the same test(s). The unmutated build passed the same test(s).",
+                decidingRun: confirmingRun
+            ),
+            original: original, confirmation: confirmation
+        )
+    }
+
+    /// The primary list is read from `original.decidingRun`, never from the
+    /// untrusted `originalFailingTests` field (see `confirmKill`). Unknown
+    /// lists stay `nil` rather than `[]`.
+    static func killConfirmationRecord(
+        _ disposition: AssertionKillConfirmation.Disposition, original: Classification, confirmingRun: TestRunResult,
+        control: AssertionKillConfirmation.Control? = nil
+    ) -> AssertionKillConfirmation {
+        AssertionKillConfirmation(
+            disposition: disposition,
+            primaryFailingTests: original.decidingRun?.summary?.failingTests,
+            confirmingFailingTests: confirmingRun.summary?.failingTests,
+            confirmingStatus: confirmingRun.status.rawValue,
+            control: control
         )
     }
 
@@ -1028,13 +925,15 @@ public enum MutationVerdictVerifier {
     // MARK: - Classification -> VerdictProof
 
     private static func proof(
-        for classification: Classification, ref: PlannedMutationRef, evidence: MutationEvidence,
-        coverageSource: String? = nil
+        for classification: Classification, ref: PlannedMutationRef, evidence recorded: MutationEvidence,
+        confirmationChain: [ConfirmationStep] = [], coverageSource: String? = nil
     ) -> VerdictProof {
+        let evidence = recorded.verifierAuthored(for: classification, confirmationChain: confirmationChain)
         switch classification.outcome {
         case .killedByAssertion, .killedByCrash, .verifiedTimeout, .survived:
             return .executed(ExecutedMutationProof(
-                mutationRef: ref, outcome: classification.outcome, evidence: evidence,
+                mutationRef: ref, outcome: classification.outcome,
+                evidence: evidence,
                 testSummary: classification.decidingRun?.summary, diagnosis: classification.diagnosis
             ))
         case .noCoverage:
@@ -1044,7 +943,9 @@ public enum MutationVerdictVerifier {
         case .unviable:
             return .unviable(BuildFailureProof(mutationRef: ref, diagnosis: classification.diagnosis, evidence: evidence))
         case .timedOut, .flaky, .notApplied, .baselineMismatch, .infrastructureFailure, .skipped:
-            return excluded(ref, outcome: classification.outcome, diagnosis: classification.diagnosis, evidence: evidence)
+            return excluded(
+                ref, outcome: classification.outcome, diagnosis: classification.diagnosis, evidence: evidence
+            )
         }
     }
 
