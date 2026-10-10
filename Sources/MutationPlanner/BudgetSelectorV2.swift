@@ -470,51 +470,71 @@ public enum BudgetSelectorV2 {
             guard n > 0 else { continue }
 
             if let innerDimension {
-                var byInner: [String: [MutationPoint]] = [:]
-                for point in stratum.candidates {
-                    byInner[innerDimension(point), default: []].append(point)
-                }
-                let innerStrata = byInner.keys.sorted().map { BudgetStratumV2(id: $0, candidates: byInner[$0] ?? []) }
-
-                // The one and only permitted recursive call. `limit` is `n`
-                // — the outer call's own already-bounded output for this
-                // stratum. It never itself receives an `innerDimension`
-                // argument, so a third level can never occur.
-                let innerCounts = try allocateCounts(
-                    strata: innerStrata, limit: n, seed: seed,
-                    minimumPerStratum: innerMinimumPerStratum, weight: innerWeight
+                selected += try selectWithinInnerStrata(
+                    stratum, count: n, seed: seed, innerDimension: innerDimension,
+                    innerMinimumPerStratum: innerMinimumPerStratum, innerWeight: innerWeight
                 )
-                for innerStratum in innerStrata.sorted(by: { $0.id < $1.id }) {
-                    guard let innerSplit = innerCounts[innerStratum.id] else { continue }
-                    let candidates = fill(innerStratum, count: innerSplit.total, seed: seed)
-                    for (ordinal, point) in candidates.enumerated() {
-                        // reasonCode is drawn from the TERMINAL (inner) call's
-                        // own PhaseSplit — never the outer stratum's (B.7).
-                        let reasonCode: InclusionReason.ReasonCode =
-                            ordinal < innerSplit.phase1 ? .minimumReservation : .proportionalRemainder
-                        selected.append((point, InclusionReason(
-                            mutationID: point.id,
-                            reasonCode: reasonCode,
-                            stratumPath: [stratum.id, innerStratum.id],
-                            selectionOrdinal: ordinal
-                        )))
-                    }
-                }
             } else {
-                let candidates = fill(stratum, count: n, seed: seed)
-                for (ordinal, point) in candidates.enumerated() {
-                    let reasonCode: InclusionReason.ReasonCode =
-                        ordinal < split.phase1 ? .minimumReservation : .proportionalRemainder
-                    selected.append((point, InclusionReason(
-                        mutationID: point.id,
-                        reasonCode: reasonCode,
-                        stratumPath: [stratum.id],
-                        selectionOrdinal: ordinal
-                    )))
-                }
+                selected += selectFromStratum(stratum, split: split, seed: seed)
             }
         }
         return selected
+    }
+
+    /// Two-level selection for one outer stratum: split its own already-bounded
+    /// `count` across the inner strata, then fill each. Output order is the
+    /// outer caller's: inner strata sorted by id, candidates in `fill` order.
+    private static func selectWithinInnerStrata(
+        _ stratum: BudgetStratumV2,
+        count n: Int,
+        seed: UInt64?,
+        innerDimension: (MutationPoint) -> String,
+        innerMinimumPerStratum: Int,
+        innerWeight: [String: Int]
+    ) throws -> [(point: MutationPoint, reason: InclusionReason)] {
+        var byInner: [String: [MutationPoint]] = [:]
+        for point in stratum.candidates {
+            byInner[innerDimension(point), default: []].append(point)
+        }
+        let innerStrata = byInner.keys.sorted().map { BudgetStratumV2(id: $0, candidates: byInner[$0] ?? []) }
+
+        // The one and only permitted recursive call. `limit` is `n`
+        // — the outer call's own already-bounded output for this
+        // stratum. It never itself receives an `innerDimension`
+        // argument, so a third level can never occur.
+        let innerCounts = try allocateCounts(
+            strata: innerStrata, limit: n, seed: seed,
+            minimumPerStratum: innerMinimumPerStratum, weight: innerWeight
+        )
+        var selected: [(point: MutationPoint, reason: InclusionReason)] = []
+        for innerStratum in innerStrata.sorted(by: { $0.id < $1.id }) {
+            guard let innerSplit = innerCounts[innerStratum.id] else { continue }
+            // reasonCode is drawn from the TERMINAL (inner) call's
+            // own PhaseSplit — never the outer stratum's (B.7).
+            selected += selectFromStratum(innerStratum, split: innerSplit, seed: seed, stratumPath: [stratum.id, innerStratum.id])
+        }
+        return selected
+    }
+
+    /// Fills one terminal stratum and tags each point with its reason: the
+    /// first `split.phase1` ordinals are minimum reservations, the rest proportional.
+    private static func selectFromStratum(
+        _ stratum: BudgetStratumV2,
+        split: PhaseSplit,
+        seed: UInt64?,
+        stratumPath: [String]? = nil
+    ) -> [(point: MutationPoint, reason: InclusionReason)] {
+        let candidates = fill(stratum, count: split.total, seed: seed)
+        return candidates.enumerated().map { ordinal, point in
+            let reasonCode: InclusionReason.ReasonCode =
+                ordinal < split.phase1 ? .minimumReservation : .proportionalRemainder
+            return (point, InclusionReason(
+                mutationID: point.id,
+                reasonCode: reasonCode,
+                stratumPath: stratumPath ?? [stratum.id],
+                selectionOrdinal: ordinal
+            ))
+        }
     }
 
     // MARK: - Deterministic ordering (B.2 step 4, B.4)
