@@ -13,7 +13,7 @@ extension AcceptanceRun {
     /// Both tests pass the flag explicitly, so nothing references the
     /// generator. A toolchain whose debug link passes `-dead_strip` (Swift
     /// 6.4) removes it, the test image is then identical to the baseline's,
-    /// and the run reports the mutation as an infrastructure failure whose
+    /// and the run reports the mutation as `notMaterialized`, whose
     /// activation evidence is `buildProductIdenticalToBaseline`. A toolchain
     /// that keeps it (Swift 6.3) lets the mutant run and survive.
     ///
@@ -26,7 +26,7 @@ extension AcceptanceRun {
     /// Whether `result` is the default-argument mutation reported as having
     /// left the test image identical to the baseline's.
     static func isStrippedDefaultArgument(_ result: MutationResult) -> Bool {
-        guard result.outcome == .infrastructureFailure,
+        guard result.outcome == .notMaterialized,
               result.point.enclosingDeclaration.path.last == unreferencedDefaultArgument.declaration,
               result.point.originalText == unreferencedDefaultArgument.original,
               result.point.replacementText == unreferencedDefaultArgument.replacement,

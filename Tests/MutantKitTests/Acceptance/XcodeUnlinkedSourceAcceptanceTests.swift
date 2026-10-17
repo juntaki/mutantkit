@@ -17,13 +17,13 @@ import Testing
 ///
 /// The authoritative verdict pipeline moved this check upstream, into
 /// `MutationVerdictVerifier.classify`'s own `unprovenActivation` gate: an
-/// unproven-activation result is classified `.infrastructureFailure` (and
+/// unproven-activation result is classified `.notMaterialized` (and
 /// excluded from the score, never scored as a survivor) the moment the
 /// verdict is produced, rather than reaching `IntegrityChecker.check` as an
 /// ordinary scorable result for a separate pass to flag after the fact as
 /// `.mutationNotActivated`. `IntegrityReport.violations` reports a *broken
 /// invariant* in the run's own bookkeeping (a result that vanished, a count
-/// that does not reconcile) — a correctly-excluded infrastructure failure is
+/// that does not reconcile) — a correctly-excluded not-materialized mutant is
 /// not one of those, so `integrity.passed` and `run.exitCode` are expected to
 /// stay green here; what this suite actually proves is that the exclusion
 /// happened, by name, for both mutants on `Unused.swift`.
@@ -72,7 +72,7 @@ struct XcodeUnlinkedSourceAcceptanceTests {
     /// The whole point of the fixture: a mutation with nowhere to go must
     /// never be credited as a kill, by name, rather than being silently
     /// scored as an ordinary survivor — see the suite's own doc comment for
-    /// why this is `.infrastructureFailure`/excluded rather than an
+    /// why this is `.notMaterialized`/excluded rather than an
     /// `IntegrityReport` violation under the current (the authoritative verdict pipeline)
     /// architecture.
     @Test("A mutation outside every target's Compile Sources is excluded, never credited as a kill")
@@ -87,7 +87,7 @@ struct XcodeUnlinkedSourceAcceptanceTests {
         }
         #expect(unlinked.count == 2)
         for result in unlinked {
-            #expect(result.outcome == .infrastructureFailure, "\(result.point.displayLocation): \(result.outcome)")
+            #expect(result.outcome == .notMaterialized, "\(result.point.displayLocation): \(result.outcome)")
             // The structural claim this suite exists to prove — unproven
             // activation, not merely a diagnosis string that happens to
             // mention it (which the Mach-O linkage-identity work (#76) is
@@ -104,7 +104,7 @@ struct XcodeUnlinkedSourceAcceptanceTests {
         }
 
         let score = try #require(run.report.score)
-        #expect(score.excluded["infrastructureFailure"] == 2)
+        #expect(score.excluded["notMaterialized"] == 2)
     }
 
     /// The linked file's mutants are a control group: if activation evidence

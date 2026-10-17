@@ -784,12 +784,14 @@ jobs:
       #   Same proven recipe as the `ios-simulator-schemata-runtime` job
       #   (release macOS archive + `build-schemata-runtime.sh` iPhoneSimulator
       #   slice), exported via $GITHUB_ENV so the `Acceptance` step below —
-      #   and only the runs on this entry — see it.
+      #   and only the runs on these entries — see it. The `xcode-workspace`
+      #   entry needs it for the same reason: its schemata run links the
+      #   runtime into the workspace's chunk build.
       - name: Install xcodegen (xcode-project-schemata only)
         if: matrix.fixture == 'xcode-project-schemata'
         run: brew install xcodegen
-      - name: Schemata runtime archives (xcode-project-schemata only)
-        if: matrix.fixture == 'xcode-project-schemata'
+      - name: Schemata runtime archives (xcode-project-schemata and xcode-workspace only)
+        if: matrix.fixture == 'xcode-project-schemata' || matrix.fixture == 'xcode-workspace'
         shell: bash
         run: |
           set -euo pipefail
