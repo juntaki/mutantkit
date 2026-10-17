@@ -2,25 +2,14 @@ import Foundation
 import MutationModel
 import Testing
 
-/// `.xcodeWorkspace` is UNSUPPORTED for schemata mode today — not a
-/// coverage gap in this suite, but a real, deliberate gap in
-/// `SchemataRunOrchestration.swift`'s own target-resolution switch, which
-/// has no case for `.xcodeWorkspace` at all: it prints "Schemata target
-/// resolution is not yet implemented for xcodeWorkspace; every mutation
-/// will run in isolated mode this run" and returns an empty target map,
-/// before a single chunk is ever planned. This is intentional, existing,
-/// fail-safe (never fail-open) behavior — this suite's job is to pin it
-/// down with a real E2E run, not to implement the missing resolver (out of
-/// scope; a new target-resolution mechanism is new capability, not
-/// verification).
-///
-/// A request for `strategy: schemata` against a real `Fixtures/XcodeWorkspace`
-/// run must still produce a fully correct, 100%-isolated report — silent
-/// fallback is allowed to be the *whole* story here (this is the one
-/// matrix row where 100% fallback is the expected, correct, pinned
-/// outcome, not a defect), but the run itself must still succeed and
-/// score correctly.
-@Suite("Schemata supported matrix: Xcode workspace (pinned unsupported)", .enabled(if: Acceptance.simulatorEnabled))
+/// `.xcodeWorkspace` is SUPPORTED for schemata mode (the multi-image build receipt): target resolution reads the
+/// workspace's member `.xcodeproj` files from `contents.xcworkspacedata`, resolves each like a lone
+/// project, and re-roots source paths at the workspace directory. Before that, the target-resolution
+/// switch had no `.xcodeWorkspace` case and every run degraded to isolated; this suite used to pin
+/// that. It now pins the opposite, on the same `Fixtures/XcodeWorkspace` run: schemata really executes
+/// (schemata-verified results exist, nothing degrades the whole run) and the only fallbacks are
+/// mutations this fixture's tests never reach.
+@Suite("Schemata supported matrix: Xcode workspace", .enabled(if: Acceptance.simulatorEnabled))
 struct SchemataSupportedMatrixXcodeWorkspaceAcceptanceTests {
     private static func configuration() throws -> String {
         """
@@ -50,8 +39,8 @@ struct SchemataSupportedMatrixXcodeWorkspaceAcceptanceTests {
         try Self.sharedRun.get()
     }
 
-    @Test("Xcode workspace: a schemata request falls back to isolated for every mutation, correctly, as a whole-run degradation")
-    func requestingSchemataFallsBackEntirelyButCorrectly() throws {
+    @Test("Xcode workspace: schemata really executes; the only fallbacks are mutations the fixture's tests never reach")
+    func requestingSchemataExecutesAndOnlyUncoveredMutationsFallBack() throws {
         let run = try self.run()
         #expect(run.exitCode == 0, "\(run.runOutput)")
         #expect(run.report.baseline.passed, "the baseline must still reflect a genuinely passing suite")
@@ -61,15 +50,20 @@ struct SchemataSupportedMatrixXcodeWorkspaceAcceptanceTests {
 
         let strategy = try #require(run.report.executionStrategy)
         #expect(strategy.requested == .schemata)
-        #expect(strategy.effectiveCount == 0, "xcodeWorkspace has no schemata target resolution today")
-        #expect(strategy.fallbackCount == integrity.planned, "every planned mutation must fall back, none silently dropped")
-        #expect(
-            strategy.degradationReason != nil,
-            "this must be reported as a whole-run degradation (target resolution never ran), not per-mutation SchemataChunkPlanner routing"
-        )
-        #expect(
-            run.runOutput.contains("Schemata target resolution is not yet implemented for xcodeWorkspace"),
-            "the operator must see an explicit, honest reason, never a silent no-op"
-        )
+        #expect(strategy.degradationReason == nil, "\(String(describing: strategy.degradationReason))")
+        #expect(strategy.effectiveCount > 0, "no mutation went through the schemata backend")
+        #expect(strategy.effectiveCount + strategy.fallbackCount == integrity.planned)
+        #expect((strategy.plannerFallbackReasonCounts ?? [:]).isEmpty)
+
+        // Unlike the xcodeProject fixture, this one is not fully covered by its tests, so some mutations legitimately
+        // never start up or hit (`activation.noStartup` / `.noHit`) and run isolated. Receipt or chunk-build failures
+        // never are legitimate.
+        let reasons = Set((strategy.fallbackReasonCounts ?? [:]).keys)
+        #expect(reasons.isSubset(of: ["activation.noHit", "activation.noStartup"]), "\(reasons)")
+
+        // The check that would have caught the earlier silent version of this run: an effective count alone passed while
+        // every result was an infrastructure failure. Schemata-verified evidence has to exist.
+        let qualification = SchemataQualification(maximumUnexpectedFallbacks: strategy.fallbackCount)
+        #expect(qualification.violations(in: run.report).isEmpty, "\(qualification.violations(in: run.report))")
     }
 }

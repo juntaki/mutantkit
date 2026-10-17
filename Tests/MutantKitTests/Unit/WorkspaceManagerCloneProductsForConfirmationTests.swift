@@ -11,8 +11,7 @@ import Testing
 /// retest (`Configuration.execution.retestKilledMutants`) runs `swift test
 /// --skip-build --scratch-path <clone>`, and `--scratch-path` does not
 /// accept a flat products directory — confirmed empirically against a real
-/// toolchain (see this project's internal product-completeness
-/// freeze-release-gate research, not part of this public repo) — it computes its own triple/
+/// toolchain) — it computes its own triple/
 /// configuration internally and looks for pre-built products nested under
 /// exactly that shape beneath whatever `--scratch-path` it is given.
 @Suite("WorkspaceManager: cloneProductsForConfirmation")

@@ -159,7 +159,7 @@ extension ExecutionProfileCommand {
         lines.append(
             "`experimental` resolves identically to `optimized` today. The one real candidate looked at for its " +
                 "own bucket — mixing \"safe\" mutants into shared builds — has a real, found soundness " +
-                "counterexample (internal research, not part of this public repo) and is deliberately not wired in " +
+                "counterexample and is deliberately not wired in " +
                 "here under any profile."
         )
         return lines.joined(separator: "\n")

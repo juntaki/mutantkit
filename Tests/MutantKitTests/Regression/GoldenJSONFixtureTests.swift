@@ -167,7 +167,7 @@ struct GoldenJSONFixtureTests {
         #expect(entries.count == 1)
         #expect(entries[0].schemaVersion == SchemaVersion.operatorCatalogEntry)
         #expect(entries[0].id == "swift.core.bool-literal-inversion")
-        #expect(entries[0].reachableProfile == .conservative)
+        #expect(entries[0].reachableProfile == .default)
 
         let reencoded = try MutationPlan.encoder().encode(entries)
         #expect(reencoded == data)

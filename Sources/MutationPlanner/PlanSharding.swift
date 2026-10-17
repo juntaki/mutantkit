@@ -94,7 +94,7 @@ public enum PlanSharding {
         }
         // Copied unchanged by the same `MutationID`-keyed rule `mutations`
         // itself shards by — never recomputed from shard-local position or
-        // candidate count (ADR-0007 B.7's shard-stability requirement).
+        // candidate count (the budget-selection schema contract's shard-stability requirement).
         for reason in plan.budgetInclusionReasons {
             inclusionReasons[index(of: reason.mutationID, count: count)].append(reason)
         }

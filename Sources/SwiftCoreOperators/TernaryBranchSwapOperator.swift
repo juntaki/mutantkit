@@ -22,8 +22,8 @@ import SwiftSyntax
 /// operator folds the tree itself before walking it.
 ///
 /// **`defaultEnabled: true`, validated with a recorded caveat (v0.4 Trust
-/// Closure).** Corpus-measured on two real, independently-shaped iOS apps
-/// (internal, not part of this public repo): always compile-viable (0 unviable in either
+/// Closure).** Corpus-measured on two real, independently-shaped iOS apps:
+/// always compile-viable (0 unviable in either
 /// project), and a consistently modest-but-real kill rate (13.3% -> 20.8%
 /// -> 26.5% across three runs) — never a compile-safety or correctness
 /// concern, and never contradicted (unlike `NilCoalescingFallbackOperator`,
@@ -38,8 +38,6 @@ import SwiftSyntax
 /// project-shape-specific rather than general; resolving that needs a
 /// non-UI-heavy real project (e.g. a macOS Swift Package), which is
 /// deferred, non-blocking future corpus work, not a v0.4 correctness gap.
-/// See the internal corpus-validation notes (not part of this public repo)
-/// and the operator catalog's item 7 for full tables.
 public struct TernaryBranchSwapOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.ternary-branch-swap",

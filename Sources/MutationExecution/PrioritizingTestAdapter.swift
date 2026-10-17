@@ -34,9 +34,7 @@ public struct PrioritizingTestAdapter: TestSelecting, TestAdapterWrapping, Senda
     /// other memoized capability in this codebase uses (never a bare `as?`),
     /// even though `base` cannot itself be `TestAdapterWrapping`-wrapped
     /// further today — this stays correct if a second wrapper type is ever
-    /// introduced. See this project's internal execution-engine
-    /// restructuring notes (not part of this public repo) for the full
-    /// rationale.
+    /// introduced.
     private let selectingBase: (any TestSelecting)?
 
     public init(base: any TestAdapter, priorityStore: TestPriorityStore) {

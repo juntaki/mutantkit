@@ -1,8 +1,8 @@
 import Foundation
 import Testing
 
-/// Turns two more of an internal structural-invariants audit's 14
-/// uncovered findings into permanent, mechanical gates. See
+/// Turns two more structural invariants into
+/// permanent, mechanical gates. See
 /// `V2InvariantsAuditRegressionSupport`'s own doc comment for why a
 /// real-source textual re-scan is the right method: both facts below are
 /// about *which spelling* one specific guard uses, and *what order* three

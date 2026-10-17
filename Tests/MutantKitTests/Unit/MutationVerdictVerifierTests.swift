@@ -2,14 +2,14 @@ import Foundation
 import MutationModel
 import Testing
 
-/// ADR-0006 Stage 1: `MutationVerdictVerifier.verify(_:MutationObservations)`
+/// The authoritative verdict pipeline: `MutationVerdictVerifier.verify(_:MutationObservations)`
 /// is now the sole place a mutation's outcome is decided — this pins its
 /// full decision table, covering every distinct branch the verifier's
 /// logic takes (ported from `ResultClassifier`/`SchemataResultClassifier`,
 /// which this suite replaces). Not a literal combinatorial matrix of every
 /// field × every field, but every branch a reader of the verifier's source
 /// would need to trust is correct.
-@Suite("Mutation verdict verifier decision table (ADR-0006 Stage 1)")
+@Suite("Mutation verdict verifier decision table")
 struct MutationVerdictVerifierTests {
     private static let planID = "plan-A"
     private static let workUnitID = "unit-1"
@@ -362,8 +362,20 @@ struct MutationVerdictVerifierTests {
         #expect(record.outcome == .infrastructureFailure)
     }
 
-    @Test("infrastructureFailure: passed, activation unproven (build identical to baseline) — not scored, not cached")
-    func isolatedPassedUnprovenIsInfrastructureFailure() throws {
+    @Test("a build failure recorded as a confirmed compiler crash is unviable, like a compilation error")
+    func confirmedCompilerCrashIsUnviable() throws {
+        let record = try verify { ref in
+            MutationObservations(
+                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: nil, activation: nil)),
+                build: BuildObservation(outcome: .failed(kind: .confirmedCompilerCrash, diagnosis: "crashed twice", command: nil))
+            )
+        }
+        #expect(record.outcome == .unviable)
+        guard case .unviable = record.proof else { Issue.record("expected .unviable"); return }
+    }
+
+    @Test("notMaterialized: a no-op canary that passed on a product identical to the baseline's — not scored, not cached")
+    func isolatedPassedUnprovenIsNotMaterialized() throws {
         let record = try verify { ref in
             MutationObservations(
                 plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h0", activation: unprovenIsolated)),
@@ -371,9 +383,64 @@ struct MutationVerdictVerifierTests {
                 test: SingleTestObservation(run: run(status: .passed), applicationEvidence: .isolated(unprovenIsolated))
             )
         }
-        #expect(record.outcome == .infrastructureFailure)
+        #expect(record.outcome == .notMaterialized)
         #expect(!record.outcome.isScorable)
         #expect(!record.outcome.isCacheableResult)
+        #expect(record.outcome.detection == .indeterminate)
+    }
+
+    @Test("notMaterialized: applied edit, successful build, product identical to the baseline's, tests not run")
+    func identicalProductWithoutTestIsNotMaterialized() throws {
+        let record = try verify { ref in
+            MutationObservations(
+                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h0", activation: unprovenIsolated)),
+                build: BuildObservation(outcome: .succeeded(buildProductHash: "h0", command: nil))
+            )
+        }
+        #expect(record.outcome == .notMaterialized)
+        #expect(record.outcome != .infrastructureFailure)
+        #expect(!record.outcome.isScorable)
+        #expect(!record.outcome.isCacheableResult)
+        #expect(!record.outcome.impliesTestWasExecuted)
+        // The proof keeps the application evidence it rests on.
+        #expect(record.proof.evidence?.provesSourceApplication == true)
+        #expect(record.proof.evidence?.applicationEvidence == .isolated(unprovenIsolated))
+    }
+
+    @Test("A claimed identical product that is not the observed one is not credited as notMaterialized")
+    func identicalProductClaimMustMatchObservedBuild() throws {
+        let record = try verify { ref in
+            MutationObservations(
+                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h0", activation: unprovenIsolated)),
+                build: BuildObservation(outcome: .succeeded(buildProductHash: "other", command: nil))
+            )
+        }
+        #expect(record.outcome == .infrastructureFailure)
+    }
+
+    @Test("A product that does differ from the baseline's with no test observation stays an infrastructureFailure")
+    func provenProductWithoutTestIsNotMaterialized() throws {
+        let record = try verify { ref in
+            MutationObservations(
+                plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h1", activation: provenIsolated)),
+                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil))
+            )
+        }
+        #expect(record.outcome == .infrastructureFailure)
+    }
+
+    @Test("A no-op canary whose suite crashed or failed stays an anomaly, never notMaterialized")
+    func canaryThatBehavedDifferentlyIsNotTrustedAsNotMaterialized() throws {
+        for status in [TestRunStatus.failed, .crashed] {
+            let record = try verify { ref in
+                MutationObservations(
+                    plannedMutation: ref, sourceApplication: .applied(makeEvidence(buildProductHash: "h0", activation: unprovenIsolated)),
+                    build: BuildObservation(outcome: .succeeded(buildProductHash: "h0", command: nil)),
+                    test: SingleTestObservation(run: run(status: status), applicationEvidence: .isolated(unprovenIsolated))
+                )
+            }
+            #expect(record.outcome == .infrastructureFailure, "\(status)")
+        }
     }
 
     @Test("survived: passed with proven activation")

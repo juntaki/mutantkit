@@ -4,9 +4,7 @@ import Foundation
 /// Bounds how long waiting for a `Foundation.Process` to exit can take,
 /// instead of trusting `Process.waitUntilExit()` unconditionally.
 ///
-/// Part of the mutation-testing hardening program's CI-reliability
-/// follow-up (this project's internal mutation-testing-hardening progress
-/// log, not part of this public repo).
+/// Part of the CI-reliability follow-up.
 /// Two independent, real public-CI stack samples this session caught a
 /// test process genuinely stuck inside `waitUntilExit()`'s own `mach_msg`
 /// wait — once for a long-lived bystander process after `.terminate()`

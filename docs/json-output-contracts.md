@@ -10,7 +10,7 @@ exit-code/stdout/stderr contract.
 **A new optional field is non-breaking. A new required field, or a removed,
 renamed, or retyped field, is breaking.** This has been the lived practice
 throughout this codebase's history — every schema-version bump on record
-(e.g. `schemataPlan` going from 1 to 2 for ADR-0005 PR F, when
+(e.g. `schemataPlan` going from 1 to 2, when
 `SchemataPlacement.embedded` changed from a flat set of fields to a list of
 per-target placements) corresponds to exactly this kind of incompatible
 change, and every other addition (`RunReport.batchExecution`,
@@ -34,6 +34,10 @@ throw rather than guess. Not every type checks its own `schemaVersion` at
 decode time today; where a reader path doesn't check it, that is a decoding
 convenience, not a claim that a version mismatch there is safe.
 
+`RunReport` readers accept every version from 1 up to the current one, so a
+`report.json` written by an older release still loads. A tool older than the
+report cannot read it: version 2 adds the `notMaterialized` outcome.
+
 ## Registry
 
 Every constant below is declared in `Sources/MutationModel/CoreTypes.swift`,
@@ -45,11 +49,11 @@ each carry their own `schemaVersion` — see
 | Constant | Value | Produced by | Top-level shape |
 | --- | --- | --- | --- |
 | `plan` | 1 | `plan.json` (written by `mutantkit plan`/`run`/`dry-run`) | object |
-| `result` | 1 | `report.json` (written by `mutantkit run`), a.k.a. `RunReport` | object |
+| `result` | 2 | `report.json` (written by `mutantkit run`), a.k.a. `RunReport` | object |
 | `schemataPlan` | 2 | The schemata-mode execution plan (`SchemataPlan`), internal to schemata execution | object |
 | `agentEvidenceReport` | 1 | `mutantkit inspect --json` (`AgentEvidenceReport`) | object |
 | `runHistoryRecord` | 1 | `mutantkit history --json` (`RunHistoryRecord`) | **bare array**, per-element `schemaVersion` |
-| `operatorCatalogEntry` | 1 | `mutantkit operator-catalog --json` (`OperatorCatalogEntry`) | **bare array** with no operator ID given (per-element `schemaVersion`); a single **object** when an operator ID is given |
+| `operatorCatalogEntry` | 2 | `mutantkit operator-catalog --json` (`OperatorCatalogEntry`) | **bare array** with no operator ID given (per-element `schemaVersion`); a single **object** when an operator ID is given |
 | `qualityGateResult` | 1 | `mutantkit gate --json` (`QualityGateResult`) | object |
 | `buildDiagnosis` | 1 | `mutantkit doctor --json` (`BuildDiagnosis`) | object |
 | `configurationValidationResult` | 1 | `mutantkit config --json` (`ConfigurationValidationResult`) | object |
@@ -95,6 +99,31 @@ failed), so `passed: true, complete: false` is a PARTIAL verification, and the
 `Fully verified: every check passed.` A partial report must never be read as
 fully verified.
 
+Completeness is split explicitly, additively and optionally (older output
+omits these keys). `tierAComplete` is computed from the report-only (Tier A)
+checks alone: every check the report alone can run passed. `complete` is
+unchanged and covers every check, including the `archive.*` / `tierB.*` checks
+that reading an evidence archive adds, so the two differ exactly when an
+archive was read. A schemata run whose activation facts need the raw evidence
+archive is legitimately `passed: true, tierAComplete: false` and still
+trustworthy.
+`fullEvidenceReverified` is `true` only when an evidence archive was read and
+every result was re-judged from raw observations with no mismatch, no result
+lacking usable observations, no archive problem and no failed check. The two
+are independent: Tier A partial with `fullEvidenceReverified: true` is the
+expected state for a schemata run with a complete bound archive. Neither field
+changes which checks pass or fail. The `verify-run` text output reports both
+("Tier A ... complete/partial. Full-evidence re-verification (Tier B): yes/no").
+
+`verify-run --json` also carries an optional `executionStrategy`: the bound
+report's `executionStrategy` copied verbatim (`requested`, `effectiveCount`,
+`fallbackCount`, `degradationReason`, dynamic `fallbackReasonCounts` and
+planner-time `plannerFallbackReasonCounts`). `report.json` is the authoritative
+artifact for execution provenance; verify-run adds no interpretation of its own.
+Treat report + verify-run as one required pair: an all-fallback run has
+`effectiveCount: 0` and is not schemata-qualified merely because its isolated
+verdicts verify. It is absent for a plain isolated run or an older report.
+
 `verify-run --json` and `trust --json` report `tierBPerformed: true` only when
 an evidence archive (written by a run with `evidence.archive: true`) was read
 and at least one result was re-judged from its raw observations under the
@@ -121,7 +150,16 @@ report `trustworthy` on its own.
 the assertion kills were credited (`withinSelection`, `wholeSuiteRan`,
 `failingTestsUnnamed`, `attributionNotRecorded`, `batchAttributed`) and how many
 results went through more than one confirmation round
-(`cascadeConfirmations`). In `report.json`, a result's `evidence` may carry
+(`cascadeConfirmations`). It also carries two optional, diagnostic-only
+lists derived from the recorded failing tests of assertion kills (no new
+store): `killingTests`, the top 10 tests by number of killed mutants
+(`test`, `mutantCount`, `fileCount`, `soleFailingCount`, `notConfirmedCount`,
+`shareOfKills`), and `suspectTests`, the rows with at least 10 mutants across at
+least 5 distinct files (constants in `TrustReport.KillingTestThresholds`), each
+with `warning: "broad-failing/suspect test — confirm with the baseline
+control"`. A broad end-to-end test can legitimately kill widely; this is never
+proof of flakiness and never changes a verdict, the score or the trust status.
+`trust` prints the same table and warnings. In `report.json`, a result's `evidence` may carry
 `assertionKillAttribution` and `confirmationChain`, both optional and both
 written only by the verifier; a result without them is never read as one whose
 kill stayed inside its test selection. A verifier version bump (13) means a
@@ -173,6 +211,18 @@ Two more `--json` outputs exist outside this registry, both intentionally:
   other command's output allows.
 - `mutantkit inspect --json` on its not-found path (`InspectCommand.ErrorJSON`)
   — see [Legacy exception](#legacy-exception-inspects-errorjson) below.
+
+## `operatorCatalogEntry` v2
+
+`reachableProfile` changed meaning, not shape. v1 reported the profile names
+of the v1.x configuration (`conservative`, `default`, `experimental`); v2
+reports the most restrictive canonical tier that reaches the operator:
+`default`, `stronger` or `all` (or `null` for an operator no profile can
+reach). `conservative` and `experimental` are never emitted, although
+`operators.profile` still accepts them. A reader that decodes the field as a
+closed enum, or compares it with v1 names, must handle the new values. Nothing
+else changed: `Configuration.version`, the `plan` and `result` schemas,
+operator versions and mutation IDs are untouched.
 
 ## Array-vs-object exception
 

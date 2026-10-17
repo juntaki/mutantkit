@@ -1,0 +1,26 @@
+version: 1
+
+project:
+  kind: xcodeProject
+  scheme: App
+  destination: platform=iOS Simulator,name=iPhone 17 Pro
+
+sources:
+  include:
+    - Core/**
+    - Shared/**
+    - Experimental/**
+
+tests:
+  targets:
+    - AppTests
+
+operators:
+  profile: default
+
+execution:
+  strategy: isolated
+  workers: 2
+
+reports:
+  - console

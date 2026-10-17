@@ -134,6 +134,7 @@ public struct StrykerReporter: Reporter {
     ///   what we do with a mutant whose repeated runs disagree. The *reason* for
     ///   the exclusion is lost; only `statusReason` carries it.
     /// - `skipped`           → `Ignored`        (exact equivalent: excluded before execution)
+    /// - `notMaterialized`   → `Ignored`        (the product never contained the mutation)
     /// - `notApplied`        → `RuntimeError`
     /// - `baselineMismatch`  → `RuntimeError`
     /// - `infrastructureFailure` → `RuntimeError`
@@ -160,7 +161,7 @@ public struct StrykerReporter: Reporter {
         case .noCoverage: .noCoverage
         case .unviable: .compileError
         case .timedOut: .timeout
-        case .flaky, .skipped: .ignored
+        case .flaky, .skipped, .notMaterialized: .ignored
         case .notApplied, .baselineMismatch, .infrastructureFailure: .runtimeError
         }
     }

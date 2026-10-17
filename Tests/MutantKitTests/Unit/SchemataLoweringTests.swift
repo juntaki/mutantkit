@@ -3,7 +3,7 @@ import MutationModel
 import Testing
 
 /// Pins the S0 `SchemataEligibility`/`SchemataUnsupportedReason` contract
-/// from ADR-0003 — the per-candidate (not per-operator) eligibility model
+/// from the schemata evidence contract — the per-candidate (not per-operator) eligibility model
 /// P0-1 requires, and its `Codable` round trip for `schemata-plan.json`.
 @Suite("Schemata lowering eligibility contract")
 struct SchemataLoweringTests {

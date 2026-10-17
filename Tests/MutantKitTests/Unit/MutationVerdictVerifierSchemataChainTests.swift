@@ -7,7 +7,7 @@ import Testing
 // pins the identical `MutationVerdictVerifier.verifySchemataChain` behavior,
 // no behavioral split. See that file's own doc comment for the verifier's
 // overall decision-table context.
-@Suite("Mutation verdict verifier: schemata chain verification (ADR-0006 Stage 2)")
+@Suite("Mutation verdict verifier: schemata chain verification")
 struct MutationVerdictVerifierSchemataChainTests {
     private static let planID = "plan-A"
     private static let workUnitID = "unit-1"
@@ -33,7 +33,7 @@ struct MutationVerdictVerifierSchemataChainTests {
         )
     }
 
-    // MARK: - Schemata mode (ADR-0006 Stage 2: MutationVerdictVerifier.verifySchemataChain)
+    // MARK: - Schemata mode (the schemata proof chain: MutationVerdictVerifier.verifySchemataChain)
 
     private var schemataObservation: SchemataExecutionObservation { makeConsistentSchemataObservation() }
 

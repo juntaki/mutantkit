@@ -4,7 +4,7 @@ import Foundation
 import MutationModel
 import Testing
 
-/// `SchemataBuiltImageInspection` is the build-time half of ADR-0006's
+/// `SchemataBuiltImageInspection` is the build-time half of the end-to-end trust chain's
 /// proof chain, wired into `SwiftPackageMacOSAdapter`: it discovers the
 /// real built bundle(s) under a chunk's `productsDirectory` and extracts
 /// each one's real `LC_UUID`-backed identity. `SchemataMutationRunnerAcceptanceTests`

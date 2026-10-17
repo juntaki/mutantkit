@@ -1,8 +1,8 @@
 import Foundation
 import Testing
 
-/// Turns four of an internal structural-invariants audit's 14 uncovered
-/// findings into permanent, mechanical gates. See
+/// Turns four structural invariants into
+/// permanent, mechanical gates. See
 /// `V2InvariantsAuditRegressionSupport`'s own doc comment for why a
 /// real-source textual re-scan, not an executed test, is the correct method
 /// for this whole audit-to-regression-test task — every fact pinned below
@@ -187,7 +187,7 @@ struct VerdictVerificationPolicyCanonicalFactoryRegressionTests {
 
 /// §3's schemata-side gap: `SchemataMutationRunner.confirmSchemataToken`
 /// never rebuilds to confirm — it re-runs the exact same, already-built
-/// `artifact` (ADR-0006 Stage 3), unlike isolated mode's own
+/// `artifact` (the re-enabled schemata scoring), unlike isolated mode's own
 /// `MutationConfirmationCoordinator.confirmCrashKill`/`.confirmTimeout`,
 /// which always create a fresh sandbox and rebuild before retesting (that
 /// isolated-mode half already has direct test coverage today —
@@ -195,7 +195,7 @@ struct VerdictVerificationPolicyCanonicalFactoryRegressionTests {
 /// — only the schemata half was uncovered). If a future change made
 /// `confirmSchemataToken` start rebuilding, or start creating a fresh
 /// sandbox, it would not be *wrong*, but it would silently multiply
-/// schemata confirmation cost and diverge from the documented ADR-0006/0008
+/// schemata confirmation cost and diverge from the documented the trust-chain and timeout-isolation designs
 /// proof model without any caller asking for that.
 @Suite("Regression: schemata confirmation never rebuilds, isolated confirmation always does")
 struct SchemataConfirmationNeverRebuildsRegressionTests {

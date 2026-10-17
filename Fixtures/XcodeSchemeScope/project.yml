@@ -1,0 +1,64 @@
+# Acceptance fixture: one source shared by a target the scheme builds and a target it does not.
+#
+#   scheme "App" builds App (and runs AppTests); App depends on Core
+#   Shared/Pricing.swift is compiled by BOTH App and Experimental (a sibling app flavour)
+#   Experimental/Banner.swift is compiled only by Experimental
+#
+# Target resolution must keep App and Core, drop Experimental, and report Banner.swift as outside the scheme.
+#
+# Regenerate with:  cd Fixtures/XcodeSchemeScope && xcodegen generate
+name: SchemeScope
+options:
+  bundleIdPrefix: dev.mutantkit.fixture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  Core:
+    type: framework
+    platform: iOS
+    sources: [Core]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  App:
+    type: framework
+    platform: iOS
+    sources: [Shared]
+    dependencies:
+      - target: Core
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  Experimental:
+    type: framework
+    platform: iOS
+    sources: [Shared, Experimental]
+    dependencies:
+      - target: Core
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_NAME: ExperimentalApp
+
+  AppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: App
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  App:
+    build:
+      targets:
+        App: all
+        AppTests: [test]
+    test:
+      targets: [AppTests]

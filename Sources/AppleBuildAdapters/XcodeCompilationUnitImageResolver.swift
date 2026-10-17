@@ -66,18 +66,97 @@ public enum XcodeCompilationUnitImageResolver {
         let timeoutSeconds: Double
     }
 
-    static func resolveArtifactPath(target: String, context: BuildSettingsContext) async throws -> (path: URL, bundleName: String) {
-        let arguments = context.projectArguments + [
-            "-showBuildSettings", "-scheme", context.scheme, "-destination", context.destination,
-            "-derivedDataPath", context.derivedDataPath.path, "-json"
-        ]
+    private static func xcodeprojPath(from projectIdentity: String?) -> String? {
+        guard let projectIdentity, projectIdentity.hasSuffix(".xcodeproj"),
+              FileManager.default.fileExists(atPath: projectIdentity)
+        else { return nil }
+        return projectIdentity
+    }
+
+    /// `target`'s own settings, taken from the project that declares it with the primary
+    /// entry's configuration and SDK, but with `BUILT_PRODUCTS_DIR` from the primary entry: that
+    /// is where this scheme build (with its derived-data path) actually wrote the product.
+    private static func targetSettings(
+        target: String, projectPath: String, like primary: [String: String], context: BuildSettingsContext
+    ) async throws -> [String: String] {
+        guard let productsDirectory = primary["BUILT_PRODUCTS_DIR"] else {
+            throw XcodeImageResolutionError.malformedBuildSettings(
+                target: target, detail: "the scheme's primary entry has no BUILT_PRODUCTS_DIR"
+            )
+        }
+        var arguments = ["-project", projectPath, "-target", target, "-showBuildSettings", "-json"]
+        if let configuration = primary["CONFIGURATION"] { arguments += ["-configuration", configuration] }
+        if let sdk = primary["SDK_NAME"] { arguments += ["-sdk", sdk] }
         let result: ProcessResult
-        let showBuildSettingsStart = GateTimingRecorder.shared.now()
         do {
             result = try await ProcessSupervisor.run(
                 executable: ToolPaths.xcodebuild, arguments: arguments,
                 workingDirectory: context.workspace, timeoutSeconds: context.timeoutSeconds
             )
+        } catch {
+            throw XcodeImageResolutionError.showBuildSettingsFailed(target: target, diagnosis: "\(error)")
+        }
+        guard result.succeeded else {
+            throw XcodeImageResolutionError.showBuildSettingsFailed(
+                target: target, diagnosis: String(decoding: result.standardError, as: UTF8.self)
+            )
+        }
+        let entries: [BuildSettingsEntry]
+        do {
+            entries = try JSONDecoder().decode([BuildSettingsEntry].self, from: result.standardOutput)
+        } catch {
+            throw XcodeImageResolutionError.malformedBuildSettings(target: target, detail: "\(error)")
+        }
+        let matches = entries.filter { $0.target == target }
+        guard matches.count == 1, var settings = matches.first?.buildSettings else {
+            throw XcodeImageResolutionError.malformedBuildSettings(
+                target: target, detail: "expected exactly one buildSettings entry named \(target) in \(projectPath), found \(matches.count)"
+            )
+        }
+        settings["BUILT_PRODUCTS_DIR"] = productsDirectory
+        return settings
+    }
+
+    /// The scheme-wide build context (products directory, configuration, SDK) when every entry the scheme
+    /// query returned agrees on it -- the entries then only differ in which target they describe, and a
+    /// dependency target missing from the list can be placed in that same products directory. Disagreement
+    /// (or an empty list) proves nothing and yields nil.
+    private static func sharedBuildContext(of entries: [BuildSettingsEntry]) -> [String: String]? {
+        guard let first = entries.first?.buildSettings else { return nil }
+        let keys = ["BUILT_PRODUCTS_DIR", "CONFIGURATION", "SDK_NAME"]
+        for entry in entries.dropFirst() where keys.contains(where: { entry.buildSettings[$0] != first[$0] }) { return nil }
+        return first
+    }
+
+    private static func showBuildSettings(action: String?, context: BuildSettingsContext) async throws -> ProcessResult {
+        let arguments = context.projectArguments + (action.map { [$0] } ?? []) + [
+            "-showBuildSettings", "-scheme", context.scheme, "-destination", context.destination,
+            "-derivedDataPath", context.derivedDataPath.path, "-json"
+        ]
+        return try await ProcessSupervisor.run(
+            executable: ToolPaths.xcodebuild, arguments: arguments,
+            workingDirectory: context.workspace, timeoutSeconds: context.timeoutSeconds
+        )
+    }
+
+    static func resolveArtifactPath(
+        target: String, projectIdentity: String? = nil, context: BuildSettingsContext
+    ) async throws -> (path: URL, bundleName: String) {
+        // The chunk is built with `build-for-testing`, so that action is asked first: a scheme's test action
+        // can use another configuration than its build action (wikipedia-ios builds Debug but tests with
+        // `Test`, and the plain query points at a `Debug-iphonesimulator` that was never written). A
+        // test-only scheme (RxSwift's `AllTests-macOS`) has an empty Build action, so the plain query fails
+        // there ("Supported platforms for the buildables in the current scheme is empty"); it is asked next
+        // only if the build-for-testing query fails.
+        let result: ProcessResult
+        let showBuildSettingsStart = GateTimingRecorder.shared.now()
+        do {
+            var attempt = try await showBuildSettings(action: "build-for-testing", context: context)
+            if !attempt.succeeded {
+                let retry = try await showBuildSettings(action: nil, context: context)
+                if retry.succeeded { attempt = retry }
+            }
+            result = attempt
         } catch {
             await GateTimingRecorder.shared.record(
                 "receipt.showBuildSettings.failed", chunkID: target, start: showBuildSettingsStart
@@ -98,11 +177,23 @@ public enum XcodeCompilationUnitImageResolver {
             throw XcodeImageResolutionError.malformedBuildSettings(target: target, detail: "\(error)")
         }
         let matches = entries.filter { $0.target == target }
-        guard matches.count == 1, let settings = matches.first?.buildSettings else {
+        var resolved: [String: String]
+        if matches.count == 1, let only = matches.first {
+            resolved = only.buildSettings
+        } else if matches.isEmpty, let primary = Self.sharedBuildContext(of: entries),
+                  let projectPath = Self.xcodeprojPath(from: projectIdentity) {
+            // A scheme query lists only the scheme's primary target when its Build action is empty
+            // (a test-only scheme such as RxSwift's `AllTests-macOS`): the requested target is a
+            // dependency the scheme builds, not an entry. Its own settings are read from the
+            // project that declares it, for the primary entry's configuration and SDK, and it is
+            // placed in the products directory the scheme build actually used.
+            resolved = try await targetSettings(target: target, projectPath: projectPath, like: primary, context: context)
+        } else {
             throw XcodeImageResolutionError.malformedBuildSettings(
                 target: target, detail: "expected exactly one buildSettings entry named \(target), found \(matches.count)"
             )
         }
+        let settings = resolved
 
         // `staticlib`/`mh_object` targets produce no image of their own —
         // their compiled code is only ever observable inside whatever

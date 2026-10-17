@@ -190,7 +190,7 @@ const mutantkit_unit_descriptor_v3_t *mutantkit_register_unit_v3(
     // dladdr on the caller's own return address -- not this function's own
     // code, unlike v2's `dladdr`-on-its-own-function technique -- resolves
     // to whichever image the *calling compilation unit* actually lives in
-    // (ADR-0006 Finding 2's fix). A statically-linked runtime otherwise has
+    // (the image-identity proof's fix). A statically-linked runtime otherwise has
     // no way to tell "the image containing runtime code" apart from "the
     // image the mutation site was actually compiled into" once more than
     // one image can be involved.

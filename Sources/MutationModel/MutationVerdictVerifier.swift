@@ -1,7 +1,7 @@
 import Foundation
 
 /// The only place a `VerifiedMutationRecord` is constructed, and — as of
-/// ADR-0006 Stage 1 — the only place a mutation's outcome is *decided*.
+/// The authoritative verdict pipeline — the only place a mutation's outcome is *decided*.
 ///
 /// `verify(_:)` is a pure function from `MutationObservations` (what
 /// actually happened) to a verdict: no caller pre-computes an outcome and
@@ -35,9 +35,9 @@ public enum ConfirmationRequirement: Sendable, Equatable {
 
 public enum MutationVerdictVerifier {
     /// Bumped whenever the rules below change in a way that could flip an
-    /// outcome for previously-seen input. ADR-0005 PR C's cache-
+    /// outcome for previously-seen input. The verified-verdict cache gate's cache-
     /// invalidation gate (`VerifiedVerdictReceipt`) reads this to auto-miss
-    /// stale entries. Bumped to 2 for ADR-0006 Stage 1: the verifier now
+    /// stale entries. Bumped to 2 for the authoritative verdict pipeline: the verifier now
     /// derives outcomes itself instead of reproducing a caller-supplied
     /// one, a real change to what "verified" means even though the
     /// underlying classification rules were ported, not rewritten. Bumped
@@ -71,7 +71,16 @@ public enum MutationVerdictVerifier {
     /// whose failing test was that very test, which used to classify as
     /// `.infrastructureFailure` (outside the selection), now classify as
     /// `.killedByAssertion`; a pre-bump cached verdict must never be reused as-is.
-    public static let currentVersion = 16
+    /// Bumped to 17: an applied edit whose build succeeded to a product identical
+    /// to the baseline's (the tests skipped, or a no-op canary that passed) is now
+    /// `.notMaterialized` instead of `.infrastructureFailure`. Not a trust
+    /// relaxation — the same observations get the classification their proof
+    /// supports, so a pre-bump cached verdict must never be reused as-is. Bumped to
+    /// 18: a build failure recorded as a confirmed compiler crash (the compiler crashed
+    /// on the mutant and again in an independent rebuild) is `.unviable`; no older
+    /// observation carries that kind, so this only keeps the version honest about the
+    /// rules that judged a cached verdict.
+    public static let currentVersion = 18
 
     /// `verify(_:)` alone cannot tell a primary kill/crash that skipped its
     /// confirmation because the run's own configuration never enabled one
@@ -160,7 +169,7 @@ public enum MutationVerdictVerifier {
         switch classification.outcome {
         case .killedByAssertion where policy.retestKilledMutants:
             return .retestKilledMutant
-        case .killedByCrash where policy.confirmCrashKills:
+        case .killedByCrash where policy.confirmCrashKills || test.run.crashProvenance != nil:
             return .confirmCrash
         case .timedOut where policy.confirmTimedOutMutants:
             return .confirmTimeout
@@ -288,6 +297,12 @@ public enum MutationVerdictVerifier {
                     diagnosis: "The mutant does not compile, so there was nothing to test: \(diagnosis)",
                     evidence: evidence
                 ))
+            case .confirmedCompilerCrash:
+                return .unviable(BuildFailureProof(
+                    mutationRef: ref,
+                    diagnosis: "The mutant crashes the compiler (reproduced in an independent rebuild), so there was nothing to test: \(diagnosis)",
+                    evidence: evidence
+                ))
             case .infrastructure:
                 return excluded(
                     ref, outcome: .infrastructureFailure,
@@ -313,6 +328,24 @@ public enum MutationVerdictVerifier {
         _ obs: MutationObservations, ref: PlannedMutationRef, evidence: MutationEvidence, buildProductHash: String?,
         policy: VerdictVerificationPolicy
     ) -> VerdictProof {
+        // The edit was applied, the build succeeded and its product is the
+        // baseline's: the tests were rightly not run (see `MutationRunner.prepare`).
+        // This is a complete observation, not a missing one. The hash the
+        // evidence names must be the one actually observed, or the claim is
+        // not credited.
+        if obs.test == nil, case let .isolated(.buildProductIdenticalToBaseline(hash))? = evidence.applicationEvidence,
+           !hash.isEmpty, hash == buildProductHash {
+            return excluded(
+                ref, outcome: .notMaterialized,
+                diagnosis: """
+                The edit was applied and the build succeeded, but the mutant's build product is identical to the \
+                baseline's, so the mutation did not reach the product under test. Nothing ran against a mutation, \
+                so this says nothing about the test suite.
+                """,
+                evidence: evidence
+            )
+        }
+
         guard let test = obs.test else {
             return excluded(
                 ref, outcome: .infrastructureFailure,
@@ -333,7 +366,10 @@ public enum MutationVerdictVerifier {
             confirmations: obs.confirmations, primaryApplicationEvidence: test.applicationEvidence
         )
 
-        if let problem = missingRequiredConfirmationProblem(classification, confirmations: obs.confirmations, policy: policy) {
+        if let problem = missingRequiredConfirmationProblem(
+            classification, confirmations: obs.confirmations, policy: policy,
+            crashNeedsConfirmation: test.run.crashProvenance != nil
+        ) {
             classification = Classification(outcome: .infrastructureFailure, diagnosis: problem, decidingRun: classification.decidingRun)
         }
 
@@ -355,7 +391,8 @@ public enum MutationVerdictVerifier {
     /// place (see `confirmTimeout`), so one is structurally guaranteed
     /// whenever this outcome is reached at all.
     private static func missingRequiredConfirmationProblem(
-        _ classification: Classification, confirmations: [ConfirmationObservation], policy: VerdictVerificationPolicy
+        _ classification: Classification, confirmations: [ConfirmationObservation], policy: VerdictVerificationPolicy,
+        crashNeedsConfirmation: Bool = false
     ) -> String? {
         switch classification.outcome {
         case .killedByAssertion where policy.retestKilledMutants:
@@ -365,7 +402,7 @@ public enum MutationVerdictVerifier {
                 confirmation was recorded.
                 """
             }
-        case .killedByCrash where policy.confirmCrashKills:
+        case .killedByCrash where policy.confirmCrashKills || crashNeedsConfirmation:
             guard confirmations.contains(where: { $0.kind == .crash }) else {
                 return """
                 This run's configuration requires a confirming rebuild for a crash kill, but no .crash \
@@ -565,9 +602,20 @@ public enum MutationVerdictVerifier {
                 )
             }
             guard activation.provesActivation else {
+                // A no-op canary that behaved as the hash says (the suite passed
+                // on a product identical to the baseline's). Any other canary
+                // outcome never reaches here: a failure or crash on an
+                // "identical" product stays an infrastructure failure above.
+                if case .buildProductIdenticalToBaseline = activation {
+                    return Classification(
+                        outcome: .notMaterialized,
+                        diagnosis: "\(passed), on a build product identical to the baseline's: the mutation did not reach the product under test, so this says nothing about the suite.",
+                        decidingRun: run
+                    )
+                }
                 return Classification(
                     outcome: .infrastructureFailure,
-                    diagnosis: "\(passed), but the mutant's build product is identical to the baseline's, so the mutation never reached the code under test and this result proves nothing.",
+                    diagnosis: "\(passed), but the mutation's activation evidence is self-contradictory, so this result proves nothing.",
                     decidingRun: run
                 )
             }
@@ -656,7 +704,7 @@ public enum MutationVerdictVerifier {
     /// Every way a schemata confirmation's own chain fails to independently
     /// prove itself — checked before any kind-specific confirm rule ever
     /// sees it, so a confirmation is never credited on the strength of the
-    /// run it is confirming (ADR-0006 Stage 3): it must carry its own
+    /// run it is confirming (the re-enabled schemata scoring): it must carry its own
     /// unique STARTUP -> HIT chain, under a `RunID` that is genuinely
     /// different from the primary observation's, never a replay.
     private static func schemataConfirmationChainProblem(
@@ -920,38 +968,5 @@ public enum MutationVerdictVerifier {
         guard !caught.isEmpty else { return base + "." }
         let more = summary.failingTests.count > 3 ? " and \(summary.failingTests.count - 3) more" : ""
         return base + ", caught by \(caught)\(more)."
-    }
-
-    // MARK: - Classification -> VerdictProof
-
-    private static func proof(
-        for classification: Classification, ref: PlannedMutationRef, evidence recorded: MutationEvidence,
-        confirmationChain: [ConfirmationStep] = [], coverageSource: String? = nil
-    ) -> VerdictProof {
-        let evidence = recorded.verifierAuthored(for: classification, confirmationChain: confirmationChain)
-        switch classification.outcome {
-        case .killedByAssertion, .killedByCrash, .verifiedTimeout, .survived:
-            return .executed(ExecutedMutationProof(
-                mutationRef: ref, outcome: classification.outcome,
-                evidence: evidence,
-                testSummary: classification.decidingRun?.summary, diagnosis: classification.diagnosis
-            ))
-        case .noCoverage:
-            return .noCoverage(NoCoverageProof(
-                mutationRef: ref, sourceApplication: evidence, coverageSource: coverageSource, diagnosis: classification.diagnosis
-            ))
-        case .unviable:
-            return .unviable(BuildFailureProof(mutationRef: ref, diagnosis: classification.diagnosis, evidence: evidence))
-        case .timedOut, .flaky, .notApplied, .baselineMismatch, .infrastructureFailure, .skipped:
-            return excluded(
-                ref, outcome: classification.outcome, diagnosis: classification.diagnosis, evidence: evidence
-            )
-        }
-    }
-
-    private static func excluded(
-        _ ref: PlannedMutationRef, outcome: MutationOutcome, diagnosis: String, evidence: MutationEvidence? = nil
-    ) -> VerdictProof {
-        .excluded(ExclusionProof(mutationRef: ref, outcome: outcome, diagnosis: diagnosis, evidence: evidence))
     }
 }

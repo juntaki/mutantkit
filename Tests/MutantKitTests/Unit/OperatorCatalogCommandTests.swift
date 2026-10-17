@@ -65,7 +65,7 @@ struct OperatorCatalogCommandTests {
         let detail = OperatorCatalogCommand.renderDetail(entry)
 
         #expect(detail.contains(entry.id))
-        #expect(detail.contains("conservative"))
+        #expect(detail.contains("default"))
         for evidence in entry.faultEvidence {
             #expect(detail.contains(evidence.split(separator: "\n").first.map(String.init) ?? evidence))
         }
@@ -81,13 +81,13 @@ struct OperatorCatalogCommandTests {
     // MARK: - reachableProfile
 
     /// Conservative-profile operators are, by construction, also reachable
-    /// by `default` and `experimental` (`OperatorProfile.admits` is
+    /// by `stronger` and `all` (`OperatorProfile.admits` is
     /// cumulative) — so the *most restrictive* profile that admits an
     /// operator is the one this command should show, and it has to agree
     /// with `OperatorProfile.admits` itself rather than a second opinion.
     @Test("reachableProfile is the most restrictive profile that actually admits the operator")
     func reachableProfileAgreesWithAdmits() throws {
-        let order: [OperatorProfile] = [.conservative, .default, .experimental]
+        let order = OperatorProfile.canonicalCases
 
         for descriptor in MutationRegistry.builtIn.map(\.descriptor) {
             let entry = try #require(OperatorCatalogCommand.entry(for: descriptor.id))
@@ -133,7 +133,7 @@ struct OperatorCatalogCommandTests {
 
         #expect(object["id"] as? String == "swift.core.bool-literal-inversion")
         #expect(object["confidence"] as? String == "high")
-        #expect(object["reachableProfile"] as? String == "conservative")
+        #expect(object["reachableProfile"] as? String == "default")
     }
 
     // MARK: - Schemata eligibility
@@ -174,6 +174,59 @@ struct OperatorCatalogCommandTests {
             let json = try OperatorCatalogCommand.jsonString(entry)
             let object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
             #expect(object["schemataEligible"] as? Bool == expected, "\(entry.id) --json output")
+        }
+    }
+}
+
+/// Catalog schema v2: `reachableProfile` holds canonical tiers only.
+@Suite("OperatorCatalogCommand schema v2")
+struct OperatorCatalogSchemaV2Tests {
+    private static func listJSON() throws -> [[String: Any]] {
+        let json = try OperatorCatalogCommand.jsonString(OperatorCatalogCommand.entries())
+        return try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+    }
+
+    @Test("The schema version is 2 in the list array and in a single-operator object")
+    func schemaVersionIsTwo() throws {
+        #expect(SchemaVersion.operatorCatalogEntry == 2)
+
+        let list = try Self.listJSON()
+        #expect(!list.isEmpty)
+        for element in list { #expect(element["schemaVersion"] as? Int == 2) }
+
+        let entry = try #require(OperatorCatalogCommand.entry(for: "swift.core.bool-literal-inversion"))
+        let single = try #require(
+            JSONSerialization.jsonObject(with: Data(OperatorCatalogCommand.jsonString(entry).utf8)) as? [String: Any]
+        )
+        #expect(single["schemaVersion"] as? Int == 2)
+    }
+
+    @Test("Operators enabled by default report default; the rest report all; none report stronger yet")
+    func tierAssignment() throws {
+        let byID = try Dictionary(uniqueKeysWithValues: Self.listJSON().map {
+            (try #require($0["id"] as? String), $0["reachableProfile"] as? String)
+        })
+
+        let defaultIDs = Set(try MutationRegistry().resolve(OperatorSettings(profile: .default)).enabledOperators.map(\.descriptor.id))
+        #expect(defaultIDs.count == 6)
+        for (id, tier) in byID {
+            #expect(tier == (defaultIDs.contains(id) ? "default" : "all"), "\(id): \(String(describing: tier))")
+        }
+        #expect(!byID.values.contains("stronger"))
+    }
+
+    @Test("Legacy profile names never appear in the catalog JSON, list or single")
+    func legacyNamesNeverEmitted() throws {
+        let listText = try OperatorCatalogCommand.jsonString(OperatorCatalogCommand.entries())
+        let singleText = try OperatorCatalogCommand.jsonString(
+            try #require(OperatorCatalogCommand.entry(for: "swift.core.arithmetic-operator-replacement"))
+        )
+        for text in [listText, singleText] {
+            #expect(!text.contains("\"reachableProfile\" : \"conservative\""))
+            #expect(!text.contains("\"reachableProfile\" : \"experimental\""))
+        }
+        for element in try Self.listJSON() {
+            #expect(!["conservative", "experimental"].contains(element["reachableProfile"] as? String ?? ""))
         }
     }
 }

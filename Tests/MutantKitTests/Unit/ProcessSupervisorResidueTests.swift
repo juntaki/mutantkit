@@ -28,7 +28,7 @@ import Testing
 /// same loss occurs polling with a bare, unrelated `Foundation.Process`).
 /// `python3`'s `subprocess.Popen` (no shell involved) does not exhibit this
 /// at all — 10/10 raw trials survived — and is what `SchemataCrashResidue
-/// AcceptanceTests` (ADR-0008 §5 item 5(b)) already uses successfully for
+/// AcceptanceTests` (the timeout-isolation acceptance gate for crash residue) already uses successfully for
 /// the same reason.
 /// `.serialized`: real, direct evidence this suite's own 4 process-spawning
 /// tests running concurrently with *each other* (Swift Testing's default)
@@ -392,7 +392,7 @@ struct ProcessSupervisorResidueTests {
     @Test("A promptly-exiting process whose child escaped into its own process group is still reaped, by provenance not by group")
     func promptExitReapsAChildThatEscapedItsProcessGroup() async throws {
         // python3's `start_new_session=True` calls `setsid()` before exec —
-        // the same shape of escape ADR-0008/ProcessSupervisor's own doc
+        // the same shape of escape the schemata timeout-isolation design/ProcessSupervisor's own doc
         // comment records for `swiftpm-testing-helper` (a new session *and*
         // process group, unreachable via `kill(-pgid)`). `descendants(of:)`
         // still finds it because ancestry (ppid), not group membership, is

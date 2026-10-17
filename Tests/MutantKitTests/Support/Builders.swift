@@ -134,7 +134,7 @@ func makeEvidence(
     )
 }
 
-// MARK: - Schemata fixtures (ADR-0006 Stage 2: raw observations only)
+// MARK: - Schemata fixtures (the schemata proof chain: raw observations only)
 
 let schemataFixtureCompilationUnitID = CompilationUnitID.derive(
     projectIdentity: "proj", target: "App", module: "App", sourcePath: "Widget.swift", lowererID: "bool-literal", lowererVersion: 1
@@ -260,7 +260,7 @@ func makeSchemataConfirmationObservation(
 /// verifier itself. Goes through the real `VerdictProof`/
 /// `VerifiedMutationRecord`/`MutationResult.projected` path (via
 /// `@testable import`, since `VerifiedMutationRecord` has no public
-/// initializer by design — ADR-0006 Stage 1) so a fabricated result is
+/// initializer by design — the authoritative verdict pipeline) so a fabricated result is
 /// still shaped exactly like a real verified one, just with the proof case
 /// picked directly from `outcome` instead of derived from observations.
 func makeResult(
@@ -339,7 +339,7 @@ private func makeCommand() -> CommandRecord {
 /// actually classifies to `outcome` — for tests exercising
 /// `MutationResultCache`/`CheckpointStore`, which now store and re-verify
 /// raw observations rather than an already-decided `MutationResult`
-/// (ADR-0006 Stage 1, second review round). Only covers the outcomes the
+/// (the authoritative verdict pipeline, second review round). Only covers the outcomes the
 /// verifier can actually produce from observations — `.baselineMismatch`
 /// and `.skipped` are never emitted by `verify` itself (both are set
 /// elsewhere: a failed baseline invalidates a whole run in
@@ -421,6 +421,14 @@ func makeObservations(
         return MutationObservations(plannedMutation: ref, sourceApplication: .notApplied(diagnosis: "anchor rejected"))
     case .infrastructureFailure:
         return MutationObservations(plannedMutation: ref, infrastructureFailureDiagnosis: "infrastructure failure")
+    case .notMaterialized:
+        // The runner's shape for a product identical to the baseline's: the
+        // edit is applied, the build succeeded, the tests were not run.
+        let identical = makeEvidence(activation: .buildProductIdenticalToBaseline(hash: ContentHash.of("mutant-binary")))
+        return MutationObservations(
+            plannedMutation: ref, sourceApplication: .applied(identical),
+            build: BuildObservation(outcome: .succeeded(buildProductHash: ContentHash.of("mutant-binary"), command: makeCommand()))
+        )
     case .baselineMismatch, .skipped:
         preconditionFailure("\(outcome) is never emitted by MutationVerdictVerifier.verify — see this function's doc comment")
     }

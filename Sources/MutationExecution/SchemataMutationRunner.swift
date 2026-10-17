@@ -8,7 +8,7 @@ import SwiftFrontend
 /// not by either engine type itself.
 ///
 /// One sandbox and one build per chunk, one fresh test process per embedded
-/// mutation — see the plan this was built from (ADR-0004's schemata
+/// mutation — see the plan this was built from (the schemata production-integration contract's schemata
 /// production-integration effort) for why: `swift test` leaves a
 /// `swiftpm-testing-helper` descendant outside the launched process's own
 /// group, so the harness can never know the real test process's PID in
@@ -25,7 +25,7 @@ import SwiftFrontend
 /// order, since a chunk is only ever launched once the previous one has
 /// fully returned.
 ///
-/// `public` (ADR-0006 Stage 3): schemata scoring is re-enabled, so
+/// `public` (the re-enabled schemata scoring): schemata scoring is re-enabled, so
 /// `SchemataRunOrchestration` (`CLI`) constructs and calls one directly
 /// for whatever `SchemataChunkPlanner` embeds — everything else still
 /// routes to isolated fallback.
@@ -44,8 +44,8 @@ public struct SchemataMutationRunner: Sendable {
         /// about which outcome won.
         public let results: [MutationResult]
         /// Every target's own verdict for every mutation, preserved in
-        /// full (ADR-0006 Stage 1) — nothing about a losing target's
-        /// evidence is discarded here, unlike ADR-0005 PR F's
+        /// full (the authoritative verdict pipeline) — nothing about a losing target's
+        /// evidence is discarded here, unlike multi-target embedding's
         /// `mergeMultiTargetResults`, which this replaces.
         public let multiTargetVerdicts: [MultiTargetVerdict]
         /// Every mutation this run attempted through schemata but could not
@@ -59,7 +59,7 @@ public struct SchemataMutationRunner: Sendable {
         /// them itself.
         public let isolatedFallbacks: [DynamicFallback]
         /// One aggregate event per chunk whose shared build genuinely
-        /// failed to compile (ADR-0008 Addendum 4's fan-out/observability
+        /// failed to compile (shared chunk build-failure attribution's fan-out/observability
         /// requirement) — never one event per affected `MutationID`. Every
         /// `MutationID` a failed chunk's build covered still appears,
         /// individually, in `isolatedFallbacks` above with reason
@@ -79,7 +79,7 @@ public struct SchemataMutationRunner: Sendable {
     }
 
     /// One shared schemata chunk build (initial or mid-chunk recovery
-    /// rebuild) that genuinely failed to compile — ADR-0008 Addendum 4's
+    /// rebuild) that genuinely failed to compile — shared chunk build-failure attribution's
     /// required aggregate event, emitted once per failed build attempt,
     /// never once per affected `MutationID`. `diagnosticReference` is the
     /// build adapter's own already-computed `BuildFailure.diagnosis` (a
@@ -127,16 +127,16 @@ public struct SchemataMutationRunner: Sendable {
 
     /// Why a mutation could not be scored from schemata evidence, kept as
     /// structurally distinct cases rather than one flat enumeration
-    /// (ADR-0008): `.activation` wraps `MutationVerdictVerifier
+    /// (the schemata timeout-isolation design): `.activation` wraps `MutationVerdictVerifier
     /// .SchemataIsolatedFallbackReason` verbatim — the verifier remains the
     /// sole authority on *what that reason means*, this type only tags
     /// *where* the reason came from. `.hangBudgetExceeded` and
     /// `.sharedChunkBuildFailure` are never verdicts at all — both are this
     /// runner's own scheduling decisions, made without consulting, and
     /// without weakening, any verifier classification: `.hangBudgetExceeded`
-    /// (ADR-0008 §3.3) that a `MutationID` could not be safely finished
+    /// (fail-closed timeout evidence) that a `MutationID` could not be safely finished
     /// under schemata within one chunk's hang budget;
-    /// `.sharedChunkBuildFailure` (ADR-0008 Addendum 4) that a typed
+    /// `.sharedChunkBuildFailure` (shared chunk build-failure attribution) that a typed
     /// `BuildFailure` from the chunk's own shared build is chunk-level
     /// evidence only, never per-mutant compile evidence, so it cannot by
     /// itself establish any individual `MutationID`'s verdict — only a
@@ -202,7 +202,7 @@ public struct SchemataMutationRunner: Sendable {
 
     private let planID: String
     /// A real per-shard identity — see `MutationRunner`'s own equivalent
-    /// fix (ADR-0006 Stage 1): `planID` alone cannot distinguish two
+    /// fix (the authoritative verdict pipeline): `planID` alone cannot distinguish two
     /// shards of the same plan.
     private let workUnitID: String
     private let programs: [SchemataProgram]
@@ -271,14 +271,14 @@ public struct SchemataMutationRunner: Sendable {
     /// runner's exact pre-existing behaviour — every embedded mutation's
     /// token run against the full configured test list, unrestricted.
     private let selectCoveringTests: Bool
-    /// ADR-0008 §3.3's per-chunk hang budget: how many verifier-confirmed
+    /// Fail-closed timeout evidence's per-chunk hang budget: how many verifier-confirmed
     /// `.verifiedTimeout` entries one chunk may accumulate before its
     /// remaining not-yet-fully-finalized `MutationID`s are dropped from
     /// schemata scoring and routed to isolated-mode fallback instead (see
     /// `runEntries`). **Count-based, not wall-clock, and deliberately not a
     /// tuned production value** — the ADR itself leaves the exact budget
     /// composition open pending real-corpus data (§"Not Yet Decided"); this
-    /// default exists only so every pre-ADR-0008 call site keeps compiling,
+    /// default exists only so every pre-the schemata timeout-isolation design call site keeps compiling,
     /// not as a considered choice. A future milestone's real-corpus
     /// validation should set the production default deliberately, not
     /// inherit this placeholder.
@@ -334,6 +334,11 @@ public struct SchemataMutationRunner: Sendable {
     /// reason — there, one mutant is one build-and-test cycle.
     private let progress: MutationModel.ProgressReporter?
 
+    /// Where each finalized mutant's raw observations are written when the run
+    /// asked for an evidence archive. The same writer isolated mode records
+    /// into; without it a schemata result could never be re-verified offline.
+    private let evidenceArchive: EvidenceArchiveWriter?
+
     /// The shared, immutable execution-session type `MutationRunner` also
     /// constructs internally — see `RunSession`'s own doc comment. Built
     /// once, at the end of `init`, from the subset of this initializer's
@@ -371,8 +376,10 @@ public struct SchemataMutationRunner: Sendable {
         coverageCacheKey: CoverageProfileCache.Key? = nil,
         preEstablishedBaseline: SharedBaselineEstablisher.Outcome? = nil,
         schemataTokenBatchSize: Int = 1,
-        progress: MutationModel.ProgressReporter? = nil
+        progress: MutationModel.ProgressReporter? = nil,
+        evidenceArchive: EvidenceArchiveWriter? = nil
     ) {
+        self.evidenceArchive = evidenceArchive
         self.planID = planID
         self.workUnitID = workUnitID
         self.programs = programs
@@ -421,7 +428,7 @@ public struct SchemataMutationRunner: Sendable {
             )
         }
 
-        // ADR-0008 §4(b): a `MutationID` embedded into more than one target
+        // The post-hang recovery semantics(b): a `MutationID` embedded into more than one target
         // lands in a *different* `SchemataProgram`/chunk per target
         // (`SchemataChunkPlanner.classify`), so "is this MutationID fully
         // finalized" can never be answered from inside one chunk alone.
@@ -582,7 +589,7 @@ public struct SchemataMutationRunner: Sendable {
     }
 
     /// Concurrency-safe home for `completedPlacementsByMutationID`
-    /// (ADR-0008 §4(b) — see `run()`'s own doc comment above where this is
+    /// (the post-hang recovery semantics(b) — see `run()`'s own doc comment above where this is
     /// constructed for the full rationale). An `actor` rather than a plain
     /// `var` because `run()` now fans chunks out over a bounded
     /// `TaskGroup`: two chunks that both embed the same `MutationID` may run
@@ -676,7 +683,7 @@ public struct SchemataMutationRunner: Sendable {
     /// different programs (`SchemataChunkPlanner.classify`), each
     /// contributing exactly one entry, so this is also "how many target
     /// placements must all finalize before this `MutationID` counts as
-    /// done" (ADR-0008 §4(b)).
+    /// done" (the post-hang recovery semantics(b)).
     private static func expectedPlacementCounts(programs: [SchemataProgram]) -> [MutationID: Int] {
         var counts: [MutationID: Int] = [:]
         for program in programs {
@@ -712,7 +719,7 @@ public struct SchemataMutationRunner: Sendable {
     /// Groups every target's own record by `MutationID` into one
     /// `MultiTargetVerdict`, preserving every target's evidence — see
     /// `MultiTargetVerdict`'s own doc comment for why this replaced
-    /// ADR-0005 PR F's lossy `mergeMultiTargetResults`.
+    /// Multi-target embedding's lossy `mergeMultiTargetResults`.
     private static func groupByMutation(_ perTarget: [TargetRecord]) throws -> [GroupedMutation] {
         var order: [MutationID] = []
         var grouped: [MutationID: [TargetRecord]] = [:]
@@ -904,7 +911,7 @@ public struct SchemataMutationRunner: Sendable {
     // MARK: - Per chunk
 
     /// One chunk's contribution to the whole run: its entries' own
-    /// outcomes, plus any ADR-0008 Addendum 4 aggregate build-failure
+    /// outcomes, plus any shared chunk build-failure attribution aggregate build-failure
     /// events it generated (at most one in practice — a chunk stops as
     /// soon as any build attempt, initial or recovery, fails — but kept as
     /// an array rather than an `Optional` so accumulation at every call
@@ -998,7 +1005,7 @@ public struct SchemataMutationRunner: Sendable {
 
     /// Bundles one chunk's build product and receipt with the sandbox they
     /// were built in — the unit `prepareChunkState`/`rebuildChunkState`
-    /// (ADR-0008) produce and every per-entry spawn consumes. Kept as a
+    /// (the schemata timeout-isolation design) produce and every per-entry spawn consumes. Kept as a
     /// value, never mutated in place: a rebuild produces an entirely new
     /// `ChunkExecutionState`, it never patches an existing one.
     private struct ChunkExecutionState {
@@ -1026,7 +1033,7 @@ public struct SchemataMutationRunner: Sendable {
     private enum ChunkPreparationOutcome {
         case ready(ChunkExecutionState)
         /// `buildFailureEvent` is non-`nil` only for the typed-`BuildFailure`
-        /// shape (ADR-0008 Addendum 4); `infrastructureFallbackEvent` is
+        /// shape (shared chunk build-failure attribution); `infrastructureFallbackEvent` is
         /// non-`nil` only for the build-receipt-unavailable shape. Mutually
         /// exclusive in practice (each failure path populates at most one),
         /// kept as two separate optionals rather than one combined enum so
@@ -1040,11 +1047,11 @@ public struct SchemataMutationRunner: Sendable {
 
     /// The single entry point for turning a sandbox into a built,
     /// receipt-resolved chunk — used both for a chunk's initial build and
-    /// (ADR-0008) for every mid-chunk recovery rebuild after a forced
+    /// (the schemata timeout-isolation design) for every mid-chunk recovery rebuild after a forced
     /// timeout-kill, so both paths route through the exact same failure
     /// handlers by construction, never by separately-maintained duplicate
     /// logic: typed `BuildFailure` -> whole-`MutationID` dynamic isolated
-    /// fallback (ADR-0008 Addendum 4 — a shared chunk build's `BuildFailure`
+    /// fallback (shared chunk build-failure attribution — a shared chunk build's `BuildFailure`
     /// is chunk-level evidence, not per-mutant compile evidence, so it must
     /// not directly establish `.unviable` for entries it merely happened to
     /// contain), untyped error / nil product hash -> `infrastructureFailure`
@@ -1059,7 +1066,7 @@ public struct SchemataMutationRunner: Sendable {
         do {
             artifact = try await build.buildSchemataChunk(loweredSources: program.loweredSources, in: sandbox)
         } catch let failure as BuildFailure {
-            // Chunk-level evidence only (ADR-0008 Addendum 4): the shared
+            // Chunk-level evidence only (shared chunk build-failure attribution): the shared
             // lowered program did not compile, which proves nothing about
             // any individual entry's own mutation. Every `MutationID` this
             // failed build/rebuild attempt covers falls back to isolated
@@ -1093,8 +1100,8 @@ public struct SchemataMutationRunner: Sendable {
             }.map(EntryRunOutcome.verified))
         }
 
-        // Real per-compilation-unit, per-image LC_UUID identity (ADR-0006
-        // Finding 2/4's build-time half) — resolved through the build
+        // Real per-compilation-unit, per-image LC_UUID identity (the build-time half of the image-identity proof and unit-to-image mapping)
+        // — resolved through the build
         // system's own metadata (`SwiftPMCompilationUnitImageResolver`'s
         // dependency-graph reachability, or Xcode's per-target build
         // settings), never through a target-name substring match. A
@@ -1169,7 +1176,7 @@ public struct SchemataMutationRunner: Sendable {
         }
     }
 
-    /// ADR-0008 §2 Option B item 1 / §3.2: the containment mechanism. Called
+    /// The timeout-isolation design's containment mechanism. Called
     /// whenever a forced timeout-kill (primary or confirmation run) is
     /// observed, for every not-yet-finalized entry the caller passes in
     /// `remainingEntries` — never a subset the caller forgot to include,
@@ -1178,7 +1185,7 @@ public struct SchemataMutationRunner: Sendable {
     /// existing sandbox/build product is discarded and never reused,
     /// regardless of whether the timeout that triggered this call is later
     /// classified `.verifiedTimeout` or `.flaky` — that classification
-    /// question belongs to `MutationVerdictVerifier` alone (ADR-0008 §3.1)
+    /// question belongs to `MutationVerdictVerifier` alone (fail-closed timeout evidence)
     /// and is never consulted here.
     ///
     /// Sandbox recreation reuses `program.chunkID` — `WorkspaceManager
@@ -1187,7 +1194,7 @@ public struct SchemataMutationRunner: Sendable {
     /// emptied. The rebuild itself (once a fresh sandbox exists) routes
     /// through the exact same `prepareChunkState` every initial chunk build
     /// already uses, so a mid-chunk recovery rebuild failure is handled by
-    /// the identical four-way split (ADR-0008 §4(d)), never a separately
+    /// the identical four-way split (the post-hang recovery semantics(d)), never a separately
     /// maintained duplicate.
     private func rebuildChunkState(
         program: SchemataProgram, entries remainingEntries: [SchemataPlanEntry], state: ChunkExecutionState
@@ -1228,7 +1235,7 @@ public struct SchemataMutationRunner: Sendable {
         )
     }
 
-    /// Mirrors `MutationRunner.finalize` (ADR-0006 Stage 1): the schemata
+    /// Mirrors `MutationRunner.finalize` (the authoritative verdict pipeline): the schemata
     /// path's single choke point from raw observations to a verified
     /// record. Unlike `MutationRunner`, this returns the
     /// `VerifiedMutationRecord` itself rather than a projected
@@ -1253,7 +1260,29 @@ public struct SchemataMutationRunner: Sendable {
             confirmations: confirmations,
             infrastructureFailureDiagnosis: infrastructureFailureDiagnosis
         )
+        archive(observations)
         return MutationVerdictVerifier.verify(observations, policy: session.policy)
+    }
+
+    /// Writes `observations` to the run's evidence archive, when one was
+    /// requested. Mirrors `MutationEvidenceAssembler.archiveEvidence`: a write
+    /// failure is counted on the writer (warned once, aggregated into one
+    /// operational issue) and never touches the verdict. One file per
+    /// `MutationID`, so a mutation placed in several targets keeps the last
+    /// target's observations; `verify-run` then reports a mismatch rather than
+    /// trusting an archive that does not describe the merged verdict.
+    private func archive(_ observations: MutationObservations) {
+        guard let evidenceArchive else { return }
+        do {
+            try evidenceArchive.record(observations)
+        } catch {
+            let diagnosis = "evidence archive write failed for \(observations.plannedMutation.mutationID): \(error)"
+            if evidenceArchive.noteWriteFailure(diagnosis) {
+                FileHandle.standardError.write(
+                    Data("warning: \(diagnosis) (further archive write failures are counted, not repeated)\n".utf8)
+                )
+            }
+        }
     }
 
     /// The same `MutationObservations` shape `finalize` will eventually
@@ -1271,14 +1300,14 @@ public struct SchemataMutationRunner: Sendable {
         )
     }
 
-    // MARK: - Per chunk: the entry scheduler (ADR-0008)
+    // MARK: - Per chunk: the entry scheduler (the schemata timeout-isolation design)
 
-    /// Runs every entry in a chunk in order, owning both ADR-0008 trigger
+    /// Runs every entry in a chunk in order, owning both the schemata timeout-isolation design trigger
     /// points that `runPrimary`/`runConfirmation` cannot see on their own:
     /// **Trigger 1** (containment before a confirmation that follows a
     /// primary forced timeout-kill — unconditional, never skipped) and
     /// **Trigger 2** (containment before the *next* entry, only when there
-    /// is a next entry to protect — ADR-0008 §5 item 2's "no wasted
+    /// is a next entry to protect — the timeout-isolation acceptance gate's "no wasted
     /// rebuild"). `state` is reassigned, never mutated in place, each time
     /// a rebuild succeeds; a rebuild failure reports §4(d)'s failure
     /// outcomes for every entry it was asked to protect and ends the
@@ -1309,7 +1338,7 @@ public struct SchemataMutationRunner: Sendable {
         // via `ChunkRunResult`'s own convenience `init` — see its doc
         // comment.
         func currentResult() -> ChunkRunResult { ChunkRunResult(results, buildFailureEvents, infrastructureFallbackEvents) }
-        // ADR-0008 §3.3: increments only on a verifier-confirmed
+        // Fail-closed timeout evidence: increments only on a verifier-confirmed
         // `.verifiedTimeout`, never on a raw forced kill — a primary timeout
         // whose confirmation resolves normally stays `.flaky` and must never
         // count against this budget (see items 1/6's own tests).
@@ -1323,7 +1352,7 @@ public struct SchemataMutationRunner: Sendable {
         // disabled) falls through to the existing per-entry call,
         // completely unchanged. Fetched once, against `initialState`:
         // entries covered here already have their final primary result
-        // before ADR-0008's Trigger 1/2 rebuild logic ever runs for this
+        // before the schemata timeout-isolation design's Trigger 1/2 rebuild logic ever runs for this
         // chunk, so a later rebuild (triggered by some *other* entry's own
         // timeout) never needs to touch, invalidate, or re-fetch them —
         // see `prepareBatchedPrimaries`'s own doc comment for why their
@@ -1362,13 +1391,10 @@ public struct SchemataMutationRunner: Sendable {
             let entry = embeddedEntries[index]
             let rawTimedOut: Bool
 
-            let primaryOutcome = if let preFetched = batchedPrimaries[entry.mutationID] {
-                preFetched
-            } else {
-                await runPrimary(
-                    entry, state: state, timeoutController: timeoutController, perTestCoverage: perTestCoverage, coverage: coverage
-                )
-            }
+            let primaryOutcome = await primaryOutcomeOrPrefetched(
+                batchedPrimaries[entry.mutationID], entry: entry, state: state, timeoutController: timeoutController,
+                perTestCoverage: perTestCoverage, coverage: coverage
+            )
 
             switch primaryOutcome {
             case let .settled(outcome, primaryTimedOut):
@@ -1399,14 +1425,21 @@ public struct SchemataMutationRunner: Sendable {
                     timeoutSeconds: handoff.resolvedTimeoutSeconds,
                     selectedTests: handoff.selectedTests
                 )
-                // Read before `finalize` is even called (ADR-0008 §3.2: a
+                // Read before `finalize` is even called (fail-closed timeout evidence: a
                 // raw supervision fact, checked before any verdict exists) —
                 // `rawTimedOut` here can never be influenced by, or made to
                 // depend on, the verdict `finalize` is about to compute.
                 rawTimedOut = confirmation.run.status == .timedOut
 
+                // Like isolated mode, the evidence carries the confirming run's own
+                // record so `verify-run` can see it. `timedOutAgain`/`crashedAgain`
+                // start false; `MutationEvidence.verifierAuthored` sets them from the
+                // verifier's own folded confirmation chain, never from this runner.
+                let confirmedEvidence = handoff.evidence.addingRunnerConfirmations(
+                    for: handoff.requirement, buildCommand: state.artifact.command, confirmingRun: confirmation.run
+                )
                 let record = finalize(
-                    point: handoff.point, sourceApplication: .applied(handoff.evidence),
+                    point: handoff.point, sourceApplication: .applied(confirmedEvidence),
                     build: handoff.buildObservation, test: handoff.testObservation, confirmations: [confirmation]
                 )
                 results.append(.verified(TargetRecord(
@@ -1419,7 +1452,7 @@ public struct SchemataMutationRunner: Sendable {
                 }
             }
 
-            // Hang-budget overflow (ADR-0008 §3.3/§4(b)) — checked before
+            // Hang-budget overflow (fail-closed timeout evidence and post-hang recovery(b)) — checked before
             // Trigger 2: an overflowing chunk closes out everything it has
             // left unconditionally, so there is nothing left for Trigger 2
             // to protect once this fires.
@@ -1442,7 +1475,7 @@ public struct SchemataMutationRunner: Sendable {
             }
 
             // Trigger 2: only when a next entry actually exists to protect
-            // (ADR-0008 §5 item 2 — rebuilding after the chunk's last spawn
+            // (the timeout-isolation acceptance gate — rebuilding after the chunk's last spawn
             // is wasted work, verified by construction here, not assumed).
             let remaining = Array(embeddedEntries[(index + 1)...])
             if rawTimedOut, !remaining.isEmpty {
@@ -1455,7 +1488,7 @@ public struct SchemataMutationRunner: Sendable {
     }
 
     /// Closes out every not-yet-fully-finalized `MutationID` in this chunk
-    /// once its hang budget is exceeded (ADR-0008 §3.3/§4(b)): every entry
+    /// once its hang budget is exceeded (fail-closed timeout evidence and post-hang recovery(b)): every entry
     /// this chunk has not yet run (`upThroughIndex+1...`, always
     /// unfinalized by definition), plus every entry this chunk *has* already
     /// run (`0...upThroughIndex`) whose `MutationID` is not yet fully
@@ -1498,7 +1531,7 @@ public struct SchemataMutationRunner: Sendable {
     /// itself (`.needsConfirmation`) — confirmation dispatch is owned by the
     /// scheduler, not by this function, specifically so the scheduler can
     /// interpose a containment rebuild between the primary run and the
-    /// confirmation run when ADR-0008 requires one (Trigger 1).
+    /// confirmation run when the schemata timeout-isolation design requires one (Trigger 1).
     private enum PrimaryOutcome {
         case settled(EntryRunOutcome, primaryTimedOut: Bool)
         case needsConfirmation(ConfirmationHandoff)
@@ -1637,7 +1670,17 @@ public struct SchemataMutationRunner: Sendable {
         ))
     }
 
-    /// Collects raw observations only (ADR-0006 Stage 2) — this runner
+    private func primaryOutcomeOrPrefetched(
+        _ preFetched: PrimaryOutcome?, entry: SchemataPlanEntry, state: ChunkExecutionState,
+        timeoutController: TimeoutController, perTestCoverage: PerTestCoverageMap?, coverage: CoverageMap?
+    ) async -> PrimaryOutcome {
+        if let preFetched { return preFetched }
+        return await runPrimary(
+            entry, state: state, timeoutController: timeoutController, perTestCoverage: perTestCoverage, coverage: coverage
+        )
+    }
+
+    /// Collects raw observations only (the schemata proof chain) — this runner
     /// decides nothing about whether the mutation was proven built,
     /// selected, or hit. It runs the process, reads back whatever
     /// transcript it wrote (however empty or malformed), and hands the
@@ -1645,7 +1688,7 @@ public struct SchemataMutationRunner: Sendable {
     /// .verifySchemataChain` inside a `SchemataExecutionObservation` —
     /// the only place that chain is ever built or judged.
     ///
-    /// Never dispatches a confirmation itself (ADR-0008): whether one is
+    /// Never dispatches a confirmation itself (the schemata timeout-isolation design): whether one is
     /// needed is decided here, but gathering it — and, when required,
     /// interposing a containment rebuild first — is `runEntries`' job, since
     /// only the scheduler knows what else remains in the chunk to protect.
@@ -1780,7 +1823,7 @@ public struct SchemataMutationRunner: Sendable {
 
         // The same single source of truth `MutationRunner`'s own
         // confirmation gates ultimately encode — never a policy check this
-        // runner re-derives on its own (ADR-0006 Stage 3).
+        // runner re-derives on its own (the re-enabled schemata scoring).
         //
         // Never a cascade of more than one confirmation, unlike
         // `MutationConfirmationCoordinator.confirmTimeout`'s own nested `retestKilledMutants`/
@@ -1837,7 +1880,7 @@ public struct SchemataMutationRunner: Sendable {
     /// `runPrimary` call, exactly as before batching existed.
     ///
     /// Never revisited once returned: entries covered here have their
-    /// *final* primary result before ADR-0008's Trigger 1/2 rebuild logic
+    /// *final* primary result before the schemata timeout-isolation design's Trigger 1/2 rebuild logic
     /// runs for anything in this chunk. A later rebuild — triggered by some
     /// *other* entry's own timeout, individual or (once containment fires)
     /// native — never needs to touch these: each one's own evidence chain
@@ -2007,7 +2050,7 @@ public struct SchemataMutationRunner: Sendable {
     /// came from the same process invocation. The retry's `TestRunResult`
     /// flows through the exact same `processPrimaryObservation` every other
     /// primary observation already uses — a `.passed`/`.failed`/`.crashed`/
-    /// `.timedOut` result here gets precisely the ADR-0008 handling it
+    /// `.timedOut` result here gets precisely the schemata timeout-isolation design handling it
     /// would have gotten had this mutant never been batched at all; no
     /// verifier semantics change. Runs at most once: a second
     /// `.infrastructureFailure` here is final, not retried again.
@@ -2064,7 +2107,7 @@ public struct SchemataMutationRunner: Sendable {
 
     /// One entry whose test process never even started. Not a forced
     /// timeout-kill: no `TestRunResult` was ever produced, so there is
-    /// nothing for ADR-0008's containment trigger to key off, and none of
+    /// nothing for the schemata timeout-isolation design's containment trigger to key off, and none of
     /// the shared-sandbox residue risk it exists for applies — hence
     /// `primaryTimedOut: false`, unconditionally. Existing behavior,
     /// unaffected by this ADR; extracted from `runPrimary` only to keep that
@@ -2145,7 +2188,7 @@ public struct SchemataMutationRunner: Sendable {
     }
 }
 
-// MARK: - Confirmation gathering (ADR-0006 Stage 3)
+// MARK: - Confirmation gathering (the re-enabled schemata scoring)
 
 private extension SchemataMutationRunner {
     /// Runs one already-built chunk's runtime against `token`, under its own
@@ -2190,7 +2233,7 @@ private extension SchemataMutationRunner {
         let compilationUnitID: CompilationUnitID
         let sourceEmbeddingID: SHA256Digest
         let token: SchemataSelectorToken
-        /// `var`, not `let` (ADR-0008): a request built by `runPrimary` at
+        /// `var`, not `let` (the schemata timeout-isolation design): a request built by `runPrimary` at
         /// primary-run time carries that moment's receipt, but if Trigger 1
         /// rebuilds the chunk before this confirmation actually runs, the
         /// confirmation's own transcript is written against the *new*
@@ -2207,7 +2250,7 @@ private extension SchemataMutationRunner {
     /// Runs a genuinely independent confirmation attempt for `request`'s
     /// mutation — its own fresh `RunID`, its own transcript file, its own
     /// test process, requesting the exact same token against the exact
-    /// same already-built artifact (ADR-0006 Stage 3): schemata mode never
+    /// same already-built artifact (the re-enabled schemata scoring): schemata mode never
     /// rebuilds to confirm, since the chunk's build already embeds every
     /// mutation and confirming is only ever a question of whether the
     /// runtime independently reaches and reports the same site again.

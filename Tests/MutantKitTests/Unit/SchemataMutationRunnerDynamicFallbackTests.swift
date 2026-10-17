@@ -5,7 +5,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// Pins `SchemataMutationRunner`'s Group 2 routing (ADR-0006): a mutation
+/// Pins `SchemataMutationRunner`'s Group 2 routing (the end-to-end trust chain): a mutation
 /// whose schemata attempt has a passing test but no runtime activation
 /// proof (`MutationVerdictVerifier.schemataIsolatedFallbackReason`) is
 /// dropped from `Outcome.results`/`.multiTargetVerdicts` entirely and
@@ -185,8 +185,7 @@ struct SchemataMutationRunnerDynamicFallbackTests {
         #expect(fallback.reason == .activation(.noHit))
     }
 
-    /// Gate 3 finding (this project's internal benchmark research, not
-    /// part of this public repo):
+    /// Found in a real-project run:
     /// a mutation on a line the shared baseline's own coverage map already
     /// proves unreached previously still paid for a full schemata token
     /// attempt before discovering the identical fact via `noStartup` —

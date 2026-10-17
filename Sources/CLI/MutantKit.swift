@@ -94,6 +94,14 @@ enum MutantKitExit {
     /// (typically: no plan was available), so it does not vouch for the
     /// report. Distinct from `integrityFailure`, which means a mismatch.
     static let notFullyVerified: Int32 = 5
+    /// `run --require-schemata` asked for a valid schemata measurement and the run
+    /// fell back to isolated execution (or never used schemata) beyond what was allowed.
+    static let qualificationFailed: Int32 = 6
+    /// `run` was stopped by SIGINT/SIGTERM/SIGHUP (or its escalation). Finished
+    /// mutants are checkpointed and, when any exist, a clearly-marked partial
+    /// report was written; re-running the same command resumes. Never a
+    /// success: the plan was not fully measured.
+    static let interrupted: Int32 = 7
 
     /// Runs `body`, mapping any error it throws — other than one that
     /// already carries its own deliberate exit code (`ExitCode`) — to
@@ -148,7 +156,7 @@ struct OverrideOptions: ParsableArguments {
     @Option(name: .long, help: "Concurrent mutants. Defaults to half the core count.")
     var workers: Int?
 
-    @Option(name: .long, help: "Operator profile: conservative, default, or experimental.")
+    @Option(name: .long, help: "Operator profile: default, stronger, or all (legacy: conservative, experimental).")
     var profile: String?
 
     /// Deliberately a separate flag from `--profile` above, not a shared
@@ -191,7 +199,7 @@ struct OverrideOptions: ParsableArguments {
                 // should be no different (see the CLI's own exit-code
                 // contract, `MutantKitExit`). Diagnostics go to stderr, not
                 // stdout — see the identical note above.
-                FileHandle.standardError.write(Data("Unknown operator profile '\(profile)'. Expected: conservative, default, experimental.\n".utf8))
+                FileHandle.standardError.write(Data("Unknown operator profile '\(profile)'. Expected: default, stronger, all (legacy: conservative, experimental).\n".utf8))
                 throw ExitCode(MutantKitExit.operationalError)
             }
             configuration.operators.profile = parsed

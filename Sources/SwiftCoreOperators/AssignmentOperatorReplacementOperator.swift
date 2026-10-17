@@ -18,8 +18,7 @@ import SwiftSyntax
 /// stays `false` until a real project corpus's actual compile-failure rate
 /// has been measured — see `CoreOperatorCompileViabilityAcceptanceTests`.
 ///
-/// A targeted 50-mutant corpus run against a real project (see the internal
-/// corpus-validation notes, not part of this public repo) measured
+/// A targeted 50-mutant corpus run against a real project measured
 /// **0 unviable** and a healthy 37.5% kill rate, without
 /// `ArithmeticOperatorReplacementOperator`'s runtime-instability pattern in
 /// that same corpus (1/50 flaky, no timeouts). Still only one project's

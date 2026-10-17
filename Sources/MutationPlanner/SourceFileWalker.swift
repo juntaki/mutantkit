@@ -112,6 +112,18 @@ public struct SourceFileWalker: Sendable {
         ".build", ".git", "DerivedData", "Pods", "Carthage"
     ]
 
+    /// Directory-name suffixes never descended into, whatever the config says.
+    ///
+    /// A `.docc` catalog's tutorial and code-sample `.swift` files are never
+    /// part of a compilation. This is a fixed rule rather than a default in
+    /// `sources.exclude` because every default there is part of the resolved
+    /// configuration and therefore of `configurationHash`.
+    public static let prunedDirectorySuffixes: [String] = [".docc"]
+
+    private static func isPrunedDirectory(_ name: String) -> Bool {
+        prunedDirectoryNames.contains(name) || prunedDirectorySuffixes.contains { name.hasSuffix($0) }
+    }
+
     private let root: URL
     private let settings: SourceSettings
 
@@ -158,7 +170,7 @@ public struct SourceFileWalker: Sendable {
                 let relativePath = directory.relativePath.isEmpty ? name : directory.relativePath + "/" + name
 
                 if values?.isDirectory == true {
-                    guard !Self.prunedDirectoryNames.contains(name) else { continue }
+                    guard !Self.isPrunedDirectory(name) else { continue }
                     // Pruning an excluded directory is safe because exclusion
                     // covers everything beneath it, so nothing here could have
                     // survived the per-file check anyway.
@@ -180,6 +192,9 @@ public struct SourceFileWalker: Sendable {
     /// Whether a relative path would be planned, without touching the disk.
     public func admits(relativePath: String) -> Bool {
         guard !Self.isPackageManifestName(Self.lastPathComponent(of: relativePath)) else { return false }
+        guard !relativePath.split(separator: "/").contains(where: { name in
+            Self.prunedDirectorySuffixes.contains { name.hasSuffix($0) }
+        }) else { return false }
         return isIncluded(relativePath) && !isExcluded(relativePath)
     }
 

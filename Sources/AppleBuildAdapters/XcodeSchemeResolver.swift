@@ -3,9 +3,8 @@ import MutationExecution
 import MutationModel
 
 //
-// Extracted from `XcodeBuildAdapter.swift` as part of this project's
-// internal execution-engine restructuring (see its own, private planning
-// notes, not part of this public repo, for the full rationale). A pure
+// Extracted from `XcodeBuildAdapter.swift` as part of the execution-engine
+// restructuring. A pure
 // move of the scheme-discovery/resolution concern: no stored adapter state
 // (`simulators`, `resolvedDestination`,
 // `workerDevicesByWorkspace`, ...) is referenced here, only

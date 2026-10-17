@@ -3,8 +3,8 @@ import MutationModel
 import SwiftFrontend
 
 /// Combines the schemata backend's `SchemataMutationRunner` with the
-/// existing, unmodified `MutationRunner` into one `RunReport` (ADR-0006
-/// Stage 3) — the shared engine `Sources/CLI/Commands/
+/// existing, unmodified `MutationRunner` into one `RunReport` (the re-enabled schemata scoring)
+/// — the shared engine `Sources/CLI/Commands/
 /// SchemataRunOrchestration.swift` runs on. Each addition here is a
 /// verbatim relocation of code that already lived (and was already tested)
 /// in `SchemataRunOrchestration`, never a rewrite.
@@ -70,12 +70,18 @@ public enum HybridExecutionEngine {
         /// same degradation isolated mode already accepts: coverage is
         /// re-measured, the run still succeeds.
         public let coverageCacheKey: CoverageProfileCache.Key?
+        /// The run's opt-in evidence archive (`evidence.archive: true`), the same
+        /// writer isolated mode records into. Schemata mode archives its raw
+        /// observations through it too, so `verify-run`/`trust` can re-derive a
+        /// schemata verdict offline (Tier B) instead of reporting it unverifiable.
+        public let evidenceArchive: EvidenceArchiveWriter?
 
         public init(
             plan: MutationPlan, configuration: Configuration, projectRoot: URL, adapter: any ProjectAdapter,
             testAdapter: any TestAdapter, toolchain: ToolchainFingerprint, coverageCache: CoverageProfileCache,
-            coverageCacheKey: CoverageProfileCache.Key?
+            coverageCacheKey: CoverageProfileCache.Key?, evidenceArchive: EvidenceArchiveWriter? = nil
         ) {
+            self.evidenceArchive = evidenceArchive
             self.plan = plan
             self.configuration = configuration
             self.projectRoot = projectRoot
@@ -197,7 +203,11 @@ public enum HybridExecutionEngine {
             coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey,
             operationalIssues: operationalIssues, workspaces: workspaces
         )
-        try? await workspaces.destroySandbox(sandbox)
+        // The control's products carry this sandbox's paths (`#filePath`), so
+        // it lives as long as the control does.
+        var control: BaselineControlSource?
+        if case let .established(shared) = outcome { control = shared.control }
+        await BaselineControlSource.retainOrDestroy(sandbox, control: control, workspaces: workspaces)
         return outcome
     }
 
@@ -260,11 +270,12 @@ public enum HybridExecutionEngine {
             // report, which on a real project is hours — and "is it stuck or
             // just slow" then has no answer short of looking for the
             // backend's child processes in `ps`.
-            progress: ProgressReporter(total: inputs.programs.count, label: "schemata chunks")
+            progress: ProgressReporter(total: inputs.programs.count, label: "schemata chunks"),
+            evidenceArchive: context.evidenceArchive
         )
         do {
             let outcome = try await runner.run()
-            // ADR-0008 Addendum 4's fan-out/observability requirement, wired
+            // Shared chunk build-failure attribution's fan-out/observability requirement, wired
             // through to a human watching the run live. The same events also
             // reach `RunReport.operationalIssues` in `merge` below (for a
             // reader of `report.json` afterward) — the identical
@@ -336,9 +347,26 @@ public enum HybridExecutionEngine {
         ).run()
     }
 
+    /// The report's strategy block. `plannerFallbackReasonCounts` is always
+    /// present on a hybrid run — classification ran before the merge, so the
+    /// planner-time reasons are real even when nothing was embedded;
+    /// `fallbackReasonCounts` (runtime activation fallbacks) exists only when
+    /// a schemata portion actually ran. Absent planner counts therefore
+    /// mean "classification never ran", never "every mutant fell back".
+    static func executionStrategyReport(
+        embeddedCount: Int, fallbackCount: Int, degradationReason: String?,
+        schemataOutcome: SchemataMutationRunner.Outcome?, plannerFallbackReasonCounts: [String: Int]
+    ) -> ExecutionStrategyReport {
+        ExecutionStrategyReport(
+            requested: .schemata, effectiveCount: embeddedCount, fallbackCount: fallbackCount, degradationReason: degradationReason,
+            fallbackReasonCounts: schemataOutcome.map { fallbackReasonCounts($0.isolatedFallbacks) },
+            plannerFallbackReasonCounts: plannerFallbackReasonCounts
+        )
+    }
+
     /// One report from two passes that now share a single baseline (see
     /// `runHybrid`'s own `sharedBaseline` — previously each built and tested
-    /// the unmutated project separately, ADR-0006's accepted v1
+    /// the unmutated project separately, the end-to-end trust chain's accepted v1
     /// inefficiency; that was measured at ~9.5% of total wall on a real
     /// iOS project, so it is shared now, not duplicated). Only one
     /// `BaselineRecord` can go in the final report regardless — both
@@ -375,16 +403,9 @@ public enum HybridExecutionEngine {
         )
         let (baselinePassed, baseline, degradationReason) = (resolved.passed, resolved.record, resolved.degradationReason)
         let integrity = IntegrityChecker.check(plan: context.plan, ledger: ledger, baselinePassed: baselinePassed)
-        let executionStrategy = ExecutionStrategyReport(
-            requested: .schemata, effectiveCount: embeddedCount, fallbackCount: fallbackCount, degradationReason: degradationReason,
-            fallbackReasonCounts: schemataOutcome.map { fallbackReasonCounts($0.isolatedFallbacks) },
-            // Same nil-vs-empty gating as `fallbackReasonCounts` above,
-            // deliberately: `schemataOutcome` is non-nil only when
-            // `embeddedIDs` was genuinely non-empty, which is exactly when
-            // classification ran for real and `plannerFallbackReasonCounts`
-            // reflects meaningful data (even a genuine, meaningful zero) —
-            // not the fully-degraded case, where nothing was ever classified.
-            plannerFallbackReasonCounts: schemataOutcome.map { _ in plannerFallbackReasonCounts }
+        let executionStrategy = executionStrategyReport(
+            embeddedCount: embeddedCount, fallbackCount: fallbackCount, degradationReason: degradationReason,
+            schemataOutcome: schemataOutcome, plannerFallbackReasonCounts: plannerFallbackReasonCounts
         )
 
         return RunReport(
@@ -464,7 +485,7 @@ public enum HybridExecutionEngine {
         // One baseline, established here and shared by both passes below —
         // see `SharedBaselineEstablisher`'s own doc comment. Previously
         // each pass built and tested the unmutated project separately (an
-        // accepted v1 inefficiency, ADR-0006); measured at Gate 3 to cost
+        // accepted v1 inefficiency, the end-to-end trust chain); measured at Gate 3 to cost
         // ~104s (~9.5% of total wall) on a real iOS project. Established
         // before either pass runs — a fully-fallback run still needs
         // exactly the cost it always paid (one baseline), and a fully-
@@ -492,7 +513,7 @@ public enum HybridExecutionEngine {
         // A mutation `SchemataChunkPlanner` embedded can still end up here:
         // `SchemataMutationRunner` itself may have found no runtime
         // activation proof for a passing test (`Outcome.isolatedFallbacks`
-        // — Group 2, ADR-0006's no-HIT/no-STARTUP routing) and dropped it
+        // — Group 2, the end-to-end trust chain's no-HIT/no-STARTUP routing) and dropped it
         // from its own `results` entirely. Union'd into the *same*
         // `fallbackIDs` set the planner-time gap already uses, so both
         // reasons a mutation needs isolated mode converge on one fallback
@@ -515,7 +536,7 @@ public enum HybridExecutionEngine {
         let report = merge(
             context, startedAt: startedAt, schemataPortion: schemataPortion, fallbackReport: fallbackReport,
             counts: PortionCounts(
-                // Effective counts, not planner-time ones (ADR-0006 Group 2):
+                // Effective counts, not planner-time ones (the end-to-end trust chain Group 2):
                 // a mutation counted among `classification.embeddedIDs` that
                 // then dynamically fell back is no longer schemata-scored, so
                 // it must not still be counted in `effectiveCount` — it is
@@ -557,12 +578,16 @@ public enum HybridExecutionEngine {
         public let priorityStore: TestPriorityStore?
         public let progress: MutationModel.ProgressReporter?
         public let evidenceArchive: EvidenceArchiveWriter?
+        /// Honoured by the isolated backend only; see `RunStopRequest`.
+        public let stop: RunStopRequest?
 
         public init(
             checkpoints: CheckpointStore, artifactsRoot: URL, coverageCache: CoverageProfileCache,
             coverageCacheKey: CoverageProfileCache.Key?, resultCache: MutationResultCache?, resultCacheDigest: String?,
-            priorityStore: TestPriorityStore?, progress: MutationModel.ProgressReporter?, evidenceArchive: EvidenceArchiveWriter? = nil
+            priorityStore: TestPriorityStore?, progress: MutationModel.ProgressReporter?, evidenceArchive: EvidenceArchiveWriter? = nil,
+            stop: RunStopRequest? = nil
         ) {
+            self.stop = stop
             self.evidenceArchive = evidenceArchive
             self.checkpoints = checkpoints
             self.artifactsRoot = artifactsRoot
@@ -599,7 +624,8 @@ public enum HybridExecutionEngine {
             resultCacheDigest: options.resultCacheDigest,
             priorityStore: options.priorityStore,
             progress: options.progress,
-            evidenceArchive: options.evidenceArchive
+            evidenceArchive: options.evidenceArchive,
+            stop: options.stop
         ).run()
     }
 }
@@ -666,7 +692,7 @@ public extension HybridExecutionEngine {
         }
     }
 
-    /// ADR-0008 Addendum 4's required aggregate report: one issue per chunk
+    /// Shared chunk build-failure attribution's required aggregate report: one issue per chunk
     /// whose shared lowered program failed to compile, carrying the
     /// `MutationID` count it cost and the chunk-level compiler diagnostic
     /// that caused it — never one issue per affected `MutationID`, which is
@@ -756,22 +782,26 @@ public extension HybridExecutionEngine {
     static func plannerFallbackReasonCounts(_ reasons: [SchemataUnsupportedReason]) -> [String: Int] {
         var counts: [String: Int] = [:]
         for reason in reasons {
-            let key = switch reason {
-            case .resultBuilderBody: "resultBuilderBody"
-            case .typeVarianceUnproven: "typeVarianceUnproven"
-            case .processStartRequired: "processStartRequired"
-            case let .operatorNotYetLowered(operatorID): "operatorNotYetLowered.\(operatorID)"
-            case .structuralConflict: "structuralConflict"
-            case .platformUnsupported: "platformUnsupported"
-            case .unsupportedOperand: "unsupportedOperand"
-            case .asyncOrThrowingExpression: "asyncOrThrowingExpression"
-            case .ownershipSensitiveExpression: "ownershipSensitiveExpression"
-            case .patternPosition: "patternPosition"
-            case .controlFlowConstant: "controlFlowConstant"
-            }
-            counts[key, default: 0] += 1
+            counts[plannerFallbackReasonKey(reason), default: 0] += 1
         }
         return counts
+    }
+
+    private static func plannerFallbackReasonKey(_ reason: SchemataUnsupportedReason) -> String {
+        switch reason {
+        case .resultBuilderBody: "resultBuilderBody"
+        case .typeVarianceUnproven: "typeVarianceUnproven"
+        case .processStartRequired: "processStartRequired"
+        case let .operatorNotYetLowered(operatorID): "operatorNotYetLowered.\(operatorID)"
+        case .structuralConflict: "structuralConflict"
+        case .platformUnsupported: "platformUnsupported"
+        case .unsupportedOperand: "unsupportedOperand"
+        case .asyncOrThrowingExpression: "asyncOrThrowingExpression"
+        case .ownershipSensitiveExpression: "ownershipSensitiveExpression"
+        case .patternPosition: "patternPosition"
+        case .controlFlowConstant: "controlFlowConstant"
+        case .compileTimeExecutedTarget: "compileTimeExecutedTarget"
+        }
     }
 
     /// Promoted to `public` because both the still-CLI-side `classify(_:)`
@@ -786,3 +816,8 @@ public extension HybridExecutionEngine {
         return ContentHash.of(data)
     }
 }
+
+// A run hands these to a child `Task` (so a forced stop can cancel it) and
+// never mutates them afterwards; every member is a `let`.
+extension HybridExecutionEngine.Context: @unchecked Sendable {}
+extension HybridExecutionEngine.IsolatedRunOptions: @unchecked Sendable {}

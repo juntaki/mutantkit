@@ -58,6 +58,17 @@ extension SwiftPackageMacOSAdapter {
             )
         }
 
+        // `swift test` runs the test bundle in a helper process. When a mutant makes that helper trap, `swift
+        // test` is NOT signalled: it prints one fixed SwiftPM line and exits 1, and the xunit report holds
+        // only the tests that finished. The structured outputs cannot record the crash, so the runner's own
+        // fixed diagnostic is read as an observation (full-line match, non-zero exit only) and carried with
+        // its provenance; it decides nothing by itself — a crash with this provenance must pass the
+        // independent crash confirmation before it can be a kill. Anything not exactly that line leaves the
+        // run in the exit/xunit contradiction below.
+        if result.exitCode != 0, let crash = testProcessCrash(inStandardError: result.standardError) {
+            return helperProcessCrashResult(crash, result: result, command: command)
+        }
+
         if result.exitCode == 0 {
             if let shortfall = narrowedSelectionShortfall(
                 summary: summary, command: command, xunitOutput: xunitOutput, reliableExpectedTestCount: reliableExpectedTestCount
@@ -112,6 +123,62 @@ extension SwiftPackageMacOSAdapter {
                     : "swift test exited with 1: \(report.failed) of \(report.total) tests failed, caught by \(caught)."
             } ?? "swift test exited with 1: at least one test failed."
         )
+    }
+
+    private static func helperProcessCrashResult(
+        _ crash: TestProcessCrashObservation, result: ProcessResult, command: CommandRecord
+    ) -> TestRunResult {
+        let standardErrorText = String(decoding: result.standardError, as: UTF8.self)
+        let standardOutputText = String(decoding: result.standardOutput, as: UTF8.self)
+        return TestRunResult(
+            status: .crashed,
+            summary: nil,
+            command: command,
+            resultArtifactPath: nil,
+            diagnosis: "The test process was killed by signal \(crash.signal) (\(crash.process)).",
+            crashProvenance: CrashProvenance(
+                source: .swiftPMTestHelperSignalDiagnostic,
+                matchedLine: crash.line,
+                signal: crash.signal,
+                standardErrorTail: OutputRedactor.redactAndTruncate(standardErrorText, limit: 4000),
+                standardOutputTail: OutputRedactor.redactAndTruncate(standardOutputText, limit: 4000)
+            )
+        )
+    }
+
+    struct TestProcessCrashObservation {
+        let signal: Int32
+        let process: String
+        let line: String
+    }
+
+    /// SwiftPM's report that the test helper process died from a signal, matched as a WHOLE line:
+    /// `error: Process '<executable> <args>' exited with unexpected signal code <N>`.
+    ///
+    /// Fail closed on anything else. Every line that begins `error: Process '` and mentions an
+    /// unexpected signal must match the exact shape (a changed format is not guessed at), and all matches
+    /// must agree on the signal (contradictory lines are not resolved); otherwise `nil`, and the run
+    /// stays in the exit/xunit contradiction. Lookalikes elsewhere in a line, or in test output, are
+    /// ignored because the line must start with the fixed prefix and end with the number.
+    static func testProcessCrash(inStandardError data: Data) -> TestProcessCrashObservation? {
+        let prefix = "error: Process '"
+        let marker = "' exited with unexpected signal code "
+        var found: [TestProcessCrashObservation] = []
+        for raw in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix(prefix), line.localizedCaseInsensitiveContains("unexpected signal") else { continue }
+            guard let range = line.range(of: marker, options: .backwards),
+                  let signal = Int32(line[range.upperBound...]), line[range.upperBound...].allSatisfy(\.isNumber)
+            else { return nil } // our prefix, but not exactly the known shape: unparsable
+            let command = line[line.index(line.startIndex, offsetBy: prefix.count) ..< range.lowerBound]
+            guard !command.isEmpty else { return nil }
+            let executable = command.prefix { $0 != " " }
+            found.append(TestProcessCrashObservation(
+                signal: signal, process: String(executable.split(separator: "/").last ?? Substring(executable)), line: line
+            ))
+        }
+        guard let first = found.first, found.allSatisfy({ $0.signal == first.signal }) else { return nil }
+        return first
     }
 
     /// `nil` (no xunit report parsed at all -- missing, unreadable, or

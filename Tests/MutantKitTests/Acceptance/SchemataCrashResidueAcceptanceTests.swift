@@ -7,7 +7,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0008 §5 item 5(b): the actual evidence gate for the crash/no-rebuild
+/// The timeout-isolation acceptance gate for crash residue: the actual evidence gate for the crash/no-rebuild
 /// policy choice. §4(c) scopes containment to forced *timeout*-kills only,
 /// on the reasoning that §1.2's documented residue/escaped-descendant risk
 /// is specific to processes `ProcessSupervisor` itself force-kills after a
@@ -65,7 +65,7 @@ import Testing
 /// code change this evidence justifies making unreviewed.
 ///
 /// Off by default like every other acceptance suite: `MUTANTKIT_ACCEPTANCE=1 swift test`.
-@Suite("Acceptance: ADR-0008 crash residue (evidence gate)", .enabled(if: Acceptance.isEnabled))
+@Suite("Acceptance: schemata crash residue (evidence gate)", .enabled(if: Acceptance.isEnabled))
 struct SchemataCrashResidueAcceptanceTests {
     private static let relativePath = "Sources/CrashResidueFixtureLib/Widget.swift"
 
@@ -104,8 +104,8 @@ struct SchemataCrashResidueAcceptanceTests {
                     // that shares this process's stdout pipe would keep that
                     // pipe open after this process crashes, so the harness
                     // reading it never sees EOF and reports a timeout
-                    // instead of a crash — measured directly (see ADR-0008
-                    // §5 item 5(b) commit history): the harness's crash
+                    // instead of a crash — measured directly (see the crash-residue
+                    // acceptance history): the harness's crash
                     // classification depends on this.
                     child.standardOutput = FileHandle.nullDevice
                     child.standardError = FileHandle.nullDevice
@@ -205,7 +205,7 @@ struct SchemataCrashResidueAcceptanceTests {
     @Test("A prompt crash (not a timeout) that already left a background child and a marker file: gathers real residue evidence")
     func promptCrashResidueEvidence() async throws {
         let markerPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mutantkit-adr0008-crash-marker-\(UUID().uuidString)").path
+            .appendingPathComponent("mutantkit-crash-residue-marker-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: markerPath) }
 
         let projectDirectory = try stageFixture(markerPath: markerPath)
@@ -257,7 +257,7 @@ struct SchemataCrashResidueAcceptanceTests {
         defer { for line in survivors { killSurvivor(from: line) } }
 
         // This is deliberately not a correctness assertion in either
-        // direction — it is the evidence gate ADR-0008 §5 item 5(b) exists
+        // direction — it is the evidence gate the timeout-isolation acceptance gate for crash residue exists
         // to produce, and residue is the confirmed, expected, reproducible
         // finding (see this suite's own doc comment for the full
         // disposition) — recorded via `withKnownIssue` rather than a hard
@@ -265,7 +265,7 @@ struct SchemataCrashResidueAcceptanceTests {
         // blocking CI on a known, already-triaged architectural gap that
         // isn't safely fixable by widening the `.timedOut` trigger.
         withKnownIssue("""
-        ADR-0008 §5 item 5(b): a promptly-crashing (non-timeout) schemata mutant leaves a live descendant behind \
+        Crash residue: a promptly-crashing (non-timeout) schemata mutant leaves a live descendant behind \
         (classified \(result.outcome) — see this suite's own doc comment for why `.crashed` itself turns out to be \
         unreachable here, and why widening containment's `.timedOut`-only trigger is not the safe fix). Tracked as \
         follow-up architecture work (unconditional post-primary-run descendant reaping), not a same-milestone code \

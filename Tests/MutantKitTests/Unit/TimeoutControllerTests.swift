@@ -5,9 +5,8 @@ import Testing
 
 /// Direct unit tests for `TimeoutController.mutantLimitSeconds(selectedTests:)`.
 /// A `10...30`s, `selectedTests.count`-scaled clamp lived here previously;
-/// Gate 3's real-iOS-project run found it uncalibrated (see
-/// `TimeoutController.swift`'s doc comment and
-/// the internal Gate 3 benchmark research, not part of this public repo),
+/// A real iOS project run found it uncalibrated (see
+/// `TimeoutController.swift`'s doc comment),
 /// so this now always
 /// answers with the whole-suite-scaled `mutantLimitSeconds`, regardless of
 /// `selectedTests` — the same fallback `nil`/empty already used.

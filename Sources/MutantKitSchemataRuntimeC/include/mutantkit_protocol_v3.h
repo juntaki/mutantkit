@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/// ADR-0006 Stage 2: a fixed-length binary protocol replacing the v2 text
+/// The schemata proof chain: a fixed-length binary protocol replacing the v2 text
 /// format entirely (no v2 parsing path is kept alive alongside this one in
 /// production once the lowerer/collector cut over — see the doc comments
 /// on `mutantkit_register_unit_v3`/`mutantkit_is_active_v3` below).
@@ -71,7 +71,7 @@ _Static_assert(sizeof(mutantkit_event_record_v3_t) == 136, "mutantkit_event_reco
 
 /// Opaque per-compilation-unit identity, registered once at process
 /// startup by the generated preamble the lowerer emits at each mutated
-/// compilation unit (ADR-0006 Finding 2's fix): unlike v2's single
+/// compilation unit (the image-identity proof's fix): unlike v2's single
 /// process-wide `dladdr`-derived image UUID, this ties a HIT event's
 /// identity to the specific compilation unit whose call site actually ran,
 /// independent of which Mach-O image happens to link this runtime.

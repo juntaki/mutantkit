@@ -21,6 +21,12 @@ public struct ConsoleReporter: Reporter {
         var out: [String] = []
 
         out.append(header(report))
+        if let interruption = report.interruption {
+            out.append(palette.red(
+                "PARTIAL RESULT — interrupted by \(interruption.signal) after \(interruption.completedMutants) of "
+                    + "\(interruption.plannedMutants) mutants. Not a trustworthy measurement; resume the run to finish it."
+            ))
+        }
         out.append(baselineSection(report))
         out.append(integritySection(report))
         out.append(scoreSection(report))

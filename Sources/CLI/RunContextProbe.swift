@@ -423,6 +423,15 @@ enum RunContextProbe {
         // to be compared correctly.
         let tracked = try await runRaw(["ls-files", "--full-name", "-z"], in: root, processRunner: processRunner)
         let status = try await runRaw(["status", "--porcelain=v1", "--untracked-files=all", "-z"], in: root, processRunner: processRunner)
+        // Mode-160000 index entries (submodule gitlinks): `<mode> <oid> <stage>\t<path>`.
+        let staged = try await runRaw(["ls-files", "--full-name", "--stage", "-z"], in: root, processRunner: processRunner)
+        var gitlinkOIDs: [String: String] = [:]
+        for entry in staged.split(separator: "\0", omittingEmptySubsequences: true) where entry.hasPrefix("160000 ") {
+            let parts = entry.split(separator: "\t", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let fields = parts[0].split(separator: " ")
+            if fields.count >= 2 { gitlinkOIDs[String(parts[1])] = String(fields[1]) }
+        }
 
         var paths = Set<String>()
         // A path in a merge conflict is listed once per stage; the set
@@ -441,7 +450,9 @@ enum RunContextProbe {
         var entries: [String] = []
         entries.reserveCapacity(paths.count)
         for path in paths.sorted() where !isToolOwned(repositoryRelativePath: path, projectPrefix: toolOwnedPrefix) {
-            let identity = try contentIdentity(of: toplevel.appendingPathComponent(path), path: path)
+            let identity = try contentIdentity(
+                of: toplevel.appendingPathComponent(path), path: path, gitlinkOID: gitlinkOIDs[path]
+            )
             entries.append("\(path)=\(identity)")
         }
 
@@ -497,7 +508,7 @@ enum RunContextProbe {
     /// A tracked path deleted from the worktree contributes `absent`, which
     /// no readable file can collide with because every other branch returns
     /// either a `sha256:`-prefixed digest or a `symlink:` prefix.
-    static func contentIdentity(of url: URL, path: String) throws -> String {
+    static func contentIdentity(of url: URL, path: String, gitlinkOID: String? = nil) throws -> String {
         let fileManager = FileManager.default
         // `attributesOfItem` does not follow symlinks, so a symlink is
         // classified as one rather than as whatever it resolves to.
@@ -520,15 +531,32 @@ enum RunContextProbe {
             }
             return hash
         case .typeDirectory:
-            throw RunContextProbeError.unprovableWorktreeContent(
-                path: path,
-                reason: "tracked path is a directory — a submodule, whose contents this digest does not read"
-            )
+            // A submodule: the recorded commit (gitlink OID) plus every byte the sandbox copy of the
+            // subtree carries. The OID alone would miss an initialized submodule's dirty or untracked
+            // files; the subtree alone would not tell an uninitialized checkout from an empty one.
+            return "gitlink:\(gitlinkOID ?? "none"):" + (try subtreeIdentity(of: url, path: path))
         default:
             throw RunContextProbeError.unprovableWorktreeContent(
                 path: path, reason: "not a regular file or symlink"
             )
         }
+    }
+
+    /// Digest of everything below a submodule directory that a sandbox copy carries (`.git` is excluded
+    /// from sandboxes, so it is excluded here). Unreadable entries throw, as for any other path.
+    static func subtreeIdentity(of directory: URL, path: String) throws -> String {
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0 != ".git" }.sorted()
+        } catch {
+            throw RunContextProbeError.unprovableWorktreeContent(path: path, reason: "submodule directory could not be listed")
+        }
+        var entries: [String] = []
+        for name in names {
+            let childPath = path + "/" + name
+            entries.append("\(name)=" + (try contentIdentity(of: directory.appendingPathComponent(name), path: childPath)))
+        }
+        return ContentHash.of(entries.joined(separator: "\u{1F}"))
     }
 
     /// Directories the tool itself writes under the project root. The digest

@@ -10,8 +10,7 @@ import XCTest
 /// `-test-timeouts-enabled`/`-maximum-test-execution-time-allowance` can cut
 /// a single hanging test off inside a batched `.xctestrun` without killing
 /// the whole `xcodebuild` invocation, so one hang no longer holds an entire
-/// batch's combined outer timeout hostage. See the internal Gate 3
-/// benchmark research record (not part of this public repo).
+/// batch's combined outer timeout hostage.
 final class HangSpikeTests: XCTestCase {
     func testIntentionalHang() {
         guard ProcessInfo.processInfo.environment["MUTANTKIT_SPIKE_HANG"] == "1" else { return }

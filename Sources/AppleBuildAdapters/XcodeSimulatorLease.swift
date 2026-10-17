@@ -1,7 +1,6 @@
 //
-// Extracted from `XcodeBuildAdapter.swift` as part of this project's
-// internal execution-engine restructuring (see its own, private planning
-// notes, not part of this public repo, for the full rationale). Collapses
+// Extracted from `XcodeBuildAdapter.swift` as part of the execution-engine
+// restructuring. Collapses
 // the three near-duplicate
 // device-selection-and-lease blocks `leaseAndRunTests`,
 // `leaseAndRunSchemataToken`, and `runBatchTests`'s own inline block each

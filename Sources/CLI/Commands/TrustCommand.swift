@@ -227,6 +227,19 @@ struct TrustCommand: ParsableCommand {
         if kills.cascadeConfirmations > 0 {
             print("  results with a cascade of confirmations: \(kills.cascadeConfirmations)")
         }
+        if let tests = kills.killingTests, !tests.isEmpty {
+            print("")
+            print("Killing tests (top \(tests.count) by mutants failed; from recorded kill evidence)")
+            for row in tests {
+                print(
+                    "  \(row.mutantCount) mutants / \(row.fileCount) files  (sole failing: \(row.soleFailingCount), " +
+                        "not confirmed: \(row.notConfirmedCount))  \(row.test)"
+                )
+            }
+        }
+        for suspect in kills.suspectTests ?? [] {
+            print("  WARNING: \(suspect.test.test): \(suspect.warning). Diagnostic only; verdicts and score are unchanged.")
+        }
     }
 
     private func printConfirmation(_ label: String, _ section: TrustReport.ConfirmationSection) {

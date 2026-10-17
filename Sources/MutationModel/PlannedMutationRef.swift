@@ -3,7 +3,7 @@ import Foundation
 /// A full reference to one specific mutation's content — not just its
 /// `MutationID`.
 ///
-/// ADR-0005's problem: today, result/plan/evidence reconciliation is mostly
+/// The authoritative verdict pipeline's problem: today, result/plan/evidence reconciliation is mostly
 /// by `MutationID` set membership (see `IntegrityChecker.check`). Nothing
 /// confirms that a result, its plan entry, and any proof attached to it all
 /// describe the *same* mutation content — only that some `MutationID`

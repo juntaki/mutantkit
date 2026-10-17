@@ -39,10 +39,9 @@ struct OperatorCatalogCommand: ParsableCommand {
         summary. With an operator ID, prints full detail for that operator \
         alone, including its fault-evidence rationale.
 
-        Corpus-measured evidence — kill rates, promotion history, provisional \
-        status — is not tracked in the registry this command reads, only in \
-        the project README's Operators table. This command does not repeat \
-        that evidence; it shows what the registry actually carries.
+        What each operator changes and its main constraints are described in \
+        docs/operators.md. This command shows what the registry actually \
+        carries.
         """
     )
 
@@ -151,9 +150,7 @@ struct OperatorCatalogCommand: ParsableCommand {
 
         lines.append("")
         lines.append("""
-        Corpus-measured evidence — kill rates, promotion history, provisional \
-        status — is not tracked in this registry yet. See the README's \
-        Operators table for what has been measured so far.
+        See docs/operators.md for the operator catalog.
         """)
 
         return lines.joined(separator: "\n")
@@ -186,11 +183,16 @@ struct OperatorCatalogEntry: Codable, Equatable {
     let summary: String
     let defaultEnabled: Bool
     let confidence: MutationConfidence
-    /// The most restrictive profile that reaches this operator by default
-    /// (`conservative` < `default` < `experimental`), or `nil` if no profile
-    /// can — true only for `requiresSymbolResolution` operators, which
+    /// The most restrictive canonical tier that reaches this operator by
+    /// default (`default` < `stronger` < `all`), or `nil` if no profile can --
+    /// true only for `requiresSymbolResolution` operators, which
     /// `MutationRegistry.resolve` excludes from every profile and can only be
     /// switched on by naming them explicitly in `operators.enable`.
+    ///
+    /// Schema v2. v1 reported the v1.x names (`conservative`, `default`,
+    /// `experimental`); this field now only ever holds a canonical value, so
+    /// `conservative` and `experimental` never appear here even though
+    /// configs still accept them.
     let reachableProfile: OperatorProfile?
     let schemataEligible: Bool
     let requiresSymbolResolution: Bool
@@ -200,10 +202,11 @@ struct OperatorCatalogEntry: Codable, Equatable {
     let faultEvidence: [String]
 
     /// Mirrors the profile order `MutationRegistry.resolve` implicitly
-    /// relies on: conservative admits a subset of default, default a subset
-    /// of experimental, so the first one that admits a descriptor is also
-    /// the most restrictive.
-    private static let profileOrder: [OperatorProfile] = [.conservative, .default, .experimental]
+    /// relies on: each canonical profile admits a subset of the next, so the
+    /// first one that admits a descriptor is also the most restrictive. Only
+    /// canonical profiles are shown as tiers; the legacy `conservative` and
+    /// `experimental` values are accepted in configs but are not tiers.
+    private static let profileOrder: [OperatorProfile] = OperatorProfile.canonicalCases
 
     init(descriptor: OperatorDescriptor) {
         schemaVersion = SchemaVersion.operatorCatalogEntry

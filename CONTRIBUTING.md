@@ -66,9 +66,8 @@ host, macOS), so run `scripts/build-schemata-runtime.sh` once first.
 
 ## Operators
 
-See [docs/operators.md](docs/operators.md) for the full catalog, promotion
-criteria, and corpus-validation status of every operator, plus the schemata
-per-operator promotion gate.
+See [docs/operators.md](docs/operators.md) for the full operator catalog,
+including which operators support schemata execution.
 
 ## Architecture
 
@@ -84,10 +83,9 @@ Reporting          Console · Xcode · JSON · Stryker · HTML · Sonar · GitHu
 ```
 
 A simplified sketch, grouped by responsibility rather than a literal
-listing of `Sources/` directories — it omits internal tooling that supports
+listing of `Sources/` directories — it omits tooling that supports
 development but sits outside the pipeline a mutation run itself executes
-(the benchmark harness, the Muter-config importer, standalone measurement
-probes).
+(the Muter-config importer, the schemata eligibility classifier).
 
 Modules talk through protocols and immutable value types. There is no
 shared mutable state. Operators are pure functions from syntax to
@@ -97,7 +95,7 @@ result can never trace back to an operator reaching outside its own inputs.
 (This does not mean every operator-produced candidate is itself high-value
 or even always valid; equivalent mutants, invalid transformations, and
 low-signal mutants are real and are evaluated separately — see
-[Operators](docs/operators.md) for how each one earns its profile and
+[Operators](docs/operators.md) for each operator's profile and
 confidence rating.)
 
 ## Roadmap

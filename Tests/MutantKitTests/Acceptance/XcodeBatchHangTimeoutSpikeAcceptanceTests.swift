@@ -21,11 +21,6 @@ import Testing
 /// branch (Phase H2, `XCResultAdapter.Failure.isNativeTimeout`) is
 /// exercised here end to end, against a real bundle, not just the unit
 /// fixtures in `XCResultAdapterBatchTests`.
-///
-/// See the internal Gate 3 benchmark research record (not part of this
-/// public repo)
-/// ("Phase H1"/"Phase H2") for the full write-up this test's assertions
-/// back.
 @Suite("Acceptance: native XCTest timeout as batch hang containment (Gate 3 Phase H1 spike)", .enabled(if: Acceptance.simulatorEnabled))
 struct XcodeBatchHangTimeoutSpikeAcceptanceTests {
     /// Both the allowance passed to `xcodebuild` and the value every

@@ -187,7 +187,7 @@ enum OperatorExclusions {
     /// literal into a runtime-selectable expression changes the compiler-
     /// visible pattern shape here, which can invalidate the compiler's
     /// exhaustiveness analysis or otherwise make schemata lowering unsound
-    /// for pattern matching — not a hypothetical, see ADR-0008 Addendum 4's
+    /// for pattern matching — not a hypothetical, see shared chunk build-failure attribution's
     /// real-corpus finding (`SchemataUnsupportedReason.patternPosition`'s
     /// own doc comment).
     static func isInPatternPosition(_ node: some SyntaxProtocol) -> Bool {
@@ -214,8 +214,8 @@ enum OperatorExclusions {
     /// return …"). Real-corpus evidence, `swift-async-algorithms` 2026-08:
     /// one such site in `AsyncThrottleSequence.swift` broke its whole
     /// 93-member shared chunk's build, forfeiting the other 92 members'
-    /// schemata fast path with it (a chunk shares one build, ADR-0008
-    /// Addendum 4) — and the identical signature had already been recorded
+    /// schemata fast path with it (a chunk shares one build)
+    /// — and the identical signature had already been recorded
     /// on `swift-argument-parser` before that.
     ///
     /// Deliberately narrower than "anywhere inside a while condition": a

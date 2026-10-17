@@ -32,11 +32,19 @@ public struct ReportReverification: Codable, Sendable {
     /// Present only when an evidence archive was read and at least one result
     /// was re-judged from its raw observations (Tier B).
     public let tierB: TierBSummary?
+    /// How many leading entries of `checks` are the report-only (Tier A) checks;
+    /// whatever follows (`archive.*`, `tierB.*`) came from the evidence archive.
+    /// `nil` means every check is a Tier A check (callers that never ran Tier B).
+    public let tierACheckCount: Int?
 
-    public init(checks: [ReverificationCheck], tierB: TierBSummary? = nil) {
+    public init(checks: [ReverificationCheck], tierB: TierBSummary? = nil, tierACheckCount: Int? = nil) {
         self.checks = checks
         self.tierB = tierB
+        self.tierACheckCount = tierACheckCount
     }
+
+    /// The checks the report alone can run, in the order they were made.
+    public var tierAChecks: [ReverificationCheck] { Array(checks.prefix(tierACheckCount ?? checks.count)) }
 
     /// Whether any result was re-verified from raw observations rather than
     /// only from what the report stores.
@@ -56,6 +64,27 @@ public struct ReportReverification: Codable, Sendable {
     /// any not-verifiable check is PARTIAL (`passed && !complete`) and must
     /// never be read as fully verified.
     public var complete: Bool { failureCount == 0 && notVerifiableCount == 0 }
+
+    /// Tier A (report-only) completeness: every check the report alone can run
+    /// passed (none failed, none not verifiable). Computed from `tierAChecks`
+    /// only, so reading an evidence archive (whose `archive.*` / `tierB.*`
+    /// checks are appended after them) cannot change it. `complete` still
+    /// covers all checks, Tier B included. A schemata run whose activation
+    /// facts need the raw archive is legitimately `false` here while still
+    /// `passed` and trustworthy; that is not a verdict problem.
+    public var tierAComplete: Bool { tierAChecks.allSatisfy { $0.status == .pass } }
+
+    /// Full-evidence re-verification (Tier B): an evidence archive was read,
+    /// every result was re-judged from its raw observations with zero
+    /// mismatches, zero results without usable observations and zero archive
+    /// problems, and no check failed. Independent of `complete`: a report can
+    /// be Tier A partial and still fully re-verified from its archive. Report
+    /// only; it changes no check and no verdict.
+    public var fullEvidenceReverified: Bool {
+        guard let tierB, failureCount == 0 else { return false }
+        return tierB.mismatchedCount == 0 && tierB.notVerifiableCount == 0 && tierB.archiveProblemCount == 0
+            && tierB.reverifiedCount == tierB.matchedCount
+    }
 }
 
 /// Re-derives, from a decoded `RunReport` (and optionally its plan), every
@@ -100,9 +129,11 @@ public enum ReportReverifier {
         checks.append(contentsOf: resultChecks(report: report, plan: plan))
         checks.append(integrityCheck(report: report, plan: plan))
         checks.append(scoreCheck(report))
+        // Everything above is Tier A; the archive-derived checks follow it.
+        let tierACount = checks.count
         let tierB = tierBChecks(report: report, evidence: evidence, expectedPolicy: expectedPolicy)
         checks.append(contentsOf: tierB.checks)
-        return ReportReverification(checks: checks, tierB: tierB.summary)
+        return ReportReverification(checks: checks, tierB: tierB.summary, tierACheckCount: tierACount)
     }
 
     // MARK: - Whole-report checks
@@ -354,7 +385,7 @@ extension ReportReverifier {
     /// therefore always stores real application evidence for.
     public static func requiresSourceApplication(_ outcome: MutationOutcome) -> Bool {
         switch outcome {
-        case .killedByAssertion, .killedByCrash, .verifiedTimeout, .survived, .noCoverage, .unviable, .timedOut, .flaky:
+        case .killedByAssertion, .killedByCrash, .verifiedTimeout, .survived, .noCoverage, .unviable, .timedOut, .flaky, .notMaterialized:
             true
         case .notApplied, .baselineMismatch, .infrastructureFailure, .skipped:
             false

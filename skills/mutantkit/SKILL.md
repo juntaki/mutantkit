@@ -215,7 +215,7 @@ n=5 — roughly break-even), but on Xcode/iOS-Simulator it measured **62.5%
 slower** on a real 100-mutant corpus (6383s vs 3928s, and the gap widened
 with scale), which is why `isolated` is the default there and `schemata`
 is an explicit opt-in for advanced or research use — see
-`ADR/0009-ios-execution-default.md`. Every mutation's own result is
+`docs/execution.md`. Every mutation's own result is
 fail-closed regardless
 of strategy: a schemata verdict that cannot prove its own runtime evidence
 never gets guessed at, it re-runs isolated instead. CLI flags

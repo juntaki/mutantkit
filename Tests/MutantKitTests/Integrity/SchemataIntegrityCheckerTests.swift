@@ -6,12 +6,12 @@ import Testing
 /// tests: `MutationEvidence.applicationEvidence` can also be a `.schemata`
 /// case, and the same "no proof, no score" discipline must apply — enforced
 /// by `MutationVerdictVerifier.verifySchemataChain` at classification time
-/// (ADR-0006 Stage 2), not re-derived here. Split into its own file rather
+/// (the schemata proof chain), not re-derived here. Split into its own file rather
 /// than folded into `IntegrityCheckerTests` to keep that file under
 /// SwiftLint's `type_body_length` cap.
 @Suite("Integrity checker: schemata evidence")
 struct SchemataIntegrityCheckerTests {
-    /// ADR-0006 Stage 1: this used to be a runtime `IntegrityChecker` check
+    /// The authoritative verdict pipeline: this used to be a runtime `IntegrityChecker` check
     /// (inconsistent schemata evidence on a scorable outcome, flagged after
     /// the fact). `MutationVerdictVerifier.classify`'s `unprovenActivation`
     /// gate now refuses to produce a scorable outcome from schemata

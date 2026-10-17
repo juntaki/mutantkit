@@ -153,7 +153,7 @@ extension ReproduceCommand {
             // `MutationVerdictVerifier`; the outcome names here are just the
             // ones a real build failure of each kind would eventually earn.
             let outcome: MutationOutcome = switch failure.kind {
-            case .compilationError: .unviable
+            case .compilationError, .confirmedCompilerCrash: .unviable
             case .infrastructure, .timedOut: .infrastructureFailure
             }
             print("\nOutcome: \(outcome.displayName)\n\(failure.diagnosis)")

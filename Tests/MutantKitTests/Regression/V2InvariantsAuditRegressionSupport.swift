@@ -1,8 +1,8 @@
 import Foundation
 
 /// Shared textual source-scanning helpers for the four regression suites
-/// that turn an internal structural-invariants audit's 14 test-coverage
-/// gaps into permanent, mechanical gates:
+/// that turn structural invariants
+/// into permanent, mechanical gates:
 /// `RunSessionAndVerdictPolicyRegressionTests`,
 /// `SchemataWorkspaceAndBaselineRegressionTests`,
 /// `SchemataCapabilityGuardOrderingRegressionTests`, and

@@ -1,9 +1,8 @@
 # Execution
 
 How a mutation run actually executes, beyond the bare field reference in
-[Configuration](configuration.md). See [Benchmarks](benchmarks.md) for the
-real measurements behind the recommendations below, and
-[Evidence model](evidence-model.md) for what a verdict actually proves.
+[Configuration](configuration.md). See [Evidence model](evidence-model.md) for
+what a verdict actually proves.
 
 ## Recommended production profile
 
@@ -20,12 +19,21 @@ execution:
   selectCoveringTests: true
 ```
 
-This is not a guess — see [Benchmarks](benchmarks.md#worker-count-and-simulator-pooling)
-for the real numbers behind `workers: 2` + `simulatorPool: true`, and for
-why `workers: 4` is a faster but explicitly experimental setting rather
-than the default (a real disagreement investigation found it consistent
-with resource contention under a full concurrent sweep, not a bug in a
-single mutant's replay).
+This is measured, not a guess. On a real 100-mutant run of a large iOS app
+(isolated mode throughout):
+
+| profile | wall clock | vs. reference | outcome parity |
+| --- | --- | --- | --- |
+| `workers: 1`, `incrementalBuild` + `selectCoveringTests` only (reference) | 5624 s | 1.00x | reference |
+| **`workers: 2`, `simulatorPool: true` (recommended)** | **2597 s** | **2.17x** | 100/100, identical to the reference |
+| `workers: 4`, `simulatorPool: true` | 1780 s | 3.16x | 99/100, one mutant `flaky` under 4-way load |
+
+`workers: 4` is faster but is not the default: its one disagreement did not
+reproduce in isolation, and the most likely explanation is resource contention
+among the concurrent workers. Treat it as an experimental setting if your
+project and CI hardware can absorb that risk. `testBatchSize` is still
+supported, but at the same scale it was slower than `simulatorPool`; it stays
+available for CI runners that restrict simulator-clone provisioning.
 
 ## `execution.profile`: known-safe defaults, chosen for you
 
@@ -49,9 +57,10 @@ execution:
   plan has at least one candidate this build's schemata backend can embed
   (everything else still gets a real isolated-mode verdict via the
   existing per-mutant fallback — schemata is never all-or-nothing). By
-  itself, `optimized` is genuinely correctness-neutral — see
-  [Benchmarks](benchmarks.md#executionprofile-optimized-correctness-parity)
-  for the proof.
+  itself, `optimized` is correctness-neutral: on a fixture with both a covered
+  and an uncovered mutable line, it reports the same per-mutant verdicts and the
+  same `MutationScore.tested` as `reference` on the same plan
+  (`ExecutionProfileCoverageParityAcceptanceTests`).
 - **`experimental`** is `optimized` plus features implemented but not yet
   proven safe for general use. That bucket is honestly empty right now —
   see `ExecutionProfile`'s own doc comment for the one real candidate that
@@ -69,8 +78,7 @@ Execution profile: optimized — enabled schemata, incrementalBuild.
 
 `mutantkit execution-profile` reports the same thing before anything runs.
 
-**Two things `optimized`/`experimental` deliberately never bundle in, and
-one thing they used to that was wrong to:**
+**Three things `optimized`/`experimental` deliberately never bundle in:**
 
 - **`incrementalBuild` is never touched by any profile.** It stays exactly
   whatever you set it to. It carries a named, unresolved persistent-sandbox
@@ -86,20 +94,15 @@ one thing they used to that was wrong to:**
   whether your project's build shape could use it, purely informationally
   — the opt-in itself stays manual: `execution.sharedModuleCache: true`.
 - **`measureCoverage` + `selectCoveringTests` are never bundled into
-  `optimized`/`experimental` by default, and this one has a history worth
-  knowing.** An earlier revision *did* bundle this pair in, on the
-  (incomplete) theory that it degrades safely like everything else — it
-  missed that coverage data, once present at all, also feeds
+  `optimized`/`experimental` by default.** Coverage data also feeds
   `MutationRunner`'s `.noCoverage` fast path, which can reclassify a real
-  surviving mutant on a genuinely-uncovered line as `.noCoverage` —
-  excluded from `MutationScore.tested`'s denominator — without ever
-  building or testing it. That is a real, silent verdict and score change
-  from choosing a profile alone, found by an adversarial review before it
-  shipped. The fix: this pair now requires its own explicit,
-  separately-named opt-in, off by default —
+  surviving mutant on a genuinely uncovered line as `.noCoverage` — excluded
+  from `MutationScore.tested`'s denominator — without ever building or testing
+  it. Choosing a profile must not change verdicts or the score on its own, so
+  this pair requires its own explicit opt-in, off by default:
   `execution.profileCoverageSkip: true`, set deliberately alongside
-  `execution.profile: optimized` — with its own doc comment naming the
-  trade-off in full. `optimized` alone never reaches that fast path.
+  `execution.profile: optimized`. `optimized` alone never reaches that fast
+  path.
 
 This also means `execution.profile: optimized` is a *different, narrower*
 bundle than "Recommended production profile" above — that profile is a
@@ -118,6 +121,21 @@ This reads your already-written `plan.json` and prints, for `optimized`:
 which of the features above are eligible here (and why, or why not), and
 exactly which `execution.*` fields would change from your current config —
 never a guess, always the same decision `mutantkit run` itself would make.
+
+## Why `isolated` is the default on Xcode and the iOS Simulator
+
+`execution.strategy: isolated` is the default for every project kind. For Xcode
+projects on the iOS Simulator it is a measured choice, not a placeholder. On a
+real 100-mutant iOS project `schemata` reached the same outcomes as `isolated`
+(100 of 100, no integrity violations) but took 6383 s against 3928 s, which is
+62.5% slower, and the gap widened as the corpus grew (27% slower at 14
+mutants). Only 32 of the 100 mutants ran on genuine schemata evidence; the other
+68 fell back to isolated. Mutants whose selected tests differ cannot share a
+batch, so most of them pay a full Xcode and Simulator launch each.
+
+`execution.strategy: schemata` stays a supported, explicit opt-in for advanced
+or research use. This says nothing about SwiftPM on macOS, which has its own
+cost model (see [schemata support matrix](schemata-support-matrix.md)).
 
 ## UI-test targets (`xcodeProject`/`xcodeWorkspace` only)
 
@@ -150,9 +168,7 @@ timeouts:
     strategy: fixed   # a UI test's own baseline duration (Simulator boot +
     maximum: 5m        # app launch + AX-tree settle time) is not a
                         # representative multiplier base for an adaptive
-                        # ceiling — see the fixed-timeout rationale in the
-                        # internal continuation-resume-removal corpus-validation
-                        # research (not part of this public repo).
+                        # ceiling.
 ```
 
 Two things worth knowing before pointing this at a real UI-test target:
@@ -166,21 +182,14 @@ Two things worth knowing before pointing this at a real UI-test target:
 - **A test selector that matches zero tests is rejected, never read as a
   pass.** `XCResultAdapter.classify` already treats
   `summary.totalTestCount == 0` as `.infrastructureFailure`
-  unconditionally — the same guard that would have caught the
-  hyphenated-test-target incident in the internal
-  `required-decode-introduction-2026-09` corpus-validation research (not
-  part of this public repo)
-  had it been an Xcode run instead of a SwiftPM one. A UI-test target's own
+  unconditionally. A UI-test target's own
   `-only-testing:` filter (a typo'd test method name, most commonly) is
   exactly as capable of silently narrowing to nothing as a regex-based
   SwiftPM filter is, so double-check the real count in a plain `xcodebuild
   test` run before trusting a mutation campaign's baseline.
 
-See the internal Phase 5A UI-test-substrate research record (not part of
-this public repo) for the full
-RED/GREEN validation this was built and proven against, including the one
-real gap this closed (a UI test target's own `xcresulttool` bundle node is
-named `"UI test bundle"`, not `"Unit test bundle"` — a hardcoded check for
-the latter alone silently enumerated a UI test target as having zero tests
-in `selectCoveringTests`'s per-test coverage measurement and schemata
-identifier resolution, even though it genuinely ran).
+A UI test target's own `xcresulttool` bundle node is named `"UI test bundle"`,
+not `"Unit test bundle"`. MutantKit recognizes both when it enumerates a target's
+tests for `selectCoveringTests`' per-test coverage measurement and for schemata
+identifier resolution, so a UI test target is never mistaken for one with zero
+tests.

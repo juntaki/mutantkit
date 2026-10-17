@@ -47,6 +47,9 @@ public actor CheckpointStore {
     /// required rather than defaulted.
     private let policy: MutationVerdictVerifier.VerdictVerificationPolicy
 
+    /// Where this checkpoint lives on disk.
+    public nonisolated var fileURL: URL { url }
+
     public init(url: URL, policy: MutationVerdictVerifier.VerdictVerificationPolicy) {
         self.url = url
         self.policy = policy
@@ -56,7 +59,7 @@ public actor CheckpointStore {
     /// *raw* `MutationObservations` — never a `VerifiedMutationRecord` or
     /// `MutationResult` outcome directly — so `loadAll` has no choice but to
     /// call `MutationVerdictVerifier.verify` itself before trusting
-    /// anything about this line (ADR-0006 Stage 1, second review round: a
+    /// anything about this line (the authoritative verdict pipeline, second review round: a
     /// prior version of this file decoded `MutationResult` and merely
     /// re-derived a `VerdictProof` from its already-decided `outcome`,
     /// which revalidates internal shape but never re-judges the underlying
@@ -105,7 +108,7 @@ public actor CheckpointStore {
     /// Every mutant's verdict, re-derived fresh from its checkpointed
     /// observations, in the order they completed.
     ///
-    /// ADR-0006 Stage 1: `plan` is required, not optional convenience — a
+    /// The authoritative verdict pipeline: `plan` is required, not optional convenience — a
     /// checkpoint line's own `MutationObservations` are decoded as
     /// untrusted, validated against `plan`'s own point for the same
     /// `MutationID` (content identity: `pointDigest`, not just an ID that

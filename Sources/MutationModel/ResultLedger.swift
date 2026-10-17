@@ -22,7 +22,7 @@ extension MutationResult: MutationLedgerEntry {}
 /// own `mutationRef` — never a key the caller picks separately.
 ///
 /// Replaces `[MutationResult]`/`[VerifiedMutationRecord]` arrays everywhere
-/// a run accumulates a set of results (ADR-0006 Stage 1): a second insert
+/// a run accumulates a set of results (the authoritative verdict pipeline): a second insert
 /// for the same key is a programming error, thrown at the point it
 /// happens — not silently overwritten, not appended as a duplicate array
 /// entry for `IntegrityChecker` to notice later by turning the array into

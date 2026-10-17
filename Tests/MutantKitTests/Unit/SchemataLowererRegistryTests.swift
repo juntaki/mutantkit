@@ -58,7 +58,7 @@ struct SchemataLowererRegistryTests {
         #expect(registry.lowerer(forOperatorID: "swift.core.arithmetic-operator-replacement") == nil)
     }
 
-    /// ADR-0006 Stage 3: the lowerer registry is the *entire* per-operator
+    /// The re-enabled schemata scoring: the lowerer registry is the *entire* per-operator
     /// scoring gate — no separate `SchemataOperatorGate` type exists.
     /// `SchemataChunkPlanner` reads `registry.lowerer(forOperatorID:) == nil`
     /// as `.isolatedFallback(reason: .operatorNotYetLowered)`, so this one

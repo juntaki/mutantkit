@@ -192,7 +192,7 @@ struct CrossFileResultCacheInvalidationTests {
         let point2 = try #require(discoveredPlan2.mutations.first { $0.file.hasSuffix("A.swift") })
         let plan2 = narrowed(discoveredPlan2, to: point2)
 
-        // Per-mutant identity (`PlannedMutationRef.pointDigest`, ADR-0005)
+        // Per-mutant identity (`PlannedMutationRef.pointDigest`, the authoritative verdict pipeline)
         // is scoped to the mutated file's own content alone — A.swift never
         // changed, so this must still be the identical mutation, not a new
         // one. If this test's premise ("A.swift's own mutation site is

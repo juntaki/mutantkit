@@ -7,9 +7,8 @@ import Testing
 /// Real, end-to-end coverage for `Configuration.execution.sharedModuleCache`
 /// — see that property's own doc comment, `WorkspaceManager
 /// .moduleCachePath(underScratchRoot:fingerprint:)`, `SharedModuleCacheNamespace`,
-/// and this project's internal isolated-build-reuse research (not part of
-/// this public repo) for the
-/// measurements and reasoning this flag rests on. Every test here spawns
+/// for the reasoning this flag rests on.
+/// Every test here spawns
 /// real `swift build`/`swift test` processes
 /// against a throwaway two-function SwiftPM fixture (`Fixture.write`,
 /// deliberately close to the research's own `probes/make-fixture.sh` —
@@ -126,8 +125,7 @@ struct SharedModuleCacheTests {
 
     // MARK: - Activation-evidence stability
 
-    /// Pins this project's internal isolated-build-reuse research's (not
-    /// part of this public repo) own manual `otool -s`
+    /// Pins a manual `otool -s`
     /// comparison as a real regression test, through the actual production
     /// hash function (`MachOCodeHash.codeHash`, not a hand-rolled
     /// reimplementation): routing system-module compilation through an
@@ -168,9 +166,47 @@ struct SharedModuleCacheTests {
         )
         #expect(expectedCachePath.lastPathComponent == ".module-cache-\(fingerprint.digest)")
 
-        let privateHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: privateBuild.binary))
-        let sharedHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: sharedBuild.binary))
+        let privateHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: privateBuild.binary, workspaceRoot: privateBuild.sandbox))
+        let sharedHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: sharedBuild.binary, workspaceRoot: sharedBuild.sandbox))
         #expect(privateHash == sharedHash, "externalizing the module cache must never change activation-hashed bytes")
+    }
+
+    /// On the real toolchain: a mutation confined to a string literal (a ternary's two
+    /// branches swapped) must change the product hash, while the same source built in a second
+    /// sandbox — whose `#file` strings carry a different path — must not.
+    @Test("A string-literal-only mutation changes the real product hash; the same source in another sandbox does not")
+    func stringLiteralOnlyMutationChangesRealProductHash() async throws {
+        func source(_ yes: String, _ no: String) -> String {
+            """
+            public struct Calc {
+                public init() {}
+                public func add(_ a: Int, _ b: Int) -> Int { return a + b }
+                public func subtract(_ a: Int, _ b: Int) -> Int { return a - b }
+                public func label(_ negated: Bool) -> String { "\\(negated ? "\(yes)" : "\(no)")" }
+                public func here() -> String { #file + #filePath }
+            }
+            """
+        }
+        let scratchRoot = Self.makeTempDir(prefix: "smc-cstring-scratch")
+        var hashes: [String] = []
+        let workspaces = try WorkspaceManager(
+            projectRoot: { () throws -> URL in
+                let root = Self.makeTempDir(prefix: "smc-cstring-project")
+                try Fixture.write(to: root)
+                return root
+            }(),
+            scratchRoot: scratchRoot
+        )
+        for (id, strings) in [("orig-a", ("> 0", "= 0")), ("orig-b", ("> 0", "= 0")), ("swapped", ("= 0", "> 0"))] {
+            let project = Self.makeTempDir(prefix: "smc-cstring-src-\(id)")
+            try Fixture.write(to: project)
+            try source(strings.0, strings.1)
+                .write(to: project.appendingPathComponent("Sources/Calc/Calc.swift"), atomically: true, encoding: .utf8)
+            let built = try await build(id: id, sourceDir: project, workspaces: workspaces, sharedModuleCache: false)
+            hashes.append(try #require(MachOCodeHash.codeHash(ofBinaryAt: built.binary, workspaceRoot: built.sandbox)))
+        }
+        #expect(hashes[0] == hashes[1], "the same source in two sandboxes must hash identically")
+        #expect(hashes[0] != hashes[2], "swapping two string literals must change the product hash")
     }
 
     // MARK: - Concurrent safety
@@ -295,7 +331,7 @@ struct SharedModuleCacheTests {
         // unmutated source — the "known correct" hash the corrupted-cache
         // build below must still match.
         let reference = try await build(id: "reference", sourceDir: projectRoot, workspaces: workspaces, sharedModuleCache: false)
-        let referenceHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: reference.binary))
+        let referenceHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: reference.binary, workspaceRoot: reference.sandbox))
 
         // Warm the shared cache for real, then corrupt one of the system
         // modules it just produced — not a made-up file, an actual `.pcm`
@@ -326,7 +362,9 @@ struct SharedModuleCacheTests {
         let afterCorruption = try await build(
             id: "afterCorruption", sourceDir: projectRoot, workspaces: workspaces, sharedModuleCache: true
         )
-        let afterCorruptionHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: afterCorruption.binary))
+        let afterCorruptionHash = try #require(
+            MachOCodeHash.codeHash(ofBinaryAt: afterCorruption.binary, workspaceRoot: afterCorruption.sandbox)
+        )
         #expect(
             afterCorruptionHash == referenceHash,
             "a corrupted shared-cache entry must never silently change the compiled program"
@@ -335,13 +373,12 @@ struct SharedModuleCacheTests {
         // Whole-directory loss is the coarser version of the same question,
         // and this run-scoped design's own answer to it: `swift build`
         // recreates a missing `-module-cache-path` directory from nothing
-        // (confirmed empirically in this project's internal isolated-build-reuse
-        // research, not part of this public repo),
+        // (confirmed empirically),
         // so deleting it outright is expected to degrade to a plain cold
         // rebuild, never a wrong one — never a build failure either.
         try FileManager.default.removeItem(at: cachePath)
         let afterDeletion = try await build(id: "afterDeletion", sourceDir: projectRoot, workspaces: workspaces, sharedModuleCache: true)
-        let afterDeletionHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: afterDeletion.binary))
+        let afterDeletionHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: afterDeletion.binary, workspaceRoot: afterDeletion.sandbox))
         #expect(afterDeletionHash == referenceHash, "a wholly-deleted shared cache directory must still rebuild correctly, not wrongly")
     }
 
@@ -377,7 +414,7 @@ struct SharedModuleCacheTests {
         let reference = try await build(
             id: "recovery-reference", sourceDir: projectRoot, workspaces: workspaces, sharedModuleCache: false
         )
-        let referenceHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: reference.binary))
+        let referenceHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: reference.binary, workspaceRoot: reference.sandbox))
 
         let sandbox = try await workspaces.createSandbox(id: "recovery-afflicted").workspaceRoot
         try FileManager.default.removeItem(at: sandbox)
@@ -411,7 +448,7 @@ struct SharedModuleCacheTests {
             SwiftPMTestProductResolver.resolve(productsDirectory: artifact.productsDirectory),
             "the recovered build did not produce a locatable .xctest bundle"
         )
-        let recoveredHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: binary))
+        let recoveredHash = try #require(MachOCodeHash.codeHash(ofBinaryAt: binary, workspaceRoot: sandbox))
         #expect(
             recoveredHash == referenceHash,
             "recovering from a broken shared cache must still produce the correct binary, never a silently wrong one"

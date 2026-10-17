@@ -9,7 +9,7 @@ import Testing
 /// independent chunks in parallel (`workers` > 1) — the change this suite
 /// pins: chunk-level fan-out bounded by a `TaskGroup` (mirroring
 /// `MutationRunner.evaluate`'s own "one in, one out" pattern), and
-/// `completedPlacementsByMutationID` (ADR-0008 §4(b)) moved into
+/// `completedPlacementsByMutationID` (the post-hang recovery semantics(b)) moved into
 /// `CompletedPlacementsTracker`, a private actor, so a later-queued chunk's
 /// own hang-budget-overflow check sees an accurate, up-to-date-as-of-now
 /// count of every *other*, already-finished chunk's contribution — never a

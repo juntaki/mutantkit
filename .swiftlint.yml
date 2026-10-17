@@ -21,10 +21,7 @@
 # (MutationRunner.swift, SchemataMutationRunner.swift, XcodeBuildAdapter.swift
 # and similar), but `cyclomatic_complexity` also covers ConfigurationValidation
 # (13), DeclarationIdentityResolver (15) and one simulator-pool test — and
-# `large_tuple` is spread across several test files. This count includes a
-# handful of entries internal-only targets (research/probe executables,
-# benchmark harness) contribute that this baseline doesn't carry, since
-# those targets are excluded from what ships publicly.
+# `large_tuple` is spread across several test files.
 # (Earlier versions of this comment also named InspectCommand.run()/
 # RunCommand.run(), then QualityGate.evaluate (16)/
 # BudgetSelectorV2.allocateCounts (18), then a ReproduceCommand handler (13);
@@ -43,8 +40,8 @@
 excluded:
   - .build
   - Fixtures          # sample Xcode/SPM projects used as acceptance-test fixtures, not project code
-  - Research          # research notes / one-off operator-catalog samples, not shipped code
-  - reference         # gitignored third-party clones kept locally for investigation, not shipped code
+  - Research          # not shipped code
+  - reference         # local third-party clones, not shipped code
 
 # Long lines are ignored in three shapes that are common and deliberate here:
 # doc/rationale comments, `\(...)`-interpolated diagnostic strings, and
@@ -60,7 +57,7 @@ line_length:
   ignores_interpolated_strings: true
   ignores_multiline_strings: true
 
-# MutationRunner.swift (2817 lines after ADR-0006 Stage 1 routed every
+# MutationRunner.swift (2817 lines after the authoritative verdict pipeline routed every
 # result-producing path through one shared MutationObservations ->
 # MutationVerdictVerifier -> ResultLedger finalization choke point) and
 # XcodeBuildAdapter.swift (1314 lines) are deliberate single-responsibility

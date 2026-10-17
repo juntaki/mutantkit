@@ -25,6 +25,12 @@ actor BaselineControlSource {
     nonisolated let workspaces: WorkspaceManager
     nonisolated let artifact: BuildArtifact
     nonisolated let memo = BaselineControlMemo()
+    /// The sandbox the baseline was compiled in, kept alive until `teardown()`.
+    /// The retained products are a copy, but the binaries in them still carry
+    /// that sandbox's absolute paths (`#filePath`), which tests use to find
+    /// fixtures and golden files; a control run must see them exist, as the
+    /// baseline and every mutant's retest did.
+    private var originSandbox: Sandbox?
 
     private init(retained: URL, workspaces: WorkspaceManager, artifact: BuildArtifact) {
         self.retained = retained
@@ -54,8 +60,32 @@ actor BaselineControlSource {
         }
     }
 
+    /// Takes over the baseline's compilation sandbox from its creator, who
+    /// must then not destroy it: `teardown()` does.
+    func adoptOrigin(_ sandbox: Sandbox) {
+        originSandbox = sandbox
+    }
+
+    /// Whether `teardown()` still has the origin sandbox to remove.
+    var originSandboxPath: URL? { originSandbox?.containerRoot }
+
     func teardown() async {
         try? await workspaces.destroyProductsClone(at: retained)
+        if let origin = originSandbox {
+            originSandbox = nil
+            try? await workspaces.destroySandbox(origin)
+        }
+    }
+
+    /// Hands `sandbox` to `control` when there is one, otherwise destroys it.
+    static func retainOrDestroy(
+        _ sandbox: Sandbox, control: BaselineControlSource?, workspaces: WorkspaceManager
+    ) async {
+        if let control {
+            await control.adoptOrigin(sandbox)
+        } else {
+            try? await workspaces.destroySandbox(sandbox)
+        }
     }
 
     /// Runs `body`, then disposes of `source` whether it returned or threw.

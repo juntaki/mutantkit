@@ -5,7 +5,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0008 §5 item 4: once a chunk's hang budget is exceeded, every
+/// The timeout-isolation acceptance gate for hang-budget overflow: once a chunk's hang budget is exceeded, every
 /// `MutationID` in that chunk not yet *fully* finalized across all of its
 /// target placements — even one embedded into a *different* chunk that
 /// hasn't run yet — is dropped from schemata scoring entirely and routed to
@@ -16,7 +16,7 @@ import Testing
 /// `MutationID` with placements in two different `SchemataProgram`s/chunks,
 /// where one placement already individually verified fine before the
 /// *other* chunk's own, unrelated hang overflowed its budget.
-@Suite("SchemataMutationRunner: ADR-0008 hang-budget overflow")
+@Suite("SchemataMutationRunner: schemata hang-budget overflow")
 struct SchemataMutationRunnerHangBudgetOverflowTests {
     // MARK: - Fixture
 

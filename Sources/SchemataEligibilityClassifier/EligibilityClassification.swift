@@ -4,9 +4,8 @@ import MutationModel
 import MutationPlanner
 import SwiftFrontend
 
-/// Research-only, outcome-blind classification core for an internal
-/// design-validation protocol's Protocol v3 addendum (Corpus B calibration
-/// population selection rule). Separated from
+/// Outcome-blind classification core: which mutations of a plan a schemata
+/// run can embed. Separated from
 /// `main.swift` so a test target can call it directly without going
 /// through `ParsableCommand`/process argv.
 ///

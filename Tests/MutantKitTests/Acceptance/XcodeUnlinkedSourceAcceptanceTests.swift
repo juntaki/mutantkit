@@ -15,7 +15,7 @@ import Testing
 /// mutating it changes the source tree, the build succeeds, every test still
 /// passes — and the two mutants on it still must never be credited as a kill.
 ///
-/// ADR-0006 Stage 1 moved this check upstream, into
+/// The authoritative verdict pipeline moved this check upstream, into
 /// `MutationVerdictVerifier.classify`'s own `unprovenActivation` gate: an
 /// unproven-activation result is classified `.infrastructureFailure` (and
 /// excluded from the score, never scored as a survivor) the moment the
@@ -73,7 +73,7 @@ struct XcodeUnlinkedSourceAcceptanceTests {
     /// never be credited as a kill, by name, rather than being silently
     /// scored as an ordinary survivor — see the suite's own doc comment for
     /// why this is `.infrastructureFailure`/excluded rather than an
-    /// `IntegrityReport` violation under the current (ADR-0006 Stage 1)
+    /// `IntegrityReport` violation under the current (the authoritative verdict pipeline)
     /// architecture.
     @Test("A mutation outside every target's Compile Sources is excluded, never credited as a kill")
     func unlinkedMutationIsExcludedFromTheScore() throws {

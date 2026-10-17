@@ -6,7 +6,7 @@ import Testing
 
 /// Empirical proof that `BoolLiteralSchemataLowerer`'s ternary-selector
 /// embedding type-checks at every site the isolated operator itself already
-/// discovers a boolean literal at — including the hard positions ADR-0003
+/// discovers a boolean literal at — including the hard positions the schemata evidence contract
 /// calls out as the ones a naive lowering can silently break (argument
 /// position, return position, a closure body, an `async` function, an
 /// actor-isolated context, a global initializer, a hot loop). A real

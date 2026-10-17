@@ -15,8 +15,8 @@ import Testing
 /// `xcodeProject` row in `docs/schemata-support-matrix.md`, and
 /// `docs/apple-support-matrix.md` and
 /// `Sources/CLI/ExecutionCapabilitiesDiagnosis.swift`'s own remedy text
-/// agree). That is exactly the platform `ADR/0009-ios-execution-default.md`
-/// — status "Accepted, implemented" — measured at **6383s schemata versus
+/// agree). That is exactly the platform `docs/execution.md`
+/// ("Why `isolated` is the default on Xcode and the iOS Simulator") records at **6383s schemata versus
 /// 3928s isolated, +62.5%**, with the gap widening as the corpus grew, and
 /// on that evidence made `isolated` the default and `schemata` an explicit
 /// opt-in "for advanced or research use".
@@ -47,9 +47,7 @@ struct ShippedGuidancePerformanceClaimTests {
             .deletingLastPathComponent() // repository root
     }
 
-    /// Prose a user or an agent actually reads. `Research/` is deliberately
-    /// excluded: it is where provisional and superseded measurements are
-    /// supposed to live, and it does not ship.
+    /// Prose a user or an agent actually reads.
     private static var shippedProse: [URL] {
         let root = repositoryRoot
         var files = [root.appendingPathComponent("README.md")]
@@ -93,22 +91,23 @@ struct ShippedGuidancePerformanceClaimTests {
         needles.contains { haystack.contains($0) }
     }
 
-    // MARK: - Rule A: an iOS speed claim must cite the ADR that measured it
+    // MARK: - Rule A: an iOS speed claim must cite the measurement
 
     /// A paragraph that makes a speed claim *and* names the iOS/Xcode
-    /// execution surface must cite ADR-0009. The ADR is what turned that
-    /// comparison from an opinion into a measurement; a shipped claim about
-    /// it that does not point at the measurement is how the original defect
-    /// read.
-    static func iOSSpeedClaimsMissingTheADR(in paragraph: Paragraph) -> Bool {
+    /// execution surface must cite `docs/execution.md`, which states that
+    /// comparison as a measurement; a shipped claim about it that does not
+    /// point at the measurement is how the original defect read. The file
+    /// that states the measurement is the source, so it cites itself.
+    static func iOSSpeedClaimsMissingTheMeasurement(in paragraph: Paragraph) -> Bool {
         let lower = paragraph.text.lowercased()
         let makesSpeedClaim = containsAny(lower, ["faster", "slower", "speedup", "quicker"])
         let namesIOSSurface = containsAny(lower, ["xcodeproject", "ios simulator", "ios-simulator"])
-        let citesTheADR = containsAny(paragraph.text, ["ADR/0009", "ADR-0009"])
-        return makesSpeedClaim && namesIOSSurface && !citesTheADR
+        let citesTheMeasurement = paragraph.file == "docs/execution.md"
+            || paragraph.text.contains("docs/execution.md")
+        return makesSpeedClaim && namesIOSSurface && !citesTheMeasurement
     }
 
-    @Test("No shipped paragraph claims an iOS/Xcode execution speed without citing ADR-0009")
+    @Test("No shipped paragraph claims an iOS/Xcode execution speed without citing docs/execution.md")
     func iOSSpeedClaimsCiteTheMeasurement() throws {
         var offenders: [Paragraph] = []
         var scanned = 0
@@ -117,7 +116,7 @@ struct ShippedGuidancePerformanceClaimTests {
             let relative = file.path.replacingOccurrences(of: Self.repositoryRoot.path + "/", with: "")
             for paragraph in Self.paragraphs(of: text, file: relative) {
                 scanned += 1
-                if Self.iOSSpeedClaimsMissingTheADR(in: paragraph) { offenders.append(paragraph) }
+                if Self.iOSSpeedClaimsMissingTheMeasurement(in: paragraph) { offenders.append(paragraph) }
             }
         }
 
@@ -128,7 +127,7 @@ struct ShippedGuidancePerformanceClaimTests {
             offenders.isEmpty,
             """
             \(offenders.count) shipped paragraph(s) make an iOS/Xcode speed claim without citing \
-            ADR/0009-ios-execution-default.md, which measured schemata at +62.5% wall clock \
+            docs/execution.md, which records schemata at +62.5% wall clock \
             (6383s vs 3928s) on a real 100-mutant iOS corpus and made isolated the default there:
             \(offenders.map { "\($0.file):\($0.line) — \($0.text.prefix(220))" }.joined(separator: "\n\n"))
             """
@@ -184,7 +183,7 @@ struct ShippedGuidancePerformanceClaimTests {
     @Test("Rule A flags the exact paragraph that shipped")
     func ruleAFlagsTheRealDefect() {
         let paragraph = try? #require(Self.paragraphs(of: Self.shippedDefect, file: "fixture.md").first)
-        #expect(paragraph.map(Self.iOSSpeedClaimsMissingTheADR) == true)
+        #expect(paragraph.map(Self.iOSSpeedClaimsMissingTheMeasurement) == true)
     }
 
     @Test("Rule B flags the exact paragraph that shipped")
@@ -193,18 +192,18 @@ struct ShippedGuidancePerformanceClaimTests {
         #expect(paragraph.map(Self.miscitesTheSupportMatrix) == true)
     }
 
-    @Test("Rule A accepts an iOS speed claim that does cite the ADR")
+    @Test("Rule A accepts an iOS speed claim that does cite the measurement")
     func ruleAAcceptsACitedClaim() {
-        let text = "on Xcode/iOS-Simulator schemata measured 62.5% slower — see `ADR/0009-ios-execution-default.md`."
+        let text = "on Xcode/iOS-Simulator schemata measured 62.5% slower — see `docs/execution.md`."
         let paragraph = Self.paragraphs(of: text, file: "fixture.md")[0]
-        #expect(!Self.iOSSpeedClaimsMissingTheADR(in: paragraph))
+        #expect(!Self.iOSSpeedClaimsMissingTheMeasurement(in: paragraph))
     }
 
     @Test("Rule A ignores a speed claim that names no iOS surface")
     func ruleAIgnoresNonIOSClaims() {
         let text = "incrementalBuild makes a SwiftPM/macOS run substantially faster."
         let paragraph = Self.paragraphs(of: text, file: "fixture.md")[0]
-        #expect(!Self.iOSSpeedClaimsMissingTheADR(in: paragraph))
+        #expect(!Self.iOSSpeedClaimsMissingTheMeasurement(in: paragraph))
     }
 
     @Test("Rule B ignores a paragraph that cites the matrix for support, not speed")

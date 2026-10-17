@@ -348,7 +348,7 @@ public enum ExecutionProfileResolver {
     /// `MutationRunner.testInWaves` path, leaving the adapter unwrapped).
     /// `SchemataRunOrchestration.run` requires the resolved test adapter to
     /// be `SchemataTestable`, so wrapping it here would turn a legitimate,
-    /// ADR-0009-sanctioned `earlyAbortSelectedTests: true` into a hard
+    /// The iOS execution default-sanctioned `earlyAbortSelectedTests: true` into a hard
     /// "adapter does not support schemata execution" failure on every
     /// mutant — never a case where staying on `.isolated` (which already
     /// runs this exact combination correctly today) loses anything

@@ -7,9 +7,9 @@
       "Inverted feature-flag and guard defaults are a recurring class of regression in Swift apps; a boolean default that no test pins down can be flipped without any test noticing."
     ],
     "id" : "swift.core.bool-literal-inversion",
-    "reachableProfile" : "conservative",
+    "reachableProfile" : "default",
     "requiresSymbolResolution" : false,
-    "schemaVersion" : 1,
+    "schemaVersion" : 2,
     "schemataEligible" : false,
     "summary" : "Replaces a boolean literal with its opposite (true ↔ false).",
     "version" : 1

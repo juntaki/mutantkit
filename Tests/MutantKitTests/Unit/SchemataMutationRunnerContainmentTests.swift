@@ -5,8 +5,8 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0008 §5 items 1, 2, 5(a), 6: the containment mechanism (Option B item
-/// 1) — a forced timeout-kill (primary or confirmation) discards the current
+/// The timeout-isolation acceptance gate: the containment mechanism
+/// — a forced timeout-kill (primary or confirmation) discards the current
 /// chunk's sandbox/build product and rebuilds before any further process is
 /// spawned against it, but an ordinary crash never triggers this, and a
 /// rebuild is never spawned when there is nothing left in the chunk to
@@ -14,7 +14,7 @@ import Testing
 /// exercised here — these tests keep `maxVerifiedTimeouts` effectively
 /// unreachable so containment correctness is isolated from budget/overflow
 /// correctness, per the implementation plan's phase sequencing.
-@Suite("SchemataMutationRunner: ADR-0008 containment")
+@Suite("SchemataMutationRunner: schemata timeout containment")
 struct SchemataMutationRunnerContainmentTests {
     // MARK: - Fixture: an N-entry chunk, one bool-literal mutant per entry, all in one chunk
 
@@ -266,8 +266,8 @@ struct SchemataMutationRunnerContainmentTests {
         #expect(try outcome(for: fixture.sortedPoints[0].id, in: result).outcome == .killedByCrash)
         #expect(try outcome(for: fixture.sortedPoints[1].id, in: result).outcome == .survived)
 
-        // A crash is not a `TestRunResult.status == .timedOut` fact — ADR-0008
-        // §3.2 scopes containment to forced timeout-kills only. No rebuild
+        // A crash is not a `TestRunResult.status == .timedOut` fact — the schemata timeout-isolation design
+        // scopes containment to forced timeout-kills only. No rebuild
         // of any kind should occur.
         #expect(adapter.buildCallCount == 1)
     }

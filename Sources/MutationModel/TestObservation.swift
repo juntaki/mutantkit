@@ -1,6 +1,6 @@
 import Foundation
 
-/// Moved here from `MutationExecution` (ADR-0006 Stage 1): `MutationVerdictVerifier`
+/// Moved here from `MutationExecution` (the authoritative verdict pipeline): `MutationVerdictVerifier`
 /// is the only place a mutation's outcome may be decided, and it lives in
 /// `MutationModel` (so its exclusive-construction guarantee on
 /// `VerifiedMutationRecord` holds across every caller). It therefore needs
@@ -15,6 +15,11 @@ import Foundation
 public enum BuildFailureKind: Codable, Sendable {
     /// The mutated source does not compile. A legitimate `unviable` mutant.
     case compilationError
+    /// The compiler itself crashed on the mutated source, and an independent rebuild of the same
+    /// mutation in a fresh sandbox crashed it again while the unmutated baseline builds. The mutant
+    /// cannot be built into anything testable, so it is `unviable` like a compilation error, but it is
+    /// a different build fact: a single crash is never this (see `BuildFailure.isCompilerCrashCandidate`).
+    case confirmedCompilerCrash
     /// Toolchain, simulator, signing or disk problem. Never a mutant's fault.
     case infrastructure
     case timedOut
@@ -26,12 +31,26 @@ public struct BuildFailure: Error, Sendable {
     public let command: CommandRecord
     /// Truncated and redacted compiler output.
     public let output: String
+    /// The output shows a Swift compiler process crashing (crash banner, stack dump with compiler frames
+    /// and a signal frame) with no compiler diagnostic and no environment failure. Only a candidate: one
+    /// crash cannot tell a mutant that crashes the compiler from a broken or overloaded machine, so the
+    /// kind stays `.infrastructure` until the executor reproduces it in an independent rebuild.
+    public let isCompilerCrashCandidate: Bool
+    /// What identifies the crash of a candidate, when its output carries enough to tell it from another
+    /// crash. A rebuild only confirms a crash that has the same signature as the first; a candidate
+    /// without one cannot be confirmed.
+    public let compilerCrashSignature: CompilerCrashSignature?
 
-    public init(kind: BuildFailureKind, diagnosis: String, command: CommandRecord, output: String) {
+    public init(
+        kind: BuildFailureKind, diagnosis: String, command: CommandRecord, output: String,
+        isCompilerCrashCandidate: Bool = false, compilerCrashSignature: CompilerCrashSignature? = nil
+    ) {
         self.kind = kind
         self.diagnosis = diagnosis
         self.command = command
         self.output = output
+        self.isCompilerCrashCandidate = isCompilerCrashCandidate
+        self.compilerCrashSignature = compilerCrashSignature
     }
 }
 
@@ -81,6 +100,11 @@ public struct TestRunResult: Codable, Sendable {
     /// genuine-timeout case, where the conservative `.flaky`
     /// reclassification still applies).
     public let isBatchAttributedTimeout: Bool
+    /// Present only when `status == .crashed` was inferred from a fixed diagnostic line the test
+    /// runner itself printed, because the structured outputs (exit status, xunit) could not record the
+    /// crash. It is an observation, never a verdict: a crash that carries it must be independently
+    /// confirmed (`MutationVerdictVerifier`), and without that confirmation it is not a kill.
+    public let crashProvenance: CrashProvenance?
 
     public init(
         status: TestRunStatus,
@@ -88,14 +112,41 @@ public struct TestRunResult: Codable, Sendable {
         command: CommandRecord,
         resultArtifactPath: URL?,
         diagnosis: String,
-        isBatchAttributedTimeout: Bool = false
+        isBatchAttributedTimeout: Bool = false,
+        crashProvenance: CrashProvenance? = nil
     ) {
+        self.crashProvenance = crashProvenance
         self.status = status
         self.summary = summary
         self.command = command
         self.resultArtifactPath = resultArtifactPath
         self.diagnosis = diagnosis
         self.isBatchAttributedTimeout = isBatchAttributedTimeout
+    }
+}
+
+/// Why a test run was called a crash without a structured record of one: the exact diagnostic line, who
+/// printed it, and the raw output it came from, so the claim can be re-examined offline.
+public struct CrashProvenance: Codable, Sendable, Hashable {
+    public enum Source: String, Codable, Sendable, Hashable {
+        /// SwiftPM's `error: Process '<cmd>' exited with unexpected signal code <N>`, printed by
+        /// `swift test` when its test helper process is killed by a signal.
+        case swiftPMTestHelperSignalDiagnostic
+    }
+
+    public let source: Source
+    public let matchedLine: String
+    public let signal: Int32
+    /// Bounded, redacted tails of the raw streams (the evidence the line was read from).
+    public let standardErrorTail: String
+    public let standardOutputTail: String
+
+    public init(source: Source, matchedLine: String, signal: Int32, standardErrorTail: String, standardOutputTail: String) {
+        self.source = source
+        self.matchedLine = matchedLine
+        self.signal = signal
+        self.standardErrorTail = standardErrorTail
+        self.standardOutputTail = standardOutputTail
     }
 }
 

@@ -54,7 +54,7 @@ public struct SchemataSelectorToken: Codable, Sendable, Hashable {
 /// `selectorToken` nil, say), and a reader had no way to tell "not embedded
 /// yet" apart from "a bug omitted a required field."
 ///
-/// `.embedded` carries a *list* of placements (ADR-0005 PR F), not a single
+/// `.embedded` carries a *list* of placements (multi-target embedding), not a single
 /// flat set of fields: a mutation whose source file is compiled into more
 /// than one target (a shared model file added directly to an app target and
 /// a widget extension's own Compile Sources, say) embeds independently into
@@ -86,7 +86,7 @@ public struct SchemataEmbeddedPlacement: Codable, Sendable, Hashable {
     public let module: String
     public let product: String
     /// Every Mach-O image expected to carry this mutation once this
-    /// specific target is built. Superseded by ADR-0006 Stage 2's real
+    /// specific target is built. Superseded by the schemata proof chain's real
     /// build-time proof (`SchemataBuildReceipt`/`CompilationUnitReceipt`,
     /// resolved by `SchemataBuildable.resolveSchemataBuildReceipt` and
     /// checked by `MutationVerdictVerifier.verifySchemataChain`) — not
@@ -140,7 +140,7 @@ public struct SchemataLowererDescriptor: Codable, Sendable, Hashable {
 
 /// How a candidate would have to be rewritten to embed it in a schema binary.
 ///
-/// See ADR-0003. There is deliberately no universal lowering: an `if`
+/// See the schemata evidence contract. There is deliberately no universal lowering: an `if`
 /// expression is only legal Swift in variable-initialization, `return`, and
 /// direct-assignment position, so a candidate sitting in a function argument
 /// or an arbitrary subexpression cannot use that shape at all. `if` expression
@@ -195,7 +195,7 @@ public enum SchemataUnsupportedReason: Codable, Sendable, Hashable {
     case structuralConflict(reason: String)
     /// The current backend/platform combination (e.g. a UI test target, an
     /// app extension, an XPC service) cannot receive runtime selection —
-    /// see ADR-0003's UI-test section.
+    /// see the schemata evidence contract's UI-test section.
     case platformUnsupported(reason: String)
     /// A lowering that needs to read an operand more than once (e.g.
     /// `RelationalOperatorReplacementSchemataLowerer`'s `lhs`/`rhs`) could
@@ -218,7 +218,7 @@ public enum SchemataUnsupportedReason: Codable, Sendable, Hashable {
     /// because replacing a literal pattern with a runtime selector changes
     /// the compiler-visible pattern shape and can invalidate compile-time
     /// exhaustiveness analysis or otherwise make schemata lowering unsound
-    /// for pattern matching — not a hypothetical, see ADR-0008 Addendum 4's
+    /// for pattern matching — not a hypothetical, see shared chunk build-failure attribution's
     /// real-corpus finding (a shared schemata chunk failed to compile,
     /// "switch must be exhaustive," because a case-pattern boolean literal
     /// had been rewritten this way). Not a type-variance question
@@ -239,6 +239,13 @@ public enum SchemataUnsupportedReason: Codable, Sendable, Hashable {
     /// the three separate is what makes classification output say which
     /// hazard actually applied.
     case controlFlowConstant
+    /// The site is in a target the build itself executes (a SwiftPM macro
+    /// implementation run by the compiler while compiling clients). Isolated
+    /// mode measures the effect on clients' compilation; schemata only
+    /// selects at test runtime, so it would measure a different experiment
+    /// (the macro's own unit tests). Distinct from `.processStartRequired`
+    /// (a runtime startup question) and `.platformUnsupported`.
+    case compileTimeExecutedTarget(target: String)
 }
 
 /// The outcome of asking whether one candidate could be embedded in a

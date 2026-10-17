@@ -61,9 +61,7 @@ struct MutationConfirmationCoordinator: Sendable {
     /// reassigned for this coordinator's whole lifetime, so the resolved
     /// value cannot go stale. The resolver itself (unwraps through
     /// `TestAdapterWrapping`) is unchanged; only *when* it runs moves from
-    /// "every `confirmKill` call" to "once, at construction." See this
-    /// project's internal execution-engine restructuring notes (not part
-    /// of this public repo) for the full rationale.
+    /// "every `confirmKill` call" to "once, at construction."
     let manifestDependentTest: (any PackageManifestConfirmationRetesting)?
     /// `test`'s `TestSelecting` conformance, memoized on the same terms as
     /// `manifestDependentTest` above.

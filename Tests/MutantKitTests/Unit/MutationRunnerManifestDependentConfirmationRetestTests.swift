@@ -13,9 +13,7 @@ import Testing
 /// source tree, which SwiftPM cannot resolve a package graph from at all.
 /// The retest failed before it ever ran a single test, and `MutationVerdictVerifier`
 /// correctly (but only because it fails safe) sank the confirmation to
-/// `.flaky` rather than crediting an unconfirmable kill — root-caused in
-/// this project's internal product-completeness freeze-release-gate
-/// research (not part of this public repo).
+/// `.flaky` rather than crediting an unconfirmable kill.
 ///
 /// The fix: `MutationConfirmationCoordinator.confirmKill` now dispatches to
 /// `PackageManifestConfirmationRetesting.runConfirmationRetest` when the

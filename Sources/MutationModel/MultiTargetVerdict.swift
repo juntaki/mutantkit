@@ -34,8 +34,8 @@ public struct TargetVerdict: Encodable, Sendable, Hashable {
 
 /// A mutation's full multi-target verdict — every target's own
 /// `VerifiedMutationRecord`, never collapsed to a single winner that
-/// discards the others' evidence (ADR-0006 Stage 1, second review round:
-/// PR F's `mergeMultiTargetResults` did exactly that, keeping only the
+/// discards the others' evidence (the authoritative verdict pipeline, second review round:
+/// the earlier multi-target embedding's `mergeMultiTargetResults` did exactly that, keeping only the
 /// highest-ranked target's `MutationResult` and losing every other
 /// target's proof permanently).
 public struct MultiTargetVerdict: Encodable, Sendable, Hashable {
@@ -52,7 +52,7 @@ public struct MultiTargetVerdict: Encodable, Sendable, Hashable {
     public let perTarget: [TargetVerdict]
 
     /// The current aggregation policy: kill in any target counts as killed
-    /// overall (the product decision ADR-0005 PR F settled on). Ranked so
+    /// overall (the product decision multi-target embedding settled on). Ranked so
     /// a kill always wins over `.survived`, which wins over `.noCoverage`,
     /// which wins over a build failure, which wins over an environmental/
     /// indeterminate outcome. Bumping this requires bumping
@@ -113,7 +113,7 @@ public struct MultiTargetVerdict: Encodable, Sendable, Hashable {
         case .survived: 4
         case .noCoverage: 3
         case .unviable: 2
-        case .flaky, .timedOut, .notApplied, .baselineMismatch: 1
+        case .flaky, .timedOut, .notApplied, .baselineMismatch, .notMaterialized: 1
         case .infrastructureFailure, .skipped: 0
         }
     }

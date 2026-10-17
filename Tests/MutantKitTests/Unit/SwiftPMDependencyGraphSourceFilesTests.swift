@@ -84,6 +84,28 @@ struct SwiftPMDependencyGraphSourceFilesTests {
         #expect(files == ["Sources/Core/Types.swift", "Sources/Networking/Auth.swift", "Sources/Networking/Client.swift"])
     }
 
+    @Test("A .docc catalog's .swift samples inside a target directory are never compilation sources")
+    func doccCatalogSamplesAreExcluded() throws {
+        let graph = try Self.graph("""
+        {
+          "targets": [
+            {
+              "name": "Lib", "path": "Sources/Lib",
+              "sources": ["Real.swift", "Documentation.docc/Tutorials/Step-01.swift"],
+              "type": "library", "product_memberships": ["Lib"]
+            },
+            {
+              "name": "LibTests", "path": "Tests/LibTests", "sources": ["T.swift"],
+              "type": "test", "target_dependencies": ["Lib"]
+            }
+          ],
+          "products": []
+        }
+        """)
+
+        #expect(graph.sourceFiles(reachableFrom: ["LibTests"]) == ["Sources/Lib/Real.swift"])
+    }
+
     @Test("A target rooted at the package root (path: \".\") joins without a spurious leading ./")
     func rootPathTargetJoinsCleanly() throws {
         // `swift package describe` reports a target whose sources live

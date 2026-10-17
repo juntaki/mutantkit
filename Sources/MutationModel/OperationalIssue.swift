@@ -13,7 +13,7 @@ public struct OperationalIssue: Codable, Sendable, Hashable {
     /// Five cases today, plus a partial per-test coverage attribution:
     /// `MutationRunner.finalize`'s checkpoint write, a
     /// shared schemata chunk build that genuinely failed to compile
-    /// (ADR-0008 Addendum 4's fan-out/observability requirement — one issue
+    /// (shared chunk build-failure attribution's fan-out/observability requirement — one issue
     /// per failed chunk, never one per affected `MutationID`), a chunk whose
     /// build succeeded but whose own build receipt could not be resolved,
     /// and a `noOpCanarySampleRate`-sampled mutant whose build product

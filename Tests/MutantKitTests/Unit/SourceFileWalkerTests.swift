@@ -83,6 +83,18 @@ struct SourceFileWalkerTests {
         #expect(found == ["Sources/Foo.swift"])
     }
 
+    @Test("A .docc catalog is pruned regardless of config, and admits agrees")
+    func doccCatalogsArePruned() throws {
+        try write("Sources/Lib/Real.swift")
+        try write("Sources/Lib/Documentation.docc/Tutorials/Step-01.swift")
+
+        #expect(try walk(exclude: []) == ["Sources/Lib/Real.swift"])
+
+        let walker = SourceFileWalker(root: root, settings: SourceSettings(include: ["Sources/**"], exclude: []))
+        #expect(walker.admits(relativePath: "Sources/Lib/Real.swift"))
+        #expect(!walker.admits(relativePath: "Sources/Lib/Documentation.docc/Tutorials/Step-01.swift"))
+    }
+
     /// A symlink that points at an ancestor would loop the walker forever. The
     /// walker skips symlinks rather than resolving them — this is the only
     /// reason a malicious or accidental link cannot hang a run.

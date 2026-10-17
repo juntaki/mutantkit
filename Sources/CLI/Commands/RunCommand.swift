@@ -37,6 +37,15 @@ struct RunCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Exit non-zero if any mutant survives.")
     var failOnSurvivors = false
 
+    @Flag(name: .long, help: ArgumentHelp(
+        "Qualification run: exit non-zero (6) unless schemata mode actually executed. "
+            + "Without this, a schemata run that fell back to isolated still exits 0."
+    ))
+    var requireSchemata = false
+
+    @Option(name: .long, help: "With --require-schemata: how many mutations may fall back to isolated execution before the run is invalid.")
+    var maxUnexpectedFallbacks = 0
+
     @Flag(name: .long, help: "Ignore any checkpoint and re-run every mutant.")
     var noResume = false
 
@@ -347,33 +356,40 @@ struct RunCommand: AsyncParsableCommand {
         )
         writeManifest(plan: loadedPlan, context: manifestContext, baselineDuration: 0, to: manifestURL)
 
-        let executed = try await Self.execute(
-            strategy: settings.resolved.execution.strategy,
-            context: HybridExecutionEngine.Context(
-                plan: loadedPlan, configuration: settings.resolved, projectRoot: root,
-                adapter: resolution.adapter, testAdapter: testAdapter, toolchain: toolchain,
-                // Deliberately the same two values passed to
-                // `HybridExecutionEngine.IsolatedRunOptions` below, not a
-                // second cache instance or a second digest computation:
-                // whichever backend measures the attribution first, the
-                // other one reuses it.
-                coverageCache: coverageCache, coverageCacheKey: coverageCacheKey
-            ),
-            workspaces: workspaces, runDirectory: runDirectory,
-            isolatedOptions: HybridExecutionEngine.IsolatedRunOptions(
-                checkpoints: checkpoints, artifactsRoot: artifacts, coverageCache: coverageCache, coverageCacheKey: coverageCacheKey,
-                resultCache: resultCache, resultCacheDigest: resultCacheDigest, priorityStore: runnerPriorityStore,
-                // Labelled, and only ever handed to the `.isolated` branch of
-                // `execute` below, where the whole plan really is what this
-                // one runner will work through. A schemata run's own
-                // isolated-fallback portion gets a separate reporter totalled
-                // on the *fallback* plan (see `runFallbackPortion`) — this
-                // total would stall short of completion there, since most of
-                // the plan never reaches that portion.
-                progress: ProgressReporter(total: loadedPlan.mutations.count, label: "mutants"),
-                evidenceArchive: evidenceArchive
-            )
+        // Only the isolated backend checkpoints per mutant, so only it can stop
+        // gracefully; other strategies keep the default signal behaviour.
+        let strategy = settings.resolved.execution.strategy
+        let stop = strategy == .isolated ? RunStopRequest() : nil
+        let progress = ProgressReporter(total: loadedPlan.mutations.count, label: "mutants")
+        let engineContext = HybridExecutionEngine.Context(
+            plan: loadedPlan, configuration: settings.resolved, projectRoot: root,
+            adapter: resolution.adapter, testAdapter: testAdapter, toolchain: toolchain,
+            // Deliberately the same two values passed to
+            // `HybridExecutionEngine.IsolatedRunOptions` below, not a
+            // second cache instance or a second digest computation:
+            // whichever backend measures the attribution first, the
+            // other one reuses it.
+            coverageCache: coverageCache, coverageCacheKey: coverageCacheKey, evidenceArchive: evidenceArchive
         )
+        let isolatedOptions = HybridExecutionEngine.IsolatedRunOptions(
+            checkpoints: checkpoints, artifactsRoot: artifacts, coverageCache: coverageCache, coverageCacheKey: coverageCacheKey,
+            resultCache: resultCache, resultCacheDigest: resultCacheDigest, priorityStore: runnerPriorityStore,
+            // Labelled, and only ever handed to the `.isolated` branch of
+            // `execute` below, where the whole plan really is what this
+            // one runner will work through. A schemata run's own
+            // isolated-fallback portion gets a separate reporter totalled
+            // on the *fallback* plan (see `runFallbackPortion`) — this
+            // total would stall short of completion there, since most of
+            // the plan never reaches that portion.
+            progress: progress, evidenceArchive: evidenceArchive, stop: stop
+        )
+        let executed = try await Self.withInterruptHandling(stop: stop) {
+            try await Self.execute(
+                strategy: strategy, context: engineContext, workspaces: workspaces,
+                runDirectory: runDirectory, isolatedOptions: isolatedOptions
+            )
+        }
+        await progress.finish()
         let report = Self.sealEvidenceArchive(evidenceArchive, in: executed, keep: settings.resolved.evidence?.keep)
 
         // Rewritten with the *measured* baseline-adaptive timeout once the
@@ -385,7 +401,28 @@ struct RunCommand: AsyncParsableCommand {
             writeManifest(plan: loadedPlan, context: manifestContext, baselineDuration: report.baseline.durationSeconds, to: manifestURL)
         }
 
-        try emit(report, settings: settings.resolved, runDirectory: runDirectory)
+        try await concludeRun(
+            report, stop: stop, checkpointURL: checkpoints.fileURL, settings: settings.resolved, runDirectory: runDirectory
+        )
+    }
+
+    /// What follows a finished (or interrupted) execution: the interruption exit, the reports, the optional
+    /// timing file, the history entry, and the integrity, qualification and survivor exits.
+    private func concludeRun(
+        _ report: RunReport, stop: RunStopRequest?, checkpointURL: URL, settings: Configuration, runDirectory: URL
+    ) async throws {
+        // An interrupted run: write what exists (a report marked partial when
+        // any mutant has a result), say how to resume, and exit with a code of
+        // its own. No history entry — a partial run is not a data point.
+        if let summary = Self.interruptionSummary(
+            report: report, stop: stop, checkpointURL: checkpointURL, arguments: CommandLine.arguments
+        ) {
+            if report.interruption != nil { try emit(report, settings: settings, runDirectory: runDirectory) }
+            print(summary)
+            throw ExitCode(MutantKitExit.interrupted)
+        }
+
+        try emit(report, settings: settings, runDirectory: runDirectory)
         // Diagnostic timing instrumentation only (see
         // `GateTimingRecorder`'s own doc comment) — every other run leaves
         // this env var unset and pays nothing beyond the spans' already-
@@ -404,8 +441,21 @@ struct RunCommand: AsyncParsableCommand {
         guard report.integrity.passed else {
             throw ExitCode(MutantKitExit.integrityFailure)
         }
+        try enforceSchemataQualification(report)
         if failOnSurvivors, (report.score?.survived ?? 0) > 0 {
             throw ExitCode(MutantKitExit.survivorsFound)
+        }
+    }
+
+    private func enforceSchemataQualification(_ report: RunReport) throws {
+        guard requireSchemata else { return }
+        let problems = SchemataQualification(maximumUnexpectedFallbacks: maxUnexpectedFallbacks).violations(in: report)
+        if !problems.isEmpty {
+            FileHandle.standardError.write(Data((
+                "error: --require-schemata: this run is not a valid schemata measurement:\n"
+                    + problems.map { "  - \($0)\n" }.joined()
+            ).utf8))
+            throw ExitCode(MutantKitExit.qualificationFailed)
         }
     }
 

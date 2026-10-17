@@ -165,7 +165,7 @@ struct XcodeSchemataAdapterAcceptanceTests {
         )
         #expect(mutated.status == .failed, "the requested token must activate the embedded mutation and flip the test's result: \(mutated.diagnosis)")
 
-        // ADR-0006 Finding 2/4's build-time half: a real per-image UUID,
+        // The image-identity proof and the unit-to-image mapping's build-time half: a real per-image UUID,
         // extracted from the actual built bundle via the target's own real
         // build settings, not a placeholder or a name-matched guess.
         let entry = try #require(staged.program.entries.first)
@@ -196,7 +196,7 @@ struct XcodeSchemataAdapterAcceptanceTests {
             #expect(!image.slices.isEmpty)
         }
 
-        // ADR-0006 Stage 2: the real chain proof end to end — a real build
+        // The schemata proof chain: the real chain proof end to end — a real build
         // receipt plus a real transcript, fed straight into the same
         // verifier production uses, not a hand-rolled cross-check.
         let transcript = try SchemataEvidenceCollector.readTranscript(at: transcriptPath)
@@ -217,7 +217,11 @@ struct XcodeSchemataAdapterAcceptanceTests {
                 sourceDiff: "--- a\n+++ b\n", buildProductHash: artifact.productHash, applicationEvidence: .schemata(observation)
             )),
             build: BuildObservation(outcome: .succeeded(buildProductHash: artifact.productHash, command: nil)),
-            test: SingleTestObservation(run: mutated, applicationEvidence: .schemata(observation))
+            // The token run executed the whole configured suite; a kill is only credited with a recorded execution.
+            test: SingleTestObservation(
+                run: mutated, applicationEvidence: .schemata(observation),
+                execution: TestExecutionRecord(attribution: .standalone, selection: .wholeSuite)
+            )
         )
         let record = MutationVerdictVerifier.verify(observations, policy: .permissive)
         #expect(

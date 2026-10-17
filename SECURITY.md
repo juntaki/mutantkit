@@ -100,10 +100,9 @@ is not build provenance from the original release pipeline.
 An SBOM is planned but not yet implemented. Until it lands, verify a
 release's dependency set from `Package.resolved` at the tagged commit.
 
-See [docs/public-quality-badges.md](docs/public-quality-badges.md) for the
-external quality/supply-chain signals (Codecov, SonarCloud, OpenSSF
-Scorecard) run against this repository, and the disposition of any known
-gap on one of them.
+The external quality and supply-chain signals run against this repository
+(Codecov, SonarCloud, OpenSSF Scorecard) are shown as badges in the
+[README](README.md).
 
 ## Threat model — what is *not* guaranteed
 

@@ -30,7 +30,7 @@ classification -- an earlier version of this script included `Tests/`
 paths and inflated Sonar's `lines_to_cover` by tens of thousands of test
 lines Codecov never counts, which is exactly why the two dashboards'
 percentages stopped being comparable. Every other production-code
-exclusion (`Fixtures/`, `Research/`, the probe-only executable targets,
+exclusion (`Fixtures/`, build output,
 ...) does not need duplicating here: `sonar.coverage.exclusions` already
 applies to Sonar's coverage metric regardless of which sensor supplied
 the raw data.

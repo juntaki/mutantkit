@@ -12,11 +12,8 @@ import SwiftSyntax
 /// `pointfreeco/swift-composable-architecture`,
 /// `pointfreeco/swift-concurrency-extras`), Category B specifically — "a
 /// continuation (or set of pending continuations) never gets resumed" — 5
-/// of those 15 commits. See the internal fault-taxonomy research on Apple
-/// concurrency operators
-/// (internal, not part of this public repo) for the full corpus, the
-/// classification methodology, and this operator's own self-assessment
-/// against the catalog's promotion bar. A real MutantKit run against
+/// of those 15 commits.
+/// A real MutantKit run against
 /// `swift-async-algorithms` independently reproduced this exact fault
 /// shape by accident (an unrelated operator hit a continuation-resume call
 /// site and produced a genuine, reproducible hang) — this operator makes
@@ -38,10 +35,7 @@ import SwiftSyntax
 /// genuinely `unviable` candidates — a real compile-safety gap this
 /// operator's guards did not yet cover, described below — closed before
 /// this promotion, then re-verified at zero `unviable` against the same
-/// real corpus. Zero integrity violations on either project. Full
-/// evidence, exact commit SHAs, toolchain versions and per-mutant tables:
-/// the internal corpus-validation research for this operator (not part of
-/// this public repo).
+/// real corpus. Zero integrity violations on either project.
 ///
 /// **Why opt-in, not default, despite clean corpus results.** Compile
 /// safety and signal quality both check out, but the cost profile does
@@ -176,8 +170,7 @@ public struct ContinuationResumeRemovalOperator: MutationOperator {
         requiresSymbolResolution: false,
         faultEvidence: [
             """
-            Internal fault-taxonomy research on Apple concurrency operators \
-            (not part of this public repo), Category B: 5 independently- \
+            Fault category B: 5 independently- \
             verified bug-fix commits across apple/swift-async-algorithms, apple/swift-nio, \
             pointfreeco/swift-composable-architecture, and pointfreeco/swift-concurrency-extras, \
             each fixing a continuation that was never resumed on some code path. Corpus-measured \
@@ -192,11 +185,11 @@ public struct ContinuationResumeRemovalOperator: MutationOperator {
             own adversarial review found and closed a second gap in the first attempt. Zero \
             integrity violations on either project; verifiedTimeout was confirmed as the dominant \
             outcome for covered candidates on both projects (100% on swift-nio), exactly as \
-            this operator's own doc comment predicted. Full evidence: internal \
-            corpus-validation research for this operator (not part of this public repo). Kept \
+            this operator's own doc comment predicted. \
+            Kept \
             `defaultEnabled: false` on cost grounds (each verifiedTimeout costs minutes, not \
-            seconds), not on compile-safety or signal-quality grounds -- see the document's own \
-            "What would be needed before promoting any of these" for the isolated-vs-schemata \
+            seconds), not on compile-safety or signal-quality grounds. \
+            The isolated-vs-schemata \
             differential proof still outstanding.
             """
         ]

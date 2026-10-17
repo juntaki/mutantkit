@@ -14,11 +14,11 @@ import Testing
 /// runner will decide.
 ///
 /// Shared across every `SchemataMutationRunner` test suite (Group 2 dynamic
-/// fallback, ADR-0008 containment/hang-budget/recovery-rebuild) rather than
+/// fallback, the schemata timeout-isolation design containment/hang-budget/recovery-rebuild) rather than
 /// duplicated per file, since the wire-format encoding and env-var protocol
 /// it implements are identical everywhere it's used.
 /// `@unchecked Sendable`, made actually thread-safe rather than merely
-/// asserted so (ADR-0008 chunk-concurrency validation): `SchemataMutationRunner
+/// asserted so (the schemata timeout-isolation design chunk-concurrency validation): `SchemataMutationRunner
 /// .run()` now fans independent chunks out over a bounded `TaskGroup`, and
 /// every chunk in flight shares this *one* adapter instance — a concurrency
 /// test running with `workers: 2`+ genuinely calls `buildSchemataChunk`/
@@ -31,7 +31,7 @@ import Testing
 /// again once a test starts running the adapter.
 final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, SchemataTestable, TestSelecting, SchemataBatchTestable,
     @unchecked Sendable {
-    /// One token can be scripted with more than one behavior (ADR-0008):
+    /// One token can be scripted with more than one behavior (the schemata timeout-isolation design):
     /// index 0 is the primary run, index 1 the first confirmation (the same
     /// selector token is reused for both in the real protocol). The last
     /// entry repeats once exhausted, so a single-behavior script — the
@@ -68,7 +68,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
     /// something in the real (non-faked) `WorkspaceManager`'s state (e.g.
     /// delete `projectRoot`) exactly between a primary run and the
     /// containment rebuild it triggers, to exercise a rebuild-time failure
-    /// path no build-failure-shaped injection can reach (ADR-0008 §4(d)'s
+    /// path no build-failure-shaped injection can reach (the post-hang recovery semantics(d)'s
     /// sandbox-recreation-failure sub-case).
     /// Guards every field below that is mutated *during* concurrent
     /// execution (as opposed to only during single-threaded test setup) —
@@ -105,7 +105,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
     var delayNanosecondsBeforeRun: [SchemataSelectorToken: UInt64] = [:]
 
     /// How many times `buildSchemataChunk` has been called for this
-    /// adapter's whole lifetime — ADR-0008's direct evidence that a
+    /// adapter's whole lifetime — the schemata timeout-isolation design's direct evidence that a
     /// mid-chunk rebuild actually happened (a superset of confirmed-hang
     /// count, matching ADR Addendum 3: one rebuild per forced timeout-kill,
     /// not per `.verifiedTimeout`). Only ever read externally *after*
@@ -126,7 +126,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
     private(set) var tokenTimeoutSeconds: [Double] = []
 
     /// Injected failures for `buildSchemataChunk`/`resolveSchemataBuildReceipt`
-    /// on a specific 1-based build-call index (ADR-0008 §4(d)) — unused
+    /// on a specific 1-based build-call index (the post-hang recovery semantics(d)) — unused
     /// until a Phase 6 test populates it; every earlier phase's tests leave
     /// this empty and get the unconditional success path below.
     var buildFailureScript: [Int: BuildFailureInjection] = [:]
@@ -359,7 +359,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
 
         // `.timedOut`/`.crashed` always include HIT: both simulate a mutant
         // that was genuinely activated and only then hung/crashed — the
-        // realistic shape, and the one ADR-0008's own confirmed-timeout
+        // realistic shape, and the one the schemata timeout-isolation design's own confirmed-timeout
         // tests need (a `.verifiedTimeout` classification requires the
         // *confirming* run's own activation to be independently proven; see
         // `MutationVerdictVerifier.confirmTimeout`).

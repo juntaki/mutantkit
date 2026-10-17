@@ -81,6 +81,9 @@ public struct DiagnosisItem: Codable, Sendable {
         case sharedModuleCache
         case macOSVersionFloor
         case schemataExecutionSupport
+        /// Whether the schemata runtime archive a schemata build links against can be
+        /// found and trusted (bundled and digest/ABI-checked, or an explicit developer override).
+        case schemataRuntime
         case perTestCoverageSupport
         case testBatchingSupport
     }
@@ -153,7 +156,7 @@ public protocol SchemataBuildable: BuildAdapter {
 
     /// Builds the real, per-compilation-unit build receipt for everything
     /// `buildSchemataChunk` just produced — the build-time half of
-    /// ADR-0006's proof chain (Finding 2/4). Every `unit` in `units` names
+    /// The end-to-end trust chain's proof chain (image identity and unit-to-image mapping). Every `unit` in `units` names
     /// its own real `BuildTargetIdentity` (the chunk planner's own
     /// project/target/module identity, never a name this method has to
     /// guess at); this method's job is only to prove which real built
@@ -210,7 +213,7 @@ public struct SchemataCompilationUnitTargetRequest: Sendable {
 
 //
 // TestRunStatus/TestRunResult/BuildFailureKind/BuildFailure moved to
-// MutationModel/TestObservation.swift (ADR-0006 Stage 1) — the verifier
+// MutationModel/TestObservation.swift (the authoritative verdict pipeline) — the verifier
 // needs to inspect them directly and cannot depend on this module.
 
 public protocol TestAdapter: Sendable {
@@ -645,9 +648,7 @@ public protocol ProjectAdapter: Sendable {
     /// conformance — never a runtime `as?`/`is` cast at the call site. `nil`
     /// for every adapter that does not conform to the capability in
     /// question (mirroring `prepareSimulatorForRun()`'s own existing
-    /// defaulted-no-op pattern below). See this project's internal
-    /// execution-engine restructuring notes (not part of this public repo)
-    /// for the full rationale and the call sites this retires.
+    /// defaulted-no-op pattern below).
     var schemataBuild: (any SchemataBuildable)? { get }
     var schemataTest: (any SchemataTestable)? { get }
     var coverageMeasuring: (any CoverageMeasuring)? { get }

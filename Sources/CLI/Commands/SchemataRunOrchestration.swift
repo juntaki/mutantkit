@@ -5,8 +5,8 @@ import MutationModel
 import MutationPlanner
 
 /// Combines the schemata backend's `SchemataMutationRunner` with the
-/// existing, unmodified `MutationRunner` into one `RunReport` (ADR-0006
-/// Stage 3) — a schemata run is never 100% embeddable, so anything
+/// existing, unmodified `MutationRunner` into one `RunReport` (the re-enabled schemata scoring)
+/// — a schemata run is never 100% embeddable, so anything
 /// `SchemataChunkPlanner` routes to isolated fallback (an operator with no
 /// registered `SchemataLowerer`, a multi-target conflict, a structural
 /// conflict) still needs a real, isolated-mode verdict. Only
@@ -81,19 +81,30 @@ enum SchemataRunOrchestration {
 
         let empty = Classification(programs: [], embeddedIDs: [], sources: sources, plannerFallbackReasons: [:])
 
-        let targetInfo: [String: [SchemataTargetInfo]]
+        var targetInfo: [String: [SchemataTargetInfo]]
         let backendID: String
+        var filesOutsideBuild: [String: String] = [:]
         do {
             switch context.adapter.kind {
             case .swiftPackageMacOS, .swiftPackageApple:
                 targetInfo = try await SwiftPMTargetResolver.resolveTargetInfo(projectRoot: context.projectRoot)
                 backendID = "swiftpm-schemata-v1"
             case .xcodeProject:
-                targetInfo = try await XcodeTargetResolver.resolveTargetInfo(projectRoot: context.projectRoot)
+                let scoped = try await XcodeTargetResolver.resolveSchemeScopedTargetInfo(
+                    projectRoot: context.projectRoot, scheme: context.configuration.project.scheme
+                )
+                targetInfo = scoped.targetInfo
+                filesOutsideBuild = outsideSchemeReasons(scoped.filesOutsideScheme)
                 backendID = "xcode-schemata-v1"
-            case .xcodeWorkspace, .auto:
-                // `.xcworkspace` (which can span more than one `.xcodeproj`)
-                // and `.auto` (never actually reached here — every
+            case .xcodeWorkspace:
+                let scoped = try await XcodeTargetResolver.resolveSchemeScopedWorkspaceTargetInfo(
+                    projectRoot: context.projectRoot, scheme: context.configuration.project.scheme
+                )
+                targetInfo = scoped.targetInfo
+                filesOutsideBuild = outsideSchemeReasons(scoped.filesOutsideScheme)
+                backendID = "xcode-schemata-v1"
+            case .auto:
+                // `.auto` (never actually reached here — every
                 // `ProjectAdapter` `AppleAdapterFactory.adapter(for:)`
                 // constructs already reports a concrete kind, see
                 // `SwiftPackageMacOSProjectAdapter.kind`/
@@ -102,12 +113,32 @@ enum SchemataRunOrchestration {
                 // fail-closed-to-isolated degradation as a genuine
                 // resolution failure below, just without pretending an
                 // attempt was made.
-                print("! Schemata target resolution is not yet implemented for \(context.adapter.kind.rawValue); every mutation will run in isolated mode this run.")
+                print(
+                    "! Schemata target resolution is not yet implemented for \(context.adapter.kind.rawValue); "
+                        + "every mutation will run in isolated mode this run."
+                )
                 return empty
             }
         } catch {
             print("! Schemata target resolution failed (\(error)); every mutation will run in isolated mode this run.")
             return empty
+        }
+
+        // One scheme build compiles every target it reaches from the same sandbox, so a lowered file that
+        // two of those targets compile must declare the schemata runtime in both modules; a chunk is
+        // planned per target and only declares it in its own. Such files run isolated, per mutation.
+        if context.adapter.kind == .xcodeProject || context.adapter.kind == .xcodeWorkspace {
+            let mutatedFiles = Set(context.plan.mutations.map(\.file))
+            for (file, infos) in targetInfo where mutatedFiles.contains(file) && Set(infos.map(\.target)).count > 1 {
+                targetInfo[file] = nil
+                filesOutsideBuild[file] = "the file is compiled by several targets that one scheme build compiles together"
+            }
+        }
+        // A mutated file with no resolved target (compiled only by targets the scheme does not build, or
+        // listed through a mechanism the resolver does not read) gets its own isolated fallback; it must
+        // not take the whole plan's schemata down with it.
+        for file in Set(context.plan.mutations.map(\.file)).subtracting(targetInfo.keys) where filesOutsideBuild[file] == nil {
+            filesOutsideBuild[file] = "the file's target membership could not be resolved"
         }
 
         // `SchemataChunkPlanner.lower` needs the *whole* target's source —
@@ -130,7 +161,8 @@ enum SchemataRunOrchestration {
         do {
             let registry = try SchemataLowererRegistry()
             let result = try SchemataChunkPlanner.plan(
-                mutationPlan: context.plan, registry: registry, sources: sources, targetInfo: targetInfo, backend: backend
+                mutationPlan: context.plan, registry: registry, sources: sources, targetInfo: targetInfo, backend: backend,
+                filesOutsideBuild: filesOutsideBuild
             )
             let embeddedIDs = Set(result.schemataPlan.entries.filter(\.isEmbedded).map(\.mutationID))
             let plannerFallbackReasons = Dictionary(
@@ -138,6 +170,7 @@ enum SchemataRunOrchestration {
                     entry.fallbackReason.map { (entry.mutationID, $0) }
                 }
             )
+            printPlannerFallbackSummary(plannerFallbackReasons, embeddedCount: embeddedIDs.count)
             return Classification(
                 programs: result.programs, embeddedIDs: embeddedIDs, sources: sources,
                 plannerFallbackReasons: plannerFallbackReasons
@@ -146,6 +179,23 @@ enum SchemataRunOrchestration {
             print("! Schemata chunk planning failed (\(error)); every mutation will run in isolated mode this run.")
             return empty
         }
+    }
+
+    private static func outsideSchemeReasons(_ files: some Sequence<String>) -> [String: String] {
+        Dictionary(
+            uniqueKeysWithValues: files.map { ($0, "the file belongs only to targets the run's scheme does not build") }
+        )
+    }
+
+    private static func printPlannerFallbackSummary(_ plannerFallbackReasons: [MutationID: SchemataUnsupportedReason], embeddedCount: Int) {
+        guard !plannerFallbackReasons.isEmpty else { return }
+        // The report records only counts per reason kind, and nothing at all when the whole plan
+        // falls back; the detail (which target, which operand) is what a corpus owner needs.
+        var detail: [String: Int] = [:]
+        for reason in plannerFallbackReasons.values { detail["\(reason)", default: 0] += 1 }
+        let lines = detail.sorted { $0.key < $1.key }.map { "  \($0.value) × \($0.key)" }
+        print("Schemata planner: \(embeddedCount) embeddable, \(plannerFallbackReasons.count) isolated per mutation:\n"
+            + lines.joined(separator: "\n"))
     }
 
     /// Reads each of `files` (repository-relative, exactly as recorded on

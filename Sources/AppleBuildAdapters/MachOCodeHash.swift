@@ -46,9 +46,15 @@ import MutationModel
 ///    changing these bytes even when the source is identical. `WorkspaceManager`
 ///    guarantees equal-length sandbox paths, and this hash means nothing without
 ///    that guarantee — the two are one mechanism split across two types.
-/// 2. A mutation confined to a string literal lands in `__cstring`, which is
-///    excluded because it carries `#file` paths. Such a mutant reads as unproven
-///    rather than activated.
+/// 2. `__TEXT,__cstring` is hashed (v3) because a mutation confined to a string
+///    literal — `isNegated ? "> 0" : "= 0"` with its branches swapped — lands
+///    *only* there, and leaving it out made such a mutant read as "identical
+///    product", which `notMaterialized` then silently dropped from the score. It also carries the `#file` strings, so it is hashed only after
+///    `WorkspacePathNormalizer` has rewritten the build workspace's own root —
+///    nothing else — to same-length sentinel bytes. String order is preserved
+///    (the section is hashed as one byte run, never as a set), and an arbitrary
+///    absolute path in user code (`"/foo/bar"`) is left alone. A caller that
+///    cannot name its workspace root cannot hash at all: `nil`, fail closed.
 ///
 /// The remaining failure points the safe way: toward under-claiming activation
 /// rather than asserting it. That is the correct direction for evidence to be
@@ -95,7 +101,9 @@ enum MachOCodeHash {
     /// cache miss / re-verification) rather than a silent, meaningless
     /// "match" between two different notions of "identical". Bump this again
     /// if what gets hashed changes again.
-    private static let formatVersion = "v2"
+    ///
+    /// v3 adds `__TEXT,__cstring`, workspace-root normalized.
+    private static let formatVersion = "v3"
 
     /// The sections whose bytes carry the program's meaning.
     ///
@@ -123,8 +131,11 @@ enum MachOCodeHash {
         ("__TEXT", "__text"), // compiled instructions
         ("__TEXT", "__const"), // immutable constants
         ("__DATA", "__data"), // initial values of mutable globals
-        ("__DATA_CONST", "__const") // immutable constants needing relocation
+        ("__DATA_CONST", "__const"), // immutable constants needing relocation
+        ("__TEXT", "__cstring") // string literals; hashed only after workspace-root normalization
     ]
+
+    private static let cstringSection = (segment: "__TEXT", section: "__cstring")
 
     /// Hash of every architecture's semantic sections plus their linkage
     /// semantics, or `nil` if the file is not a Mach-O this can read.
@@ -132,21 +143,28 @@ enum MachOCodeHash {
     /// `nil` rather than a fallback: a caller that receives a hash must be able to
     /// trust what it means, and quietly substituting a whole-file hash would hand
     /// back a value with the opposite property.
-    static func codeHash(ofBinaryAt url: URL) -> String? {
+    static func codeHash(ofBinaryAt url: URL, workspaceRoot: URL) -> String? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
-        return codeHash(of: data)
+        return codeHash(of: data, workspaceRoot: workspaceRoot)
     }
 
-    static func codeHash(of data: Data) -> String? {
+    /// `workspaceRoot` is the directory this binary was built under; it is required
+    /// because `__cstring` embeds it. `nil` when it cannot be normalized against.
+    static func codeHash(of data: Data, workspaceRoot: URL) -> String? {
+        guard let normalizer = WorkspacePathNormalizer(workspaceRoot: workspaceRoot) else { return nil }
+        return codeHash(of: data, normalizer: normalizer)
+    }
+
+    private static func codeHash(of data: Data, normalizer: WorkspacePathNormalizer) -> String? {
         guard let magic = data.readUInt32(at: 0, bigEndian: false) else { return nil }
 
         switch magic {
         case machO64:
-            guard let identity = semanticIdentity(in: data, sliceOffset: 0) else { return nil }
+            guard let identity = semanticIdentity(in: data, sliceOffset: 0, normalizer: normalizer) else { return nil }
             return "\(formatVersion):\(identity)"
 
         case fatBigEndian, fat64BigEndian:
-            return fatCodeHash(of: data, is64: magic == fat64BigEndian)
+            return fatCodeHash(of: data, is64: magic == fat64BigEndian, normalizer: normalizer)
 
         default:
             // 32-bit or big-endian Mach-O: no current Apple platform produces one
@@ -160,7 +178,7 @@ enum MachOCodeHash {
     ///
     /// Simulator bundles are routinely fat (arm64 + x86_64). Hashing only the first
     /// slice would miss a mutation whose codegen differs per architecture.
-    private static func fatCodeHash(of data: Data, is64: Bool) -> String? {
+    private static func fatCodeHash(of data: Data, is64: Bool, normalizer: WorkspacePathNormalizer) -> String? {
         guard let count = data.readUInt32(at: 4, bigEndian: true) else { return nil }
         // A malformed header must not turn into a huge loop.
         guard count > 0, count < 64 else { return nil }
@@ -181,7 +199,7 @@ enum MachOCodeHash {
                 offset = Int(value)
             }
 
-            guard let identity = semanticIdentity(in: data, sliceOffset: offset) else { return nil }
+            guard let identity = semanticIdentity(in: data, sliceOffset: offset, normalizer: normalizer) else { return nil }
             slices.append((cpu, identity))
         }
 
@@ -245,7 +263,7 @@ enum MachOCodeHash {
     }
 
     private static func segmentContribution(
-        in data: Data, sliceOffset: Int, commandCursor: Int
+        in data: Data, sliceOffset: Int, commandCursor: Int, normalizer: WorkspacePathNormalizer
     ) -> (sections: [String: String], linkageSections: [LinkageSection])? {
         guard let segmentName = data.readCString(at: commandCursor + 8, maxLength: 16),
               let sectionCount = data.readUInt32(at: commandCursor + 64, bigEndian: false)
@@ -271,7 +289,9 @@ enum MachOCodeHash {
                 let start = sliceOffset + Int(offset)
                 let end = start + Int(size)
                 guard start >= 0, end <= data.count, start <= end else { return nil }
-                sections["\(segmentName),\(sectionName)"] = ContentHash.of(data.subdata(in: start ..< end))
+                let bytes = data.subdata(in: start ..< end)
+                let isCString = segmentName == cstringSection.segment && sectionName == cstringSection.section
+                sections["\(segmentName),\(sectionName)"] = ContentHash.of(isCString ? normalizer.normalize(bytes) : bytes)
             }
 
             do {
@@ -335,14 +355,14 @@ enum MachOCodeHash {
     /// one over genuinely absent content. See the type's own doc comment for
     /// why an unresolvable linkage section fails the whole hash rather than
     /// being skipped.
-    private static func semanticIdentity(in data: Data, sliceOffset: Int) -> String? {
+    private static func semanticIdentity(in data: Data, sliceOffset: Int, normalizer: WorkspacePathNormalizer) -> String? {
         guard let magic = data.readUInt32(at: sliceOffset, bigEndian: false), magic == machO64 else {
             return nil
         }
         guard let commandCount = data.readUInt32(at: sliceOffset + 16, bigEndian: false) else {
             return nil
         }
-        guard let walked = walkLoadCommands(in: data, sliceOffset: sliceOffset, commandCount: commandCount)
+        guard let walked = walkLoadCommands(in: data, sliceOffset: sliceOffset, commandCount: commandCount, normalizer: normalizer)
         else { return nil }
         guard !walked.sections.isEmpty else { return nil }
 
@@ -380,7 +400,9 @@ enum MachOCodeHash {
     /// Walks every load command in one Mach-O slice, dispatching each kind
     /// this reader cares about to its own already-tested function. `nil` on
     /// any command this pass could not read — never a partial result.
-    private static func walkLoadCommands(in data: Data, sliceOffset: Int, commandCount: UInt32) -> LoadCommandWalkResult? {
+    private static func walkLoadCommands(
+        in data: Data, sliceOffset: Int, commandCount: UInt32, normalizer: WorkspacePathNormalizer
+    ) -> LoadCommandWalkResult? {
         var result = LoadCommandWalkResult()
         // mach_header_64 is 32 bytes; the load commands follow it.
         var cursor = sliceOffset + 32
@@ -393,7 +415,9 @@ enum MachOCodeHash {
 
             switch command {
             case segmentCommand64:
-                guard let contribution = segmentContribution(in: data, sliceOffset: sliceOffset, commandCursor: cursor)
+                guard let contribution = segmentContribution(
+                    in: data, sliceOffset: sliceOffset, commandCursor: cursor, normalizer: normalizer
+                )
                 else { return nil }
                 result.sections.merge(contribution.sections) { _, new in new }
                 result.linkageSections.append(contentsOf: contribution.linkageSections)
@@ -471,6 +495,75 @@ enum MachOCodeHash {
         }
 
         return records
+    }
+}
+
+// MARK: - Workspace-root normalization
+
+/// Rewrites the build workspace's own root path, wherever it appears in a byte run,
+/// to same-length sentinel bytes — and rewrites nothing else.
+///
+/// Same-length, because the surrounding offsets and the `WorkspaceManager`
+/// equal-length-path guarantee must stay meaningful; sentinel rather than deletion,
+/// so a string that *contained* the root still differs from one that did not.
+/// Only the known root spellings are touched (`path`, standardized, symlink-resolved),
+/// and only at a path boundary: the byte before must not continue a path component
+/// and the byte after must be `/` or the end of the string, so `"/tmp/abcd"` is not
+/// mistaken for `"/tmp/abc"` plus a tail. A user's own `"/foo/bar"` is never touched.
+struct WorkspacePathNormalizer {
+    static let sentinel: UInt8 = 0x01
+
+    private let roots: [[UInt8]]
+
+    /// `nil` when the root is empty, `/`, or relative: there is nothing sound to normalize against.
+    init?(workspaceRoot: URL) {
+        var spellings = Set<String>()
+        // `resolvingSymlinksInPath` strips a leading `/private` rather than adding it, so the
+        // symlink-resolved spelling a compiler embeds (`/private/var/...`) comes from `realpath`.
+        var candidates = [workspaceRoot.path, workspaceRoot.standardizedFileURL.path, workspaceRoot.resolvingSymlinksInPath().path]
+        if let resolved = realpath(workspaceRoot.path, nil) {
+            candidates.append(String(cString: resolved))
+            free(resolved)
+        }
+        for candidate in candidates {
+            var path = candidate
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            guard path.hasPrefix("/"), path.count > 1 else { return nil }
+            spellings.insert(path)
+        }
+        // Longest first: `/private/var/x` must be consumed before its own suffix `/var/x`.
+        roots = spellings.sorted { $0.utf8.count > $1.utf8.count }.map { Array($0.utf8) }
+    }
+
+    func normalize(_ data: Data) -> Data {
+        var bytes = [UInt8](data)
+        for root in roots {
+            Self.replace(root, in: &bytes)
+        }
+        return Data(bytes)
+    }
+
+    private static func isComponentByte(_ byte: UInt8) -> Bool {
+        (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
+            || byte == 0x2E || byte == 0x5F || byte == 0x2D
+    }
+
+    private static func replace(_ root: [UInt8], in bytes: inout [UInt8]) {
+        let length = root.count
+        guard length > 0, bytes.count >= length else { return }
+        var index = 0
+        while index + length <= bytes.count {
+            if bytes[index] == root[0], bytes[index ..< index + length].elementsEqual(root) {
+                let before = index == 0 ? 0 : bytes[index - 1]
+                let after = index + length == bytes.count ? 0 : bytes[index + length]
+                if !isComponentByte(before), after == 0 || after == 0x2F {
+                    for offset in index ..< index + length { bytes[offset] = sentinel }
+                    index += length
+                    continue
+                }
+            }
+            index += 1
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 /// outcome may take once it is eligible for scoring, caching,
 /// checkpointing, or reporting.
 ///
-/// Renamed from `VerifiedMutationVerdict` (ADR-0006 Stage 1): this is now
+/// Renamed from `VerifiedMutationVerdict` (the authoritative verdict pipeline): this is now
 /// the *only* currency in the pipeline — `MutationResult`'s public
 /// initializer is gone, so nothing downstream of the verifier constructs
 /// anything else. `outcome` is not a stored field: it reads straight from

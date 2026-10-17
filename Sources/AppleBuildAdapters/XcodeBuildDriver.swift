@@ -3,9 +3,8 @@ import MutationExecution
 import MutationModel
 
 //
-// Extracted from `XcodeBuildAdapter.swift` as part of this project's
-// internal execution-engine restructuring (see its own, private planning
-// notes, not part of this public repo, for the full rationale).
+// Extracted from `XcodeBuildAdapter.swift` as part of the execution-engine
+// restructuring.
 // `build(in:enableCoverage:extraArguments:)` moves here in full, unchanged
 // body, becoming this type's own `build`.
 //
@@ -147,7 +146,7 @@ struct BuildDriver: Sendable {
 
         return BuildArtifact(
             productsDirectory: products,
-            productHash: TestProductHasher.hash(productsDirectory: products),
+            productHash: TestProductHasher.hash(productsDirectory: products, workspaceRoot: workspace),
             xctestrunPath: xctestrun,
             command: command
         )

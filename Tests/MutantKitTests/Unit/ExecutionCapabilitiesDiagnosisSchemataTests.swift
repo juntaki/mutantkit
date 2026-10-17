@@ -29,8 +29,8 @@ struct ExecutionCapabilitiesDiagnosisSchemataTests {
         arguments: [
             (ProjectKind.swiftPackageMacOS, true),
             (ProjectKind.xcodeProject, true),
-            (ProjectKind.swiftPackageApple, false),
-            (ProjectKind.xcodeWorkspace, false)
+            (ProjectKind.xcodeWorkspace, true),
+            (ProjectKind.swiftPackageApple, false)
         ]
     )
     func schemataSupportMatchesMatrix(kind: ProjectKind, expectedSupported: Bool) {
@@ -47,8 +47,8 @@ struct ExecutionCapabilitiesDiagnosisSchemataTests {
         arguments: [
             (ProjectKind.swiftPackageMacOS, DiagnosisItem.Status.ok),
             (ProjectKind.xcodeProject, DiagnosisItem.Status.ok),
-            (ProjectKind.swiftPackageApple, DiagnosisItem.Status.warning),
-            (ProjectKind.xcodeWorkspace, DiagnosisItem.Status.warning)
+            (ProjectKind.xcodeWorkspace, DiagnosisItem.Status.ok),
+            (ProjectKind.swiftPackageApple, DiagnosisItem.Status.warning)
         ]
     )
     func schemataItemStatusPerProjectKind(kind: ProjectKind, expectedStatus: DiagnosisItem.Status) {
@@ -105,14 +105,14 @@ struct ExecutionCapabilitiesDiagnosisSchemataTests {
     /// only matters once the kind itself clears the first gate.
     @Test("An unsupported ProjectKind stays unavailable even with a schemata-friendly Configuration")
     func unsupportedKindStaysUnavailableRegardlessOfConfiguration() {
-        let resolution = makeResolution(kind: .xcodeWorkspace, test: FakeSchemataBatchableTestAdapter())
+        let resolution = makeResolution(kind: .swiftPackageApple, test: FakeSchemataBatchableTestAdapter())
         let configuration = configuration(selectCoveringTests: false, earlyAbort: false, testBatchSize: nil)
 
         let items = ExecutionCapabilitiesDiagnosis.items(for: resolution, configuration: configuration)
         let schemataItem = items.first { $0.code == .schemataExecutionSupport }
 
         #expect(schemataItem?.status == .warning, "\(String(describing: schemataItem))")
-        #expect(schemataItem?.detail.contains("xcodeWorkspace") == true)
+        #expect(schemataItem?.detail.contains("swiftPackageApple") == true)
     }
 
     // MARK: - Helpers

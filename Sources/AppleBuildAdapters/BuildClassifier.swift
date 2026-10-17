@@ -15,9 +15,11 @@ enum BuildClassifier {
     ///
     /// Matched against `file.swift:12:34: error:` rather than the bare word
     /// "error", because `xcodebuild: error:` and `** BUILD FAILED **` are the
-    /// tool talking about itself, not a diagnostic about the source.
+    /// tool talking about itself, not a diagnostic about the source. An error
+    /// inside a macro expansion has no file name and is printed as
+    /// `macro expansion @Reducer:23:50: error:`.
     private static let diagnosticPattern = try? NSRegularExpression(
-        pattern: #"^.*\.(?:swift|h|m|mm|c|cpp):\d+:\d+:\s*(?:error|fatal error):"#,
+        pattern: #"^(?:.*\.(?:swift|h|m|mm|c|cpp)|macro expansion @[^:\n]+):\d+:\d+:\s*(?:error|fatal error):"#,
         options: [.anchorsMatchLines]
     )
 
@@ -38,13 +40,33 @@ enum BuildClassifier {
         "xcode-select",
         "no such module 'xctest'",
         "sdk not found",
-        "toolchain",
+        // Specific phrasings only: a bare "toolchain" appears in ordinary build output (environment
+        // dumps, `DT_TOOLCHAIN_DIR`, paths under `XcodeDefault.xctoolchain`) and, matched ahead of the
+        // compiler diagnostics, would relabel a real compile error as an environment failure.
+        "toolchain not found",
+        "no such toolchain",
+        "unable to find toolchain",
+        "unable to locate toolchain",
+        "failed to load toolchain",
+        "could not find toolchain",
         "permission denied",
         "resource temporarily unavailable"
     ]
 
+    /// ANSI CSI escape sequences (`ESC [ ... final byte`). Xcode 27's `swift build` passes
+    /// `-color-diagnostics` to the frontend even when its output is a pipe, so a diagnostic arrives as
+    /// `file.swift:12:34: ␛[1;31merror: ␛[1;39m...`, which no marker search would otherwise see.
+    private static let escapeSequences = try? NSRegularExpression(pattern: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]")
+
+    static func strippingEscapeSequences(_ text: String) -> String {
+        guard let escapeSequences, text.contains("\u{1B}") else { return text }
+        return escapeSequences.stringByReplacingMatches(
+            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: ""
+        )
+    }
+
     static func failure(from result: ProcessResult, command: CommandRecord) -> BuildFailure {
-        let output = result.combinedOutput
+        let output = strippingEscapeSequences(result.combinedOutput)
         let redacted = OutputRedactor.redactAndTruncate(output)
 
         if result.timedOut {
@@ -108,6 +130,24 @@ enum BuildClassifier {
             )
         }
 
+        // The compiler process itself died: no diagnostic, but a crash banner and a stack dump. This is
+        // only a candidate (see `BuildFailure.isCompilerCrashCandidate`); the classifier cannot show that
+        // the crash is reproducible, so the kind stays `.infrastructure`.
+        if isCompilerCrash(output) {
+            return BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                The build exited with \(result.exitCode) because a Swift compiler process crashed (stack dump \
+                in the output) without a compiler diagnostic. A single crash does not show whether the mutated \
+                source or the machine is at fault.
+                """,
+                command: command,
+                output: redacted,
+                isCompilerCrashCandidate: true,
+                compilerCrashSignature: CompilerCrashSignature(output: output)
+            )
+        }
+
         // Non-zero, but nothing identifies it as a compile error. Reporting this as
         // `.compilationError` would invent a fact about the mutant; `.infrastructure`
         // only claims that the build is unusable, which is all that is known.
@@ -120,6 +160,17 @@ enum BuildClassifier {
             command: command,
             output: redacted
         )
+    }
+
+    /// Whether the output shows a Swift compiler process crashing: its crash banner, a stack dump that
+    /// contains compiler (`swift-frontend` / `swift-driver`) frames, and evidence that a signal was
+    /// delivered (the signal-handler frame or a signal name). Deliberately all three: the banner alone is
+    /// also printed for plain assertion output, and a bare "Stack dump" can come from any tool.
+    static func isCompilerCrash(_ output: String) -> Bool {
+        guard output.contains("Please submit a bug report"), output.contains("Stack dump:") else { return false }
+        guard output.contains("swift-frontend") || output.contains("swift-driver") else { return false }
+        let signals = ["_sigtramp", "Segmentation fault", "Illegal instruction", "Abort trap", "Bus error"]
+        return signals.contains(where: output.contains)
     }
 
     /// The first real compiler diagnostic line, for the diagnosis sentence.

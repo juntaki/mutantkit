@@ -7,7 +7,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0006 Stage 3: the confirmation-inclusive twin of
+/// The re-enabled schemata scoring: the confirmation-inclusive twin of
 /// `SchemataIsolatedDifferentialAcceptanceTests` — with
 /// `retestKilledMutants: true`, both backends must run a confirmation and
 /// reach the exact same `MutationVerdictVerifier.confirmKill` diagnosis,
@@ -24,7 +24,7 @@ import Testing
 /// method never actually parallelizes anything, so schemata's
 /// single-process transcript assumption still holds. (`--parallel` with
 /// real concurrency is a genuine, pre-existing limitation of schemata's
-/// runtime evidence collection — flagged in ADR-0006 as a known limitation,
+/// runtime evidence collection — flagged in the end-to-end trust chain as a known limitation,
 /// not something this suite works around by design choice.)
 ///
 /// Off by default like every other acceptance suite: `MUTANTKIT_ACCEPTANCE=1 swift test`.

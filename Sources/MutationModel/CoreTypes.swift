@@ -138,8 +138,13 @@ public struct CommandRecord: Hashable, Codable, Sendable {
 /// guess at its shape.
 public enum SchemaVersion {
     public static let plan = 1
-    public static let result = 1
-    /// Bumped to 2 for ADR-0005 PR F: `SchemataPlacement.embedded` carries a
+    /// Bumped to 2 for the `notMaterialized` outcome: a `report.json` can now carry an outcome value
+    /// that a reader of version 1 cannot decode. Readers accept every version from
+    /// `oldestReadableResult` up to this one; a report written by an older tool still loads.
+    public static let result = 2
+    /// The oldest `report.json` schema version this tool still reads.
+    public static let oldestReadableResult = 1
+    /// Bumped to 2 for multi-target embedding: `SchemataPlacement.embedded` carries a
     /// list of per-target placements now, not a single flat set of fields —
     /// a plan written under schemaVersion 1 cannot decode against this
     /// type, by design (`SchemataPlan.decodeAndValidate`'s own
@@ -153,7 +158,7 @@ public enum SchemaVersion {
     /// a version bump that actually belongs to `RunHistoryRecord`.
     public static let agentEvidenceReport = 1
     public static let runHistoryRecord = 1
-    public static let operatorCatalogEntry = 1
+    public static let operatorCatalogEntry = 2
     public static let qualityGateResult = 1
     public static let buildDiagnosis = 1
     public static let configurationValidationResult = 1

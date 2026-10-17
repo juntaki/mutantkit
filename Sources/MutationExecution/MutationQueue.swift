@@ -29,8 +29,13 @@ public actor MutationQueue {
     /// highest-indexed remaining point and re-seeds the entry.
     private var workerLastFile: [String: String] = [:]
 
-    public init(_ points: [MutationPoint]) {
+    /// Once a stop has been requested the queue hands out nothing more, so no
+    /// worker starts a new mutant; whatever it is already running finishes.
+    private let stop: RunStopRequest?
+
+    public init(_ points: [MutationPoint], stop: RunStopRequest? = nil) {
         remaining = points.reversed()
+        self.stop = stop
     }
 
     /// Pops and returns the next point, preferring one from the same file
@@ -43,6 +48,7 @@ public actor MutationQueue {
     /// `workerLastFile` from whatever was actually returned so the next call
     /// is biased correctly.
     public func next(forWorker workerID: String) -> MutationPoint? {
+        if stop?.isStopRequested == true { return nil }
         if let preferred = workerLastFile[workerID],
            let index = remaining.lastIndex(where: { $0.file == preferred }) {
             let point = remaining.remove(at: index)
@@ -62,6 +68,7 @@ public actor MutationQueue {
     /// exploit in that path: the worker's sandbox never compiled anything,
     /// so the order it drains in is irrelevant to throughput.
     public func next() -> MutationPoint? {
-        remaining.popLast()
+        if stop?.isStopRequested == true { return nil }
+        return remaining.popLast()
     }
 }

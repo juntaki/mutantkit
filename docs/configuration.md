@@ -3,8 +3,7 @@
 Full `mutantkit.yml` field reference. See the [README](../README.md) for a
 short example and for how a config is discovered (`setup`/`init` write one
 for you). See [Execution](execution.md) for `execution.profile` and the
-recommended production tuning, and [Benchmarks](benchmarks.md) for the
-measurements behind it.
+recommended production tuning.
 
 The example below is a hand-maintained reference showing every field with
 its default or a representative value; `Sources/CLI/ConfigurationLoader
@@ -39,7 +38,7 @@ tests:
   parallel: false
 
 operators:
-  profile: default           # conservative | default | experimental
+  profile: default           # default | stronger | all  (legacy: conservative | experimental)
 
 execution:
   strategy: isolated
@@ -128,9 +127,9 @@ execution:
   # An older way to amortize the fixed simulator install/launch cost: merges
   # several mutants' test runs into one xcodebuild invocation instead of one
   # per mutant. Requires selectCoveringTests and an Xcode project or
-  # workspace destination. A real benchmark against a large iOS app (see
-  # docs/benchmarks.md) found `simulatorPool: true` with `workers: 2` faster
-  # than this at the same scale — kept available since it does not require
+  # workspace destination. Measured on a large iOS app, `simulatorPool: true`
+  # with `workers: 2` was faster than this at the same scale (see
+  # docs/execution.md) — kept available since it does not require
   # provisioning extra simulator clones, which some CI runners restrict.
   # Mutually exclusive in practice: `simulatorPool` has no effect once
   # `testBatchSize` is set, since a batch already shares one lane.

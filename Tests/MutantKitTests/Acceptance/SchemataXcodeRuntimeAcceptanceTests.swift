@@ -25,7 +25,7 @@ import Testing
 /// cover. A macOS unit test target, not iOS Simulator, on purpose — it
 /// isolates the linker-injection question from simulator-specific concerns
 /// (code signing, device boot, dyld image loading inside a sandboxed
-/// simulator) that ADR-0003 explicitly calls out as separate, harder,
+/// simulator) that the schemata evidence contract explicitly calls out as separate, harder,
 /// still-open problems.
 ///
 /// Off by default like every other acceptance suite (`xcodegen generate`

@@ -113,7 +113,7 @@ struct XcodeAppDebugDylibAcceptanceTests {
 
             let products = try Self.build(in: directory)
             return try #require(
-                TestProductHasher.hash(productsDirectory: products),
+                TestProductHasher.hash(productsDirectory: products, workspaceRoot: directory),
                 "no test product found under \(products.path)"
             )
         }

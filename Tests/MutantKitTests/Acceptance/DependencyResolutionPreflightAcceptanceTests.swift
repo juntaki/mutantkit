@@ -26,8 +26,7 @@ import Testing
 /// written by the *preflight*, before any mutation testing could possibly
 /// begin, not by a later confirmation retest.
 ///
-/// A real remote dependency (`swift-numerics`, already used elsewhere in
-/// this project's own benchmark corpora — see `Benchmarks/manifest.json`)
+/// A real remote dependency (`swift-numerics`)
 /// is required to reproduce the reviewer's own finding faithfully: a local
 /// `.package(path:)` dependency never produces a `Package.resolved` at
 /// all (confirmed empirically while building this fix), so it cannot stand

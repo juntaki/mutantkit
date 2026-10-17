@@ -45,7 +45,7 @@ struct MutationPlanTests {
         #expect(try plan.encoded() == plan.encoded())
     }
 
-    /// ADR-0007 invariant 8/B.8: a v1 plan (no `budgetInclusionReasons`) must
+    /// The budget-selection compatibility invariant: a v1 plan (no `budgetInclusionReasons`) must
     /// encode byte-identically to how it always has. A synthesized encoder
     /// would emit `"budgetInclusionReasons": []` for every plan since the
     /// field was added — a Codex integration review caught this as a High

@@ -21,11 +21,20 @@ extension TrustReport {
         public let batchAttributed: Int
         /// Results that went through more than one confirmation round.
         public let cascadeConfirmations: Int
+        /// Top tests by number of assertion-killed mutants they failed for
+        /// (absent in older JSON, or when no kill names a failing test).
+        public let killingTests: [KillingTest]?
+        /// Diagnostic only: tests over `KillingTestThresholds`. Never changes
+        /// a verdict, the score or the trust status. Absent when none.
+        public let suspectTests: [SuspectTest]?
 
         public init(
             assertionKills: Int, withinSelection: Int, wholeSuiteRan: Int, failingTestsUnnamed: Int,
-            attributionNotRecorded: Int, batchAttributed: Int, cascadeConfirmations: Int
+            attributionNotRecorded: Int, batchAttributed: Int, cascadeConfirmations: Int,
+            killingTests: [KillingTest]? = nil, suspectTests: [SuspectTest]? = nil
         ) {
+            self.killingTests = killingTests
+            self.suspectTests = suspectTests
             self.assertionKills = assertionKills
             self.withinSelection = withinSelection
             self.wholeSuiteRan = wholeSuiteRan
@@ -56,9 +65,11 @@ extension TrustReport {
             }
             if attribution.attribution == .batch { batch += 1 }
         }
+        let tally = killingTests(for: results)
         return KillEvidenceSection(
             assertionKills: kills.count, withinSelection: within, wholeSuiteRan: whole, failingTestsUnnamed: unnamed,
-            attributionNotRecorded: notRecorded, batchAttributed: batch, cascadeConfirmations: cascades
+            attributionNotRecorded: notRecorded, batchAttributed: batch, cascadeConfirmations: cascades,
+            killingTests: tally?.top, suspectTests: tally.flatMap { $0.suspects.isEmpty ? nil : $0.suspects }
         )
     }
 }

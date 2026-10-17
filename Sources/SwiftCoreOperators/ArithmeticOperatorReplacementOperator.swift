@@ -21,8 +21,7 @@ import SwiftSyntax
 /// `CoreOperatorCompileViabilityAcceptanceTests` for exactly this gap made
 /// concrete and empirically confirmed, not merely asserted.
 ///
-/// A targeted 50-mutant corpus run against a real project (see the internal
-/// corpus-validation notes, not part of this public repo) measured **0 unviable** —
+/// A targeted 50-mutant corpus run against a real project measured **0 unviable** —
 /// this codebase's actual arithmetic usage didn't happen to hit the
 /// fixture-demonstrated failure patterns above. That does not retire those
 /// patterns as real risk; it means this one corpus's sample didn't exercise

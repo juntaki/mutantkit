@@ -23,5 +23,6 @@ extension RunReport {
         executionStrategy = other.executionStrategy
         self.operationalIssues = operationalIssues
         self.evidenceArchive = evidenceArchive
+        interruption = other.interruption
     }
 }

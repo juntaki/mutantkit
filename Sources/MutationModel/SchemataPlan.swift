@@ -168,7 +168,7 @@ public struct SchemataPlan: Codable, Sendable {
     /// position. A sequential ID would shift every later chunk's identity on
     /// a single addition, invalidating schema build cache, artifact cache,
     /// and historical benchmark comparisons for no real reason. See
-    /// ADR-0003.
+    /// The schemata evidence contract.
     ///
     /// This identifies the *plan*, not any one chunk's actual build
     /// artifact — adding a mutation anywhere changes `schemataPlanID`, by
@@ -348,7 +348,7 @@ public struct SchemataPlan: Codable, Sendable {
     ///
     /// Optional on `decodeAndValidate` (not required) because no production
     /// caller constructs a `SchemataPlan`-consuming execution path yet — see
-    /// ADR-0004. When one exists, it should always pass this; the
+    /// The schemata production-integration contract. When one exists, it should always pass this; the
     /// parameterless overload's behavior — self-consistency only — remains
     /// available for exactly the callers this codebase already has: tests
     /// exercising the plan/entry contract in isolation, not a real backend
@@ -505,7 +505,7 @@ public struct SchemataPlan: Codable, Sendable {
     }
 }
 
-/// A `SchemataPlan` decoded but not yet checked against anything — ADR-0006's
+/// A `SchemataPlan` decoded but not yet checked against anything — the end-to-end trust chain's
 /// fix for `decodeAndValidate`'s own fail-open shape: `executionContext`
 /// being optional means a production execution path can call the weaker,
 /// context-free overload as easily as the real one, with nothing at the

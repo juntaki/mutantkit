@@ -4,7 +4,7 @@ import Foundation
 import MutationModel
 import Testing
 
-/// `MachOReceiptExtractor` is the build-time half of ADR-0006 Stage 2's
+/// `MachOReceiptExtractor` is the build-time half of the schemata proof chain's
 /// proof chain: a `SchemataBuildReceipt` can only claim a real per-image
 /// `LC_UUID` if this parser refuses everything it cannot prove -- a
 /// truncated file, a missing UUID, two conflicting UUIDs in one slice --

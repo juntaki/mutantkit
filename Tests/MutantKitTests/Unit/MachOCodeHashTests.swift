@@ -27,10 +27,10 @@ struct MachOCodeHashTests {
     func realBinaryProducesNonNilHash() throws {
         let data = try testBinaryData()
         let hash = try #require(
-            MachOCodeHash.codeHash(of: data),
+            MachOCodeHash.codeHash(of: data, workspaceRoot: machOTestWorkspace),
             "Failed to hash a real Mach-O binary — the allow-list may be stale"
         )
-        #expect(hash.hasPrefix("v2:\(ContentHash.algorithmPrefix)"))
+        #expect(hash.hasPrefix("v3:\(ContentHash.algorithmPrefix)"))
     }
 
     /// The format-version tag exists so a hash computed before linkage
@@ -39,8 +39,8 @@ struct MachOCodeHashTests {
     @Test("The hash carries its own format-version tag, distinct from the raw content hash")
     func hashCarriesFormatVersionTag() throws {
         let data = try testBinaryData()
-        let hash = try #require(MachOCodeHash.codeHash(of: data))
-        #expect(hash.hasPrefix("v2:"))
+        let hash = try #require(MachOCodeHash.codeHash(of: data, workspaceRoot: machOTestWorkspace))
+        #expect(hash.hasPrefix("v3:"))
         #expect(!hash.hasPrefix(ContentHash.algorithmPrefix), "a v1-shaped consumer must never mistake this for a bare content hash")
     }
 
@@ -51,8 +51,8 @@ struct MachOCodeHashTests {
     func codeHashIsDeterministic() throws {
         let data = try testBinaryData()
 
-        let first = try #require(MachOCodeHash.codeHash(of: data))
-        let second = try #require(MachOCodeHash.codeHash(of: data))
+        let first = try #require(MachOCodeHash.codeHash(of: data, workspaceRoot: machOTestWorkspace))
+        let second = try #require(MachOCodeHash.codeHash(of: data, workspaceRoot: machOTestWorkspace))
 
         #expect(first == second)
     }
@@ -66,23 +66,23 @@ struct MachOCodeHashTests {
         modified[flipOffset] ^= 0xFF
 
         let modifiedHash = try #require(
-            MachOCodeHash.codeHash(of: modified),
+            MachOCodeHash.codeHash(of: modified, workspaceRoot: machOTestWorkspace),
             "Modified binary produced a nil hash"
         )
-        #expect(modifiedHash.hasPrefix("v2:\(ContentHash.algorithmPrefix)"))
+        #expect(modifiedHash.hasPrefix("v3:\(ContentHash.algorithmPrefix)"))
     }
 
     // MARK: - Invalid input
 
     @Test("Empty data produces nil")
     func emptyDataProducesNil() {
-        #expect(MachOCodeHash.codeHash(of: Data()) == nil)
+        #expect(MachOCodeHash.codeHash(of: Data(), workspaceRoot: machOTestWorkspace) == nil)
     }
 
     @Test("Garbage data produces nil")
     func garbageDataProducesNil() {
         let garbage = Data(repeating: 0xFE, count: 64 * 1024)
-        #expect(MachOCodeHash.codeHash(of: garbage) == nil)
+        #expect(MachOCodeHash.codeHash(of: garbage, workspaceRoot: machOTestWorkspace) == nil)
     }
 
     // MARK: - Linkage (issue #3: same `__text` bytes, different bound symbol)
@@ -106,8 +106,8 @@ struct MachOCodeHashTests {
         #expect(boundToSymA.textSectionBytes == boundToSymB.textSectionBytes)
         #expect(boundToSymA.textSectionBytes != Data())
 
-        let hashA = try #require(MachOCodeHash.codeHash(of: boundToSymA.data))
-        let hashB = try #require(MachOCodeHash.codeHash(of: boundToSymB.data))
+        let hashA = try #require(MachOCodeHash.codeHash(of: boundToSymA.data, workspaceRoot: machOTestWorkspace))
+        let hashB = try #require(MachOCodeHash.codeHash(of: boundToSymB.data, workspaceRoot: machOTestWorkspace))
         #expect(hashA != hashB, "identical __text bytes but a different bound symbol must not hash the same")
     }
 
@@ -115,25 +115,27 @@ struct MachOCodeHashTests {
     func sameIndirectSymbolBindingHashesTheSame() throws {
         let first = try MinimalMachO.build(stubBoundToSymbolIndex: 0)
         let second = try MinimalMachO.build(stubBoundToSymbolIndex: 0)
-        #expect(MachOCodeHash.codeHash(of: first.data) == MachOCodeHash.codeHash(of: second.data))
+        let firstHash = MachOCodeHash.codeHash(of: first.data, workspaceRoot: machOTestWorkspace)
+        let secondHash = MachOCodeHash.codeHash(of: second.data, workspaceRoot: machOTestWorkspace)
+        #expect(firstHash == secondHash)
     }
 
     @Test("An indirect symbol index past nsyms fails closed to nil, not a partial hash")
     func outOfRangeSymbolIndexFailsClosed() throws {
         let malformed = try MinimalMachO.build(stubBoundToSymbolIndex: 99)
-        #expect(MachOCodeHash.codeHash(of: malformed.data) == nil)
+        #expect(MachOCodeHash.codeHash(of: malformed.data, workspaceRoot: machOTestWorkspace) == nil)
     }
 
     @Test("An indirect symbol table index past nindirectsyms fails closed to nil")
     func outOfRangeIndirectIndexFailsClosed() throws {
         let malformed = try MinimalMachO.build(stubBoundToSymbolIndex: 0, indirectSymbolCountOverride: 0)
-        #expect(MachOCodeHash.codeHash(of: malformed.data) == nil)
+        #expect(MachOCodeHash.codeHash(of: malformed.data, workspaceRoot: machOTestWorkspace) == nil)
     }
 
     @Test("INDIRECT_SYMBOL_LOCAL resolves to a canonical marker, not a parse failure")
     func localIndirectSymbolResolvesToCanonicalMarker() throws {
         let local = try MinimalMachO.build(stubBoundToSymbolIndex: nil)
-        #expect(MachOCodeHash.codeHash(of: local.data) != nil)
+        #expect(MachOCodeHash.codeHash(of: local.data, workspaceRoot: machOTestWorkspace) != nil)
     }
 
     // MARK: - Helpers

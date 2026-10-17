@@ -32,16 +32,16 @@
   {
     "text": "}",
     "violation": {
-      "reason": "File should contain 1000 lines or less: currently contains 1717",
-      "severity": "warning",
       "ruleDescription": "Files should not span too many lines.",
-      "ruleName": "File Length",
+      "severity": "warning",
       "ruleIdentifier": "file_length",
+      "ruleName": "File Length",
       "location": {
-        "line": 1717,
+        "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift",
         "character": 1,
-        "file": "Sources/AppleBuildAdapters/XcodeBuildAdapter.swift"
-      }
+        "line": 1715
+      },
+      "reason": "File should contain 1000 lines or less: currently contains 1715"
     }
   },
   {
@@ -106,16 +106,16 @@
   },
   {
     "violation": {
-      "severity": "warning",
-      "ruleIdentifier": "type_body_length",
-      "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
       "location": {
-        "character": 8,
         "line": 38,
-        "file": "Sources/MutationExecution/MutationRunner.swift"
+        "file": "Sources/MutationExecution/MutationRunner.swift",
+        "character": 8
       },
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1405 lines"
+      "ruleDescription": "Type bodies should not span too many lines",
+      "ruleIdentifier": "type_body_length",
+      "severity": "warning",
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1384 lines"
     },
     "text": "public struct MutationRunner: Sendable {"
   },
@@ -256,16 +256,16 @@
   },
   {
     "violation": {
-      "severity": "warning",
-      "ruleIdentifier": "file_length",
-      "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
       "location": {
-        "character": 1,
-        "line": 2890,
-        "file": "Sources/MutationExecution/MutationRunner.swift"
+        "line": 2874,
+        "file": "Sources/MutationExecution/MutationRunner.swift",
+        "character": 1
       },
-      "reason": "File should contain 1000 lines or less: currently contains 2890"
+      "ruleDescription": "Files should not span too many lines.",
+      "ruleIdentifier": "file_length",
+      "severity": "warning",
+      "reason": "File should contain 1000 lines or less: currently contains 2874"
     },
     "text": "}"
   },
@@ -285,19 +285,19 @@
     }
   },
   {
+    "text": "public struct SchemataMutationRunner: Sendable {",
     "violation": {
+      "ruleDescription": "Type bodies should not span too many lines",
       "severity": "warning",
       "ruleIdentifier": "type_body_length",
-      "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
       "location": {
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 8,
-        "line": 32,
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+        "line": 32
       },
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1013 lines"
-    },
-    "text": "public struct SchemataMutationRunner: Sendable {"
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 1039 lines"
+    }
   },
   {
     "text": "    private func runChunk(",
@@ -405,19 +405,19 @@
     }
   },
   {
+    "text": "}",
     "violation": {
+      "ruleDescription": "Files should not span too many lines.",
       "severity": "warning",
       "ruleIdentifier": "file_length",
-      "ruleDescription": "Files should not span too many lines.",
       "ruleName": "File Length",
       "location": {
+        "file": "Sources/MutationExecution/SchemataMutationRunner.swift",
         "character": 1,
-        "line": 2280,
-        "file": "Sources/MutationExecution/SchemataMutationRunner.swift"
+        "line": 2323
       },
-      "reason": "File should contain 1000 lines or less: currently contains 2280"
-    },
-    "text": "}"
+      "reason": "File should contain 1000 lines or less: currently contains 2323"
+    }
   },
   {
     "text": "    public static func establish(",
@@ -495,7 +495,7 @@
     "text": "public enum MutationVerdictVerifier {"
   },
   {
-    "text": "/// Moved here from `MutationExecution` (ADR-0006 Stage 1): `MutationVerdictVerifier`",
+    "text": "/// Moved here from `MutationExecution` (the authoritative verdict pipeline): `MutationVerdictVerifier`",
     "violation": {
       "reason": "A doc comment should be attached to a declaration",
       "severity": "warning",
@@ -870,7 +870,7 @@
     }
   },
   {
-    "text": "    @Test(\"Test E: pattern exclusion is ancestor-structural, not only direct-parent \u2014 an enum-associated-value pattern nests the literal several levels below its ExpressionPatternSyntax ancestor\")",
+    "text": "    @Test(\"Test E: pattern exclusion is ancestor-structural, not only direct-parent — an enum-associated-value pattern nests the literal several levels below its ExpressionPatternSyntax ancestor\")",
     "violation": {
       "reason": "Line should be 140 characters or less; currently it has 196 characters",
       "severity": "warning",
@@ -885,7 +885,7 @@
     }
   },
   {
-    "text": "        #expect(reason == .patternPosition, \"the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax itself \u2014 only an ancestor walk finds it\")",
+    "text": "        #expect(reason == .patternPosition, \"the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax itself — only an ancestor walk finds it\")",
     "violation": {
       "reason": "Line should be 140 characters or less; currently it has 181 characters",
       "severity": "warning",
@@ -1200,19 +1200,19 @@
     "text": "struct MutationVerdictVerifierSchemataChainTests {"
   },
   {
+    "text": "struct MutationVerdictVerifierTests {",
     "violation": {
+      "ruleDescription": "Type bodies should not span too many lines",
       "severity": "warning",
       "ruleIdentifier": "type_body_length",
-      "ruleDescription": "Type bodies should not span too many lines",
       "ruleName": "Type Body Length",
       "location": {
+        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift",
         "character": 1,
-        "line": 13,
-        "file": "Tests/MutantKitTests/Unit/MutationVerdictVerifierTests.swift"
+        "line": 13
       },
-      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 587 lines"
-    },
-    "text": "struct MutationVerdictVerifierTests {"
+      "reason": "Struct body should span 300 lines or less excluding comments and whitespace: currently spans 648 lines"
+    }
   },
   {
     "text": "        let record = try verify { ref in MutationObservations(plannedMutation: ref, sourceApplication: .notApplied(diagnosis: \"anchor moved\")) }",
@@ -1425,7 +1425,7 @@
     }
   },
   {
-    "text": "    @Test(\"The free-form diagnostic payload of unsupportedOperand/structuralConflict/platformUnsupported is dropped from the key \u2014 never a per-mutation-unique histogram entry\")",
+    "text": "    @Test(\"The free-form diagnostic payload of unsupportedOperand/structuralConflict/platformUnsupported is dropped from the key — never a per-mutation-unique histogram entry\")",
     "violation": {
       "reason": "Line should be 140 characters or less; currently it has 176 characters",
       "severity": "warning",
@@ -1605,7 +1605,7 @@
     }
   },
   {
-    "text": "    @Test(\"A chunk whose build fails with an untyped error or a nil product hash reports no observability event \u2014 only a typed BuildFailure does\")",
+    "text": "    @Test(\"A chunk whose build fails with an untyped error or a nil product hash reports no observability event — only a typed BuildFailure does\")",
     "violation": {
       "reason": "Line should be 140 characters or less; currently it has 146 characters",
       "severity": "warning",

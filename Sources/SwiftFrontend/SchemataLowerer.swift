@@ -2,7 +2,7 @@ import Foundation
 import MutationModel
 
 /// Turns eligible `MutationPoint`s into an embedded schema — a whole chunk
-/// at a time, never one point in isolation. See ADR-0003 (P0-3): nested
+/// at a time, never one point in isolation. See the schemata evidence contract (P0-3): nested
 /// mutations, mutations sharing an expression tree, byte-offset drift from
 /// an earlier edit in the same file, and cross-operator semantic conflicts
 /// are all invisible to a lowerer that only ever sees one point at a time —
@@ -10,7 +10,7 @@ import MutationModel
 /// candidate per call.
 ///
 /// Operates on `MutationPoint`, not the live-tree `MutationCandidate`: per
-/// ADR-0002 ("the plan is the source of truth"), lowering — like
+/// The mutation-plan contract ("the plan is the source of truth"), lowering — like
 /// application — works from the plan's self-contained byte-range/content
 /// anchors, never a `Syntax` node kept alive past discovery. `analyze` takes
 /// the point's source alongside it rather than a live tree: a point alone
@@ -47,7 +47,7 @@ public protocol SchemataLowerer: Sendable {
 
 /// One schema build's worth of mutation points — already partitioned by the
 /// chunk planner (target/module/product/conflict-layer/locality; see
-/// ADR-0003) into a set small enough to build as one compile unit.
+/// The schemata evidence contract) into a set small enough to build as one compile unit.
 public struct SchemataChunk: Sendable {
     public let chunkID: String
     public let points: [MutationPoint]

@@ -42,19 +42,16 @@ name: Release validation
 #       integrity violations, `effectiveCount == integrity.planned`).
 #
 # `workflow_dispatch` ONLY — no push, no pull_request, no schedule. Cost: roughly
-# **80 minutes** of macOS runner time per dispatch, not the ~50 these jobs cost
-# inside the private `ci.yml` they were lifted from. The difference is structural
-# and worth stating so nobody re-derives the smaller number: over there a single
-# shared `build` job compiled the test harness once and both acceptance jobs
-# downloaded its `build-tests` tarball. There is no such job here, so each
-# acceptance job pays its own `swift build --build-tests` — two independent debug
+# **80 minutes** of macOS runner time per dispatch. Each acceptance job pays its own
+# `swift build --build-tests` (there is no shared build job to download a
+# `build-tests` tarball from) — two independent debug
 # builds of swift-syntax and friends, roughly +30 min in total. The SwiftPM
 # caches below claw a large part of that back on a warm cache, but the
 # `timeout-minutes` budgets are all sized for the *cold* case, because a
 # `timeout-minutes` overrun is reported as `cancelled` rather than `failure`, and
 # a release gate whose normal outcome is "no evidence" is its own failure mode.
 #
-# Paying 80 minutes on every PR was the reason these jobs were dropped from
+# Paying 80 minutes on every PR is the reason these jobs are not part of
 # `ci.yml`. Run this deliberately before cutting a release. It is not a human
 # checklist: release-time evidence stays reproducible on GitHub Actions, with
 # `release-validation-gate` as the single check that says whether the evidence
@@ -85,10 +82,8 @@ jobs:
   # `swift build -c release` separately (and rather than each proving something
   # about a differently-built package).
   #
-  # Standalone in this repo: the private CI this was lifted from gated it behind
-  # `needs: route` and a `run_full || run_schemata_targeted` condition. There is no
-  # `route` job here and nothing to route — a `workflow_dispatch` is already the
-  # deliberate decision that condition was approximating, so it is simply gone.
+  # Not routed: a `workflow_dispatch` is already the deliberate decision to run the
+  # full validation, so there is no `route` job and no run-condition here.
   release-package:
     name: Build release package (bundled schemata runtime)
     runs-on: xcode-27
@@ -347,9 +342,9 @@ jobs:
     name: Release package's bundled schemata runtime (macOS, clean-machine E2E)
     runs-on: xcode-27
     needs: release-package
-    # 35, not 25. This job inlines the work the private CI split into a separate
-    # `build` job (`timeout-minutes: 15`) plus the acceptance job itself
-    # (`timeout-minutes: 15`): a cold `swift build --build-tests` here means a
+    # 35, not 25. This job builds the test harness itself and then runs the
+    # acceptance test, a 15-minute build plus a 15-minute run, with headroom: a cold
+    # `swift build --build-tests` here means a
     # full debug build of swift-syntax 603 (Package.swift) before the first test
     # runs. Budget the sum, with headroom, because an overrun surfaces as
     # `cancelled` — which the gate correctly treats as failure, producing a
@@ -358,9 +353,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Same cache as the private `build` job carried, for the same reason: the
-      # dependency resolve + checkout of swift-syntax is the bulk of the cold
-      # build this job now pays on its own.
+      # Cache the dependency resolve + checkout of swift-syntax: it is the bulk of the
+      # cold build this job pays on its own.
       - name: Cache SwiftPM dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -377,9 +371,8 @@ jobs:
       - name: Toolchain
         run: swift --version
 
-      # Built here rather than downloaded: the private CI this came from pulled a
-      # `build-tests` tarball from a shared `build` job, which does not exist in
-      # this repo. This is the *test harness* binary, distinct from the release
+      # Built here rather than downloaded (there is no shared `build` job). This is the
+      # *test harness* binary, distinct from the release
       # package below — which is what the harness drives as a subprocess.
       - name: Build tests
         shell: bash
@@ -490,9 +483,9 @@ jobs:
     name: Release package's bundled schemata runtime (clean-machine E2E, macOS package on a macOS 26 host)
     runs-on: macos-26
     needs: release-package
-    # 35, not 25. This job inlines the work the private CI split into a separate
-    # `build` job (`timeout-minutes: 15`) plus the acceptance job itself
-    # (`timeout-minutes: 15`): a cold `swift build --build-tests` here means a
+    # 35, not 25. This job builds the test harness itself and then runs the
+    # acceptance test, a 15-minute build plus a 15-minute run, with headroom: a cold
+    # `swift build --build-tests` here means a
     # full debug build of swift-syntax 603 (Package.swift) before the first test
     # runs. Budget the sum, with headroom, because an overrun surfaces as
     # `cancelled` — which the gate correctly treats as failure, producing a
@@ -501,9 +494,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Same cache as the private `build` job carried, for the same reason: the
-      # dependency resolve + checkout of swift-syntax is the bulk of the cold
-      # build this job now pays on its own.
+      # Cache the dependency resolve + checkout of swift-syntax: it is the bulk of the
+      # cold build this job pays on its own.
       - name: Cache SwiftPM dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -528,9 +520,8 @@ jobs:
       - name: Toolchain
         run: swift --version
 
-      # Built here rather than downloaded: the private CI this came from pulled a
-      # `build-tests` tarball from a shared `build` job, which does not exist in
-      # this repo. This is the *test harness* binary, distinct from the release
+      # Built here rather than downloaded (there is no shared `build` job). This is the
+      # *test harness* binary, distinct from the release
       # package below — which is what the harness drives as a subprocess.
       - name: Build tests
         shell: bash
@@ -652,9 +643,9 @@ jobs:
     name: Release package's bundled schemata runtime (iOS Simulator, clean-machine E2E)
     runs-on: xcode-27
     needs: release-package
-    # 45, not 30 — same arithmetic as the macOS job: the private split was a
-    # 15-minute shared `build` plus a 20-minute iOS acceptance job, and this one
-    # does both. Simulator boot and the Xcode-project fixture build make this the
+    # 45, not 30 — same arithmetic as the macOS job: a 15-minute build plus a
+    # 20-minute iOS acceptance run, in one job. Simulator boot and the Xcode-project
+    # fixture build make this the
     # slower of the two, hence the wider budget.
     timeout-minutes: 45
     steps:

@@ -71,3 +71,32 @@ struct BuildClassifierOutputCompletenessTests {
         #expect(failure.kind == .compilationError)
     }
 }
+
+/// A bare `toolchain` in the output is not evidence of an environment failure.
+@Suite("BuildClassifier: toolchain markers")
+struct BuildClassifierToolchainMarkerTests {
+    private func classify(_ output: String) -> BuildFailure {
+        let result = ProcessResult(
+            exitCode: 1, standardOutput: Data(output.utf8), standardError: Data(), durationSeconds: 1,
+            timedOut: false, terminatingSignal: nil, outputComplete: true
+        )
+        return BuildClassifier.failure(
+            from: result, command: CommandRecord(executable: "xcodebuild", arguments: ["build"], workingDirectory: "/tmp")
+        )
+    }
+
+    @Test("a compiler diagnostic in output that mentions a toolchain stays a compilationError")
+    func diagnosticWithToolchainWordIsCompilationError() {
+        let output = """
+        export DT_TOOLCHAIN_DIR=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain
+        SwiftCompile normal arm64 /Applications/Xcode.app/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc
+        Mutant.swift:12:34: error: cannot find 'x' in scope
+        """
+        #expect(classify(output).kind == .compilationError)
+    }
+
+    @Test("a missing toolchain is still an infrastructure failure")
+    func missingToolchainIsInfrastructure() {
+        #expect(classify("xcodebuild: error: No such toolchain 'org.example.custom'\n").kind == .infrastructure)
+    }
+}

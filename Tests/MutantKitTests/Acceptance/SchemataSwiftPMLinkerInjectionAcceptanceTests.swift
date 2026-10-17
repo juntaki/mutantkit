@@ -127,7 +127,7 @@ struct SchemataSwiftPMLinkerInjectionAcceptanceTests {
     /// a direct, test-only filter over the raw transcript, not a call to
     /// any production API: deciding which candidate is real is
     /// `MutationVerdictVerifier.verifySchemataChain`'s job alone in
-    /// production (ADR-0006 Stage 2).
+    /// production (the schemata proof chain).
     private static func matchingStartup(in transcript: RuntimeTranscript, token: SchemataSelectorToken, runID: RunID) -> RuntimeStartupEvent? {
         transcript.records.compactMap { record -> RuntimeStartupEvent? in
             guard case let .startup(event) = record, event.token == token, event.runID == runID else { return nil }

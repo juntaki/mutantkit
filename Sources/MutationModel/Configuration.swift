@@ -421,9 +421,9 @@ public enum BudgetStratification: String, Codable, Sendable {
 }
 
 /// Opt-in switch between v1's `stratifyBy`-driven selection and Budget
-/// Selection v2's two-level allocator (ADR-0007). `nil`/`.v1` (the default)
+/// Selection v2's two-level allocator (the budget-selection v2 spec). `nil`/`.v1` (the default)
 /// keeps `stratifyBy`/`minimumPerOperator` in full effect, byte-identical to
-/// existing configs (ADR-0007 invariant 8, Choice 1 — v2 ships opt-in only
+/// existing configs (the budget-selection compatibility invariant — v2 ships opt-in only
 /// this milestone). `.v2` routes through `BudgetSelectorV2` instead, using
 /// `minimumPerStratum`/`weight` and ignoring `stratifyBy`/`minimumPerOperator`.
 public enum BudgetSelectionAlgorithm: String, Codable, Sendable {
@@ -444,7 +444,7 @@ public struct BudgetSettings: Codable, Sendable, Hashable {
     /// of that mode. Ignored under `.subtype` and `nil`. Ignored entirely
     /// under `selection: .v2` — see `minimumPerStratum`.
     public var minimumPerOperator: Int?
-    /// Opts into Budget Selection v2 (ADR-0007). See
+    /// Opts into Budget Selection v2 (the budget-selection v2 spec). See
     /// `BudgetSelectionAlgorithm`'s doc comment.
     public var selection: BudgetSelectionAlgorithm?
     /// `selection: .v2` only: the outer stratum's (operator's)
@@ -452,8 +452,8 @@ public struct BudgetSettings: Codable, Sendable, Hashable {
     /// Defaults to 1 when `.v2` is active and this is unset. Ignored under
     /// `.v1`/`nil`.
     public var minimumPerStratum: Int?
-    /// `selection: .v2` only: optional per-operator Phase 2 weight (ADR-0007
-    /// B.3), keyed by operator ID. Empty/unset means equal-share. If any
+    /// `selection: .v2` only: optional per-operator Phase 2 weight (the budget-selection budget semantics),
+    /// keyed by operator ID. Empty/unset means equal-share. If any
     /// entry is configured, every operator with an eligible candidate must
     /// be configured — a partial configuration is a config-load error (see
     /// `BudgetSelectorV2.validateWeightConfiguration`). Ignored under

@@ -69,17 +69,21 @@ struct VerifyRunCommand: AsyncParsableCommand {
             report: report, plan: plan, evidence: evidence, expectedPolicy: expectedPolicy
         )
         var checks = reverification.checks
-        checks.insert(anchorCheck(report: report, plan: plan, root: root), at: Self.anchorInsertionIndex(in: checks))
-        checks.insert(
-            sourceEvidenceCheck(report: report, root: root), at: Self.anchorInsertionIndex(in: checks) + 1
-        )
+        let anchors = anchorCheck(report: report, plan: plan, root: root)
+        let sourceEvidence = sourceEvidenceCheck(report: report, root: root)
+        checks.insert(anchors, at: Self.anchorInsertionIndex(in: checks))
+        checks.insert(sourceEvidence, at: Self.anchorInsertionIndex(in: checks) + 1)
+        // The two checks inserted here are report-only (Tier A) too.
+        let tierAComplete = (reverification.tierAChecks + [anchors, sourceEvidence]).allSatisfy { $0.status == .pass }
         return VerifyRunResult(
             planID: report.planID,
             resultCount: report.results.count,
             planSupplied: plan != nil,
             verifierVersion: MutationVerdictVerifier.currentVersion,
             checks: checks,
-            tierB: reverification.tierB
+            tierB: reverification.tierB,
+            executionStrategy: report.executionStrategy,
+            tierAComplete: tierAComplete
         )
     }
 
@@ -138,6 +142,18 @@ struct VerifyRunCommand: AsyncParsableCommand {
         } else {
             print("Tier B (re-verification from raw observations) was not performed; not-verifiable items are not counted as passed.")
         }
+        print(
+            "Tier A (report-only checks): \(result.complete ? "complete" : "partial"). " +
+                "Full-evidence re-verification (Tier B): \(result.fullEvidenceReverified == true ? "yes" : "no")."
+        )
+        if let strategy = result.executionStrategy {
+            let planner = strategy.plannerFallbackReasonCounts.map { $0.isEmpty ? "none" : "\($0)" } ?? "not recorded"
+            print(
+                "Execution (copied from report.json, which is authoritative): requested \(strategy.requested), " +
+                    "\(strategy.effectiveCount) effective, \(strategy.fallbackCount) fallback; planner fallback reasons: \(planner)" +
+                    (strategy.degradationReason.map { "; whole-run degradation: \($0)" } ?? "") + "."
+            )
+        }
         print("This checks internal consistency and re-derivability, not who produced the report.")
         print("\n" + summaryLine(for: result))
     }
@@ -188,6 +204,23 @@ struct VerifyRunResult: Codable {
     /// `true` only when every check passed (none failed, none not verifiable).
     /// `passed && !complete` is a PARTIAL verification.
     let complete: Bool
+    /// Additive, optional (absent in older output). Tier A / report-only
+    /// completeness: computed from the report-only checks alone, so it is not
+    /// affected by the evidence-archive (Tier B) checks that `complete` also
+    /// covers. `complete` is kept unchanged for existing consumers.
+    let tierAComplete: Bool?
+    /// Additive, optional. Full-evidence (Tier B) re-verification: an evidence
+    /// archive was read and every result re-judged from raw observations with
+    /// no mismatch, missing observation or archive problem. Independent of
+    /// `tierAComplete`: schemata runs may be Tier A partial yet `true` here.
+    let fullEvidenceReverified: Bool?
+    /// Additive, optional. The bound report's `executionStrategy`, copied
+    /// verbatim (requested/effective/fallback counts, `plannerFallbackReasonCounts`,
+    /// dynamic `fallbackReasonCounts`, `degradationReason`). `report.json` stays
+    /// authoritative for execution provenance; this is a reference copy so the
+    /// pair (report, verify-run) can be read together. `nil` when the report
+    /// records none (a plain isolated run, or an older report).
+    let executionStrategy: ExecutionStrategyReport?
     let passCount: Int
     let failCount: Int
     let notVerifiableCount: Int
@@ -195,9 +228,12 @@ struct VerifyRunResult: Codable {
 
     init(
         planID: String, resultCount: Int, planSupplied: Bool, verifierVersion: Int, checks: [ReverificationCheck],
-        tierB: TierBSummary? = nil
+        tierB: TierBSummary? = nil, executionStrategy: ExecutionStrategyReport? = nil, tierAComplete: Bool? = nil
     ) {
-        let summary = ReportReverification(checks: checks)
+        let summary = ReportReverification(checks: checks, tierB: tierB)
+        self.executionStrategy = executionStrategy
+        self.tierAComplete = tierAComplete ?? summary.tierAComplete
+        fullEvidenceReverified = summary.fullEvidenceReverified
         schemaVersion = SchemaVersion.verifyRunResult
         self.planID = planID
         self.resultCount = resultCount

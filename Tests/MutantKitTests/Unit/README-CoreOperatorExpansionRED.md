@@ -78,7 +78,5 @@ validation (nil-coalescing-fallback has since been demoted to experimental):
 Conditional-clause deletion and side-effect-call removal remain separate design
 work because their safe syntax boundaries and exclusion policies need dedicated
 contracts rather than being bundled into this slice. Side-effect-call removal's
-design contract is now written — see
-this project's internal side-effect-call-removal operator-catalog design
-document (not part of this public repo) — but not yet
+design contract is written but not yet
 implemented.

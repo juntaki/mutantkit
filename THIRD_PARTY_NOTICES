@@ -29,7 +29,8 @@ a reference asset in the ways its authors' licence permits:
     original; the failure modes they encode are observations about Muter.
 
 MutantKit uses a different evidence and scoring model from Muter and does not
-aim to reproduce Muter's classification semantics. See ADR-0001.
+aim to reproduce Muter's classification semantics. MutantKit is an independent
+implementation, not a fork.
 
 If Muter source is vendored in future, this notice must be updated to name the
 specific files, and the MIT notice below must additionally be reproduced at the

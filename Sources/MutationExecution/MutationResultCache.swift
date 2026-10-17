@@ -14,7 +14,7 @@ import MutationModel
 /// 1. **Per-mutant identity**, enforced here in `load`: the entry's
 ///    `mutationID` must equal this point's, *and* its `pointDigest` must
 ///    equal `PlannedMutationRef.pointDigest(for: point)`. That digest folds
-///    in the mutated file's own `sourceFileHash` (ADR-0002), so a mutant
+///    in the mutated file's own `sourceFileHash` (the mutation-plan contract), so a mutant
 ///    whose file changed by even one byte can never be served from cache,
 ///    whatever the context digest says.
 /// 2. **Per-context identity**, enforced by the caller's digest. Since
@@ -80,7 +80,7 @@ public actor MutationResultCache {
     /// identity, or `nil` on anything from "no entry" to "the entry cannot
     /// be trusted."
     ///
-    /// ADR-0006 Stage 1 (second review round): the on-disk entry carries
+    /// The authoritative verdict pipeline (second review round): the on-disk entry carries
     /// raw `MutationObservations`, not a decided outcome — never trusted
     /// directly, decoded as an untrusted envelope and re-verified through
     /// `MutationVerdictVerifier.verify` exactly like a fresh evaluation
@@ -100,7 +100,7 @@ public actor MutationResultCache {
         guard let data = try? Data(contentsOf: url),
               let record = try? JSONDecoder().decode(CacheRecord.self, from: data),
               record.key == key,
-              // ADR-0005 PR C: a record stamped by an older verifier version
+              // The verified-verdict cache gate: a record stamped by an older verifier version
               // (or one that predates this field entirely — see
               // `CacheRecord.init(from:)` — always decodes to
               // `unknownVerificationVersion`, which can never equal a real
@@ -140,7 +140,7 @@ public actor MutationResultCache {
     }
 
     /// `verificationVersion` is always read from re-verifying `observations`
-    /// itself (ADR-0006 Stage 1) — never a separate caller-supplied argument
+    /// itself (the authoritative verdict pipeline) — never a separate caller-supplied argument
     /// that could in principle disagree with what actually backs the
     /// resulting verdict.
     public func store(

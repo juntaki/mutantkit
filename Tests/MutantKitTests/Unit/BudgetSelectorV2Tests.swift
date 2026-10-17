@@ -3,7 +3,7 @@ import MutationModel
 @testable import MutationPlanner
 import Testing
 
-/// Pins ADR-0007's Budget Selection v2 spec (`BudgetSelectorV2`) — the
+/// Pins the budget-selection v2 spec's Budget Selection v2 spec (`BudgetSelectorV2`) — the
 /// two-level `allocateCounts`/`allocate` algorithm in B.2, the weight
 /// semantics in B.3, and the `InclusionReason` schema in B.7. Fixtures reuse
 /// `BudgetSelectorTests.point(...)` so both selector generations are tested

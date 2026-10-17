@@ -1,40 +1,6 @@
 // swift-tools-version:6.0
 //
-// This manifest omits a handful of internal-only targets that are not
-// part of the public product.
-//
-// Five executable targets exist only as research/investigation tooling
-// (never referenced by the CLI, by any library target, or by any other
-// target's `dependencies:`), and are omitted here along with their
-// `Sources/` directories:
-//
-//   - BudgetV2Eval             (internal budget-selection evaluation tool)
-//   - PlanSubsetDerivation     (internal budget-selection evaluation tool)
-//   - PlanStats                (temporary diagnostic tool, not a frozen protocol)
-//   - SchemataChunkBuildProbe  (temporary diagnostic tool, not a frozen protocol)
-//   - DirectXCTestInvokeProbe  (standalone prototype, not wired into any production path)
-//
-// `BenchmarkRunner` and its test target `BenchmarkRunnerTests` are also
-// omitted -- unlike the five above, this is a competitive-hygiene
-// decision, not a "still unfinished" one. It's a real, working standalone
-// tool that runs MutantKit against other mutation testing tools as
-// external processes for a fair competitive comparison; publishing its
-// adapters and validity guards would hand a competitor a free map of
-// their own product's failure modes, discovered here at real
-// investigation cost, for close to zero benefit to a public user (it
-// targets a fixed internal corpus, not an arbitrary package). A release
-// that wants to publish frozen benchmark numbers should do so via a
-// separate, deliberately-written public doc, not by shipping this tool.
-//
-// `SchemataEligibilityClassifier` is research-only in the same sense, but
-// is deliberately KEPT here:
-// `Tests/MutantKitTests/Unit/SchemataEligibilityClassifierTests.swift`
-// (part of the shipped `MutantKitTests` target, which this repo's own CI
-// builds and runs) does `@testable import SchemataEligibilityClassifier`
-// to pin real `EligibilityClassifier` behavior. Dropping the target here
-// would break that test target's compile -- not a hygiene win, a
-// regression. Removing it would require first relocating or deleting
-// that test file, which is a separate decision this pass doesn't make.
+// The `mutantkit` package: the CLI, its libraries, and the test target.
 import PackageDescription
 
 let package = Package(
@@ -131,19 +97,12 @@ let package = Package(
             ]
         ),
 
-        // Research-only, outcome-blind classification tool for an internal
-        // design-validation protocol's addendum (Corpus B calibration
-        // population selection rule): actually runs
+        // Classifies which mutations of a plan a schemata run can embed: it runs
         // SchemataChunkPlanner.plan (the same target-resolution/registry
-        // machinery a real formal run uses) to determine authoritative
-        // embedded membership, not just a lowerer's own `analyze()`. See
+        // machinery a real run uses) to determine authoritative embedded
+        // membership, not just a lowerer's own `analyze()`. See
         // Sources/SchemataEligibilityClassifier/EligibilityClassification.swift's
-        // doc comment.
-        //
-        // Kept in this public manifest (unlike its research siblings)
-        // because `MutantKitTests` — the shipped test target this repo's
-        // own CI builds — `@testable import`s it; see this file's header
-        // comment.
+        // doc comment. `MutantKitTests` `@testable import`s it.
         .executableTarget(
             name: "SchemataEligibilityClassifier",
             dependencies: [

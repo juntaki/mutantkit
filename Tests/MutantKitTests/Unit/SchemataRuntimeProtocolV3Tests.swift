@@ -10,7 +10,7 @@ import Testing
 /// the real `libMutantKitSchemataRuntime.a` `swift build --build-tests`
 /// (already run before every test invocation) already produced.
 ///
-/// This is the runtime half of ADR-0006 Stage 2's proof chain: the
+/// This is the runtime half of the schemata proof chain: the
 /// generated preamble/collector (later stage-2 tasks) are not wired up
 /// yet, so this test drives the C API directly rather than through a real
 /// lowered mutation -- exactly the same reasoning

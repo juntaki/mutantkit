@@ -33,11 +33,10 @@ import SwiftSyntax
 /// notice.
 ///
 /// **`defaultEnabled: true`, validated (v0.4 Trust Closure).** Corpus-measured
-/// on two real, independently-shaped iOS apps (internal, not part of this public repo): a
+/// on two real, independently-shaped iOS apps: a
 /// healthy and improving kill rate (29.4% -> 30.4% -> 71.4% across three
 /// runs), 0 unviable in either project, no signal-density concern in
-/// either. See the internal corpus-validation notes (not part of this
-/// public repo) for full tables.
+/// either.
 public struct ReturnValueReplacementOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.return-value-replacement",

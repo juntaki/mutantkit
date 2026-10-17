@@ -1173,7 +1173,7 @@ jobs:
       # rather than `unit` specifically because only the *merged*
       # unit+acceptance lcov is a real, non-misleading coverage number;
       # `unit`'s own profile alone is exactly the "0.0%, not a real
-      # measurement" shape docs/public-quality-badges.md describes fixing.
+      # measurement" shape this merged number avoids.
       - name: Convert merged coverage to Sonar's Generic Test Coverage format
         run: python3 Scripts/lcov-to-sonar-coverage.py lcov.info sonar-coverage.xml "$GITHUB_WORKSPACE"
       # This workflow triggers on plain `pull_request`, not

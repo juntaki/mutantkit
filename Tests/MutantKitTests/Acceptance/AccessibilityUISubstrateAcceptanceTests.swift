@@ -20,8 +20,7 @@ import Testing
 /// The two hand-applied faults this substrate exists to make observable at
 /// all (`.accessibilityLabel("Close")` and `.contentShape(Rectangle())`
 /// removal) are validated manually against `XCResultAdapter.classify`
-/// directly, not here — see the internal Phase 5A UI-test-substrate
-/// research record (not part of this public repo) for that evidence.
+/// directly, not here.
 /// Neither is a registered `MutationOperator`, so neither can be driven
 /// through `mutantkit plan`'s own discovery.
 @Suite(
@@ -98,9 +97,8 @@ struct AccessibilityUISubstrateAcceptanceTests {
     }
 
     /// The single most important lesson from Phase 5's own corpus-validation
-    /// work (see the hyphenated-test-target incident in this project's
-    /// internal `required-decode-introduction-2026-09` corpus-validation
-    /// research, not part of this public repo): a test filter that silently matches
+    /// work:
+    /// a test filter that silently matches
     /// zero tests must never be read as a pass. `-only-testing:` here narrows
     /// to a test method that does not exist, so the real suite's 3 tests
     /// become 0 — MutantKit must fail the whole run closed, not report a

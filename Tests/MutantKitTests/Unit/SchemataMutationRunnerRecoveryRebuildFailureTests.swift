@@ -5,7 +5,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0008 §5 item 8 / §4(d), amended by Addendum 4: a mid-chunk
+/// The post-hang recovery semantics(d), amended by Addendum 4: a mid-chunk
 /// recovery rebuild (triggered by a forced timeout-kill) can itself fail in
 /// the same four shapes the *initial* per-chunk build already handles —
 /// sandbox-creation error, untyped build error, a typed `BuildFailure`, and a
@@ -19,7 +19,7 @@ import Testing
 /// longer silently swallowed via `try?`) — both fall back to isolated mode,
 /// joining hang-budget overflow as further independent dynamic-fallback
 /// triggers, never a manufactured `.unviable`.
-@Suite("SchemataMutationRunner: ADR-0008 recovery-rebuild failure parity")
+@Suite("SchemataMutationRunner: recovery-rebuild failure parity")
 struct SchemataMutationRunnerRecoveryRebuildFailureTests {
     // MARK: - Fixture: a 2-entry chunk, entry 0 always primary-times-out to trigger Trigger 1's mandatory rebuild
 
@@ -185,7 +185,7 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
 
     @Test("""
     A recovery rebuild that throws a typed BuildFailure routes every protected entry to dynamic isolated fallback \
-    (.sharedChunkBuildFailure), not .unviable — ADR-0008 Addendum 4
+    (.sharedChunkBuildFailure), not .unviable — shared chunk build-failure attribution
     """)
     func typedBuildFailureDuringRebuildRoutesToIsolatedFallback() async throws {
         let fixture = try ChunkFixture.make()

@@ -15,7 +15,7 @@ import Testing
 /// primary run it is confirming, not a different one.
 ///
 /// Uses `FakeSchemataAdapter` (shared with the Group 2 dynamic-fallback and
-/// ADR-0008 containment suites) with its `TestSelecting` conformance, so
+/// The schemata timeout-isolation design containment suites) with its `TestSelecting` conformance, so
 /// `SchemataMutationRunner`'s own `test as? any TestSelecting` cast succeeds
 /// exactly the way a real `SwiftPackageMacOSAdapter`/`XcodeBuildAdapter`
 /// would. No process is spawned anywhere in this suite.
@@ -177,8 +177,7 @@ struct SchemataMutationRunnerTestSelectionTests {
     // whole-suite number. Gate 3's real-iOS-project run found it
     // uncalibrated for Xcode/Simulator's fixed per-invocation overhead (see
     // `TimeoutController.mutantLimitSeconds(selectedTests:)`'s own doc
-    // comment and the internal Gate 3 benchmark research, not part of this
-    // public repo), so a
+    // comment), so a
     // known selection now resolves to the same whole-suite number an
     // unknown one always did — the three tests below assert that identical
     // outcome instead of a narrower one.

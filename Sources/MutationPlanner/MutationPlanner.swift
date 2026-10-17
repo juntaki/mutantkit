@@ -11,7 +11,7 @@ public enum PlannerError: Error, CustomStringConvertible {
     case invalidBudget(maxMutants: Int)
     case diffScopeMissing(base: String)
     case integrityViolations([IntegrityViolation])
-    /// `budget.selection: v2` (ADR-0007) rejected its own input — a
+    /// `budget.selection: v2` (the budget-selection v2 spec) rejected its own input — a
     /// duplicate `MutationID`, an invalid `weight` configuration, or a
     /// `maxMutants`/candidate-count magnitude the overflow-safety bound
     /// disallows. See `BudgetSelectorV2Error`'s own description for detail.
@@ -306,7 +306,7 @@ public struct MutationPlanner: Sendable {
 
     /// Returns `(selected, skipped, budgetInclusionReasons)`. The third
     /// element is only ever non-empty under `budget.selection: v2` — v1's
-    /// two modes produce no `InclusionReason` records (ADR-0007 B.7 is a v2
+    /// two modes produce no `InclusionReason` records (the budget-selection schema contract is a v2
     /// capability, not retrofitted onto v1).
     private func applyBudgetGate(
         _ points: [MutationPoint],
@@ -377,7 +377,7 @@ public struct MutationPlanner: Sendable {
         }
     }
 
-    /// Budget Selection v2 (ADR-0007): outer stratum = operator ID, inner
+    /// Budget Selection v2 (the budget-selection v2 spec): outer stratum = operator ID, inner
     /// stratum = the exact (original, replacement) text pair — the same two
     /// dimensions `.operatorSubtype` already uses, so a v1-vs-v2 comparison
     /// isolates the allocation algorithm as the only variable, not the

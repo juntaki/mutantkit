@@ -25,17 +25,10 @@ that already existed, cross-referenced in one place for the first time.
 
 ## Toolchain floor
 
-**v0.8 policy change (2026-09-11): current-toolchain-only.** MutantKit no
-longer aims to maximize compatibility with old Apple toolchains — it aims
-to strongly guarantee correctness on the *current* one. There is exactly
-one supported, continuously-verified toolchain baseline: **Xcode 26.x**,
-CI-pinned to the exact version below. Historical compatibility evidence
-against older toolchains (Xcode 16.x, Xcode 15.2) is retired from this
-public support contract — it recorded real, once-true facts about an
-earlier baseline, not claims about what is supported today. That evidence
-is preserved as a historical record internally (not part of this public
-repo), not deleted, but it no longer describes MutantKit's current
-contract.
+**Current-toolchain-only.** MutantKit does not try to maximize compatibility
+with old Apple toolchains; it aims to strongly guarantee correctness on the
+*current* one, CI-pinned to the exact version below. Compatibility with older
+toolchains (Xcode 16.x, Xcode 15.2) is not part of this support contract.
 
 **Xcode 27.0 is the CI-enforced baseline; Xcode 26.6 is a CI-enforced
 compatibility lane.** Hosted CI runs on GitHub's `xcode-27` runner image
@@ -56,11 +49,11 @@ release. Differences you can observe on Xcode 27:
   correct, there is no schemata speedup). See
   [`docs/schemata-support-matrix.md`](schemata-support-matrix.md). A package
   with one test target is not affected.
-- **Dead-stripped code can report `infrastructureFailure`.** The newer
+- **Dead-stripped code can report `notMaterialized`.** The newer
   toolchain removes code nothing references (an unused default-argument
   generator, for example), so a mutant in it can produce a build product
-  identical to the baseline's. It is reported as `infrastructureFailure`
-  ("build product identical to baseline"), not as a survivor and not scored.
+  identical to the baseline's. It is reported as `notMaterialized`
+  (the mutation did not reach the product), not as a survivor and not scored.
 - **`execution.sharedModuleCache` is not expected to help.** In
   maintainer testing SwiftPM no longer placed module files in that cache, so
   do not expect the speedup described for earlier toolchains.
@@ -153,37 +146,23 @@ level (`docs/schemata-support-matrix.md:34-39`).
 No UI-automation DSL and no new project kind — an existing Xcode
 project/workspace UI test target/scheme is driven the same way any other
 `isolated`-mode test target is. Full account:
-`docs/execution.md`'s UI-test section and
-the internal Phase 5A UI-test-substrate research record (not part of this
-public repo). This row was
-declared supported in `README.md`'s own "Supported today" table before
-v0.4 Trust Closure Workstream D but had no citation in this matrix — the
-underlying evidence was real and already existed, this closes the
-citation gap between the two documents, not a correctness gap.
+`docs/execution.md`'s UI-test section.
 
 ## Test selection (`selectCoveringTests`) and batching (`testBatchSize`)
 
-Two independent axes, both declared **supported** in public docs
-(`docs/benchmarks.md`, `docs/configuration.md`) but, until v0.4 Trust
-Closure Workstream B, without a shared citation naming which test
-framework each was actually proven against:
+Two independent axes, both **supported** (see `docs/configuration.md`). The
+table names the test framework each is proven against:
 
 | Selection mechanism | XCTest | Swift Testing |
 |---|---|---|
 | `-only-testing:` (unbatched, `selectCoveringTests` alone) | **Supported** — `XcodeCoverageSelectionAcceptanceTests` | **Supported** — `XcodeSwiftTestingAcceptanceTests.swiftTestingCoverageSelectionNarrowsAttribution` |
-| Batched `.xctestrun` `OnlyTestIdentifiers` (`testBatchSize` + `selectCoveringTests`) | **Supported** — `XcodeBatchTestingAcceptanceTests` | **Supported** (v0.4 Workstream B) — `XcodeBatchTestingSwiftTestingAcceptanceTests`, confirming empirically that the bare `qualifiedName` (no trailing `()`) is the correct `OnlyTestIdentifiers` form for a Swift Testing target, against a real `xcodebuild` batch run |
+| Batched `.xctestrun` `OnlyTestIdentifiers` (`testBatchSize` + `selectCoveringTests`) | **Supported** — `XcodeBatchTestingAcceptanceTests` | **Supported** — `XcodeBatchTestingSwiftTestingAcceptanceTests`, confirming empirically that the bare `qualifiedName` (no trailing `()`) is the correct `OnlyTestIdentifiers` form for a Swift Testing target, against a real `xcodebuild` batch run |
 
-Before Workstream B, `BatchXCTestRunBuilder.build(items:)`'s own doc
-comment named this Swift Testing cell explicitly as "never verified
-empirically, only for XCTest" — a real supported-path correctness gap this
-audit closed with a targeted acceptance test rather than narrowing the
-contract. `testBatchSize` itself remains a non-default, opt-in setting
-(`docs/benchmarks.md`: slower than `simulatorPool` at scale, kept for
-CI runners that restrict simulator-clone provisioning) — that recommendation
-is unchanged; only the correctness-evidence gap for its Swift Testing cell
-is closed.
+`testBatchSize` remains a non-default, opt-in setting: it is slower than
+`simulatorPool` at scale and is kept for CI runners that restrict
+simulator-clone provisioning (see `docs/execution.md`).
 
-**Recorded residual scope (not a v0.4 blocker):** both batched-selection
+**Known coverage limits:** both batched-selection
 acceptance suites (`XcodeBatchTestingAcceptanceTests` and its Swift Testing
 mirror) exercise exactly one shape — two mutants whose selection is the
 identical two-test pair, landing in one batch, everything killed as
@@ -195,11 +174,9 @@ The invalid-selection fail-closed guarantee *is* covered, but only at the
 unit level and framework-agnostically —
 `BatchXCTestRunBuilderTests.selectionMatchingNoTargetThrows` pins that a
 selection naming a target with none of the batch's own tests throws
-`BatchXCTestRunError` rather than silently running everything. This gap
-predates Workstream B (the pre-existing XCTest suite never covered these
-shapes either) and is not specific to Swift Testing; it is deferred as
-future acceptance-test work, not a v0.4 correctness gap, since it does not
-change any current supported/default behavior.
+`BatchXCTestRunError` rather than silently running everything. This gap is not
+specific to Swift Testing (the XCTest suite does not cover these shapes
+either), and it does not change any current supported or default behavior.
 
 ## Apple platform breadth (macOS / iOS / tvOS / watchOS / visionOS)
 
@@ -253,16 +230,7 @@ matrix does not re-measure that parity, only cross-references it.
 
 ## The CI/acceptance matrix this lands in
 
-**Corrected 2026-09.** This section previously described a `route`/`build`
-dynamic-matrix design (path-based routing into a full-vs-narrow run, a
-shared `build` job reused by `unit-fast`/`unit-system`/`acceptance`) with
-specific `ci.yml` line-number citations. That design does not exist in the
-CI actually running today — it was lost in the `git-projector publish`
-incident recorded in `HANDOVER.md` and was not restored in that shape; the
-restoration (commit `e7fb818` and its `integration/release-ci-repair`
-merge) rebuilt a deliberately simpler workflow instead, by design, per that
-workflow's own comments. Job names are cited below instead of line numbers,
-since line numbers are exactly what drifted silently last time.
+Jobs are cited below by name rather than by line number.
 
 The public repo's `.github/workflows/ci.yml`, run on every push/PR (no
 `route`, everything unconditional):
@@ -309,7 +277,7 @@ every push (`ci.yml`) or before every release (`release-validation.yml`).
 | Swift 6.0+ (build MutantKit) | Supported, hard-enforced by `Package.swift` |
 | Xcode 27.0, pinned / macOS 14+ Apple Silicon runtime (develop, build, CI-test MutantKit) | Supported, CI-enforced on the preview `xcode-27` image (`xcode-select -s` pin in every macOS job; `lint` and `release-package` fail on drift) |
 | Xcode 26.6 compatibility lane | Supported, CI-enforced, reduced (unit tests, SwiftPM package, local path dependencies, Xcode project isolated); CodeQL stays on 26.6 |
-| Target project's own toolchain (older than Xcode 26.6) | Best-effort, untested — no compatibility CI lane maintained (v0.8 policy) |
+| Target project's own toolchain (older than Xcode 26.6) | Best-effort, untested — no compatibility CI lane maintained |
 | SwiftPM (macOS) × XCTest / Swift Testing | Supported, both modes |
 | Xcode project/workspace × XCTest / Swift Testing | Supported, `isolated`; `xcodeProject`+XCTest also `schemata`-supported |
 | iOS Simulator | Supported, both modes (per the table above) |

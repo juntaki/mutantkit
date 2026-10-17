@@ -3,7 +3,7 @@ import MutationModel
 import SwiftCoreOperators
 import Testing
 
-/// Pins the `SchemataPlan`/`schemataPlanID` contract from ADR-0003: content-
+/// Pins the `SchemataPlan`/`schemataPlanID` contract from the schemata evidence contract: content-
 /// addressed (never sequential/positional, never truncated), deterministic
 /// regardless of input order, bound to a specific parent `MutationPlan`,
 /// sensitive to every field of every entry, and validated on decode rather

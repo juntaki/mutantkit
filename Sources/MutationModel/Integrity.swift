@@ -23,11 +23,18 @@ public struct IntegrityViolation: Codable, Sendable, Hashable {
     public let kind: Kind
     public let detail: String
     public let mutationID: MutationID?
+    /// Set only on the single collapsed violation of an interrupted run: every
+    /// planned mutant that has no result, so the IDs stay recoverable.
+    public let unfinishedMutationIDs: [MutationID]?
 
-    public init(kind: Kind, detail: String, mutationID: MutationID? = nil) {
+    public init(
+        kind: Kind, detail: String, mutationID: MutationID? = nil,
+        unfinishedMutationIDs: [MutationID]? = nil
+    ) {
         self.kind = kind
         self.detail = detail
         self.mutationID = mutationID
+        self.unfinishedMutationIDs = unfinishedMutationIDs
     }
 }
 
@@ -136,7 +143,7 @@ public enum IntegrityChecker {
             }
         }
 
-        // Under `budget.selection: v2`, ADR-0007 B.7 requires exactly one
+        // Under `budget.selection: v2`, the budget-selection schema contract requires exactly one
         // `InclusionReason` per selected mutant — never zero, never two, and
         // never one pointing at a mutant that isn't actually in the plan
         // (which would mean it was orphaned by a stage that filtered
@@ -150,7 +157,7 @@ public enum IntegrityChecker {
                     detail: """
                     Plan has \(plan.mutations.count) selected mutation(s) but \
                     \(plan.budgetInclusionReasons.count) budgetInclusionReasons record(s) — these must \
-                    match exactly one-to-one under budget.selection: v2 (ADR-0007 B.7).
+                    match exactly one-to-one under budget.selection: v2.
                     """
                 ))
             }
@@ -161,7 +168,7 @@ public enum IntegrityChecker {
 
     /// Reconciles a finished run against its plan.
     ///
-    /// ADR-0006 Stage 1: narrowed to reconciliation only — counts,
+    /// The authoritative verdict pipeline: narrowed to reconciliation only — counts,
     /// duplicates, and set-matching against the plan. The evidence-
     /// interpretation checks this function used to run itself
     /// (`phantomMutant`'s "does this result actually have a source diff",
@@ -190,7 +197,8 @@ public enum IntegrityChecker {
     public static func check(
         plan: MutationPlan,
         ledger: ResultLedger<MutationResult>,
-        baselinePassed: Bool
+        baselinePassed: Bool,
+        interruptedBy interruption: RunInterruption? = nil
     ) -> IntegrityReport {
         var violations = validatePlan(plan)
 
@@ -226,12 +234,24 @@ public enum IntegrityChecker {
 
         // Invariant: planned = classified + skipped. A planned mutation that
         // silently vanished is exactly the failure mode we refuse to tolerate.
-        for id in plannedIDs.subtracting(resultIDs).sorted() {
+        let unfinished = plannedIDs.subtracting(resultIDs).sorted()
+        if let interruption, !unfinished.isEmpty {
+            // One line instead of one per mutant. Still a violation, so the
+            // score stays withheld and the partial report cannot pass as complete.
             violations.append(IntegrityViolation(
                 kind: .plannedMutationWithoutResult,
-                detail: "Planned mutation \(id) produced no result and no skip record.",
-                mutationID: id
+                detail: "\(unfinished.count) of \(plannedIDs.count) planned mutants did not run "
+                    + "(interrupted by \(interruption.signal)).",
+                unfinishedMutationIDs: unfinished
             ))
+        } else {
+            for id in unfinished {
+                violations.append(IntegrityViolation(
+                    kind: .plannedMutationWithoutResult,
+                    detail: "Planned mutation \(id) produced no result and no skip record.",
+                    mutationID: id
+                ))
+            }
         }
 
         // `notApplied` is never silently absorbed: it is loud by

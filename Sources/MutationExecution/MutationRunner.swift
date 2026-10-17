@@ -38,16 +38,14 @@ private struct ConfirmationSandboxRequest {
 public struct MutationRunner: Sendable {
     private let plan: MutationPlan
     private let configuration: Configuration
-    private let build: any BuildAdapter
+    let build: any BuildAdapter
     private let test: any TestAdapter
     /// `test`'s `BatchTestable` conformance, resolved once here — `test` is
     /// a `let`, fixed for this runner's whole lifetime, so memoizing is
     /// bit-for-bit equivalent to re-casting on every call. Wrapper-aware
     /// (`testAdapterCapability`), never a bare `as?`, per the same
     /// reasoning as `MutationConfirmationCoordinator`'s memoized
-    /// properties. See this project's internal execution-engine
-    /// restructuring notes (not part of this public repo) for the full
-    /// rationale.
+    /// properties.
     private let batchableTest: (any BatchTestable)?
     private let checkpoints: CheckpointStore?
     private let artifactsRoot: URL?
@@ -57,6 +55,8 @@ public struct MutationRunner: Sendable {
     private let monotonicNow: @Sendable () -> TimeInterval
     private let operationalIssues = OperationalIssueLog()
     private let progress: MutationModel.ProgressReporter?
+    /// See `RunStopRequest`: once requested, no new mutant is started.
+    private let stop: RunStopRequest?
 
     /// Retesting a decided outcome (same-artifact confirmation for a kill,
     /// fresh-rebuild confirmation for a crash or a timeout) and the
@@ -65,7 +65,7 @@ public struct MutationRunner: Sendable {
     /// comment. Extracted out of this type: constructed once in
     /// `init`, from the same `workspaces`/`build`/`test`/`configuration`
     /// this runner itself was given.
-    private let confirmationCoordinator: MutationConfirmationCoordinator
+    let confirmationCoordinator: MutationConfirmationCoordinator
 
     /// Turning raw build/test/application observations into a reportable
     /// `MutationResult` — see that type's own doc comment. Extracted
@@ -73,7 +73,7 @@ public struct MutationRunner: Sendable {
     /// this runner's own `operationalIssues` log by reference (not a copy),
     /// so a warning `finalize` records still reaches this run's own
     /// `RunReport.operationalIssues` below.
-    private let evidenceAssembler: MutationEvidenceAssembler
+    let evidenceAssembler: MutationEvidenceAssembler
 
     /// The shared, immutable execution-session type both this runner and
     /// `SchemataMutationRunner` construct internally — see `RunSession`'s
@@ -108,7 +108,7 @@ public struct MutationRunner: Sendable {
 
     /// `session.workspaces` — the sandbox lifecycle every build/test/
     /// confirmation path in this file goes through.
-    private var workspaces: WorkspaceManager { session.workspaces }
+    var workspaces: WorkspaceManager { session.workspaces }
 
     /// `session.coverageCache` — when supplied with `coverageCacheKey`, the
     /// baseline pass's per-test coverage attribution is loaded from this
@@ -195,6 +195,7 @@ public struct MutationRunner: Sendable {
         progress: MutationModel.ProgressReporter? = nil,
         evidenceArchive: EvidenceArchiveWriter? = nil,
         preEstablishedBaseline: SharedBaselineEstablisher.Outcome? = nil,
+        stop: RunStopRequest? = nil,
         monotonicNow: @escaping @Sendable () -> TimeInterval = { Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000 }
     ) {
         self.plan = plan
@@ -208,6 +209,7 @@ public struct MutationRunner: Sendable {
         self.resultCacheDigest = resultCacheDigest
         self.priorityStore = priorityStore
         self.progress = progress
+        self.stop = stop
         self.monotonicNow = monotonicNow
         // Computed once, here, and handed to every collaborator below that
         // needs it (`confirmationCoordinator`, `evidenceAssembler`,
@@ -229,7 +231,8 @@ public struct MutationRunner: Sendable {
             resultCacheDigest: resultCacheDigest,
             progress: progress,
             operationalIssues: operationalIssues,
-            evidenceArchive: evidenceArchive
+            evidenceArchive: evidenceArchive,
+            stop: stop
         )
         self.session = RunSession(
             projectRoot: projectRoot,
@@ -292,15 +295,29 @@ public struct MutationRunner: Sendable {
         // Every freshly-evaluated mutant's own `finalize` call already wrote
         // it to the checkpoint and (when cacheable) the cross-run cache,
         // right next to the raw `MutationObservations` that produced it —
-        // no separate store pass is needed here (ADR-0006 Stage 1, second
+        // no separate store pass is needed here (the authoritative verdict pipeline, second
         // review round: `finalize`'s own doc comment explains why the write
         // moved there).
-        let (evaluated, batchExecution) = try await evaluate(pending, baseline: baseline)
+        var evaluated: [MutationResult] = []
+        var batchExecution: BatchExecutionSummary?
+        do {
+            (evaluated, batchExecution) = try await evaluate(pending, baseline: baseline)
+        } catch where stop?.isStopRequested == true {
+            // A forced stop cancelled the run mid-flight. What this run
+            // finished is exactly what its checkpoint holds, so rebuild from
+            // that rather than from results the thrown error discarded.
+            let persisted = ((try? await checkpoints?.loadAll(plan: plan)) ?? []).map { $0.markedAsCheckpointResume() }
+            let known = Set(resumed.map(\.id))
+            evaluated = persisted.filter { !known.contains($0.id) }
+        }
+        // Results of mutants cut short by a forced stop are artifacts of the
+        // termination (see `MutationEvidenceAssembler.finalize`), not verdicts.
+        if let stop { evaluated.removeAll { stop.wasDiscarded($0.id) } }
 
         results.append(contentsOf: evaluated)
         results.sort { $0.id < $1.id }
 
-        // ADR-0006 Stage 1: the ledger, not the plain array, is this run's
+        // The authoritative verdict pipeline: the ledger, not the plain array, is this run's
         // authoritative result state — `results` above is retired to a
         // display-ordering convenience the moment every result has been
         // gathered. A duplicate insert here (the identical `MutationID`
@@ -313,6 +330,19 @@ public struct MutationRunner: Sendable {
             try ledger.insert(result)
         }
 
+        // Marked partial only when the stop actually left planned mutants
+        // without a result; a signal that arrives after the last one finished
+        // changes nothing about a complete report.
+        let planned = Set(plan.mutations.map(\.id))
+        let interruption: RunInterruption? = stop.flatMap { stop in
+            guard stop.isStopRequested, !planned.isSubset(of: Set(ledger.mutationIDs)) else { return nil }
+            return RunInterruption(
+                signal: stop.signalName ?? "unknown",
+                completedMutants: planned.intersection(ledger.mutationIDs).count,
+                plannedMutants: planned.count
+            )
+        }
+
         return RunReport(
             planID: plan.planID,
             startedAt: startedAt,
@@ -321,9 +351,12 @@ public struct MutationRunner: Sendable {
             toolchain: toolchain,
             baseline: baseline.record,
             ledger: ledger,
-            integrity: IntegrityChecker.check(plan: plan, ledger: ledger, baselinePassed: true),
+            integrity: IntegrityChecker.check(
+                plan: plan, ledger: ledger, baselinePassed: true, interruptedBy: interruption
+            ),
             batchExecution: batchExecution,
-            operationalIssues: await operationalIssues.snapshot()
+            operationalIssues: await operationalIssues.snapshot(),
+            interruption: interruption
         )
     }
 
@@ -366,7 +399,7 @@ public struct MutationRunner: Sendable {
             var remaining = pending.makeIterator()
 
             for _ in 0 ..< workers {
-                guard let point = remaining.next() else { break }
+                guard stop?.isStopRequested != true, let point = remaining.next() else { break }
                 group.addTask { await evaluate(point, baseline: baseline) }
             }
 
@@ -375,7 +408,7 @@ public struct MutationRunner: Sendable {
             // buys contention, not throughput.
             while let result = try await group.next() {
                 collected.append(result)
-                if let point = remaining.next() {
+                if stop?.isStopRequested != true, let point = remaining.next() {
                     group.addTask { await evaluate(point, baseline: baseline) }
                 }
             }
@@ -398,7 +431,7 @@ public struct MutationRunner: Sendable {
     /// build and test run in changes.
     private func evaluateIncrementally(_ pending: [MutationPoint], baseline: BaselineContext) async throws -> [MutationResult] {
         let workers = max(1, configuration.execution.resolvedWorkerCount())
-        let queue = MutationQueue(pending)
+        let queue = MutationQueue(pending, stop: stop)
 
         return try await withThrowingTaskGroup(of: [MutationResult].self) { group in
             for workerIndex in 0 ..< workers {
@@ -515,7 +548,7 @@ public struct MutationRunner: Sendable {
         _ pending: [MutationPoint], baseline: BaselineContext, batchSize: Int
     ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary?) {
         let workers = max(1, configuration.execution.resolvedWorkerCount())
-        let queue = MutationQueue(pending)
+        let queue = MutationQueue(pending, stop: stop)
         let collector = PipelineCollector()
         let coordinator = PipelineCoordinator(workspaces: workspaces, workerCount: workers)
 
@@ -571,7 +604,7 @@ public struct MutationRunner: Sendable {
         _ pending: [MutationPoint], baseline: BaselineContext, batchSize: Int
     ) async throws -> (results: [MutationResult], batchExecution: BatchExecutionSummary?) {
         let workers = max(1, configuration.execution.resolvedWorkerCount())
-        let queue = MutationQueue(pending)
+        let queue = MutationQueue(pending, stop: stop)
 
         var collected: [MutationResult] = []
         var readyToTest: [PreparedMutant] = []
@@ -962,7 +995,7 @@ public struct MutationRunner: Sendable {
             }
 
             for _ in 0 ..< workers {
-                guard let point = remaining.next() else { break }
+                guard stop?.isStopRequested != true, let point = remaining.next() else { break }
                 try addTask(for: point)
             }
 
@@ -974,7 +1007,7 @@ public struct MutationRunner: Sendable {
                 case let .readyToTest(prepared):
                     readyToTest.append(prepared)
                 }
-                if let point = remaining.next() {
+                if stop?.isStopRequested != true, let point = remaining.next() {
                     try addTask(for: point)
                 }
             }
@@ -1874,7 +1907,11 @@ public struct MutationRunner: Sendable {
         }
 
         let attempt = await establishBaseline(in: sandbox.workspaceRoot, startedAt: started)
-        try? await workspaces.destroySandbox(sandbox)
+        // The control's products carry this sandbox's paths (`#filePath`), so
+        // it lives as long as the control does.
+        var control: BaselineControlSource?
+        if case let .established(context) = attempt { control = context.control }
+        await BaselineControlSource.retainOrDestroy(sandbox, control: control, workspaces: workspaces)
         return attempt
     }
 
@@ -2142,7 +2179,7 @@ public struct MutationRunner: Sendable {
         }
     }
 
-    private enum PrepareOutcome {
+    enum PrepareOutcome {
         case finished(MutationResult)
         case readyToTest(PreparedMutant)
     }
@@ -2223,58 +2260,14 @@ public struct MutationRunner: Sendable {
         baseline: BaselineContext,
         startedAt: Date
     ) async -> PrepareOutcome {
-        func finished(
-            sourceApplication: SourceApplicationOutcome? = nil,
-            build: BuildObservation? = nil,
-            coverage: CoverageObservation? = nil,
-            infrastructureFailureDiagnosis: String? = nil,
-            buildDurationSeconds: Double? = nil
-        ) async -> PrepareOutcome {
-            .finished(await evidenceAssembler.finalize(
-                point: point,
-                sourceApplication: sourceApplication,
-                build: build,
-                coverage: coverage,
-                infrastructureFailureDiagnosis: infrastructureFailureDiagnosis,
-                durationSeconds: Date().timeIntervalSince(startedAt),
-                buildDurationSeconds: buildDurationSeconds
-            ))
-        }
-
-        func infrastructureFailure(
-            _ diagnosis: String, evidence: MutationEvidence? = nil, buildDurationSeconds: Double? = nil
-        ) async -> PrepareOutcome {
-            await finished(
-                sourceApplication: evidence.map { .applied($0) },
-                infrastructureFailureDiagnosis: diagnosis,
-                buildDurationSeconds: buildDurationSeconds
-            )
-        }
-
-        let sourceURL: URL
-        do {
-            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
-        } catch {
-            return await infrastructureFailure("\(point.file) could not be located inside the sandbox: \(error)")
-        }
+        let scope = PrepareScope(runner: self, point: point, startedAt: startedAt)
 
         let applied: AppliedMutation
-        do {
-            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
-        } catch let error as ApplicationError {
-            // No evidence is attached on purpose: for a mutation that was never
-            // written, the absence of a diff is the honest record, and
-            // `notApplied` is exempt from the phantom check for that reason.
-            switch error {
-            case let .anchorRejected(verification):
-                return await finished(sourceApplication: .notApplied(diagnosis: verification.diagnosis))
-            case let .unreadableFile(path, underlying):
-                return await infrastructureFailure("The sandboxed copy of \(path) could not be read: \(underlying)")
-            case let .unwritableFile(path, underlying):
-                return await infrastructureFailure("The mutation could not be written to \(path): \(underlying)")
-            }
-        } catch {
-            return await infrastructureFailure("The mutation could not be applied: \(error)")
+        switch await applyMutation(in: sandbox, scope: scope) {
+        case let .applied(appliedMutation):
+            applied = appliedMutation
+        case let .failed(outcome):
+            return outcome
         }
 
         // Fast path: a baseline coverage map that knows this line was never
@@ -2291,7 +2284,7 @@ public struct MutationRunner: Sendable {
         // enters the score without a phantom or unproven-activation violation.
         if let coverage = baseline.coverage, coverage.isKnownUncovered(point) {
             let observation = coverage.observation(forFile: point.file, line: point.line)
-            return await finished(
+            return await scope.finished(
                 sourceApplication: .applied(evidenceAssembler.evidence(applied)),
                 coverage: CoverageObservation(mutatedLineWasExecuted: false, source: observation?.source ?? "baseline coverage")
             )
@@ -2308,23 +2301,14 @@ public struct MutationRunner: Sendable {
             .flatMap { $0.isEmpty ? nil : $0 }
 
         let artifact: BuildArtifact
-        let buildStarted = Date()
-        do {
-            artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
-        } catch let failure as BuildFailure {
-            return await finished(
-                sourceApplication: .applied(evidenceAssembler.evidence(applied, buildCommand: failure.command)),
-                build: BuildObservation(outcome: .failed(kind: failure.kind, diagnosis: failure.diagnosis, command: failure.command)),
-                buildDurationSeconds: Date().timeIntervalSince(buildStarted)
-            )
-        } catch {
-            return await infrastructureFailure(
-                "The mutant's build could not be run: \(error)",
-                evidence: evidenceAssembler.evidence(applied),
-                buildDurationSeconds: Date().timeIntervalSince(buildStarted)
-            )
+        let buildDurationSeconds: Double
+        switch await buildMutant(applied, in: sandbox, scope: scope) {
+        case let .built(builtArtifact, duration):
+            artifact = builtArtifact
+            buildDurationSeconds = duration
+        case let .failed(outcome):
+            return outcome
         }
-        let buildDurationSeconds = Date().timeIntervalSince(buildStarted)
 
         let activation = MutationEvidenceAssembler.activationEvidence(
             mutantHash: artifact.productHash,
@@ -2380,16 +2364,16 @@ public struct MutationRunner: Sendable {
         // `Configuration.execution.noOpCanarySampleRate` for the narrow,
         // deterministic, opt-in slice of it this reopens.
         if case .buildProductIdenticalToBaseline? = activation, !isNoOpCanarySample(point.id) {
-            return await finished(
+            return await scope.finished(
                 sourceApplication: .applied(evidenceAssembler.evidence(applied, artifact: artifact, activation: activation)),
                 build: BuildObservation(
                     outcome: .succeeded(buildProductHash: artifact.productHash, command: artifact.command),
                     durationSeconds: buildDurationSeconds
                 ),
                 infrastructureFailureDiagnosis: """
-                The mutant's build product is identical to the baseline's, so the mutation never reached the code \
-                under test, and this result proves nothing. Tests were skipped rather than run against a build \
-                already known to contain no mutation.
+                The mutant's build product is identical to the baseline's, so the mutation did not reach the \
+                product under test (code compiled out, dead-stripped or optimized away). Tests were skipped rather \
+                than run against a build already known to contain no mutation.
                 """,
                 buildDurationSeconds: buildDurationSeconds
             )
@@ -2540,7 +2524,7 @@ public struct MutationRunner: Sendable {
     /// not know or care which, so a batched and an unbatched mutant with
     /// the same test outcome are classified identically.
     ///
-    /// ADR-0006 Stage 1: whether to gather a confirmation is decided from
+    /// The authoritative verdict pipeline: whether to gather a confirmation is decided from
     /// `run`'s own raw `status` and `prepared.activation`'s own
     /// `provesActivation` — never from a classification computed ahead of
     /// the verifier, which is the whole point of this stage. The verifier
@@ -2617,7 +2601,7 @@ public struct MutationRunner: Sendable {
         // retest — see `Configuration.execution.confirmCrashKills`'s doc comment
         // for why the same-artifact retest `retestKilledMutants` uses for
         // assertion kills is not enough here.
-        if configuration.execution.confirmCrashKills, run.status == .crashed, activationProven {
+        if configuration.execution.confirmCrashKills || run.crashProvenance != nil, run.status == .crashed, activationProven {
             let confirmationStarted = Date()
             let (observation, crashEvidence) = await confirmationCoordinator.confirmCrashKill(
                 prepared.point, baseline: baseline, selectedTests: prepared.selectedTests, originalDiagnosis: run.diagnosis

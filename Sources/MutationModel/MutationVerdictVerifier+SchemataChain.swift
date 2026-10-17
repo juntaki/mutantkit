@@ -28,8 +28,27 @@ extension MutationVerdictVerifier {
     /// many processes ran it.
     struct VerifiedSchemataChain {
         let unit: CompilationUnitReceipt
-        let image: BuiltImageReceipt
+        /// Every image the receipt proves contains the unit. Activation needs
+        /// one complete STARTUP -> HIT in `processes`, not one per image.
+        let images: [BuiltImageReceipt]
         let processes: [VerifiedProcessSchemataChain]
+    }
+
+    /// STARTUP/HIT uniqueness is per (process, image): several images can be
+    /// loaded into one test process, each with its own runtime instance, and
+    /// whether bundles share a process is a build-tool detail, not an invariant.
+    struct ProcessImageKey: Hashable, Comparable {
+        let processID: Int32
+        let imageUUID: String
+
+        init(processID: Int32, imageUUID: ImageUUID) {
+            self.processID = processID
+            self.imageUUID = imageUUID.rawValue
+        }
+
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            (lhs.processID, lhs.imageUUID) < (rhs.processID, rhs.imageUUID)
+        }
     }
 
     enum SchemataChainError: Error, CustomStringConvertible {
@@ -49,7 +68,7 @@ extension MutationVerdictVerifier {
             case .nonUniqueCompilationUnit:
                 "the build receipt does not name exactly one compilation unit matching this mutation's own identity"
             case .nonUniqueBuiltImage:
-                "the build receipt does not name exactly one built image for the matched compilation unit's target"
+                "the build receipt does not prove any built image containing the matched compilation unit"
             case .noStartup:
                 "the transcript contains no STARTUP event matching this run's own expectation and the receipt's real image"
             case .noHit:
@@ -67,7 +86,7 @@ extension MutationVerdictVerifier {
     /// Requires exactly one candidate, or throws — the shared discipline
     /// every stage of `verifySchemataChain` uses: zero candidates and more
     /// than one are both refused identically, never resolved by
-    /// `.first`/`.max` picking (ADR-0006 Finding 3).
+    /// `.first`/`.max` picking (multi-image STARTUP/HIT matching).
     static func exactlyOne<T>(_ candidates: [T], or error: SchemataChainError) throws -> T {
         guard candidates.count == 1, let only = candidates.first else { throw error }
         return only
@@ -76,7 +95,7 @@ extension MutationVerdictVerifier {
     /// Builds the one, fully-proven chain from raw observations alone —
     /// `PlannedMutationRef -> sourceEmbeddingID -> CompilationUnitReceipt ->
     /// BuiltImageReceipt/architecture/LC_UUID -> {STARTUP -> HIT}+`. The
-    /// only place this proof chain is ever constructed (ADR-0006 Stage 2):
+    /// only place this proof chain is ever constructed (the schemata proof chain):
     /// `SchemataMutationRunner` collects `observation` and decides nothing.
     ///
     /// Every raw STARTUP/HIT event not matching the expected semantic
@@ -98,14 +117,16 @@ extension MutationVerdictVerifier {
             },
             or: .nonUniqueCompilationUnit
         )
-        let image = try exactlyOne(receipt.images.filter { $0.buildTarget == unit.buildTarget }, or: .nonUniqueBuiltImage)
+        let containingImages = receipt.images(containing: unit)
+        guard !containingImages.isEmpty else { throw SchemataChainError.nonUniqueBuiltImage }
 
         func matchesExpectedIdentity(
             runID: RunID, compilationUnitID: CompilationUnitID, sourceEmbeddingID: SHA256Digest,
             token: SchemataSelectorToken, imageUUID: ImageUUID
         ) -> Bool {
             runID == expectation.runID && compilationUnitID == unit.compilationUnitID && sourceEmbeddingID == unit.sourceEmbeddingID
-                && token == expectation.selectorToken && image.slices.contains { $0.imageUUID == imageUUID }
+                && token == expectation.selectorToken
+                && containingImages.contains { $0.slices.contains { $0.imageUUID == imageUUID } }
         }
 
         // Both collected before any absence is classified: a transcript
@@ -135,28 +156,28 @@ extension MutationVerdictVerifier {
             )
         }
 
-        let startupsByProcess = Dictionary(grouping: matchingStartups, by: \.processID)
-        let hitsByProcess = Dictionary(grouping: matchingHits, by: \.processID)
+        let startupsByKey = Dictionary(grouping: matchingStartups) { ProcessImageKey(processID: $0.processID, imageUUID: $0.imageUUID) }
+        let hitsByKey = Dictionary(grouping: matchingHits) { ProcessImageKey(processID: $0.processID, imageUUID: $0.imageUUID) }
 
-        for processID in startupsByProcess.keys.sorted() where startupsByProcess[processID]!.count > 1 {
-            throw SchemataChainError.duplicateStartup(processID: processID)
+        for key in startupsByKey.keys.sorted() where startupsByKey[key]!.count > 1 {
+            throw SchemataChainError.duplicateStartup(processID: key.processID)
         }
-        for processID in hitsByProcess.keys.sorted() where hitsByProcess[processID]!.count > 1 {
-            throw SchemataChainError.duplicateHit(processID: processID)
+        for key in hitsByKey.keys.sorted() where hitsByKey[key]!.count > 1 {
+            throw SchemataChainError.duplicateHit(processID: key.processID)
         }
-        let startupByProcess = startupsByProcess.compactMapValues(\.first)
-        for processID in hitsByProcess.keys.sorted() where startupByProcess[processID] == nil {
-            throw SchemataChainError.orphanHit(processID: processID)
+        let startupByKey = startupsByKey.compactMapValues(\.first)
+        for key in hitsByKey.keys.sorted() where startupByKey[key] == nil {
+            throw SchemataChainError.orphanHit(processID: key.processID)
         }
 
         guard !matchingStartups.isEmpty else { throw SchemataChainError.noStartup }
 
-        let processes = hitsByProcess.keys.sorted().map { processID in
-            VerifiedProcessSchemataChain(startup: startupByProcess[processID]!, hit: hitsByProcess[processID]!.first!)
+        let processes = hitsByKey.keys.sorted().map { key in
+            VerifiedProcessSchemataChain(startup: startupByKey[key]!, hit: hitsByKey[key]!.first!)
         }
         guard !processes.isEmpty else { throw SchemataChainError.noHit }
 
-        return VerifiedSchemataChain(unit: unit, image: image, processes: processes)
+        return VerifiedSchemataChain(unit: unit, images: containingImages, processes: processes)
     }
 
     static func schemataChainDiagnosis(_ chain: Result<VerifiedSchemataChain, Error>) -> String {

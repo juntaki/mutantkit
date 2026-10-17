@@ -31,8 +31,8 @@ struct TestProductHasherTests {
         let baselineRoot = try makeProductsDirectory(appExecutable: stub.data, debugDylib: stub.data)
         let mutantRoot = try makeProductsDirectory(appExecutable: stub.data, debugDylib: mutatedDylib)
 
-        let baselineHash = try #require(TestProductHasher.hash(productsDirectory: baselineRoot))
-        let mutantHash = try #require(TestProductHasher.hash(productsDirectory: mutantRoot))
+        let baselineHash = try #require(TestProductHasher.hash(productsDirectory: baselineRoot, workspaceRoot: machOTestWorkspace))
+        let mutantHash = try #require(TestProductHasher.hash(productsDirectory: mutantRoot, workspaceRoot: machOTestWorkspace))
 
         #expect(baselineHash != mutantHash)
     }
@@ -44,8 +44,8 @@ struct TestProductHasherTests {
         let first = try makeProductsDirectory(appExecutable: stub, debugDylib: stub)
         let second = try makeProductsDirectory(appExecutable: stub, debugDylib: stub)
 
-        let firstHash = try #require(TestProductHasher.hash(productsDirectory: first))
-        let secondHash = try #require(TestProductHasher.hash(productsDirectory: second))
+        let firstHash = try #require(TestProductHasher.hash(productsDirectory: first, workspaceRoot: machOTestWorkspace))
+        let secondHash = try #require(TestProductHasher.hash(productsDirectory: second, workspaceRoot: machOTestWorkspace))
 
         #expect(firstHash == secondHash)
     }
@@ -55,13 +55,13 @@ struct TestProductHasherTests {
         let stub = try fixtureBinary().data
         let root = try makeProductsDirectory(appExecutable: stub, debugDylib: nil)
 
-        #expect(TestProductHasher.hash(productsDirectory: root) != nil)
+        #expect(TestProductHasher.hash(productsDirectory: root, workspaceRoot: machOTestWorkspace) != nil)
     }
 
     @Test("No test bundle anywhere yields nil, not a crash")
     func emptyDirectoryYieldsNil() throws {
         let root = try makeTempDirectory()
-        #expect(TestProductHasher.hash(productsDirectory: root) == nil)
+        #expect(TestProductHasher.hash(productsDirectory: root, workspaceRoot: machOTestWorkspace) == nil)
     }
 
     // MARK: - Helpers

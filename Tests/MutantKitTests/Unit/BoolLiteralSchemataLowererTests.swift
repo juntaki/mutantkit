@@ -105,7 +105,7 @@ struct BoolLiteralSchemataLowererTests {
         // adopted — every mutant gets its own fresh process, with its one
         // requested token fixed for that process's entire lifetime before
         // it even launches, so a memoized value here is computed exactly
-        // once *with that token already active*. See ADR-0003's
+        // once *with that token already active*. See the schemata evidence contract's
         // correction addendum.
         let source = "let featureEnabled = true\n"
         let mutationPoint = try point(source)
@@ -113,7 +113,7 @@ struct BoolLiteralSchemataLowererTests {
         #expect(eligibility.isEligible)
     }
 
-    // MARK: - ADR-0008 Addendum 4: pattern-position eligibility
+    // MARK: - shared chunk build-failure attribution: pattern-position eligibility
 
     /// Real-corpus finding: a shared schemata chunk embedding a
     /// `switch (Bool, Bool) { case (true, false): ... }` failed to compile
@@ -234,7 +234,7 @@ struct BoolLiteralSchemataLowererTests {
         #expect(reason == .resultBuilderBody, "must still report the original reason, not .patternPosition")
     }
 
-    // MARK: - ADR-0008 Addendum 4: the same structural predicate naturally covers if/guard/for case, with no special-casing
+    // MARK: - shared chunk build-failure attribution: the same structural predicate naturally covers if/guard/for case, with no special-casing
 
     @Test("`guard case` shares the identical ExpressionPatternSyntax grammar — its pattern literal is ineligible with no special-case code")
     func guardCasePatternLiteralIsIneligible() throws {

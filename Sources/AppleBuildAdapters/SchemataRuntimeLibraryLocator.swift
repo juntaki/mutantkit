@@ -44,7 +44,7 @@ public enum SchemataRuntimeLibraryLocator {
     /// `mutantkit_protocol_v3.h` exactly — see `SchemataRuntimeManifest
     /// .runtimeABIVersion`'s own doc comment for why this is a distinct
     /// number from the lowerer's or the wire protocol's own "version."
-    static let expectedRuntimeABIVersion: UInt32 = 1
+    public static let expectedRuntimeABIVersion: UInt32 = 1
 
     /// Where a bundled runtime lives relative to the executable's own
     /// install directory — `<install-root>/lib/mutantkit/schemata/`. A

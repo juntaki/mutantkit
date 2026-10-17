@@ -8,12 +8,12 @@
 /// mutant a given test run actually exercised. Splitting evidence by backend
 /// keeps that distinction explicit at the type level instead of overloading
 /// one evidence shape to mean two different things depending on context. See
-/// ADR-0003.
+/// The schemata evidence contract.
 ///
 /// The two cases carry proof of very different strength. `.isolated`'s
 /// `ActivationEvidence.provesActivation` is sound on its own. `.schemata`'s
 /// `SchemataExecutionObservation` is deliberately raw and unproven — the
-/// runner that collects it decides nothing (ADR-0006 Stage 2, Finding 2/3/4):
+/// runner that collects it decides nothing (the schemata proof chain (image identity, HIT matching, unit-to-image mapping)):
 /// only `MutationVerdictVerifier.verifySchemataChain` may turn it into a
 /// verdict, by building the whole proof chain (compilation unit -> built
 /// image -> STARTUP -> HIT) from scratch, with unique-candidate matching at
@@ -31,7 +31,7 @@ public enum MutationApplicationEvidence: Codable, Sendable, Hashable {
 /// likes, so ground truth has to come from the side that planned the run.
 public struct SchemataRunExpectation: Codable, Sendable, Hashable {
     public let mutationID: MutationID
-    /// The real compilation unit (ADR-0006 Stage 2) this mutation's source
+    /// The real compilation unit (the schemata proof chain) this mutation's source
     /// file was lowered into — checked against a candidate STARTUP/HIT
     /// event's own reported `compilationUnitID`.
     public let compilationUnitID: CompilationUnitID
@@ -56,7 +56,7 @@ public struct SchemataRunExpectation: Codable, Sendable, Hashable {
 
 /// Everything one schemata mutant's test run actually produced, as raw,
 /// unfiltered observations — collecting this is `SchemataMutationRunner`'s
-/// whole job for schemata mode (ADR-0006 Stage 2): gather the facts, decide
+/// whole job for schemata mode (the schemata proof chain): gather the facts, decide
 /// nothing. `MutationVerdictVerifier.verifySchemataChain` is the only place
 /// that turns this into a verdict, building the full proof chain
 /// (`PlannedMutationRef -> sourceEmbeddingID -> CompilationUnitReceipt ->

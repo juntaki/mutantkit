@@ -16,19 +16,10 @@ comment:
 
 # Mirrors sonar-project.properties' sonar.exclusions/sonar.coverage.exclusions
 # so Sonar and Codecov measure the same "production code" denominator:
-# sample fixtures, research notes/tools, gitignored reference clones, build
-# output, and the research/probe/benchmark-only executable targets are all
-# excluded from both.
+# sample fixtures and build output are excluded from both, as is the
+# standalone eligibility classifier executable.
 ignore:
   - "Tests/**"
   - "Fixtures/**"
-  - "Research/**"
-  - "reference/**"
   - ".build/**"
-  - "Sources/BenchmarkRunner/**"
-  - "Sources/BudgetV2Eval/**"
-  - "Sources/PlanSubsetDerivation/**"
   - "Sources/SchemataEligibilityClassifier/**"
-  - "Sources/PlanStats/**"
-  - "Sources/SchemataChunkBuildProbe/**"
-  - "Sources/DirectXCTestInvokeProbe/**"

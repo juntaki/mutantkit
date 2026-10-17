@@ -7,7 +7,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0006 Stage 3's actual gate: the two backends must agree. The exact
+/// The re-enabled schemata scoring's actual gate: the two backends must agree. The exact
 /// same `MutationPoint`s, discovered once from one fixture, are run to
 /// completion under both `MutationRunner` (isolated: one full rebuild per
 /// mutant) and `SchemataMutationRunner` (schemata: every mutation embedded

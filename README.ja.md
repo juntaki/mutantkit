@@ -133,6 +133,7 @@ Claude CodeとCodexのpluginは、どちらも同じ`skills/mutantkit/SKILL.md`�
 | `noCoverage`            | mutationされたコードをテストが実行していない        |
 | `notApplied`            | mutationを安全に適用できなかった              |
 | `baselineMismatch`      | 実行対象が検証済みbaselineと一致しない           |
+| `notMaterialized`       | 編集はコンパイルできたが、ビルド成果物がbaselineと同一で、mutationがテスト対象に届いていない |
 | `infrastructureFailure` | 実行環境側の問題で判定できない                   |
 
 `survived`は、テストが弱くmutationを検出できなかった可能性があります。`noCoverage`は、そもそもmutationされたコードがテストから実行されていないことを示します。
@@ -156,7 +157,7 @@ MutantKitは、mutationの適用と実行を検証します。確認できない
 * coverageを使い、実際に実行されたmutationと未到達のmutationを区別
 * evidenceを整合できない結果は通常のscoreへ含めない
 
-現在の最新リリースは `v1.2.0` です。SwiftPMとXcode project / workspace、isolatedとschemata実行、CI gating、coverage-based test selection、caching、sharding、resumable runsに対応しています。既定で有効なoperatorは6種類で、残りは検証が進み次第、順次追加していく方針です。詳しくは[Operators](docs/operators.md)と後述の「対応状況」を参照してください。
+現在の最新リリースは `v1.3.0` です。SwiftPMとXcode project / workspace、isolatedとschemata実行、CI gating、coverage-based test selection、caching、sharding、resumable runsに対応しています。既定で有効なoperatorは6種類で、残りは検証が進み次第、順次追加していく方針です。詳しくは[Operators](docs/operators.md)と後述の「対応状況」を参照してください。
 
 ## 結果の見方
 
@@ -176,7 +177,7 @@ killed / (killed + survived + noCoverage)
 
 coverage gapを含むテストスイート全体の検出率です。
 
-`notApplied`、`baselineMismatch`、`infrastructureFailure`は、通常のmutation scoreへ含めず、別の問題として扱います。
+`notApplied`、`baselineMismatch`、`notMaterialized`、`infrastructureFailure`は、通常のmutation scoreへ含めず、別の問題として扱います。
 
 ## 主な特徴
 
@@ -460,7 +461,6 @@ Mutation Testing Elements、self-contained HTML、Markdown CI summary、GitHub A
 * [CI](docs/ci.md)
 * [Apple support matrix](docs/apple-support-matrix.md)
 * [Agents](docs/agents.md)
-* [ADR-0002](ADR/0002-the-mutation-plan-is-the-source-of-truth.md)
 
 ## Contributing
 

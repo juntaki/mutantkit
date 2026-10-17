@@ -2,7 +2,7 @@ import Foundation
 import MutationModel
 import Testing
 
-/// ADR-0006 Stage 3: the crash/timeout half of
+/// The re-enabled schemata scoring: the crash/timeout half of
 /// `SchemataConfirmationVerifierTests` (split into its own file to keep
 /// each suite under the type-body-length limit, not a difference in what
 /// is being pinned) — schemata crash and timeout confirmations go through
@@ -169,10 +169,8 @@ struct SchemataConfirmationCrashTimeoutVerifierTests {
         #expect(record.outcome == .infrastructureFailure)
     }
 
-    /// Historical regression (this project's internal known-issues record
-    /// on a schemata-confirm-timeout image-UUID mismatch, not part of
-    /// this public repo,
-    /// 2026-08-23): a real, production-scale-app `confirmTimeout` retry observed a runtime
+    /// Historical regression:
+    /// a real, production-scale-app `confirmTimeout` retry observed a runtime
     /// image UUID that did not match the build receipt's, and ended in
     /// `infrastructureFailure` rather than a wrong verdict. Live repro of
     /// the original trigger (a stale simulator install surfacing an older

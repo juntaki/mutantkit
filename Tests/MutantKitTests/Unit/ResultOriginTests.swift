@@ -84,7 +84,7 @@ struct ResultOriginTests {
     func performanceSummarySeparatesOrigins() throws {
         // Three distinct mutations, one per origin — a real report never
         // carries the same mutation more than once (`ResultLedger.insert`
-        // refuses a duplicate `PlannedMutationRef` now — ADR-0006 Stage 1),
+        // refuses a duplicate `PlannedMutationRef` now — the authoritative verdict pipeline),
         // so `markedAsCheckpointResume`/`markedAsCrossRunCacheHit` are
         // applied to their own separate fixtures, not restamped copies of
         // one shared result.

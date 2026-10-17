@@ -2,7 +2,7 @@ import Foundation
 import MutationModel
 import Testing
 
-/// `SchemataPlanLoader` is ADR-0006's fix for `decodeAndValidate`'s
+/// `SchemataPlanLoader` is the end-to-end trust chain's fix for `decodeAndValidate`'s
 /// `executionContext: SchemataExecutionContext? = nil` shape: with an
 /// optional parameter, a production execution path can call the weaker,
 /// context-free overload just as easily as the real one, and nothing at

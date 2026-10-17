@@ -166,7 +166,7 @@ struct SchemataSwiftPMRuntimeAcceptanceTests {
     /// direct, test-only filter over the raw transcript, not a call to any
     /// production API: deciding which candidate is real is
     /// `MutationVerdictVerifier.verifySchemataChain`'s job alone in
-    /// production (ADR-0006 Stage 2); this suite only needs to confirm the
+    /// production (the schemata proof chain); this suite only needs to confirm the
     /// real runtime actually wrote the record shape that job depends on.
     private static func matchingStartup(in transcript: RuntimeTranscript, token: SchemataSelectorToken, runID: RunID) -> RuntimeStartupEvent? {
         transcript.records.compactMap { record -> RuntimeStartupEvent? in

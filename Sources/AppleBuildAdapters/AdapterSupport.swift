@@ -137,7 +137,7 @@ enum TestProductHasher {
     /// Returns `nil` when no test binary is found or none can be read, which the
     /// caller must treat as "activation unproven" rather than as an
     /// empty-but-valid hash.
-    static func hash(productsDirectory directory: URL) -> String? {
+    static func hash(productsDirectory directory: URL, workspaceRoot: URL) -> String? {
         let bundles = testBundles(in: directory)
         guard !bundles.isEmpty else { return nil }
 
@@ -146,7 +146,7 @@ enum TestProductHasher {
         let componentHashes = bundles
             .compactMap { bundle -> (String, String)? in
                 guard let binary = executable(inBundle: bundle),
-                      let hash = MachOCodeHash.codeHash(ofBinaryAt: binary)
+                      let hash = MachOCodeHash.codeHash(ofBinaryAt: binary, workspaceRoot: workspaceRoot)
                 else { return nil }
                 return (bundle.lastPathComponent, hash)
             }

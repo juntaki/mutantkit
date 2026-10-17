@@ -67,7 +67,7 @@ struct SchemataChunkPlannerTests {
         #expect(entry.fallbackReason == .operatorNotYetLowered(operatorID: "swift.core.arithmetic-operator-replacement"))
     }
 
-    /// ADR-0005 PR F: a file compiled into more than one target — a shared
+    /// Multi-target embedding: a file compiled into more than one target — a shared
     /// model file added directly to two targets' own Compile Sources, say —
     /// embeds independently into *each* target's own build: two separate
     /// chunks, two separate selector namespaces, one merged

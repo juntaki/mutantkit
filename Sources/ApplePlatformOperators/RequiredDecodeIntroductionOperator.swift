@@ -152,9 +152,7 @@ import SwiftSyntax
 /// `amplitude/Amplitude-Swift` (3/3 candidates: 2 `killedByAssertion`, 1
 /// `survived` — a specific, well-explained single test gap, not a
 /// blind spot). Zero `unviable`/`infrastructureFailure` across both (17
-/// candidates total); zero integrity violations. Full evidence, exact
-/// commit SHAs and toolchains: the internal corpus-validation research
-/// for this operator (not part of this public repo).
+/// candidates total); zero integrity violations.
 ///
 /// **Why opt-in, not default, despite clean compile safety.** The
 /// `segmentio/analytics-swift` run found this operator's *dominant*
@@ -207,8 +205,7 @@ public struct RequiredDecodeIntroductionOperator: MutationOperator {
             unviable/infrastructureFailure across both (17 candidates total); zero integrity \
             violations. Promoted confidence to medium on this evidence -- validated opt-in, not \
             default: the verifiedTimeout-dominant cost profile on the harder corpus, not compile \
-            safety or signal quality, is why defaultEnabled stays false. Full evidence: internal \
-            corpus-validation research for this operator (not part of this public repo).
+            safety or signal quality, is why defaultEnabled stays false.
             """
         ]
     )

@@ -7,7 +7,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0006 Stage 3: the Xcode half of `SchemataConfirmationAcceptanceTests`
+/// The re-enabled schemata scoring: the Xcode half of `SchemataConfirmationAcceptanceTests`
 /// — proves schemata confirmation end to end against a real
 /// `xcodegen`-generated macOS framework + unit-test bundle. Unlike the
 /// SwiftPM adapter, `XCResultAdapter` reads a structured `Crash:` field

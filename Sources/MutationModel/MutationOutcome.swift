@@ -42,6 +42,14 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
     case baselineMismatch
     /// Simulator, toolchain, or disk failure. Our problem, not the suite's.
     case infrastructureFailure
+    /// The edit was applied and the build succeeded, but the mutant's build
+    /// product is identical to the baseline's: the mutation did not reach the
+    /// tested product. Not a survivor (nothing ran against a mutation), not an
+    /// equivalent-mutant claim, and not an infrastructure failure either — the
+    /// observation is complete and consistent. The reason it did not
+    /// materialize (code compiled out by conditional compilation, dead
+    /// stripping, an optimization) is deliberately not part of the outcome.
+    case notMaterialized
     /// Excluded by budget, profile, or configuration before execution.
     case skipped
 
@@ -80,7 +88,8 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
         switch self {
         case .killedByAssertion, .killedByCrash, .verifiedTimeout: .detected
         case .survived: .survived
-        case .noCoverage, .unviable, .timedOut, .flaky, .notApplied, .baselineMismatch, .infrastructureFailure, .skipped:
+        case .noCoverage, .unviable, .timedOut, .flaky, .notApplied, .baselineMismatch, .infrastructureFailure, .notMaterialized,
+             .skipped:
             .indeterminate
         }
     }
@@ -95,7 +104,7 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
         case .verifiedTimeout: .verifiedTimeout
         case .flaky: .flakyFailure
         case .infrastructureFailure: .infrastructureFailure
-        case .survived, .noCoverage, .unviable, .timedOut, .notApplied, .baselineMismatch, .skipped: nil
+        case .survived, .noCoverage, .unviable, .timedOut, .notApplied, .baselineMismatch, .notMaterialized, .skipped: nil
         }
     }
 
@@ -136,7 +145,7 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
         switch self {
         case .killedByAssertion, .killedByCrash, .verifiedTimeout, .survived, .timedOut, .flaky:
             true
-        case .noCoverage, .unviable, .notApplied, .baselineMismatch, .infrastructureFailure, .skipped:
+        case .noCoverage, .unviable, .notApplied, .baselineMismatch, .infrastructureFailure, .notMaterialized, .skipped:
             false
         }
     }
@@ -161,7 +170,7 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
         case .survived, .noCoverage, .killedByAssertion, .killedByCrash, .verifiedTimeout:
             true
         case .unviable, .timedOut, .flaky, .notApplied, .baselineMismatch,
-             .infrastructureFailure, .skipped:
+             .infrastructureFailure, .notMaterialized, .skipped:
             false
         }
     }
@@ -179,6 +188,7 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
         case .notApplied: "not applied"
         case .baselineMismatch: "baseline mismatch"
         case .infrastructureFailure: "infrastructure failure"
+        case .notMaterialized: "not materialized"
         case .skipped: "skipped"
         }
     }

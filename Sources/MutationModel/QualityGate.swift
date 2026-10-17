@@ -253,7 +253,7 @@ public enum QualityGate {
     /// `MutationID`, so a survivor that merely moved line does not read as new.
     ///
     /// Deliberately `MutationID` equality alone, not `PlannedMutationRef
-    /// .pointDigest` (ADR-0005) — the stronger, untruncated content-binding
+    /// .pointDigest` (the authoritative verdict pipeline) — the stronger, untruncated content-binding
     /// layer that exists elsewhere for evidence-trust purposes. `MutationID`
     /// truncates to 64 bits, an accepted collision risk for a human-facing
     /// label (see `SchemataPlan.swift`'s own doc comment on that trade-off);
@@ -261,7 +261,7 @@ public enum QualityGate {
     /// survivor as "already known." This has no evidence of happening in
     /// practice and is not being treated as a live concern — noted so a
     /// future reader reasoning about this comparison's collision exposure
-    /// does not have to rediscover ADR-0005 from scratch.
+    /// does not have to rediscover the authoritative verdict pipeline from scratch.
     private static func newSurvivorViolations(
         report: RunReport,
         baseline: RunReport,

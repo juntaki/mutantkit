@@ -14,7 +14,7 @@ name: CodeQL
 # advanced setup this workflow represents not covering everything GitHub's
 # own detection found). c-cpp is Sources/MutantKitSchemataRuntimeC (a real,
 # plain-C target the SwiftPM package builds); python is Scripts/
-# compare-wave-reports.py; actions is this directory's own workflow YAML.
+# lcov-to-sonar-coverage.py; actions is this directory's own workflow YAML.
 #
 # Two jobs, not one: a first version tried to `init` all four languages
 # together under one `build-mode: manual` and failed outright --

@@ -314,12 +314,12 @@ struct MutationPlannerEndToEndTests {
         #expect(first.planID == second.planID)
     }
 
-    // MARK: - Budget Selection v2 (ADR-0007, opt-in)
+    // MARK: - Budget Selection v2 (the budget-selection v2 spec, opt-in)
 
     /// `selection: v2` reaches `BudgetSelectorV2` end to end: the plan is
     /// budget-limited exactly like v1, and — the capability v1 never had —
     /// every selected mutant carries a `budgetInclusionReasons` record
-    /// (ADR-0007 B.7).
+    /// (the budget-selection schema contract).
     @Test("selection: v2 budget-limits the plan and records an InclusionReason for every selected mutant")
     func budgetSelectionV2ProducesInclusionReasons() async throws {
         try write("Sources/Big.swift", """
@@ -345,7 +345,7 @@ struct MutationPlannerEndToEndTests {
 
     /// v1 never populates `budgetInclusionReasons` — the field exists on
     /// every plan, but stays empty unless `selection: v2` was actually used
-    /// (ADR-0007 B.8: v2 is opt-in, v1 unaffected).
+    /// (the budget-selection compatibility rule: v2 is opt-in, v1 unaffected).
     @Test("Under v1 (the default), budgetInclusionReasons stays empty")
     func budgetInclusionReasonsEmptyUnderV1() async throws {
         try write("Sources/Big.swift", "struct Big { var a = true; var b = true; var c = true }")
@@ -359,7 +359,7 @@ struct MutationPlannerEndToEndTests {
     }
 
     /// A duplicate `MutationID` is a precondition violation `BudgetSelectorV2`
-    /// itself refuses (ADR-0007 invariant 4) — `applyBudgetGate` must surface
+    /// itself refuses (the unique-MutationID invariant) — `applyBudgetGate` must surface
     /// that refusal as a `PlannerError`, not let it escape unwrapped or, worse,
     /// silently succeed.
     @Test("selection: v2 surfaces BudgetSelectorV2's own errors as PlannerError")

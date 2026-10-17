@@ -4,7 +4,7 @@
 ///
 /// `outcome` is stored, not re-derived by a caller, and is the *only* place
 /// this proof's outcome lives — `VerifiedMutationRecord` no longer has a
-/// separate `outcome` field that could disagree with it (ADR-0006 Stage 1:
+/// separate `outcome` field that could disagree with it (the authoritative verdict pipeline:
 /// a second review round found the original two-field shape combinable
 /// into a mismatched pair, even though only the verifier ever constructed
 /// one in practice). Wraps the existing `MutationEvidence` rather than
@@ -44,12 +44,12 @@ public struct ExecutedMutationProof: Encodable, Sendable, Hashable {
 ///
 /// `coverageSource` (e.g. `"swift-package-codecov"`, `"xccov"`) is the one
 /// positive fact this codebase's coverage readers actually produce today —
-/// see `CoverageObservation.source`. The richer fields ADR-0005 item 3
+/// see `CoverageObservation.source`. The richer fields the authoritative verdict pipeline
 /// originally sketched (coverage profile ID/tool version, original
 /// location, profile source hash, test-selection digest) stay un-invented:
 /// no coverage reader in this codebase produces any of them yet, and
 /// adding fields with no real producer is exactly the speculative-
-/// abstraction risk ADR-0004 (items 6, 8, 9) already declined.
+/// abstraction risk the schemata production-integration contract already declined.
 public struct NoCoverageProof: Encodable, Sendable, Hashable {
     public let mutationRef: PlannedMutationRef
     public let sourceApplication: MutationEvidence

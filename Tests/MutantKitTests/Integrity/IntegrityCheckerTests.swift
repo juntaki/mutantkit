@@ -10,7 +10,7 @@ import Testing
 struct IntegrityCheckerTests {
     // MARK: - Phantom mutants
 
-    /// ADR-0006 Stage 1: "a result with no/hollow evidence is a phantom" used
+    /// The authoritative verdict pipeline: "a result with no/hollow evidence is a phantom" used
     /// to be a runtime check here. It is now a compile-time impossibility
     /// instead: `MutationVerdictVerifier` is the only place a
     /// `VerifiedMutationRecord` is built, `ExecutedMutationProof` requires
@@ -91,7 +91,7 @@ struct IntegrityCheckerTests {
 
     // MARK: - Activation
 
-    /// ADR-0006 Stage 1: `.mutationNotActivated` used to be a runtime check
+    /// The authoritative verdict pipeline: `.mutationNotActivated` used to be a runtime check
     /// here (an unproven-activation result would still reach `check` and
     /// get flagged after the fact). `MutationVerdictVerifier.classify`'s own
     /// `unprovenActivation` gate now refuses to produce a scorable outcome
@@ -99,7 +99,7 @@ struct IntegrityCheckerTests {
     /// `IntegrityChecker.check`'s doc comment on why this is no longer
     /// re-checked here.
 
-    /// ADR-0005 PR D: `.noCoverage` is `isScorable`, but by design it is
+    /// The no-coverage proof: `.noCoverage` is `isScorable`, but by design it is
     /// reached without ever building — this is the real shape the coverage
     /// fast path (`MutationRunner.prepare`) actually produces:
     /// `applicationEvidence: nil` because no build ever ran, not because
@@ -171,6 +171,25 @@ struct IntegrityCheckerTests {
     /// A planned mutation that silently vanished is the failure this tool refuses
     /// to tolerate: the report would simply be missing a mutant, and nothing in
     /// the numbers would say so.
+    @Test("An interrupted run collapses unfinished mutants into one violation and still withholds the score")
+    func interruptedRunCollapsesUnfinishedMutants() throws {
+        let ran = try makeAnchoredPoint(file: "Sources/A.swift")
+        let b = try makeAnchoredPoint(file: "Sources/B.swift")
+        let c = try makeAnchoredPoint(file: "Sources/C.swift")
+        let plan = makePlan(mutations: [ran, b, c])
+        let results = [makeResult(point: ran, outcome: .killedByAssertion)]
+        let interruption = RunInterruption(signal: "SIGINT", completedMutants: 1, plannedMutants: 3)
+
+        let report = IntegrityChecker.check(
+            plan: plan, ledger: makeLedger(results), baselinePassed: true, interruptedBy: interruption
+        )
+
+        #expect(report.violations.kinds == [.plannedMutationWithoutResult])
+        #expect(report.violations.first?.detail == "2 of 3 planned mutants did not run (interrupted by SIGINT).")
+        #expect(Set(report.violations.first?.unfinishedMutationIDs ?? []) == [b.id, c.id])
+        #expect(!report.violations.isEmpty)
+    }
+
     @Test("A planned mutation with no result is flagged")
     func plannedMutationWithoutResultIsFlagged() throws {
         let ran = try makeAnchoredPoint(file: "Sources/A.swift")

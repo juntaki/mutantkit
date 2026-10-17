@@ -3,11 +3,7 @@ import MutationModel
 import SwiftFrontend
 import Testing
 
-/// Scenario numbers in test names/comments match
-/// this project's internal side-effect-call-removal operator-catalog
-/// design document's (not part of this public repo) own
-/// "RED test scenarios" section exactly, so a failure here can be traced
-/// back to the exact design paragraph it tests.
+/// Scenario numbers in test names and comments identify the RED scenarios.
 @Suite("RED: side-effect call removal operator")
 struct SideEffectCallRemovalOperatorREDTests {
     private let operatorID = "swift.core.side-effect-call-removal"
@@ -565,9 +561,7 @@ extension SideEffectCallRemovalOperatorREDTests {
         #expect(points.contains { $0.originalText == "sideEffect()" })
     }
 
-    /// Operator-exclusion-soundness audit
-    /// (this project's internal operator-catalog exclusion-policy
-    /// document, not part of this public repo): the
+    /// Operator-exclusion-soundness audit: the
     /// coarseness `Sources/MutationModel/Configuration.swift`'s own doc
     /// comment already admits for `excludeCalls` ("Doesn't support
     /// overloading currently — all function calls with a matching name will

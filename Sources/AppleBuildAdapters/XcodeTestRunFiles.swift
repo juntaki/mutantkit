@@ -4,10 +4,9 @@ import MutationModel
 // MARK: - .xctestrun
 
 //
-// Extracted from `XcodeBuildAdapter.swift` as part of this project's
-// internal execution-engine restructuring, its own "safe file-split half"
-// (see its own, private planning notes, not part of this public repo, for
-// the full rationale). None of the three members below (`XCTestRunLocator`,
+// Extracted from `XcodeBuildAdapter.swift` as part of the execution-engine
+// restructuring, its own "safe file-split half".
+// None of the three members below (`XCTestRunLocator`,
 // its `xctestrunVariant` sibling, `SchemeListJSON`) carry any of
 // `XcodeBuildAdapter`'s own stored state (`configuration`, `simulators`,
 // `resolvedDestination`, ...) — each is a pure, self-contained ".xctestrun /

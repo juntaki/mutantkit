@@ -56,8 +56,8 @@ public struct RuntimeHitEvent: Codable, Sendable, Hashable {
 }
 
 /// One decoded v3 event record — a STARTUP or a HIT, never filtered or
-/// picked among by whatever parses raw transcript bytes into these (ADR-0006
-/// Finding 3): ambiguity between two candidate events is a fact for a
+/// picked among by whatever parses raw transcript bytes into these (multi-image STARTUP/HIT matching
+/// ): ambiguity between two candidate events is a fact for a
 /// caller doing chain selection to see and reject, not something a parser
 /// resolves on the caller's behalf by returning only its own guess at "the"
 /// relevant one.

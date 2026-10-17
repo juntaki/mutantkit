@@ -7,7 +7,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// The Xcode half of ADR-0006 Stage 3's gate — the same comparison
+/// The Xcode half of the re-enabled schemata scoring's gate — the same comparison
 /// `SchemataIsolatedDifferentialAcceptanceTests` proves for SwiftPM, against
 /// a real `xcodegen`-generated macOS framework + unit-test bundle instead of
 /// a Swift package: the exact same `MutationPoint`s run to completion under

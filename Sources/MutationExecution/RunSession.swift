@@ -2,10 +2,8 @@ import Foundation
 import MutationModel
 
 /// The fields both `MutationRunner` and `SchemataMutationRunner` already
-/// agree on, in type and meaning, from their own current stored state —
-/// see this project's internal execution-engine restructuring notes (not
-/// part of this public repo) for the field-by-field justification/rejection
-/// this type's shape comes from. Each runner builds its own `session`
+/// agree on, in type and meaning, from their own current stored state.
+/// Each runner builds its own `session`
 /// *inside* its own `init`, from the parameters that `init` already
 /// receives — this type never changes what either `init` accepts (both
 /// initializers are a

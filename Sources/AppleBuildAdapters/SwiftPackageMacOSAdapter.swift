@@ -265,7 +265,7 @@ extension SwiftPackageMacOSAdapter: BuildAdapter {
         let products = productsDirectory(in: workspace)
         return BuildArtifact(
             productsDirectory: products,
-            productHash: TestProductHasher.hash(productsDirectory: products),
+            productHash: TestProductHasher.hash(productsDirectory: products, workspaceRoot: workspace),
             // SwiftPM does not produce one; `swift test` needs no such handoff.
             xctestrunPath: nil,
             command: command
@@ -315,16 +315,28 @@ extension SwiftPackageMacOSAdapter: SchemataBuildable {
         // would make every later `CompilationUnitReceipt.buildTarget ==
         // request.buildTarget` lookup fail closed for the wrong reason.
         let buildTargetsByName = Dictionary(units.map { ($0.buildTarget.targetName, $0.buildTarget) }) { first, _ in first }
+        // Executables and dynamic libraries that statically link a requested target are final images too: a test
+        // may run one as a child process, and the mutation then activates there. Only products the dependency
+        // graph proves to contain one of the targets are inspected.
+        var candidates: [String: (name: String, kind: SwiftPMDependencyGraph.ProductKind)] = [:]
+        for target in buildTargetsByName.keys {
+            for product in graph.finalImageProducts(containing: target) { candidates[product.name] = product }
+        }
+        let productImages = try SchemataBuiltImageInspection.inspectProductImages(
+            candidates.values.sorted { $0.name < $1.name }, in: artifact.productsDirectory
+        )
         let resolvedByTarget = try SwiftPMCompilationUnitImageResolver.resolve(
-            targets: Set(buildTargetsByName.keys), graph: graph, discovered: discovered
+            targets: Set(buildTargetsByName.keys), graph: graph, discovered: discovered, productImages: productImages
         )
 
-        var imagesByTarget: [BuildTargetIdentity: BuiltImageReceipt] = [:]
-        for (targetName, image) in resolvedByTarget {
-            guard let buildTarget = buildTargetsByName[targetName] else { continue }
-            if imagesByTarget[buildTarget] == nil {
-                imagesByTarget[buildTarget] = try BuiltImageReceipt(
-                    buildTarget: buildTarget,
+        // One receipt per distinct built image (several targets may share the
+        // single combined bundle). The owner is left unset: which units an image
+        // contains is stated by each unit's `containingImageIDs`.
+        var imageByPath: [String: BuiltImageReceipt] = [:]
+        for images in resolvedByTarget.values {
+            for image in images where imageByPath[image.binaryPath] == nil {
+                imageByPath[image.binaryPath] = try BuiltImageReceipt(
+                    ownerBuildTarget: nil,
                     binaryPath: image.binaryPath,
                     contentHash: image.contentHash,
                     slices: image.slices
@@ -332,11 +344,13 @@ extension SwiftPackageMacOSAdapter: SchemataBuildable {
             }
         }
 
-        let compilationUnits = units.map {
-            CompilationUnitReceipt(
-                compilationUnitID: $0.compilationUnitID,
-                sourceEmbeddingID: $0.sourceEmbeddingID,
-                buildTarget: $0.buildTarget
+        let compilationUnits = units.map { request -> CompilationUnitReceipt in
+            let containing = (resolvedByTarget[request.buildTarget.targetName] ?? []).compactMap { imageByPath[$0.binaryPath]?.imageID }
+            return CompilationUnitReceipt(
+                compilationUnitID: request.compilationUnitID,
+                sourceEmbeddingID: request.sourceEmbeddingID,
+                sourceBuildTarget: request.buildTarget,
+                containingImageIDs: containing
             )
         }
 
@@ -347,7 +361,7 @@ extension SwiftPackageMacOSAdapter: SchemataBuildable {
             toolchainHash: context.toolchainHash,
             buildArgumentsHash: context.buildArgumentsHash,
             runtimeABIVersion: UInt32(BoolLiteralSchemataLowerer.runtimeABIVersion),
-            images: Array(imagesByTarget.values),
+            images: Array(imageByPath.values),
             compilationUnits: compilationUnits
         )
     }
@@ -599,7 +613,7 @@ extension SwiftPackageMacOSAdapter: CoverageMeasuring {
     public func readCoverage(in workspace: URL, projectRoot: URL) async -> CoverageMap? {
         // SwiftPM writes codecov JSON under `.build/<arch>/<build>/codecov/`.
         // `.build/debug` is normally a symlink; resolving it is what makes
-        // the enumerator actually descend (HANDOVER §3-3). Resolved via
+        // the enumerator actually descend. Resolved via
         // `resolvedWorkspace(_:)` since that's where the build actually ran.
         let buildDir = productsDirectory(in: resolvedWorkspace(workspace)).resolvingSymlinksInPath()
         let codecovDir = buildDir.appendingPathComponent("codecov", isDirectory: true)
@@ -911,9 +925,7 @@ public struct SwiftPackageMacOSProjectAdapter: ProjectAdapter {
     /// possible here — the compiler would refuse one that doesn't hold,
     /// itself a permanent, free check that a future `BatchTestable`
     /// conformance can't be added to the adapter body without this file
-    /// being updated too. See this project's internal execution-engine
-    /// restructuring notes (not part of this public repo) for the full
-    /// rationale.
+    /// being updated too.
     public let schemataBuild: (any SchemataBuildable)?
     public let schemataTest: (any SchemataTestable)?
     public let coverageMeasuring: (any CoverageMeasuring)?

@@ -36,7 +36,7 @@ struct MergeCommandHistoryTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         // Two real, independently-anchored mutations (distinct files, so
-        // distinct content-derived IDs — see ADR-0002) standing in for the
+        // distinct content-derived IDs — see the mutation-plan contract) standing in for the
         // work a real sharded plan would split across machines.
         let killedPoint = try makeAnchoredPoint(file: "Sources/A.swift")
         let survivedPoint = try makeAnchoredPoint(file: "Sources/B.swift")

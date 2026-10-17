@@ -156,8 +156,8 @@ private extension SHA256Digest {
 }
 
 /// Identifies one schemata run's attempt to activate and hit a specific
-/// mutation — fresh per attempt, including per confirmation retest (ADR-0006
-/// Finding 3's proposed fix requires this: a confirmation reusing the
+/// mutation — fresh per attempt, including per confirmation retest (the proposed fix for multi-image STARTUP/HIT matching
+/// requires this: a confirmation reusing the
 /// original run's ID would let a stale transcript pass as new evidence).
 /// Not a `HexIdentity`: a `RunID` is generated, never parsed from untrusted
 /// hex input, so it carries a `UUID` directly rather than a validated hex

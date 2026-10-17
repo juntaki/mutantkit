@@ -2,9 +2,8 @@ import Foundation
 import MutationExecution
 
 //
-// Extracted from `XcodeBuildAdapter.swift` as part of this project's
-// internal execution-engine restructuring (see its own, private planning
-// notes, not part of this public repo, for the full rationale). A pure
+// Extracted from `XcodeBuildAdapter.swift` as part of the execution-engine
+// restructuring. A pure
 // move of the stale-app-uninstall concern:
 // its only stored dependency is `processRunner` (constructor-injected,
 // matching `XcodeBuildAdapter.processRunner`'s own doc comment's stated

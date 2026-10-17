@@ -17,11 +17,8 @@ import Testing
 /// candidate) are disabled so this suite's own campaign produces exactly the
 /// one candidate this task is about.
 ///
-/// This proves pipeline correctness only, per the task briefing's own point
-/// 9 — it is explicitly NOT counted as promotion evidence. See this
-/// operator's internal corpus-validation research (not part of this
-/// public repo) for
-/// the real, external-project evidence that decides promotion.
+/// This proves pipeline correctness only; it is explicitly NOT counted as
+/// promotion evidence.
 @Suite(
     "Acceptance: hit-area-shape-removal on Phase 5A UI-test substrate",
     .enabled(if: Acceptance.simulatorEnabled)

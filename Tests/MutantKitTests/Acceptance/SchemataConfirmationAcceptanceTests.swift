@@ -7,7 +7,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0006 Stage 3: proves schemata confirmation end to end against a real
+/// The re-enabled schemata scoring: proves schemata confirmation end to end against a real
 /// toolchain — policy decision -> a second, genuinely independent process
 /// -> its own fresh RunID/transcript -> `MutationVerdictVerifier`'s
 /// independent chain validation -> the final scored outcome. Not a unit

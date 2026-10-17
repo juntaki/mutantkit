@@ -44,9 +44,36 @@ public enum SwiftPMTargetResolver {
             let targetDependencies: [String]?
         }
 
+        private enum ProductCodingKeys: String, CodingKey { case name, targets, type }
+        /// `swift package describe` encodes the product type as a one-key object:
+        /// `{"executable": null}` or `{"library": ["automatic" | "dynamic" | "static"]}`.
+        private struct ProductTypeKey: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init?(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
         struct Product: Decodable {
             let name: String
             let targets: [String]
+            let kind: SwiftPMDependencyGraph.ProductKind
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: ProductCodingKeys.self)
+                name = try container.decode(String.self, forKey: .name)
+                targets = try container.decode([String].self, forKey: .targets)
+                var resolved = SwiftPMDependencyGraph.ProductKind.other
+                if let type = try? container.nestedContainer(keyedBy: ProductTypeKey.self, forKey: .type) {
+                    if type.contains(ProductTypeKey(stringValue: "executable")!) {
+                        resolved = .executable
+                    } else if let library = ProductTypeKey(stringValue: "library"), type.contains(library),
+                              let kinds = try? type.decode([String].self, forKey: library), kinds.contains("dynamic") {
+                        resolved = .dynamicLibrary
+                    }
+                }
+                kind = resolved
+            }
         }
 
         let targets: [Target]
@@ -90,6 +117,13 @@ public enum SwiftPMTargetResolver {
         return Self.targetInfo(from: decoded, projectRoot: projectRoot)
     }
 
+    /// SwiftPM's own `type` for a target, mapped explicitly. Only `"macro"`
+    /// is known to be executed by the build; every other type stays
+    /// `.runtime`. Never inferred from a target's name.
+    static func executionRole(forSwiftPMType type: String) -> SchemataTargetExecutionRole {
+        type == "macro" ? .compileTime : .runtime
+    }
+
     static func targetInfo(from decoded: DescribeOutput, projectRoot: URL) -> [String: [SchemataTargetInfo]] {
         let projectIdentity = Self.projectIdentity(for: projectRoot)
         var targetInfo: [String: [SchemataTargetInfo]] = [:]
@@ -98,7 +132,8 @@ public enum SwiftPMTargetResolver {
                 projectIdentity: projectIdentity,
                 target: target.name,
                 module: target.name,
-                product: target.productMemberships?.first ?? target.name
+                product: target.productMemberships?.first ?? target.name,
+                executionRole: Self.executionRole(forSwiftPMType: target.type)
             )
             for source in target.sources {
                 let relativePath = "\(target.path)/\(source)"
@@ -128,10 +163,12 @@ public enum SwiftPMTargetResolver {
             )
         }
         var products: [String: Set<String>] = [:]
+        var productKinds: [String: SwiftPMDependencyGraph.ProductKind] = [:]
         for product in decoded.products {
             products[product.name] = Set(product.targets)
+            productKinds[product.name] = product.kind
         }
-        return SwiftPMDependencyGraph(projectIdentity: projectIdentity, targets: targets, products: products)
+        return SwiftPMDependencyGraph(projectIdentity: projectIdentity, targets: targets, products: products, productKinds: productKinds)
     }
 
     private static func projectIdentity(for projectRoot: URL) -> String {
@@ -170,9 +207,44 @@ public struct SwiftPMDependencyGraph: Sendable {
         public let dependencies: Set<String>
     }
 
+    /// What a product builds as its final image. Only products that link their
+    /// targets into one standalone Mach-O (an executable, a dynamic library)
+    /// can contain a target's code; static and automatic libraries do not
+    /// produce an image of their own.
+    public enum ProductKind: Sendable, Equatable {
+        case executable
+        case dynamicLibrary
+        case other
+    }
+
     public let projectIdentity: String
     public let targets: [String: TargetInfo]
     public let products: [String: Set<String>]
+    public let productKinds: [String: ProductKind]
+
+    public init(
+        projectIdentity: String, targets: [String: TargetInfo], products: [String: Set<String>],
+        productKinds: [String: ProductKind] = [:]
+    ) {
+        self.projectIdentity = projectIdentity
+        self.targets = targets
+        self.products = products
+        self.productKinds = productKinds
+    }
+
+    /// Executable and dynamic-library products whose dependency closure contains
+    /// `target`: the final images, besides test bundles, that statically link
+    /// its compiled code. Proven from the target graph; a product that does not
+    /// depend on `target` is never listed, whatever sits beside it on disk.
+    public func finalImageProducts(containing target: String) -> [(name: String, kind: ProductKind)] {
+        products.compactMap { name, members -> (name: String, kind: ProductKind)? in
+            guard let kind = productKinds[name], kind != .other else { return nil }
+            let contains = members.contains { member in
+                member == target || (targets[member].map { reaches($0, target: target) } ?? false)
+            }
+            return contains ? (name, kind) : nil
+        }.sorted { $0.name < $1.name }
+    }
 
     public func isTestTarget(_ name: String) -> Bool {
         targets[name]?.type == "test"
@@ -242,7 +314,10 @@ public struct SwiftPMDependencyGraph: Sendable {
                 // every subsequent `plan`.
                 files.append(contentsOf: info.sources
                     .filter { $0.hasSuffix(".swift") }
-                    .map { Self.joinedSourcePath(targetPath: info.path, source: $0) })
+                    .map { Self.joinedSourcePath(targetPath: info.path, source: $0) }
+                    // A `.docc` catalog sits inside a target's directory and `describe` can list its
+                    // `.swift` samples, but SwiftPM never compiles them.
+                    .filter { !$0.split(separator: "/").contains { $0.hasSuffix(".docc") } })
             }
             queue.append(contentsOf: info.dependencies)
         }

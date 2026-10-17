@@ -7,12 +7,12 @@ import Testing
 
 /// Coverage for `MutationRunner.prepare`'s isolated-mode short-circuit: a
 /// mutant whose build product hash comes back identical to the baseline's
-/// is classified `.infrastructureFailure` the moment the build finishes,
+/// is classified `.notMaterialized` the moment the build finishes,
 /// without ever running its tests — `MutationVerdictVerifier.classify`
-/// routes `.passed`/`.failed`/`.crashed` through `unprovenActivation` to
-/// that same outcome once activation is unproven, so for those three
-/// statuses a test run would only confirm what the hash comparison already
-/// knows. `.timedOut` is the exception: `classify` never gates it on
+/// routes `.passed` to that same outcome once activation is unproven (a
+/// `.failed`/`.crashed` run on an identical product stays an anomaly,
+/// `.infrastructureFailure`), so a test run would only confirm what the hash
+/// comparison already knows. `.timedOut` is the exception: `classify` never gates it on
 /// activation, so a hash-identical mutant whose tests hang would *not*
 /// collapse to `.infrastructureFailure` if actually run — see
 /// `timedOutStatusIsNotGatedByUnprovenActivation` below, which pins that
@@ -82,9 +82,9 @@ struct MutationRunnerNoOpShortCircuitTests {
         let report = try await runner.run()
 
         let result = try #require(report.results.first)
-        #expect(result.outcome == .infrastructureFailure)
+        #expect(result.outcome == .notMaterialized)
         #expect(result.diagnosis.contains("identical to the baseline"))
-        #expect(result.diagnosis.contains("skipped"), "the diagnosis must be honest that tests never ran")
+        #expect(result.diagnosis.contains("Nothing ran against a mutation"), "the diagnosis must be honest that tests never ran")
         #expect(!result.diagnosis.contains("The tests passed"), "no test result exists to claim this")
 
         let baselineCalls = await test.baselineCallCount

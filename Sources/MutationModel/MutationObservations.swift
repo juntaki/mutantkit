@@ -134,7 +134,7 @@ public struct ConfirmationObservation: Codable, Sendable {
 /// more of it* (running a confirmation retry) is an orchestration decision
 /// a runner still makes, but always from raw fields already present here
 /// (`build`/`test`'s own status), never from a pre-computed outcome —
-/// ADR-0006 Stage 1 removes `candidateOutcome` for exactly this reason.
+/// The authoritative verdict pipeline removes `candidateOutcome` for exactly this reason.
 public struct MutationObservations: Codable, Sendable {
     public let plannedMutation: PlannedMutationRef
     public let sourceApplication: SourceApplicationOutcome?

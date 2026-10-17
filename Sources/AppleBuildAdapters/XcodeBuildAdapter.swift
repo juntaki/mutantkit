@@ -875,7 +875,7 @@ extension XcodeBuildAdapter: SchemataBuildable {
         for (targetName, requests) in targetsByName {
             let buildTarget = requests[0].buildTarget
             let resolved = try await XcodeCompilationUnitImageResolver.resolveArtifactPath(
-                target: targetName, context: buildSettingsContext
+                target: targetName, projectIdentity: buildTarget.projectIdentity, context: buildSettingsContext
             )
             let discovered = try SchemataBuiltImageInspection.inspectSingle(at: resolved.path, bundleName: resolved.bundleName)
             imagesByTarget[buildTarget] = try BuiltImageReceipt(
@@ -1665,9 +1665,7 @@ public struct XcodeBuildProjectAdapter: ProjectAdapter {
     /// same `XcodeBuildAdapter` instance `build`/`test` already share —
     /// zero `as?`, a compile-time-checked upcast, since `adapter`'s
     /// concrete type and every protocol it conforms to are both statically
-    /// known right here. See `ProjectAdapter`'s own doc comment and this
-    /// project's internal execution-engine restructuring notes (not part
-    /// of this public repo) for the full rationale.
+    /// known right here. See `ProjectAdapter`'s own doc comment.
     public let schemataBuild: (any SchemataBuildable)?
     public let schemataTest: (any SchemataTestable)?
     public let coverageMeasuring: (any CoverageMeasuring)?

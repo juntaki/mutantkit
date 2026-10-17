@@ -38,8 +38,7 @@ import SwiftSyntax
 /// audit adds several more explicit `.accessibilityLabel(...)` calls (avatar
 /// edit button, pinned-items "view all" button, pinned-message button),
 /// independent evidence that missing explicit labels recur outside
-/// RevenueCat. See the internal corpus-validation research for this
-/// operator (not part of this public repo) for the full evidence.
+/// RevenueCat.
 ///
 /// **v1 matcher — SwiftUI modifier call only, symbol-blind by construction
 /// (matching every other operator in this catalog):**
@@ -137,11 +136,7 @@ public struct ExplicitLabelRemovalOperator: MutationOperator {
             only a real XCUITest/AX-tree assertion can. Element X iOS PR #5890: an independent \
             accessibility audit adds several more explicit `.accessibilityLabel(...)` calls (avatar \
             edit button, pinned-items "view all" button, pinned-message button), independent \
-            real-fault evidence that missing explicit labels recur outside RevenueCat. Full \
-            corpus evidence, including the internal Phase 5A fixture's operator-generated (not \
-            hand-applied) kill, external-project preflights, survivor classification, and the \
-            adversarial self-review: internal corpus-validation research for this operator \
-            (not part of this public repo).
+            real-fault evidence that missing explicit labels recur outside RevenueCat.
             """
         ]
     )

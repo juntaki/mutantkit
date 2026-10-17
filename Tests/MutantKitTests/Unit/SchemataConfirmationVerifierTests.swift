@@ -2,7 +2,7 @@ import Foundation
 import MutationModel
 import Testing
 
-/// ADR-0006 Stage 3: schemata confirmations go through the exact same
+/// The re-enabled schemata scoring: schemata confirmations go through the exact same
 /// `MutationVerdictVerifier.confirm` a real run would, never a
 /// runner-side shortcut. Every case here pins that a confirmation must
 /// prove its own independent STARTUP -> HIT chain — reusing the primary

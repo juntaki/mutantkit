@@ -107,6 +107,13 @@ public struct TrustReport: Codable, Sendable, Equatable {
         /// `true` only when every check passed: none failed and none is not
         /// verifiable. `passed && !complete` is a PARTIAL verification.
         public let complete: Bool
+        /// Additive, optional. Same value as `complete`, named for what it is:
+        /// Tier A (report-only) completeness.
+        public let tierAComplete: Bool?
+        /// Additive, optional. Full-evidence (Tier B) re-verification: archive
+        /// read and every result re-judged with no mismatch, missing
+        /// observation or archive problem. Independent of `tierAComplete`.
+        public let fullEvidenceReverified: Bool?
         public let passCount: Int
         public let failCount: Int
         public let notVerifiableCount: Int
@@ -124,6 +131,8 @@ public struct TrustReport: Codable, Sendable, Equatable {
             tierB = reverification.tierB
             passed = reverification.passed
             complete = reverification.complete
+            tierAComplete = reverification.tierAComplete
+            fullEvidenceReverified = reverification.fullEvidenceReverified
             passCount = reverification.passCount
             failCount = reverification.failureCount
             notVerifiableCount = reverification.notVerifiableCount
@@ -196,7 +205,7 @@ public struct TrustReport: Codable, Sendable, Equatable {
     /// rebuild confirmation evidence (`CrashConfirmation`/`TimeoutConfirmation`)
     /// this codebase attaches when `confirmCrashKills`/`confirmTimedOutMutants`
     /// was on. A `killedByCrash`/`verifiedTimeout` result with no such
-    /// evidence was still legitimately proven (see `ADR-0006`) — it was
+    /// evidence was still legitimately proven (see `the end-to-end trust chain`) — it was
     /// simply never asked to reproduce a second time, because that run's
     /// configuration did not request it.
     public struct ConfirmationSection: Codable, Sendable, Equatable {

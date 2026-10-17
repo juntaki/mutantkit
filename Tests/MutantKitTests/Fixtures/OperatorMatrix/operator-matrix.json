@@ -1,0 +1,173 @@
+[
+  {
+    "category" : "accessibility",
+    "confidence" : "experimental",
+    "id" : "apple.accessibility.explicit-label-removal",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "concurrency",
+    "confidence" : "medium",
+    "id" : "apple.concurrency.continuation-resume-removal",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "concurrency",
+    "confidence" : "experimental",
+    "id" : "apple.concurrency.post-await-cancellation-guard-removal",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "lifecycle",
+    "confidence" : "experimental",
+    "id" : "apple.lifecycle.foreground-event-replacement",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "persistence",
+    "confidence" : "medium",
+    "id" : "apple.persistence.required-decode-introduction",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "swiftui",
+    "confidence" : "experimental",
+    "id" : "apple.swiftui.hit-area-shape-removal",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "swiftui",
+    "confidence" : "experimental",
+    "id" : "apple.swiftui.task-id-removal",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "arithmetic",
+    "confidence" : "medium",
+    "id" : "swift.core.arithmetic-operator-replacement",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "arithmetic",
+    "confidence" : "medium",
+    "id" : "swift.core.assignment-operator-replacement",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "literal",
+    "confidence" : "high",
+    "id" : "swift.core.bool-literal-inversion",
+    "requiresSymbolResolution" : false,
+    "schemata" : true,
+    "tier" : "default",
+    "version" : 1
+  },
+  {
+    "category" : "conditional",
+    "confidence" : "experimental",
+    "id" : "swift.core.else-clause-deletion",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "conditional",
+    "confidence" : "high",
+    "id" : "swift.core.logical-connector-replacement",
+    "requiresSymbolResolution" : false,
+    "schemata" : true,
+    "tier" : "default",
+    "version" : 1
+  },
+  {
+    "category" : "optional",
+    "confidence" : "medium",
+    "id" : "swift.core.nil-coalescing-fallback",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "conditional",
+    "confidence" : "experimental",
+    "id" : "swift.core.range-boundary-replacement",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "conditional",
+    "confidence" : "high",
+    "id" : "swift.core.relational-operator-replacement",
+    "requiresSymbolResolution" : false,
+    "schemata" : true,
+    "tier" : "default",
+    "version" : 1
+  },
+  {
+    "category" : "literal",
+    "confidence" : "medium",
+    "id" : "swift.core.return-value-replacement",
+    "requiresSymbolResolution" : false,
+    "schemata" : true,
+    "tier" : "default",
+    "version" : 1
+  },
+  {
+    "category" : "side-effect",
+    "confidence" : "experimental",
+    "id" : "swift.core.side-effect-call-removal",
+    "requiresSymbolResolution" : false,
+    "schemata" : false,
+    "tier" : "all",
+    "version" : 1
+  },
+  {
+    "category" : "conditional",
+    "confidence" : "high",
+    "id" : "swift.core.ternary-branch-swap",
+    "requiresSymbolResolution" : false,
+    "schemata" : true,
+    "tier" : "default",
+    "version" : 1
+  },
+  {
+    "category" : "conditional",
+    "confidence" : "medium",
+    "id" : "swift.core.unary-not-removal",
+    "requiresSymbolResolution" : false,
+    "schemata" : true,
+    "tier" : "default",
+    "version" : 1
+  }
+]

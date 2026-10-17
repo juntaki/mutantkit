@@ -58,9 +58,9 @@ enum ExecutionCapabilitiesDiagnosis {
     /// together; they must never say different things.
     static func schemataSupported(for kind: ProjectKind) -> Bool {
         switch kind {
-        case .swiftPackageMacOS, .xcodeProject:
+        case .swiftPackageMacOS, .xcodeProject, .xcodeWorkspace:
             true
-        case .swiftPackageApple, .xcodeWorkspace, .auto:
+        case .swiftPackageApple, .auto:
             false
         }
     }

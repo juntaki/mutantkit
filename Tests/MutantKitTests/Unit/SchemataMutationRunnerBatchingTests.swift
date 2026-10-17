@@ -8,7 +8,7 @@ import Testing
 /// Gate 3 Phase H5: `SchemataMutationRunner.runEntries`' upfront
 /// `prepareBatchedPrimaries` pre-fetch — several entries' primary
 /// observations resolved via one shared `runSchemataTokenBatch` call
-/// instead of one `runSchemataToken` call each — folded back into ADR-0008's
+/// instead of one `runSchemataToken` call each — folded back into the schemata timeout-isolation design's
 /// unmodified per-entry state machine (Phase H4's split makes this
 /// substitution possible without either side knowing about the other).
 ///
@@ -210,10 +210,10 @@ struct SchemataMutationRunnerBatchingTests {
         #expect(adapter.individualRunSchemataTokenCallCount == 0)
     }
 
-    // MARK: - A batched primary timeout still routes into the existing, unmodified ADR-0008 confirmation path
+    // MARK: - A batched primary timeout still routes into the existing, unmodified the schemata timeout-isolation design confirmation path
 
     @Test("""
-    A batched primary timeout still triggers an individual confirmation (existing ADR-0008 path, unmodified); a confirmation \
+    A batched primary timeout still triggers an individual confirmation (the existing timeout-confirmation path, unmodified); a confirmation \
     that resolves normally still settles flaky, never a direct verifiedTimeout
     """)
     func batchedPrimaryTimeoutStillConfirms() async throws {
@@ -290,7 +290,7 @@ struct SchemataMutationRunnerBatchingTests {
         #expect(adapter.schemataBatchCallCount == 1)
         #expect(adapter.individualRunSchemataTokenCallCount == 1, "only entry 1's own confirmation should ever dispatch individually")
         // Trigger 1 still rebuilds once, for entry 1's own confirmation —
-        // ADR-0008's rebuild mechanics are completely unmodified by batching.
+        // The schemata timeout-isolation design's rebuild mechanics are completely unmodified by batching.
         #expect(adapter.buildCallCount == 2)
     }
 
@@ -450,7 +450,7 @@ struct SchemataMutationRunnerBatchingTests {
         // Both single-test entries still share one batch call (Phase
         // H12.3's narrowing only excludes multi-test selections, not
         // single-test ones), and the timed-out entry's own confirmation is
-        // the only individual dispatch — the exact ADR-0008 path Phase H5
+        // the only individual dispatch — the exact the schemata timeout-isolation design path Phase H5
         // already proved unmodified, still true after Phase H12.3.
         #expect(adapter.schemataBatchCallCount == 1)
         #expect(adapter.individualRunSchemataTokenCallCount == 1)

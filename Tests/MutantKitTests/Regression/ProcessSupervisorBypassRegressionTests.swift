@@ -47,37 +47,11 @@ struct ProcessSupervisorBypassRegressionTests {
 
     /// Whole `Sources/` targets this scan does not enter at all.
     ///
-    /// The first six are research/probe-only executables named in
-    /// `Package.swift` — standalone tools for a specific investigation or
-    /// evaluation protocol, never part of the mutation-execution path a
-    /// real `mutantkit run` takes, so they carry none of the trust
-    /// obligations `ProcessSupervisor` exists to uphold.
-    ///
-    /// `BenchmarkRunner` was added to this list while *writing* this test,
-    /// not before: running this exact scan against the real tree found
-    /// five real `Process()` constructions in that target
-    /// (`BenchmarkPreflight.swift`, `MeasurementCollector.swift`,
-    /// `ProjectMaterializer.swift`, `ToolchainDiscovery.swift` ×2) that an
-    /// earlier same-day manual audit had missed — direct, mechanical proof
-    /// of why this suite needs to exist at all. `BenchmarkRunner` is
-    /// MutantBench-Swift, `Package.swift`'s own comment on the target:
-    /// "Deliberately depends on nothing else in this package —
-    /// `MutationModel`/`MutationExecution` included. Both MutantKit and
-    /// Muter are external processes to this target, never in-process
-    /// engines." It never participates in producing a mutation verdict —
-    /// it shells out to the already-built `mutantkit` binary and to Muter
-    /// as black boxes to compare their wall time — so it sits in the same
-    /// "not the trust surface" category as the six probes above, even
-    /// though nothing in `Package.swift` labels it that way today. Its own
-    /// timed tool invocations already go through a hardened,
-    /// `ProcessSupervisor`-equivalent `posix_spawn` implementation
-    /// (`ToolRunner.swift`, allow-listed by file below); the five
-    /// `Process()` sites this exclusion actually covers are short-lived
-    /// toolchain/version/preflight queries, not part of any mutation run.
-    /// Hardening or removing them is real, separate work for whoever owns
-    /// `BenchmarkRunner` next — out of scope for this suite, whose job is
-    /// only to keep the allow-list honest and visible, never to silently
-    /// grow it.
+    /// Standalone tools that are never part of the mutation-execution path a
+    /// real `mutantkit run` takes, so they carry none of the trust obligations
+    /// `ProcessSupervisor` exists to uphold. The list is deliberately explicit
+    /// and visible: this suite's job is to keep the allow-list honest, never to
+    /// let it grow silently.
     private static let excludedTargets: Set<String> = [
         "BudgetV2Eval",
         "PlanSubsetDerivation",
@@ -94,12 +68,10 @@ struct ProcessSupervisorBypassRegressionTests {
         // The raw `posix_spawn` implementation everything else in this
         // allow-list is supposed to route through instead of reimplementing.
         "MutationExecution/ProcessSupervisor.swift",
-        // `BenchmarkRunner`'s own decoupled, hardened `posix_spawn`
-        // reimplementation for its timed tool invocations — see the
-        // `excludedTargets` doc comment above. Listed explicitly (not
-        // just covered by the whole-target exclusion) so this file keeps
-        // showing up if `BenchmarkRunner` is ever narrowed to a per-file
-        // allow-list instead of a whole-target one.
+        // A tool target's own decoupled `posix_spawn` implementation for its
+        // timed tool invocations. Listed explicitly (not just covered by the
+        // whole-target exclusion) so it keeps showing up if that target is
+        // narrowed to a per-file allow-list instead of a whole-target one.
         "BenchmarkRunner/ToolRunner.swift"
     ]
 
@@ -326,9 +298,8 @@ struct ProcessSupervisorBypassRegressionTests {
     private static func failureMessage(for violations: [Violation]) -> String {
         var lines = [
             "Found \(violations.count) raw process-spawn bypass(es) of ProcessSupervisor outside the documented allow-list.",
-            "Route through ProcessSupervisor.run(...) instead, or — only if this really is research/probe-only tooling",
-            "outside the mutation-execution trust path — extend the allow-list in this file with a justification, the",
-            "same way BenchmarkRunner's own entry explains itself:"
+            "Route through ProcessSupervisor.run(...) instead, or — only if this really is standalone tooling",
+            "outside the mutation-execution trust path — extend the allow-list in this file with a justification:"
         ]
         lines.append(contentsOf: violations.map(\.description))
         return lines.joined(separator: "\n")

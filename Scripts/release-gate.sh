@@ -166,12 +166,10 @@ swift test
 # SwiftPM/Swift Testing layer. Many suites internally launch xcodebuild,
 # simulators, and MutantKit workers in parallel; running several such
 # suites concurrently caused self-contention, 600s build timeouts, and
-# timing-oracle failures on an otherwise idle validation machine (see the
-# internal release-gate concurrency research record, not part of this
-# public repo — a same-SHA,
-# same-timeout controlled experiment proved this outer parallelism, not a
-# product or test-design bug: unbounded run 121 failures/56 distinct tests,
-# outer-serialized run 2596/2596 pass).
+# timing-oracle failures even on an idle machine. A same-SHA, same-timeout
+# controlled experiment showed this outer parallelism, not a product or
+# test-design bug, was the cause (unbounded run: 121 failures across 56 distinct
+# tests; outer-serialized run: all 2596 tests passed).
 #
 # Keep the product's own internal concurrency intact; only serialize
 # independent top-level tests here.

@@ -7,8 +7,8 @@ import MutationModel
 /// mutated target-under-test's own process and knows nothing about Swift
 /// types; this reads what it left behind after that process exits. Decodes
 /// only; deciding which (if any) event is real evidence is
-/// `MutationVerdictVerifier.verifySchemataChain`'s job alone (ADR-0006
-/// Stage 2) — this type never matches or picks among candidates.
+/// `MutationVerdictVerifier.verifySchemataChain`'s job alone (the schemata proof chain)
+/// — this type never matches or picks among candidates.
 ///
 /// Deliberately not linked against the C target (see `Package.swift`'s
 /// `MutationExecution` target comment) — the environment variable names and
@@ -91,8 +91,8 @@ public enum SchemataEvidenceCollector {
     static let recordSize = 136
 
     /// Parses every fixed-size record in `data`, in file order — no
-    /// filtering, no picking a "first" or "last" among candidates (ADR-0006
-    /// Finding 3): that is a chain-selection decision for a caller building
+    /// filtering, no picking a "first" or "last" among candidates (multi-image STARTUP/HIT matching):
+    /// that is a chain-selection decision for a caller building
     /// evidence to make deliberately, with every candidate in view, not
     /// something this parser resolves by discarding the others first.
     public static func parseTranscript(from data: Data) throws -> RuntimeTranscript {
@@ -154,7 +154,7 @@ public enum SchemataEvidenceCollector {
 
     /// Reads and parses whatever transcript exists at `transcriptPath` —
     /// the raw-observation counterpart to the old `collectActivationEvidence`
-    /// (ADR-0006 Stage 2): this reads and decodes bytes, nothing more. No
+    /// (the schemata proof chain): this reads and decodes bytes, nothing more. No
     /// STARTUP/HIT matching happens here at all; deciding which candidate
     /// (if any) is real is `MutationVerdictVerifier.verifySchemataChain`'s
     /// job alone, once this raw `RuntimeTranscript` reaches it inside a

@@ -33,9 +33,7 @@ struct CoreOperatorRegistryExpansionTests {
     /// the same low range that got `nilCoalescing` demoted. `ternary` was
     /// deliberately NOT demoted alongside it: one corpus's low kill rate
     /// isn't enough evidence on its own, and that call is left open pending
-    /// a second corpus. See the internal corpus-validation notes (not part
-    /// of this public repo) and the operator catalog's item 7 for the full
-    /// evidence and the open question.
+    /// a second corpus.
     private static let defaultEnabledIDs: Set<String> = [ternary, unaryNot, returnValue]
 
     /// Not proven safe to compile by default — see

@@ -12,9 +12,7 @@ import XCTest
 /// pointless miss — and because one class carrying both would exceed
 /// SwiftLint's type-body-length threshold.
 ///
-/// See this project's internal cache-key-granularity research (not part
-/// of this public repo) for the correctness
-/// argument these tests pin.
+/// These tests pin the cache-key granularity's correctness argument.
 final class RunContextProbeContentIdentityTests: XCTestCase {
     // MARK: - The point of the exercise: surviving across commits
 
@@ -124,8 +122,7 @@ final class RunContextProbeContentIdentityTests: XCTestCase {
     /// be trading a provable answer for a plausible one, which is the exact
     /// failure mode this project exists to rule out. Narrowing this
     /// conservatively — per mutant, by a real dependency closure — is the
-    /// follow-on work described in this project's internal
-    /// cache-key-granularity research (not part of this public repo);
+    /// follow-on work;
     /// until it exists, the answer is a miss, never a guess.
     func testTrackedNonSourceChangeStillMissesConservatively() async throws {
         let (repo, before) = try await committedBaseline()
@@ -204,30 +201,30 @@ final class RunContextProbeContentIdentityTests: XCTestCase {
         }
     }
 
-    /// A submodule is a separate repository this digest does not descend
-    /// into, so its content cannot be proven unchanged. Refuse rather than
-    /// hash the rest and imply the submodule matched.
-    func testSubmoduleGitlinkRefusesToProduceADigest() async throws {
+    /// A submodule gitlink digests as the recorded commit plus every byte the sandbox copy of the
+    /// subtree carries: an uninitialized (empty) checkout is a valid, stable digest, and neither a
+    /// change to the recorded commit nor a file appearing inside an initialized one may hide.
+    func testSubmoduleGitlinkDigestsCommitAndSubtree() async throws {
         let (repo, _) = try await committedBaseline()
         defer { try? FileManager.default.removeItem(at: repo) }
 
-        // Register a gitlink (mode 160000) directly, which is what a
-        // submodule is in the index, without needing a second real repo.
         let head = try gitOutput(["rev-parse", "HEAD"], in: repo)
         try git(["update-index", "--add", "--cacheinfo", "160000,\(head),Vendor/Dependency"], in: repo)
-        try FileManager.default.createDirectory(
-            at: repo.appendingPathComponent("Vendor/Dependency"), withIntermediateDirectories: true
-        )
+        let submodule = repo.appendingPathComponent("Vendor/Dependency")
+        try FileManager.default.createDirectory(at: submodule, withIntermediateDirectories: true)
 
-        do {
-            _ = try await RunContextProbe.worktreeContentState(in: repo)
-            XCTFail("a submodule in scope must abort the digest")
-        } catch let error as RunContextProbeError {
-            guard case let .unprovableWorktreeContent(path, _) = error else {
-                return XCTFail("expected .unprovableWorktreeContent, got \(error)")
-            }
-            XCTAssertEqual(path, "Vendor/Dependency")
-        }
+        let uninitialized = try await RunContextProbe.worktreeContentState(in: repo)
+        let again = try await RunContextProbe.worktreeContentState(in: repo)
+        XCTAssertEqual(uninitialized, again, "an uninitialized submodule must digest stably")
+
+        try write("// dirty\n", at: submodule.appendingPathComponent("Extra.swift"))
+        let withFile = try await RunContextProbe.worktreeContentState(in: repo)
+        XCTAssertNotEqual(uninitialized, withFile, "a file inside the submodule must invalidate")
+
+        try FileManager.default.removeItem(at: submodule.appendingPathComponent("Extra.swift"))
+        try git(["update-index", "--cacheinfo", "160000,0123456789012345678901234567890123456789,Vendor/Dependency"], in: repo)
+        let movedPin = try await RunContextProbe.worktreeContentState(in: repo)
+        XCTAssertNotEqual(uninitialized, movedPin, "a different recorded submodule commit must invalidate")
     }
 
     /// A symlink contributes its link target text, not the bytes it resolves

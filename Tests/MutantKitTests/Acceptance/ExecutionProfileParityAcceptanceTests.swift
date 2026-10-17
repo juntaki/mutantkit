@@ -135,7 +135,7 @@ struct ExecutionProfileParityAcceptanceTests {
     /// `execution.profileCoverageSkip: true` would also cause) `RunCommand
     /// .resolveTestAdapter` wraps the test adapter in
     /// `PrioritizingTestAdapter` whenever `selectCoveringTests` and the
-    /// documented, ADR-0009-sanctioned `earlyAbortSelectedTests` are both
+    /// documented, the iOS execution default-sanctioned `earlyAbortSelectedTests` are both
     /// on and there is no batchable `testBatchSize` to take the wave-based
     /// path instead. `PrioritizingTestAdapter` conforms to `TestSelecting`,
     /// never `SchemataTestable` — before the fix, combining these two

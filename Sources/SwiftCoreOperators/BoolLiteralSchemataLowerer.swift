@@ -71,7 +71,7 @@ public enum SchemataLoweringError: Error, Equatable, CustomStringConvertible {
 /// lowered: it proves the embed → verify → activate pipeline without the
 /// operator itself introducing a second source of risk.
 ///
-/// **Correction (ADR-0008 Addendum 4):** the claim above is about *type*,
+/// **Correction (shared chunk build-failure attribution):** the claim above is about *type*,
 /// not *syntactic*, position — a real-corpus run found a genuine syntactic
 /// constraint this operator's literals can sit in: a `switch`/`if case`/
 /// `guard case`/`for case` pattern position expects a literal pattern the
@@ -99,8 +99,8 @@ public enum SchemataLoweringError: Error, Equatable, CustomStringConvertible {
 public struct BoolLiteralSchemataLowerer: SchemataLowerer {
     public static let lowererID = "swift.core.bool-literal-inversion.schemata"
     public static let lowererVersion = 1
-    /// Bumped from `1` to `2` for the v3 runtime protocol (ADR-0006 Stage
-    /// 2): the generated call site's shape changed entirely (a per-
+    /// Bumped from `1` to `2` for the v3 runtime protocol (the schemata proof chain
+    /// ): the generated call site's shape changed entirely (a per-
     /// compilation-unit descriptor registered once, passed into every call,
     /// versus v2's bare `(namespace, localIndex)` pair with no descriptor
     /// at all) — folded into `sourceEmbeddingID` so a cached embedding
@@ -163,7 +163,7 @@ public struct BoolLiteralSchemataLowerer: SchemataLowerer {
     """
 
     /// Registers this file's own compilation-unit identity, once, at
-    /// process startup (ADR-0006 Finding 2) — prepended to *every* file
+    /// process startup (the image-identity proof) — prepended to *every* file
     /// that carries at least one embedded mutation, unlike
     /// `sharedDeclarationPreamble`'s single-file placement, since each
     /// file's `mutantkit_register_unit_v3` call must be made from within
@@ -230,7 +230,7 @@ public struct BoolLiteralSchemataLowerer: SchemataLowerer {
         guard !OperatorExclusions.isInsideResultBuilderBody(node) else {
             return .isolatedOnly(reason: .resultBuilderBody)
         }
-        // ADR-0008 Addendum 4: a literal sitting in a switch/if-case/
+        // Shared chunk build-failure attribution: a literal sitting in a switch/if-case/
         // guard-case/for-case *pattern* position must stay a compile-time
         // constant — a runtime-selector rewrite there is not one. See
         // `OperatorExclusions.isInPatternPosition`'s own doc comment for
@@ -256,7 +256,7 @@ public struct BoolLiteralSchemataLowerer: SchemataLowerer {
         // A `static`/module-scope `let` initializer's memoization was
         // reasoned about here in an earlier draft (S6) as a hazard — but
         // that reasoning assumed a many-mutants-per-process execution model
-        // this codebase never actually adopted (see ADR-0003's correction
+        // this codebase never actually adopted (see the schemata evidence contract's correction
         // addendum). Under the real model — one requested token, fixed for
         // an entire fresh process's lifetime, set before the process even
         // launches — a memoized-once value is computed exactly once *with

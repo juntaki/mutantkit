@@ -402,7 +402,7 @@ public enum ConfigurationValidator {
         return issues
     }
 
-    /// `selection: .v2`'s own validation (ADR-0007 B.3/B.8). Weight
+    /// `selection: .v2`'s own validation (the budget-selection budget and compatibility semantics). Weight
     /// *completeness* against the real operator set is not checkable here —
     /// operators aren't known until planning-time discovery — so only each
     /// configured value's range is checked; `BudgetSelectorV2.allocateCounts`
@@ -419,7 +419,7 @@ public enum ConfigurationValidator {
         // feature on the strength of that evaluation — it lost to v1 on both
         // of the larger corpora measured. It shipped anyway, reachable from a
         // plain `execution.budget.selection: v2`, in v0.1.0 and v0.2.0. See
-        // ADR-0007 for the specification and the current status.
+        // The budget-selection v2 spec for the specification and the current status.
         //
         // Rejected here rather than deleted from `BudgetSettings`: this
         // project's YAML decoding does not reject unknown keys
@@ -442,7 +442,7 @@ public enum ConfigurationValidator {
             message: """
             Budget Selection v2 is withdrawn pending evaluation and cannot be used. \
             Remove execution.budget.selection (and any minimumPerStratum/weight), or set \
-            selection: v1. See ADR-0007 for status.
+            selection: v1.
             """
         ))
 
@@ -555,7 +555,7 @@ public enum ConfigurationJSONSchema {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "profile": { "enum": ["conservative", "default", "experimental"] },
+            "profile": { "enum": ["default", "stronger", "all", "conservative", "experimental"] },
             "disable": { "type": "array", "items": { "type": "string" } },
             "enable": { "type": "array", "items": { "type": "string" } }
           }
@@ -576,7 +576,7 @@ public enum ConfigurationJSONSchema {
                 "seed": { "type": ["integer", "null"] },
                 "stratifyBy": { "enum": ["subtype", "operatorSubtype", null] },
                 "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 },
-                "selection": { "enum": ["v1", "v2", null], "description": "v1 only. 'v2' is withdrawn pending evaluation and is rejected at configuration validation; see ADR-0007." },
+                "selection": { "enum": ["v1", "v2", null], "description": "v1 only. 'v2' is withdrawn pending evaluation and is rejected at configuration validation." },
                 "minimumPerStratum": { "type": ["integer", "null"], "minimum": 1 },
                 "weight": {
                   "type": ["object", "null"],

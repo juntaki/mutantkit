@@ -102,6 +102,28 @@ public enum SchemataBuiltImageInspection {
         return discovered
     }
 
+    /// The built image of each named executable or dynamic-library product that
+    /// exists under `productsDirectory`. A product is looked up by its exact
+    /// name (`<name>`, `lib<name>.dylib`), never discovered by scanning, so only
+    /// products the caller has already proven relevant can appear. A product
+    /// that was not built is skipped: a binary that does not exist cannot have
+    /// run.
+    public static func inspectProductImages(
+        _ products: [(name: String, kind: SwiftPMDependencyGraph.ProductKind)], in productsDirectory: URL,
+        extractor: any BuiltImageInspecting = MachOReceiptExtractor()
+    ) throws -> [String: DiscoveredImage] {
+        let directory = productsDirectory.resolvingSymlinksInPath()
+        var found: [String: DiscoveredImage] = [:]
+        for product in products {
+            let fileName = product.kind == .dynamicLibrary ? "lib\(product.name).dylib" : product.name
+            let binary = directory.appendingPathComponent(fileName)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: binary.path, isDirectory: &isDirectory), !isDirectory.boolValue else { continue }
+            found[product.name] = try inspectSingle(at: binary, bundleName: product.name, extractor: extractor)
+        }
+        return found
+    }
+
     /// Inspects one specific, already-known binary path directly — no
     /// discovery, no guessing among candidates. Used by resolvers (Xcode's)
     /// that can compute the exact expected path for a target from the

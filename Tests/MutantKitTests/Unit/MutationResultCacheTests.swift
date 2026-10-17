@@ -197,7 +197,7 @@ struct MutationResultCacheTests {
         #expect(loaded?.confirmationDurationSeconds == 1)
     }
 
-    // MARK: - ADR-0005 PR C: verificationVersion gating
+    // MARK: - the verified-verdict cache gate: verificationVersion gating
 
     @Test("A record stamped by an older verifier version is a miss, not served stale")
     func staleVerificationVersionMisses() async throws {
@@ -206,7 +206,7 @@ struct MutationResultCacheTests {
         let observations = makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID)
 
         // `store` always stamps the version from re-verifying `observations`
-        // itself (ADR-0006 Stage 1) — a stale version can no longer be
+        // itself (the authoritative verdict pipeline) — a stale version can no longer be
         // injected through the public API, so this simulates the on-disk
         // shape a superseded verifier would have left behind directly, the
         // same way `legacyRecordWithoutVersionFieldMisses` below does.
@@ -266,7 +266,7 @@ struct MutationResultCacheTests {
     /// `PlannedMutationRef.pointDigest`, which folds in `sourceFileHash`.
     ///
     /// The setup is the adversarial one: the *same* mutation site in a file
-    /// that changed somewhere else entirely. ADR-0002 makes the `MutationID`
+    /// that changed somewhere else entirely. The mutation-plan contract makes the `MutationID`
     /// stable across that edit on purpose — occurrence index is scoped to the
     /// enclosing declaration, so adding a function above it renumbers
     /// nothing. So the ID matches, the key matches, and the only thing
@@ -289,7 +289,7 @@ struct MutationResultCacheTests {
         let oldPoint = try #require(try discover(before, using: Operators.boolLiteral).first)
         let newPoint = try #require(try discover(after, using: Operators.boolLiteral).first)
 
-        #expect(oldPoint.id == newPoint.id, "ADR-0002 keeps the ID stable here — that is what makes this adversarial")
+        #expect(oldPoint.id == newPoint.id, "the mutation-plan contract keeps the ID stable here — that is what makes this adversarial")
         #expect(oldPoint.sourceFileHash != newPoint.sourceFileHash, "the file's content really did move")
 
         let cache = MutationResultCache(root: makeScratch(), policy: .permissive)

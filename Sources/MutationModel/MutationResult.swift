@@ -51,7 +51,7 @@ public enum ResultOrigin: String, Codable, Sendable, Hashable {
 
 /// The outcome of one mutant, with the proof that backs it.
 ///
-/// ADR-0006 Stage 1: this is a **verified projection**, not a value any
+/// The authoritative verdict pipeline: this is a **verified projection**, not a value any
 /// pipeline stage constructs from scratch. It has no public initializer —
 /// the only way to build a fresh one is `MutationResult.projected(from:point:...)`,
 /// which reads outcome/evidence/testSummary/diagnosis straight off a
@@ -77,7 +77,7 @@ public struct MutationResult: Codable, Sendable, Identifiable {
     public let mutationRef: PlannedMutationRef
     /// The verifier version that produced this result — read directly off
     /// the record at projection time, never passed in by a caller. Lets
-    /// `MutationResultCache`/`CheckpointStore` (ADR-0006 Stage 1) validate
+    /// `MutationResultCache`/`CheckpointStore` (the authoritative verdict pipeline) validate
     /// a stored result's freshness from the result itself, the same way
     /// `mutationRef` lets them validate its identity. `0` for a legacy-
     /// decoded `MutationResult` (see `mutationRef`'s doc comment) — always
@@ -223,7 +223,7 @@ public struct MutationResult: Codable, Sendable, Identifiable {
     /// different replacement text, a shifted byte range, an edited source
     /// file) fails this the same way `projected` fails a mismatched one —
     /// this is `MutationResultCache.load`'s "validate the current context"
-    /// step (ADR-0006 Stage 1), not a relaxed version of it.
+    /// step (the authoritative verdict pipeline), not a relaxed version of it.
     public static func reanchored(
         from record: VerifiedMutationRecord,
         point: MutationPoint,
@@ -557,7 +557,7 @@ public struct RunReport: Codable, Sendable {
     public let batchExecution: BatchExecutionSummary?
     /// `nil` for a plain `.isolated` run, where "requested" and "effective"
     /// are trivially the same thing and recording it would say nothing. Set
-    /// only by `SchemataRunOrchestration` (ADR-0006 Stage 1): a requested
+    /// only by `SchemataRunOrchestration` (the authoritative verdict pipeline): a requested
     /// `.schemata` run's *effective* execution — how many mutations were
     /// actually embedded versus routed to isolated fallback, and why, when
     /// the whole run degraded — is otherwise only ever printed to the
@@ -575,8 +575,12 @@ public struct RunReport: Codable, Sendable {
     /// write one. Absent for a run that did not, and for reports written
     /// before archives existed.
     public let evidenceArchive: EvidenceArchiveReference?
+    /// Present only when the run was interrupted before every planned mutant
+    /// had a result. Such a report is a progress snapshot, never a finished
+    /// measurement: it has no score and fails integrity by construction.
+    public let interruption: RunInterruption?
 
-    /// The only real construction path (ADR-0006 Stage 1, second review
+    /// The only real construction path (the authoritative verdict pipeline, second review
     /// round): `ledger`, not a plain `[MutationResult]`, so a caller cannot
     /// hand this the same mutation's result twice — `ResultLedger.insert`
     /// already refused that at the moment each entry was added, which a
@@ -597,8 +601,10 @@ public struct RunReport: Codable, Sendable {
         integrity: IntegrityReport,
         batchExecution: BatchExecutionSummary? = nil,
         executionStrategy: ExecutionStrategyReport? = nil,
-        operationalIssues: [OperationalIssue] = []
+        operationalIssues: [OperationalIssue] = [],
+        interruption: RunInterruption? = nil
     ) {
+        self.interruption = interruption
         schemaVersion = SchemaVersion.result
         self.planID = planID
         self.startedAt = startedAt
@@ -631,7 +637,7 @@ public struct RunReport: Codable, Sendable {
     /// discipline `MutationPlan.decode` already applies.
     public static func decode(from data: Data) throws -> RunReport {
         let report = try MutationPlan.decoder().decode(RunReport.self, from: data)
-        guard report.schemaVersion == SchemaVersion.result else {
+        guard (SchemaVersion.oldestReadableResult ... SchemaVersion.result).contains(report.schemaVersion) else {
             throw ReportError.unsupportedSchemaVersion(found: report.schemaVersion, expected: SchemaVersion.result)
         }
         return report
@@ -639,7 +645,7 @@ public struct RunReport: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, planID, startedAt, finishedAt, projectRoot, toolchain, baseline, results, integrity, score,
-             batchExecution, executionStrategy, operationalIssues, evidenceArchive
+             batchExecution, executionStrategy, operationalIssues, evidenceArchive, interruption
     }
 
     public init(from decoder: Decoder) throws {
@@ -660,6 +666,7 @@ public struct RunReport: Codable, Sendable {
         // treated as "no operational issues recorded", not an error.
         operationalIssues = try container.decodeIfPresent([OperationalIssue].self, forKey: .operationalIssues) ?? []
         evidenceArchive = try container.decodeIfPresent(EvidenceArchiveReference.self, forKey: .evidenceArchive)
+        interruption = try container.decodeIfPresent(RunInterruption.self, forKey: .interruption)
     }
 }
 
@@ -671,7 +678,8 @@ public enum ReportError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case let .unsupportedSchemaVersion(found, expected):
-            "Report schema version \(found) is not supported by this tool (expects \(expected))."
+            "Report schema version \(found) is not supported by this tool " +
+                "(reads \(SchemaVersion.oldestReadableResult) through \(expected))."
         }
     }
 }

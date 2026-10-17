@@ -186,13 +186,13 @@ public extension OperatorProfile {
     /// `conservative` run would still execute the low-confidence sites of a
     /// high-confidence operator.
     ///
-    /// `default` and `experimental` impose no floor: both already accept
-    /// operators whose declared confidence is below `high`, so filtering their
-    /// sites by confidence would contradict the operator-level decision.
+    /// Every other profile imposes no floor: they already accept operators
+    /// whose declared confidence is below `high`, so filtering their sites by
+    /// confidence would contradict the operator-level decision.
     var siteConfidenceFloor: MutationConfidence? {
         switch self {
         case .conservative: .high
-        case .default, .experimental: nil
+        case .default, .stronger, .all, .experimental: nil
         }
     }
 }

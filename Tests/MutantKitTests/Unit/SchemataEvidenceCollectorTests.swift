@@ -7,7 +7,7 @@ import Testing
 /// format `mutantkit_protocol_v3.c` writes (STARTUP/HIT records) and
 /// `readTranscript`'s own file-I/O boundary. Deliberately does NOT pin any
 /// STARTUP/HIT matching behavior — that decision belongs solely to
-/// `MutationVerdictVerifier.verifySchemataChain` (ADR-0006 Stage 2), pinned
+/// `MutationVerdictVerifier.verifySchemataChain` (the schemata proof chain), pinned
 /// by `MutationVerdictVerifierTests`'s own schemata-chain test group.
 /// `SchemataSwiftPMRuntimeAcceptanceTests` separately proves this parser
 /// against the *real* C runtime's actual output, not just these

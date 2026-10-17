@@ -136,6 +136,7 @@ Once a run finishes, each mutation gets one of the following results:
 | `noCoverage`            | No test ever executed the mutated code                          |
 | `notApplied`            | The mutation could not be safely applied                        |
 | `baselineMismatch`      | What ran does not match the verified baseline                   |
+| `notMaterialized`       | The edit compiled, but the build product is identical to the baseline's, so the mutation never reached what the tests run |
 | `infrastructureFailure` | The execution environment itself had a problem                  |
 
 `survived` may mean your tests are too weak to catch that mutation. `noCoverage` means the mutated code was never exercised by any test at all.
@@ -159,7 +160,7 @@ MutantKit verifies both that a mutation was applied and that it was executed. It
 * Uses coverage to separate mutations that were actually executed from ones that were never reached
 * Never folds a result it cannot reconcile with its evidence into the ordinary score
 
-> **v1.2.0 (latest release).** SwiftPM and Xcode projects, isolated and schemata execution, CI gating, coverage-based test selection, caching, sharding, and resumable runs. Six operators are enabled by default; more are added as they clear validation — see [Operators](docs/operators.md) and [Supported today](#supported-today) below.
+> **v1.3.0 (latest release).** SwiftPM and Xcode projects, isolated and schemata execution, CI gating, coverage-based test selection, caching, sharding, and resumable runs. Six operators are enabled by default; more are added as they clear validation — see [Operators](docs/operators.md) and [Supported today](#supported-today) below.
 
 ## Reading the results
 
@@ -179,7 +180,7 @@ killed / (killed + survived + noCoverage)
 
 The detection rate across the whole suite, including coverage gaps.
 
-`notApplied`, `baselineMismatch`, and `infrastructureFailure` are never folded into the ordinary mutation score — they're reported as a separate class of problem.
+`notApplied`, `baselineMismatch`, `notMaterialized`, and `infrastructureFailure` are never folded into the ordinary mutation score — they're reported as a separate class of problem.
 
 ## Key features
 
@@ -461,7 +462,6 @@ Output formats include Mutation Testing Elements, self-contained HTML, a Markdow
 * [CI](docs/ci.md)
 * [Apple support matrix](docs/apple-support-matrix.md)
 * [Agents](docs/agents.md)
-* [ADR-0002](ADR/0002-the-mutation-plan-is-the-source-of-truth.md)
 
 ## Contributing
 

@@ -1,12 +1,12 @@
 @testable import CLI
 import Foundation
-import MutationExecution
+@testable import MutationExecution
 import MutationModel
 import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// The other half of ADR-0008 Addendum 4's fan-out/observability
+/// The other half of shared chunk build-failure attribution's fan-out/observability
 /// requirement. `SchemataMutationRunnerSharedChunkBuildFailureTests` already
 /// pins that `SchemataMutationRunner` *computes* one aggregate
 /// `SharedChunkBuildFailureEvent` per failed chunk build; this suite pins
@@ -23,7 +23,7 @@ import Testing
 /// discarding every reason with it. Both gaps are closed here, and both are
 /// pinned below against the *real* runner's own output rather than a
 /// hand-built event, so the wiring cannot pass while the producer drifts.
-@Suite("Schemata fallback observability (ADR-0008 Addendum 4 fan-out reporting)")
+@Suite("Schemata fallback observability (shared chunk build-failure fan-out reporting)")
 struct SchemataFallbackObservabilityTests {
     // MARK: - Fixture (mirrors SchemataMutationRunnerSharedChunkBuildFailureTests' own 3-entry chunk)
 
@@ -333,5 +333,38 @@ struct SchemataFallbackObservabilityTests {
         """.utf8)
         let decodedLegacy = try JSONDecoder().decode(ExecutionStrategyReport.self, from: legacy)
         #expect(decodedLegacy.plannerFallbackReasonCounts == nil)
+    }
+}
+
+@Suite("Fully-degraded schemata report keeps its planner fallback reasons")
+struct SchemataFullyDegradedReportTests {
+    @Test("Nothing embedded, every mutant explicitly fell back: the reason histogram is in the report")
+    func allFallbackKeepsPlannerReasons() throws {
+        let counts = HybridExecutionEngine.plannerFallbackReasonCounts(
+            Array(repeating: .unsupportedOperand(reason: "unrecognized operand kind infixOperatorExpr: a == b"), count: 10)
+        )
+        let strategy = HybridExecutionEngine.executionStrategyReport(
+            embeddedCount: 0, fallbackCount: 10, degradationReason: "no mutation in this plan was embeddable",
+            schemataOutcome: nil, plannerFallbackReasonCounts: counts
+        )
+        #expect(strategy.effectiveCount == 0)
+        #expect(strategy.plannerFallbackReasonCounts == ["unsupportedOperand": 10])
+        #expect(strategy.fallbackReasonCounts == nil, "no schemata portion ran, so there are no runtime activation fallbacks")
+        let decoded = try JSONDecoder().decode(ExecutionStrategyReport.self, from: JSONEncoder().encode(strategy))
+        #expect(decoded.plannerFallbackReasonCounts == ["unsupportedOperand": 10])
+    }
+
+    @Test("""
+    A partly-fallback run keeps its histogram, and a legacy report without the field still decodes as nil \
+    (classification never ran)
+    """)
+    func partialAndLegacy() throws {
+        let strategy = HybridExecutionEngine.executionStrategyReport(
+            embeddedCount: 4, fallbackCount: 2, degradationReason: nil,
+            schemataOutcome: nil, plannerFallbackReasonCounts: ["resultBuilderBody": 2]
+        )
+        #expect(strategy.plannerFallbackReasonCounts == ["resultBuilderBody": 2])
+        let legacy = Data(#"{"requested":"schemata","effectiveCount":1,"fallbackCount":2}"#.utf8)
+        #expect(try JSONDecoder().decode(ExecutionStrategyReport.self, from: legacy).plannerFallbackReasonCounts == nil)
     }
 }

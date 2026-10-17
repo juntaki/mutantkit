@@ -15,7 +15,7 @@ import Testing
 /// and a run containing an unprovable result publishes no score at all.
 @Suite("Regression: a reported mutant must exist in the source")
 struct PhantomMutantTests {
-    /// ADR-0006 Stage 1: a scorable outcome with genuinely *no* evidence at
+    /// The authoritative verdict pipeline: a scorable outcome with genuinely *no* evidence at
     /// all is no longer constructible — `ExecutedMutationProof` requires
     /// real evidence to exist as a precondition of the type itself, not a
     /// runtime check `isReportable` re-verifies afterward. What remains
@@ -63,7 +63,7 @@ struct PhantomMutantTests {
         #expect(cleanReport.score != nil)
 
         // The same run, with the phantom `.notApplied` instead of `.survived`
-        // with hollowed-out evidence: ADR-0006 Stage 1 moved "no proof, no
+        // with hollowed-out evidence: the authoritative verdict pipeline moved "no proof, no
         // score" from an `IntegrityChecker` runtime check on evidence
         // quality to a construction-time guarantee — `MutationVerdictVerifier`
         // is the only real path to a scorable outcome, and it only ever

@@ -1,14 +1,14 @@
 import Foundation
 import Testing
 
-/// Turns five more of an internal structural-invariants audit's 14
-/// uncovered findings into permanent, mechanical gates. See
+/// Turns five more structural invariants into
+/// permanent, mechanical gates. See
 /// `V2InvariantsAuditRegressionSupport`'s own doc comment for why a
 /// real-source textual re-scan is the right method: every one of these five
 /// invariants is, in the audit's own words, "provable only by direct source
 /// reading" — each requires a real `SimulatorPool`/leased device or a real
 /// `xcodebuild` invocation to exercise behaviorally, which is exactly the
-/// acceptance-suite-only territory `AGENTS.md`'s validation policy keeps
+/// acceptance-suite-only territory, kept
 /// out of the fast unit-test loop.
 @Suite("Regression: BuildDriver has no stored property capable of holding a simulator lease")
 struct BuildDriverNeverLeasesRegressionTests {

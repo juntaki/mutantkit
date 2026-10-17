@@ -3,7 +3,7 @@ import MutationModel
 import Testing
 
 /// `SchemataBuildReceipt`/`BuiltImageReceipt` are the build-time half of
-/// ADR-0006 Stage 2's proof chain -- what a runtime STARTUP/HIT event's
+/// The schemata proof chain -- what a runtime STARTUP/HIT event's
 /// `compilationUnitID`/`imageUUID` gets checked against. If construction
 /// itself accepted a receipt with two slices claiming the same image UUID,
 /// or two compilation units under the same ID, the verifier's later
@@ -160,7 +160,9 @@ struct SchemataBuildReceiptTests {
         let receipt = try makeReceipt(images: [image], compilationUnits: [unit])
         #expect(receipt.image(for: target()) == image)
         #expect(receipt.image(for: target("Other")) == nil)
-        #expect(receipt.compilationUnit(for: unit.compilationUnitID) == unit)
+        // The legacy single-image form is resolved to the image owned by its build target.
+        #expect(receipt.compilationUnit(for: unit.compilationUnitID)?.containingImageIDs == [image.imageID])
+        #expect(receipt.compilationUnit(for: unit.compilationUnitID)?.sourceBuildTarget == unit.sourceBuildTarget)
         #expect(receipt.compilationUnit(for: compilationUnitID("Missing.swift")) == nil)
     }
 

@@ -34,9 +34,7 @@ import SwiftSyntax
 /// These are genuinely different faults with different real-world
 /// consequences (missed work vs. extra work), not two names for the same
 /// mutation — corpus statistics and promotion decisions for this operator are
-/// kept direction-specific throughout; see this type's own `faultEvidence`
-/// and the internal corpus-validation research for this operator (not
-/// part of this public repo).
+/// kept direction-specific throughout; see this type's own `faultEvidence`.
 ///
 /// **v1 matcher — exact member access only, two named constants, one type,
 /// symbol-blind by construction (no symbol resolution, matching every other
@@ -156,10 +154,7 @@ import SwiftSyntax
 /// `confidence: .medium`**: this catalog's own precedent for that promotion
 /// (`ContinuationResumeRemovalOperator`, `RequiredDecodeIntroductionOperator`)
 /// required two independently-verified real projects; only one was found
-/// reachable this round despite a genuine search. Full evidence, the two
-/// rejected candidates' own reasoning, and the adversarial review that
-/// reached this conclusion: the internal corpus-validation research for
-/// this operator (not part of this public repo).
+/// reachable this round despite a genuine search.
 public struct ForegroundEventReplacementOperator: MutationOperator {
     /// The two supported constants and the direction each names, matched and
     /// replaced by exact string identity only.
@@ -222,8 +217,7 @@ public struct ForegroundEventReplacementOperator: MutationOperator {
             own scheme/test-target configuration. Promotion decision: C, remain experimental -- not \
             promoted to confidence: .medium, because this catalog's own precedent for that promotion \
             required two independently-verified real projects, and only one was found reachable this \
-            round despite a genuine search. Full evidence: internal \
-            corpus-validation research for this operator (not part of this public repo).
+            round despite a genuine search.
             """
         ]
     )

@@ -5,7 +5,7 @@ import SwiftCoreOperators
 import SwiftFrontend
 import Testing
 
-/// ADR-0008 §5 item 7: written last, against the *finished* control-flow
+/// The timeout-isolation acceptance gate for verifier authority: written last, against the *finished* control-flow
 /// shape (`runPrimary`/`runConfirmation`/`runEntries`), specifically so it
 /// exercises the mechanism this ADR actually shipped, not an intermediate
 /// design. Two independent checks:
@@ -22,7 +22,7 @@ import Testing
 ///    (a primary timeout whose confirmation resolves normally must stay
 ///    `.flaky`, never promoted to `.verifiedTimeout`, since schemata mode's
 ///    `isBatchAttributedTimeout` is permanently `false`) through the *full*
-///    runner, with ADR-0008's mid-chunk rebuild genuinely interposed between
+///    runner, with the schemata timeout-isolation design's mid-chunk rebuild genuinely interposed between
 ///    the primary and confirmation runs — proving the rebuild (a new code
 ///    path) cannot smuggle different evidence into the verifier and flip
 ///    this invariant.
@@ -35,7 +35,7 @@ import Testing
 /// correct or otherwise, is fabricated for a shared-build-failure-routed
 /// `MutationID`) is pinned in
 /// `SchemataMutationRunnerSharedChunkBuildFailureTests`.
-@Suite("SchemataMutationRunner: ADR-0008 verifier-authority regression")
+@Suite("SchemataMutationRunner: verifier-authority regression")
 struct SchemataMutationRunnerVerifierAuthorityRegressionTests {
     @Test("""
     MutationVerdictVerifier.verify(_:policy:) is called from exactly one place in SchemataMutationRunner.swift — finalize's own \

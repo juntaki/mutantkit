@@ -194,7 +194,7 @@ public struct MutationPlan: Codable, Sendable {
     /// even if the operator set changes in a later release.
     public let operators: [OperatorDescriptor]
     /// One record per mutant in `mutations`, present only when this plan was
-    /// selected under `budget.selection: v2` (ADR-0007 B.7) — always empty
+    /// selected under `budget.selection: v2` (the budget-selection schema contract) — always empty
     /// for a v1 plan. Computed once, at planning time, and never recomputed:
     /// `PlanSharding.shard` copies each shard's subset unchanged rather than
     /// re-deriving it, and it is excluded from `planID`/`workUnitID`'s hash
@@ -275,7 +275,7 @@ public struct MutationPlan: Codable, Sendable {
     /// `[]`. Synthesized `Encodable` would always emit the key — a Codex
     /// integration review caught that this makes every v1 plan.json's bytes
     /// change even though v1's own selection behavior is untouched, breaking
-    /// ADR-0007 invariant 8/B.8's byte-identical-for-existing-configs
+    /// The budget-selection compatibility invariant's byte-identical-for-existing-configs
     /// requirement. Omitting rather than emitting `[]` restores that.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -290,7 +290,7 @@ public struct MutationPlan: Codable, Sendable {
         try container.encode(skipped, forKey: .skipped)
         try container.encode(operators, forKey: .operators)
         // Omitted when it carries nothing `configurationHash` does not
-        // already say -- the same treatment, for the same ADR-0007 invariant
+        // already say -- the same treatment, for the same budget-selection invariant
         // 8/B.8 reason, `budgetInclusionReasons` gets just below: a plan
         // whose two scopes coincide keeps the bytes it had before this field
         // existed.

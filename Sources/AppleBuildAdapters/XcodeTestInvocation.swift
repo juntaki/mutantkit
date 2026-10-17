@@ -3,9 +3,8 @@ import MutationExecution
 import MutationModel
 
 //
-// Extracted from `XcodeBuildAdapter.swift` as part of this project's
-// internal execution-engine restructuring (see its own, private planning
-// notes, not part of this public repo, for the full rationale). Collapses
+// Extracted from `XcodeBuildAdapter.swift` as part of the execution-engine
+// restructuring. Collapses
 // the shared "build
 // `test-without-building` arguments, launch via `ProcessSupervisor.run`,
 // handle launch-failure/timeout" shape `runTestsOnDestination`,

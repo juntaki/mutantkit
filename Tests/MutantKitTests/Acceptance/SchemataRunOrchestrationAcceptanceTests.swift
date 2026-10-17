@@ -11,7 +11,7 @@ import Testing
 /// `.schemata` run genuinely mixes both backends: the bool-literal and
 /// ternary candidates run through the real `SchemataMutationRunner`, the
 /// arithmetic one falls back to isolated mode, and both verdicts land in
-/// one reconciled report (ADR-0006 Stage 3: schemata scoring re-enabled,
+/// one reconciled report (the re-enabled schemata scoring: schemata scoring re-enabled,
 /// gated by which operators have a registered lowerer — see
 /// `SchemataRunOrchestration`'s own doc comment).
 ///

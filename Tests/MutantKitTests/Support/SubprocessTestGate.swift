@@ -2,9 +2,7 @@ import Testing
 
 /// Cross-suite mutual exclusion for tests that spawn a real OS subprocess.
 ///
-/// Part of the mutation-testing hardening program's CI-reliability follow-up
-/// (this project's internal mutation-testing-hardening progress log, not
-/// part of this public repo, P1 → C2).
+/// Part of the CI-reliability follow-up.
 /// Real public CI failures traced a recurring flake to real contention: a
 /// GitHub-hosted macOS runner (confirmed 3 vCPUs) running many real-
 /// subprocess-spawning tests concurrently — `xcodebuild`, `simctl`,

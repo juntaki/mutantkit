@@ -16,9 +16,7 @@ import Testing
 /// package graph from that at all, the retest failed before it ever ran a
 /// single test, and `MutationVerdictVerifier` correctly (but only because
 /// it fails safe) sank the confirmation to `.flaky` instead of crediting an
-/// unconfirmable kill. Root-caused in this project's internal
-/// product-completeness freeze-release-gate research (not part of this
-/// public repo).
+/// unconfirmable kill.
 ///
 /// This suite reproduces that exact scenario against a real toolchain — a
 /// real `swift build --build-tests` and a real `swift test --skip-build`

@@ -39,6 +39,10 @@ struct MutationEvidenceAssembler: Sendable {
     /// Opt-in: when set, every finalized mutant's raw observations are also
     /// written to the run's evidence archive (see `archiveEvidence`).
     var evidenceArchive: EvidenceArchiveWriter?
+    /// When termination has been forced, a mutant cut short mid-build is not
+    /// persisted anywhere: it must be re-run on resume, not remembered as an
+    /// infrastructure failure the interruption itself caused.
+    var stop: RunStopRequest?
 
     /// Whether the mutation reached the binary the tests ran against.
     ///
@@ -53,14 +57,14 @@ struct MutationEvidenceAssembler: Sendable {
             : .buildProductDiffersFromBaseline(mutantHash: mutantHash, baselineHash: baselineHash)
     }
 
-    /// ADR-0006 Stage 1: the single path from raw observations to a
+    /// The authoritative verdict pipeline: the single path from raw observations to a
     /// reportable result — `MutationObservations -> MutationVerdictVerifier
     /// -> MutationResult` projection. There is no other way for this file
     /// to produce a `MutationResult`: `prepare`'s `finished` closure,
     /// `finishAfterTest`, and every pre-classification infrastructure-
     /// failure early exit (sandbox creation, a build/test launch failure)
     /// all route through here — including the early exits, which PR B
-    /// (ADR-0005) deliberately left outside the verifier because there was
+    /// (the authoritative verdict pipeline) deliberately left outside the verifier because there was
     /// "no classification decision to sit in front of." That reasoning
     /// under-weighted the actual goal: the point was never "re-check a
     /// classifier's judgment," it is "nothing constructs a `MutationResult`
@@ -77,7 +81,7 @@ struct MutationEvidenceAssembler: Sendable {
     /// reportable result — every result-producing path in this file ends
     /// here, directly or through `finishAfterTest`/`infrastructureFailureResult`.
     ///
-    /// ADR-0006 Stage 1 (second review round): persistence now happens
+    /// The authoritative verdict pipeline (second review round): persistence now happens
     /// *here*, not at each of this function's ~20 call sites. Previously
     /// every call site did its own `checkpoints?.record(result)` right
     /// after obtaining `result` — one call per finalized mutant, but
@@ -131,6 +135,11 @@ struct MutationEvidenceAssembler: Sendable {
             preconditionFailure("finalize's own ref must always match projected's recomputation: \(error)")
         }
 
+        if stop?.isForced == true {
+            stop?.markDiscarded(point.id)
+            return result
+        }
+
         do {
             try await checkpoints?.record(
                 observations, durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,
@@ -158,7 +167,7 @@ struct MutationEvidenceAssembler: Sendable {
                 for: MutationResultCache.Key(mutationID: point.id, contextDigest: resultCacheDigest)
             )
         }
-        await progress?.recordCompletion()
+        await progress?.recordCompletion(outcome: result.outcome)
         return result
     }
 

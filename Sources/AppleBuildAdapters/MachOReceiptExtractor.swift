@@ -3,8 +3,8 @@ import MutationModel
 
 /// What went wrong reading a Mach-O binary for its build-receipt identity.
 ///
-/// Every case is a refusal, never a guess: `SchemataBuildReceipt` (ADR-0006
-/// Stage 2) exists so a mutation's proof chain can require an exact,
+/// Every case is a refusal, never a guess: `SchemataBuildReceipt` (the schemata proof chain)
+/// exists so a mutation's proof chain can require an exact,
 /// unambiguous per-image identity. A parser that silently accepted a
 /// truncated file or picked one of two conflicting `LC_UUID` commands would
 /// hand the verifier a value that looks trustworthy but is not.

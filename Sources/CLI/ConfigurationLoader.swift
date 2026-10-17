@@ -314,9 +314,9 @@ enum ConfigurationLoader {
         var lines = [
             "",
             "operators:",
-            "  # conservative = high-confidence only (use for pull requests)",
-            "  # default      = every operator enabled by default (nightly)",
-            "  # experimental = everything, including noisy operators (weekly)",
+            "  # default  = every operator enabled by default",
+            "  # stronger = default plus operators that cost more or carry more risk",
+            "  # all      = everything, including noisy operators",
             "  profile: default",
             "  disable: []",
             "",

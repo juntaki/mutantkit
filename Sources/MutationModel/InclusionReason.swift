@@ -1,8 +1,8 @@
 /// A machine-readable explanation of why one specific mutant was included in
 /// a budget-limited plan — the symmetric counterpart to `SkippedMutation`'s
-/// `detail` (which explains exclusions), closing ADR-0007 B.1 invariant 6.
+/// `detail` (which explains exclusions), closing a frozen budget-selection invariant.
 ///
-/// Per ADR-0007 B.7's frozen schema (Choice 4), this is deliberately
+/// Per the budget-selection schema contract's frozen schema, this is deliberately
 /// minimal: no field Budget Selection v2's allocator doesn't already
 /// compute, no timestamp, no raw score — a shard-count-independent,
 /// resume-stable, mechanically derivable record. Lives in `MutationModel`
@@ -10,7 +10,7 @@
 /// `MutationPlan` — which persists one of these per v2-selected mutant —
 /// cannot depend on `MutationPlanner` without inverting the module graph.
 ///
-/// Only produced under `budget.selection: v2` (ADR-0007 B.8/Choice 1); a
+/// Only produced under `budget.selection: v2` (the budget-selection compatibility rule); a
 /// v1 plan's `MutationPlan.budgetInclusionReasons` is always empty.
 public struct InclusionReason: Codable, Sendable, Hashable {
     public enum ReasonCode: String, Codable, Sendable {
@@ -26,7 +26,7 @@ public struct InclusionReason: Codable, Sendable, Hashable {
     public let mutationID: MutationID
     /// Drawn from the *terminal* allocation call's own phase split for this
     /// mutant's innermost stratum — never a parent stratum's split, even
-    /// when an inner dimension is configured (ADR-0007 B.7, normatively).
+    /// when an inner dimension is configured (the budget-selection schema contract, normatively).
     public let reasonCode: ReasonCode
     /// The stratum identity chain: one element for a single-level (outer
     /// only) allocation, `[outerStratumID, innerStratumID]` when an inner

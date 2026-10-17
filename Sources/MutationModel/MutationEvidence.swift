@@ -442,3 +442,42 @@ public struct MutationEvidence: Codable, Sendable, Hashable {
         sourceBeforeHash != sourceAfterHash && !sourceDiff.isEmpty
     }
 }
+
+public extension MutationEvidence {
+    /// A copy that also records the confirming run for a crash or timeout
+    /// confirmation, the way the isolated runner does: `confirmingBuildCommand`
+    /// is the build the confirmation ran against, `confirmingTestCommand` its
+    /// test invocation. The reproduction flags are written `false` here on
+    /// purpose; `verifierAuthored(for:confirmationChain:)` sets them from the
+    /// verifier's own folded chain, so a runner cannot claim a reproduction the
+    /// verifier did not accept. A kill retest has no such record and leaves the
+    /// evidence unchanged.
+    func addingRunnerConfirmations(
+        for requirement: ConfirmationRequirement, buildCommand: CommandRecord?, confirmingRun: TestRunResult
+    ) -> MutationEvidence {
+        var crash = crashConfirmation
+        var timeout = timeoutConfirmation
+        switch requirement {
+        case .confirmCrash:
+            crash = CrashConfirmation(
+                confirmingBuildCommand: buildCommand, confirmingTestCommand: confirmingRun.command,
+                crashedAgain: false, diagnosis: confirmingRun.diagnosis
+            )
+        case .confirmTimeout:
+            timeout = TimeoutConfirmation(
+                confirmingBuildCommand: buildCommand, confirmingTestCommand: confirmingRun.command,
+                timedOutAgain: false, diagnosis: confirmingRun.diagnosis
+            )
+        case .retestKilledMutant, .none:
+            break
+        }
+        return MutationEvidence(
+            sourceBeforeHash: sourceBeforeHash, sourceAfterHash: sourceAfterHash, sourceDiff: sourceDiff,
+            buildProductHash: buildProductHash, applicationEvidence: applicationEvidence,
+            buildCommand: self.buildCommand, testCommand: testCommand, resultArtifact: resultArtifact,
+            crashConfirmation: crash, timeoutConfirmation: timeout,
+            testAttempts: testAttempts, assertionKillConfirmation: assertionKillConfirmation,
+            assertionKillAttribution: assertionKillAttribution, confirmationChain: confirmationChain
+        )
+    }
+}
