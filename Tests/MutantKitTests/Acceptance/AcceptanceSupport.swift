@@ -377,7 +377,21 @@ struct AcceptanceRun {
         plannerFallbackReasonCounts: \(strategy?.plannerFallbackReasonCounts ?? [:])
         operationalIssues:
         \(issues.isEmpty ? "  (none)" : issues.joined(separator: "\n"))
+        console:
+        \(consoleEvidence)
         """
+    }
+
+    /// The lines of the plan and run console output that explain how the
+    /// schemata backend was used: the `!` warning lines (for instance the one
+    /// printed when target resolution or chunk planning fails and the run
+    /// degrades) and every line that mentions schemata. A whole-run
+    /// degradation can be absent from the report's own fields, so without
+    /// these the failure message cannot say why the backend degraded.
+    var consoleEvidence: String {
+        let lines = (planOutput + "\n" + runOutput).split(separator: "\n", omittingEmptySubsequences: true)
+            .filter { $0.hasPrefix("!") || $0.localizedCaseInsensitiveContains("schemata") }
+        return lines.isEmpty ? "  (no warning or schemata lines in the console output)" : lines.map { "  \($0)" }.joined(separator: "\n")
     }
 
     /// The same idea for the other way this bar fails: a baseline that did
@@ -386,7 +400,7 @@ struct AcceptanceRun {
     /// red" from "nothing ran at all", none of which a bare
     /// `#expect(baseline.passed)` failure prints.
     var baselineEvidence: String {
-        "baseline: \(report.baseline)\ndegradationReason: \(report.executionStrategy?.degradationReason ?? "nil")"
+        "baseline: \(report.baseline)\ndegradationReason: \(report.executionStrategy?.degradationReason ?? "nil")\nconsole:\n\(consoleEvidence)"
     }
 
     func cleanUp() {
