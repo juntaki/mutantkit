@@ -113,7 +113,7 @@
     "id" : "swift.core.nil-coalescing-fallback",
     "requiresSymbolResolution" : false,
     "schemata" : false,
-    "tier" : "all",
+    "tier" : "stronger",
     "version" : 1
   },
   {

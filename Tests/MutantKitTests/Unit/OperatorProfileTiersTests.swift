@@ -45,9 +45,32 @@ struct OperatorProfileTiersTests {
             .filter { !$0.requiresSymbolResolution }.map(\.id).sorted())
     }
 
-    @Test("stronger selects the same operators as default until operators carry an explicit tier")
-    func strongerEqualsDefaultInP1() throws {
-        #expect(try Self.selected(.stronger) == Self.selected(.default))
+    @Test("stronger selects the six default operators plus nil-coalescing-fallback")
+    func strongerIsDefaultPlusNilCoalescing() throws {
+        #expect(try Self.selected(.stronger) == Self.core([
+            "bool-literal-inversion", "logical-connector-replacement",
+            "relational-operator-replacement", "ternary-branch-swap",
+            "unary-not-removal", "return-value-replacement", "nil-coalescing-fallback"
+        ]))
+    }
+
+    @Test("every profile that admits an operator also admits it in the next tier")
+    func tiersAreNested() throws {
+        let default6 = Set(try Self.selected(.default))
+        let stronger = Set(try Self.selected(.stronger))
+        let all = Set(try Self.selected(.all))
+        #expect(default6.isSubset(of: stronger))
+        #expect(stronger.isSubset(of: all))
+        #expect(stronger.subtracting(default6) == Set(OperatorProfile.strongerAdditionalOperatorIDs))
+    }
+
+    @Test("side-effect-call-removal and the other non-default operators stay out of stronger")
+    func strongerExcludesTheRest() throws {
+        let stronger = Set(try Self.selected(.stronger))
+        for name in ["side-effect-call-removal", "else-clause-deletion", "arithmetic-operator-replacement",
+                     "assignment-operator-replacement", "range-boundary-replacement"] {
+            #expect(!stronger.contains("swift.core.\(name)"), "\(name)")
+        }
     }
 
     @Test("Only conservative imposes a per-site confidence floor")

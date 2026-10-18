@@ -201,7 +201,7 @@ struct OperatorCatalogSchemaV2Tests {
         #expect(single["schemaVersion"] as? Int == 2)
     }
 
-    @Test("Operators enabled by default report default; the rest report all; none report stronger yet")
+    @Test("Operators enabled by default report default; nil-coalescing-fallback reports stronger; the rest report all")
     func tierAssignment() throws {
         let byID = try Dictionary(uniqueKeysWithValues: Self.listJSON().map {
             (try #require($0["id"] as? String), $0["reachableProfile"] as? String)
@@ -210,9 +210,12 @@ struct OperatorCatalogSchemaV2Tests {
         let defaultIDs = Set(try MutationRegistry().resolve(OperatorSettings(profile: .default)).enabledOperators.map(\.descriptor.id))
         #expect(defaultIDs.count == 6)
         for (id, tier) in byID {
-            #expect(tier == (defaultIDs.contains(id) ? "default" : "all"), "\(id): \(String(describing: tier))")
+            let expected = defaultIDs.contains(id) ? "default"
+                : (OperatorProfile.strongerAdditionalOperatorIDs.contains(id) ? "stronger" : "all")
+            #expect(tier == expected, "\(id): \(String(describing: tier))")
         }
-        #expect(!byID.values.contains("stronger"))
+        #expect(byID["swift.core.nil-coalescing-fallback"] == "stronger")
+        #expect(byID.values.filter { $0 == "stronger" }.count == 1)
     }
 
     @Test("Legacy profile names never appear in the catalog JSON, list or single")

@@ -93,9 +93,9 @@ public struct OperatorDescriptor: Codable, Sendable, Hashable {
 public enum OperatorProfile: String, Codable, Sendable, CaseIterable {
     /// Nightly: everything marked `defaultEnabled`.
     case `default`
-    /// Useful but costlier or riskier operators. Until operators carry an
-    /// explicit tier this selects exactly what `default` does; it exists so
-    /// the name can be adopted before the evidence moves operators into it.
+    /// `default` plus the operators in `strongerAdditionalOperatorIDs`: useful
+    /// but costlier or less settled operators that the baseline evidence has
+    /// moved up from `all`.
     case stronger
     /// Everything, including operators known to be noisy.
     case all
@@ -113,14 +113,29 @@ public enum OperatorProfile: String, Codable, Sendable, CaseIterable {
     /// Accepted when reading but never written by `setup` or shown as a tier.
     public static let legacyCases: [OperatorProfile] = [.conservative, .experimental]
 
+    /// Operators `stronger` admits on top of `defaultEnabled`. Kept as a list
+    /// of IDs here, not a field on `OperatorDescriptor`: a descriptor is
+    /// serialized into every plan, so a tier field would change plan content
+    /// for operators whose behavior did not change.
+    ///
+    /// `swift.core.nil-coalescing-fallback`: Stage 1 operator-parity baseline
+    /// (8 corpora): 59 of 64 mutants scorable, no flaky, timed-out or
+    /// non-materialized mutants, and 25 of its 26 survivors were hand-judged
+    /// meaningful. It stays out of `default` and has no schemata lowerer.
+    public static let strongerAdditionalOperatorIDs: Set<String> = [
+        "swift.core.nil-coalescing-fallback"
+    ]
+
     public var isLegacy: Bool { Self.legacyCases.contains(self) }
 
     public func admits(_ descriptor: OperatorDescriptor) -> Bool {
         switch self {
         case .conservative:
             descriptor.defaultEnabled && descriptor.confidence == .high
-        case .default, .stronger:
+        case .default:
             descriptor.defaultEnabled
+        case .stronger:
+            descriptor.defaultEnabled || Self.strongerAdditionalOperatorIDs.contains(descriptor.id)
         case .all, .experimental:
             true
         }
