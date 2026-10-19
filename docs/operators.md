@@ -6,12 +6,12 @@ the short "what is enabled by default" summary.
 
 ## Profiles
 
-`operators.profile` takes `default`, `stronger` or `all`. `stronger` currently
-selects the same operators as `default`; it is the tier operators move into as
-they are evaluated. The v1.x values keep their meaning exactly and are still
+`operators.profile` takes `default`, `stronger` or `all`. `stronger` selects the
+six `default` operators plus `swift.core.nil-coalescing-fallback`; it is the tier
+operators move into as they are evaluated. The v1.x values keep their meaning exactly and are still
 accepted: `conservative` (only the four high-confidence operators, fewer than
 `default`) and `experimental` (everything, the same as `all`). The Profile
-column below uses the v1.x names.
+column below uses the v1.x names, except `stronger` for the one operator in that tier.
 
 An operator is enabled by default only when it corresponds to a documented real
 fault pattern, has positive and negative syntax fixtures, compiles reliably,
@@ -53,7 +53,7 @@ build (for example through `operators.disable`).
 | `swift.core.ternary-branch-swap` | conservative | high | `a ? b : c` → `a ? c : b` | Keeps the comments and trivia around the condition and both branches. Always compiles. | yes |
 | `swift.core.unary-not-removal` | default | medium | `!x` → `x` | A multi-`!` token (`!!x`) is not assumed to be stacked built-in negation, because it could be a user-defined operator. | yes |
 | `swift.core.return-value-replacement` | default | medium | an explicit `return` value → a neutral value | Only `return`s whose neutral replacement the syntax alone proves safe. Equivalent spellings (`0x0`, `nil as T?`, `Optional<T>.none`, an empty raw string, ...) are excluded by value, not by text. | yes |
-| `swift.core.nil-coalescing-fallback` | experimental | medium | `a ?? b` → `b` | A survivor means the suite never showed that a non-nil left-hand value is preferred over the fallback, not that the nil path is untested. Code with many defensive fallbacks can produce many low-value survivors. | no |
+| `swift.core.nil-coalescing-fallback` | stronger | medium | `a ?? b` → `b` | A survivor means the suite never showed that a non-nil left-hand value is preferred over the fallback, not that the nil path is untested. Code with many defensive fallbacks can produce many low-value survivors. | no |
 | `swift.core.arithmetic-operator-replacement` | experimental | medium | `+` ↔ `-`, `*` ↔ `/` | No symbol resolution, and Swift's arithmetic protocols do not guarantee a matched pair (`Numeric` has no `/`), so a mutant can fail to compile (reported as `unviable`). Mutants in loop and index arithmetic can hang. | no |
 | `swift.core.assignment-operator-replacement` | experimental | medium | `+=` ↔ `-=`, `*=` ↔ `/=` | Same compile-viability caveat as arithmetic replacement. | no |
 | `swift.core.else-clause-deletion` | experimental | experimental | `if a { X } else { Y }` → `if a { X }` | Only a trailing `else` or `else if` clause is removed, never the `if` branch or the condition. Sites where removing `else` would break exhaustiveness (an `if`/`switch` expression, the last statement of a non-`Void` body) are skipped. | no |

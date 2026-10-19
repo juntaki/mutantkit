@@ -43,11 +43,11 @@ import SwiftSyntax
 /// low-value "no test distinguishes non-nil-preferred-over-fallback" gap
 /// dozens of times over. A default-profile (nightly) run pays that budget
 /// and review cost on every run for very little new signal. Available via
-/// `experimental` or an explicit `enable` until survivor data from more
-/// corpora either justifies re-promotion or motivates a targeted exclusion
-/// heuristic — not yet added, since one corpus is too little evidence to
-/// risk overfitting an exclusion rule that could hide a genuinely valuable
-/// `??` mutant.
+/// `stronger`, `all` or an explicit `enable`. The Stage 1 operator-parity
+/// baseline across 8 corpora moved it from `all` to `stronger` (see
+/// `OperatorProfile.strongerAdditionalOperatorIDs`); it stays out of
+/// `default`, and no targeted exclusion heuristic has been added, since that
+/// could hide a genuinely valuable `??` mutant.
 public struct NilCoalescingFallbackOperator: MutationOperator {
     public static let descriptor = OperatorDescriptor(
         id: "swift.core.nil-coalescing-fallback",
