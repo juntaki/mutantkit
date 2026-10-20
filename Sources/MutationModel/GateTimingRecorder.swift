@@ -56,7 +56,13 @@ public actor GateTimingRecorder {
     /// Records one span running from `start` to now (or to `end`, when a
     /// caller captured it separately — e.g. to record a span that failed,
     /// where the caller already has an `end` from a `catch` block).
-    public func record(_ name: String, chunkID: String? = nil, mutationID: String? = nil, start: ContinuousClock.Instant, end: ContinuousClock.Instant? = nil) {
+    public func record(
+        _ name: String,
+        chunkID: String? = nil,
+        mutationID: String? = nil,
+        start: ContinuousClock.Instant,
+        end: ContinuousClock.Instant? = nil
+    ) {
         let finish = end ?? clock.now
         spans.append(Span(
             name: name,

@@ -100,7 +100,10 @@ struct SchemataRuntimeLibraryLocatorTests {
     }
 
     @Test(
-        "THE regression test for the reported bug: an .iOSSimulator request with only the flat macOS-shaped layout present must refuse, never silently fall back to the macOS archive"
+        """
+        THE regression test for the reported bug: an .iOSSimulator request with only the flat macOS-shaped layout \
+        present must refuse, never silently fall back to the macOS archive
+        """
     )
     func iOSSimulatorRefusesFlatMacOSLayout() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("locator-test-\(UUID().uuidString)")

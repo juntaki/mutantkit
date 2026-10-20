@@ -45,6 +45,19 @@ enum V2InvariantsAuditRegressionSupport {
         try String(contentsOf: sourcesRoot.appendingPathComponent(relativePath), encoding: .utf8)
     }
 
+    /// The whole `SchemataMutationRunner` implementation: the main declaration
+    /// file plus its `SchemataMutationRunner+<Topic>.swift` extension files,
+    /// concatenated in file-name order.
+    static func readSchemataMutationRunner() throws -> String {
+        let directory = sourcesRoot.appendingPathComponent("MutationExecution")
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("SchemataMutationRunner") && $0.hasSuffix(".swift") }
+            .sorted()
+        return try names
+            .map { try String(contentsOf: directory.appendingPathComponent($0), encoding: .utf8) }
+            .joined(separator: "\n")
+    }
+
     /// The lines of `text` from the first line containing `startMarker`
     /// (inclusive) up to — but not including — the next later line whose
     /// text starts with `endLinePrefix` (e.g. `"    func "`, a sibling

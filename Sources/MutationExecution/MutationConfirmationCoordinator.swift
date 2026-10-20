@@ -363,34 +363,13 @@ struct MutationConfirmationCoordinator: Sendable {
         }
 
         let sandbox: Sandbox
-        do {
-            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-timeout-confirm")
-        } catch {
-            return unconfirmed("No confirmation sandbox could be created: \(error)")
-        }
-
-        let sourceURL: URL
-        do {
-            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
-        } catch {
-            try? await workspaces.destroySandbox(sandbox)
-            return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
-        }
-
-        let applied: AppliedMutation
-        do {
-            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
-        } catch {
-            try? await workspaces.destroySandbox(sandbox)
-            return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
-        }
-
         let artifact: BuildArtifact
-        do {
-            artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
-        } catch {
-            try? await workspaces.destroySandbox(sandbox)
-            return unconfirmed("The confirmation rebuild did not build: \(error)")
+        switch await rebuildForTimeoutConfirmation(point) {
+        case let .success(rebuilt):
+            sandbox = rebuilt.sandbox
+            artifact = rebuilt.artifact
+        case let .failure(failure):
+            return unconfirmed(failure.diagnosis)
         }
 
         // F3 zero-base review, verdict-contamination audit: cloned here —
@@ -526,5 +505,57 @@ struct MutationConfirmationCoordinator: Sendable {
             request.point, artifact: relocatedArtifact, in: innerConfirmationSandbox, baseline: request.baseline,
             selectedTests: request.selectedTests, originalFailingTests: request.confirmingRun.summary?.failingTests
         )
+    }
+}
+
+extension MutationConfirmationCoordinator {
+    /// A fresh sandbox holding this mutant's re-applied edit and its
+    /// confirming rebuild — what `confirmTimeout` tests in.
+    struct TimeoutConfirmationRebuild {
+        let sandbox: Sandbox
+        let artifact: BuildArtifact
+    }
+
+    /// Why a confirming rebuild could not be produced; the sandbox, if one
+    /// was created, is already destroyed.
+    struct TimeoutConfirmationRebuildFailure: Error {
+        let diagnosis: String
+    }
+
+    /// Creates the confirmation sandbox, re-applies `point`'s mutation to it,
+    /// and builds it.
+    private func rebuildForTimeoutConfirmation(
+        _ point: MutationPoint
+    ) async -> Result<TimeoutConfirmationRebuild, TimeoutConfirmationRebuildFailure> {
+        let sandbox: Sandbox
+        do {
+            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-timeout-confirm")
+        } catch {
+            return .failure(.init(diagnosis: "No confirmation sandbox could be created: \(error)"))
+        }
+
+        let sourceURL: URL
+        do {
+            sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
+        } catch {
+            try? await workspaces.destroySandbox(sandbox)
+            return .failure(.init(diagnosis: "The confirmation sandbox's source could not be located: \(error)"))
+        }
+
+        let applied: AppliedMutation
+        do {
+            applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
+        } catch {
+            try? await workspaces.destroySandbox(sandbox)
+            return .failure(.init(diagnosis: "The mutation could not be re-applied for confirmation: \(error)"))
+        }
+
+        do {
+            let artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
+            return .success(TimeoutConfirmationRebuild(sandbox: sandbox, artifact: artifact))
+        } catch {
+            try? await workspaces.destroySandbox(sandbox)
+            return .failure(.init(diagnosis: "The confirmation rebuild did not build: \(error)"))
+        }
     }
 }

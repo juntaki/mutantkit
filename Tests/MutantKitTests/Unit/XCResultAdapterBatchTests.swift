@@ -208,7 +208,12 @@ struct XCResultAdapterBatchTests {
         // The real configurations are unaffected by the phantom one.
         #expect(outcomes["mut_pass"]?.status == .passed)
     }
+}
 
+/// `XCResultAdapter.classify(batch:tree:configurationTestIdentifiers:)`: unattributed failures and
+/// covering tests shared between configurations.
+@Suite("XCResultAdapter: batch attribution")
+struct XCResultAdapterBatchAttributionTests {
     /// Found against a real, much larger batch than this fixture's three
     /// configurations (a 940-mutant real-project run): a configuration can
     /// report a real, nonzero `failedTests` count while none of its own
@@ -471,7 +476,11 @@ struct XCResultAdapterBatchTests {
         #expect(outcomes["mut_b"]?.summary.failed == 0)
         #expect(outcomes["mut_b"]?.summary.failingTests.isEmpty == true)
     }
+}
 
+/// `XCResultAdapter.classify(batch:tree:configurationTestIdentifiers:)`: a native XCTest timeout inside a batch.
+@Suite("XCResultAdapter: batch native timeout")
+struct XCResultAdapterBatchNativeTimeoutTests {
     // MARK: - Native XCTest timeout inside a batch (Gate 3 Phase H2)
 
     /// The exact A/pass, B/native-timeout, C/pass shape confirmed for real

@@ -14,7 +14,13 @@ struct ReporterFailClosedTests {
     /// so the score is 50% and visibly so. The fail-closed variant uses the
     /// same plan and results but a red baseline, which forces integrity to
     /// fail and the score to be withheld.
-    private let passing: (report: RunReport, plan: MutationPlan, results: [MutationResult]) = {
+    private struct PassingRun {
+        let report: RunReport
+        let plan: MutationPlan
+        let results: [MutationResult]
+    }
+
+    private let passing: PassingRun = {
         let killed = anchoredPoint(file: "Sources/Killed.swift", source: killedSource)
         let survived = anchoredPoint(file: "Sources/Survived.swift", source: survivedSource)
         let plan = makePlan(mutations: [killed, survived])
@@ -23,7 +29,7 @@ struct ReporterFailClosedTests {
             makeResult(point: survived, outcome: .survived)
         ]
         let report = makeReport(plan: plan, results: results)
-        return (report, plan, results)
+        return PassingRun(report: report, plan: plan, results: results)
     }()
 
     private func failingReport() -> RunReport {

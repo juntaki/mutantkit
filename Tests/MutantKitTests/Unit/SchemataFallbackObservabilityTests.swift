@@ -298,7 +298,10 @@ struct SchemataFallbackObservabilityTests {
         ])
     }
 
-    @Test("The free-form diagnostic payload of unsupportedOperand/structuralConflict/platformUnsupported is dropped from the key — never a per-mutation-unique histogram entry")
+    @Test("""
+    The free-form diagnostic payload of unsupportedOperand/structuralConflict/platformUnsupported is dropped from the key \
+    — never a per-mutation-unique histogram entry
+    """)
     func freeFormDiagnosisTextNeverBecomesPartOfTheKey() {
         let counts = HybridExecutionEngine.plannerFallbackReasonCounts([
             .unsupportedOperand(reason: "first mutant's own diagnosis text"),
@@ -309,7 +312,10 @@ struct SchemataFallbackObservabilityTests {
         #expect(counts == ["unsupportedOperand": 2, "structuralConflict": 1, "platformUnsupported": 1])
     }
 
-    @Test("A ExecutionStrategyReport carrying both histograms round-trips through JSON, and a legacy report predating this field still decodes")
+    @Test("""
+    A ExecutionStrategyReport carrying both histograms round-trips through JSON, \
+    and a legacy report predating this field still decodes
+    """)
     func plannerFallbackReasonCountsIsSchemaAdditive() throws {
         let report = ExecutionStrategyReport(
             requested: .schemata, effectiveCount: 32, fallbackCount: 68,

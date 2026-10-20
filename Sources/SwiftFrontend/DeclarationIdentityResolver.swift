@@ -29,13 +29,19 @@ public enum DeclarationIdentityResolver {
         return DeclarationIdentity(path: components.reversed())
     }
 
-    private static func component(for node: Syntax) -> String? {
+    /// The declared name of a type-like declaration, or `nil` for any other node.
+    private static func typeName(of node: Syntax) -> String? {
         if let decl = node.as(StructDeclSyntax.self) { return decl.name.text }
         if let decl = node.as(ClassDeclSyntax.self) { return decl.name.text }
         if let decl = node.as(EnumDeclSyntax.self) { return decl.name.text }
         if let decl = node.as(ProtocolDeclSyntax.self) { return decl.name.text }
         if let decl = node.as(ActorDeclSyntax.self) { return decl.name.text }
         if let decl = node.as(MacroDeclSyntax.self) { return decl.name.text }
+        return nil
+    }
+
+    private static func component(for node: Syntax) -> String? {
+        if let name = typeName(of: node) { return name }
 
         if let decl = node.as(ExtensionDeclSyntax.self) {
             return "extension \(decl.extendedType.trimmedDescription)"

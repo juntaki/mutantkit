@@ -120,54 +120,64 @@ struct SimulatorPoolCloningTests {
     private static func pool(_ simctl: FakeSimctl) -> SimulatorPool {
         SimulatorPool(
             workingDirectory: workingDirectory,
-            processRunner: { _, arguments, _, _ in
-                if arguments.contains("list") {
-                    return Self.success(await simctl.listJSON())
-                }
-                if arguments.contains("clone") {
-                    // simctl clone <source> <name>.
-                    guard arguments.count >= 4 else { return Self.failure("malformed clone invocation") }
-                    let source = arguments[arguments.count - 2]
-                    let name = arguments[arguments.count - 1]
-                    switch await simctl.clone(source: source, name: name) {
-                    case let .succeeded(udid):
-                        return Self.success(udid)
-                    case .sourceBooted:
-                        return Self.failure(
-                            "An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=405):\n"
-                                + "Unable to clone device in current state: Booted"
-                        )
-                    case .otherFailure:
-                        return Self.failure("clone failed")
-                    }
-                }
-                if arguments.contains("delete") {
-                    guard let udid = arguments.last, await simctl.delete(udid: udid) else {
-                        return Self.failure("delete failed: unknown device")
-                    }
-                    return Self.success()
-                }
-                if arguments.contains("boot"), !arguments.contains("bootstatus") {
-                    guard let udid = arguments.last else { return Self.success() }
-                    if await simctl.failBootFor.contains(udid) {
-                        return Self.failure("boot failed")
-                    }
-                    await simctl.boot(udid: udid)
-                    return Self.success()
-                }
-                if arguments.contains("bootstatus") {
-                    guard let udid = arguments.last, await simctl.failBootFor.contains(udid) else {
-                        return Self.success()
-                    }
-                    return Self.failure("bootstatus failed")
-                }
-                if arguments.contains("shutdown") {
-                    if let udid = arguments.last { await simctl.shutdown(udid: udid) }
-                    return Self.success()
-                }
-                return Self.success()
-            }
+            processRunner: { _, arguments, _, _ in await respond(to: arguments, simctl: simctl) }
         )
+    }
+
+    private static func respond(to arguments: [String], simctl: FakeSimctl) async -> ProcessResult {
+        if arguments.contains("list") {
+            return success(await simctl.listJSON())
+        }
+        if arguments.contains("clone") {
+            return await respondToClone(arguments, simctl: simctl)
+        }
+        if arguments.contains("delete") {
+            guard let udid = arguments.last, await simctl.delete(udid: udid) else {
+                return failure("delete failed: unknown device")
+            }
+            return success()
+        }
+        if arguments.contains("boot"), !arguments.contains("bootstatus") {
+            return await respondToBoot(arguments, simctl: simctl)
+        }
+        if arguments.contains("bootstatus") {
+            guard let udid = arguments.last, await simctl.failBootFor.contains(udid) else {
+                return success()
+            }
+            return failure("bootstatus failed")
+        }
+        if arguments.contains("shutdown") {
+            if let udid = arguments.last { await simctl.shutdown(udid: udid) }
+            return success()
+        }
+        return success()
+    }
+
+    /// `simctl clone <source> <name>`.
+    private static func respondToClone(_ arguments: [String], simctl: FakeSimctl) async -> ProcessResult {
+        guard arguments.count >= 4 else { return failure("malformed clone invocation") }
+        let source = arguments[arguments.count - 2]
+        let name = arguments[arguments.count - 1]
+        switch await simctl.clone(source: source, name: name) {
+        case let .succeeded(udid):
+            return success(udid)
+        case .sourceBooted:
+            return failure(
+                "An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=405):\n"
+                    + "Unable to clone device in current state: Booted"
+            )
+        case .otherFailure:
+            return failure("clone failed")
+        }
+    }
+
+    private static func respondToBoot(_ arguments: [String], simctl: FakeSimctl) async -> ProcessResult {
+        guard let udid = arguments.last else { return success() }
+        if await simctl.failBootFor.contains(udid) {
+            return failure("boot failed")
+        }
+        await simctl.boot(udid: udid)
+        return success()
     }
 
     private static var baseDevice: SimulatorDevice {
@@ -347,7 +357,9 @@ struct SimulatorPoolCloningTests {
         let remaining = try await pool.availableDevices()
         #expect(remaining.map(\.udid) == [Self.baseUDID])
     }
+}
 
+extension SimulatorPoolCloningTests {
     // MARK: - releaseWorkerPool
 
     @Test("releaseWorkerPool deletes every clone but never the base device")

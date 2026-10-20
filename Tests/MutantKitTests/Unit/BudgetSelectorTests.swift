@@ -285,11 +285,16 @@ struct BudgetSelectorSubtypeStratificationTests {
     /// total. A budget that exhausts before every stratum contributes twice
     /// must still touch every stratum once.
     private static func fourStrataPoints() -> [MutationPoint] {
-        let strata: [(operatorID: String, originalText: String, replacementText: String)] = [
-            ("swift.core.relational-operator-replacement", ">", ">="),
-            ("swift.core.relational-operator-replacement", ">=", ">"),
-            ("swift.core.relational-operator-replacement", "<", "<="),
-            ("swift.core.bool-literal-inversion", "true", "false")
+        struct Stratum {
+            let operatorID: String
+            let originalText: String
+            let replacementText: String
+        }
+        let strata = [
+            Stratum(operatorID: "swift.core.relational-operator-replacement", originalText: ">", replacementText: ">="),
+            Stratum(operatorID: "swift.core.relational-operator-replacement", originalText: ">=", replacementText: ">"),
+            Stratum(operatorID: "swift.core.relational-operator-replacement", originalText: "<", replacementText: "<="),
+            Stratum(operatorID: "swift.core.bool-literal-inversion", originalText: "true", replacementText: "false")
         ]
         return strata.flatMap { stratum in
             (0 ..< 5).map { index in

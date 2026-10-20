@@ -53,14 +53,19 @@ struct MutationRunnerIncrementalBatchTestingTests {
         """.utf8).write(to: url)
     }
 
+    private struct RunOutcome {
+        let report: RunReport
+        let build: SpyIncrementalBuildAdapter
+        let test: SpyIncrementalBatchAdapter
+        let points: [MutationPoint]
+        let log: CallLog
+    }
+
     private func run(
         batchOutcomeOverrides: [Int: TestRunStatus] = [:],
         retestKilledMutants: Bool = false,
         failCloneForPointIndex: Int? = nil
-    ) async throws -> (
-        report: RunReport, build: SpyIncrementalBuildAdapter, test: SpyIncrementalBatchAdapter,
-        points: [MutationPoint], log: CallLog
-    ) {
+    ) async throws -> RunOutcome {
         try writeThreeMutantProject()
 
         let configuration = Configuration(
@@ -107,12 +112,15 @@ struct MutationRunnerIncrementalBatchTestingTests {
             workspaces: workspaces
         )
         let report = try await runner.run()
-        return (report, build, test, points, log)
+        return RunOutcome(report: report, build: build, test: test, points: points, log: log)
     }
 
     @Test("Mutants build in the same reused sandbox and are still tested through runBatch together")
     func sameSandboxBuildStillBatchesTests() async throws {
-        let (report, build, test, _, _) = try await run()
+        let outcome = try await run()
+        let report = outcome.report
+        let build = outcome.build
+        let test = outcome.test
 
         #expect(report.results.count == 3)
         #expect(report.integrity.violations.isEmpty)
@@ -132,7 +140,8 @@ struct MutationRunnerIncrementalBatchTestingTests {
         // per-mutant build-then-test interleaving, which would corrupt the
         // fixed, reused DerivedData path the whole design depends on (see
         // `WorkspaceManager.cloneProducts`'s doc comment).
-        let (_, _, _, _, log) = try await run()
+        let outcome = try await run()
+        let log = outcome.log
 
         let events = await log.events
         let lastBuildIndex = events.lastIndex { if case .build = $0 { true } else { false } }
@@ -144,9 +153,13 @@ struct MutationRunnerIncrementalBatchTestingTests {
 
     @Test("A killed mutant's confirmation retest runs against its clone, not the reused worker sandbox")
     func confirmKillRetestsAgainstTheCloneNotTheWorkerSandbox() async throws {
-        let (report, build, test, points, _) = try await run(
+        let outcome = try await run(
             batchOutcomeOverrides: [0: .failed, 1: .passed], retestKilledMutants: true
         )
+        let report = outcome.report
+        let build = outcome.build
+        let test = outcome.test
+        let points = outcome.points
 
         let killedResult = try #require(report.results.first { $0.id == points[0].id })
         #expect(killedResult.outcome == .killedByAssertion)
@@ -172,7 +185,9 @@ struct MutationRunnerIncrementalBatchTestingTests {
         // here is a real, freshly-observed pass, not a fabricated one —
         // same discipline `MutationRunnerBatchTestingTests`'s identical
         // fix already established for the non-incremental batch path.
-        let (report, _, _, points, _) = try await run(batchOutcomeOverrides: [0: .passed])
+        let outcome = try await run(batchOutcomeOverrides: [0: .passed])
+        let report = outcome.report
+        let points = outcome.points
 
         let sorted = report.results.sorted { $0.id < $1.id }
         let recovered = try #require(sorted.first { $0.id == points[1].id })
@@ -181,9 +196,11 @@ struct MutationRunnerIncrementalBatchTestingTests {
 
     @Test("A cloneProducts failure for one mutant doesn't stall or lose the rest of the worker's queue")
     func cloneFailureDoesNotStallTheWorker() async throws {
-        let (report, _, _, points, _) = try await run(
+        let outcome = try await run(
             batchOutcomeOverrides: [1: .passed], failCloneForPointIndex: 0
         )
+        let report = outcome.report
+        let points = outcome.points
 
         #expect(report.results.count == 3, "all three mutants must still be reported, none lost")
         let sorted = report.results.sorted { $0.id < $1.id }
@@ -219,7 +236,9 @@ struct MutationRunnerIncrementalBatchTestingTests {
     /// the fix it must be `true`.
     @Test("A worker's own persistent sandbox is still alive when the batch test call runs, and is destroyed only after")
     func workerSandboxOutlivesTheBatchTestCall() async throws {
-        let (_, build, _, _, log) = try await run(batchOutcomeOverrides: [0: .passed, 1: .passed])
+        let outcome = try await run(batchOutcomeOverrides: [0: .passed, 1: .passed])
+        let build = outcome.build
+        let log = outcome.log
 
         let workerSandbox = try #require(await build.buildMutantCalls.map(\.workspace).first)
         #expect(

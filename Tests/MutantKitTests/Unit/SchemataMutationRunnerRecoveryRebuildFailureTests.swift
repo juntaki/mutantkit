@@ -289,7 +289,8 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
                 projectRoot: Self.makeTempDir(prefix: "mutantkit-recovery-finalized-project"),
                 scratchRoot: Self.makeTempDir(prefix: "mutantkit-recovery-finalized-scratch")
             ),
-            timeouts: TimeoutSettings(baselineSeconds: 30), toolchainHash: "toolchain", buildArgumentsHash: "args", policy: Self.confirmsTimeoutsOnly
+            timeouts: TimeoutSettings(baselineSeconds: 30), toolchainHash: "toolchain", buildArgumentsHash: "args",
+            policy: Self.confirmsTimeoutsOnly
         )
         let result = try await runner.run()
 

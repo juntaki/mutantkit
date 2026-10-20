@@ -74,7 +74,9 @@ struct WorkerDeviceAffinityIsolatedOnlyRegressionTests {
 
     @Test("The isolated lease call passes a real preferredDevice; the schemata and batch lease calls pass nil")
     func onlyTheIsolatedLeaseCallHonorsPreferredDevice() throws {
-        let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter.swift")
+        let text = try ["XcodeBuildAdapter", "XcodeBuildAdapter+Schemata", "XcodeBuildAdapter+Batch"]
+            .map { try Support.read("AppleBuildAdapters/\($0).swift") }
+            .joined(separator: "\n")
         let preferredDeviceLines = text.components(separatedBy: .newlines).filter { $0.contains("preferredDevice:") }
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
 
@@ -115,7 +117,7 @@ struct UninstallOnlyOnLeasedPathRegressionTests {
     func nonLeasedTestDispatchNeverUninstalls() throws {
         let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter.swift")
         let body = try #require(
-            Support.span(in: text, startMarker: "private func runTestsOnDestination(", endLinePrefix: "    private func "),
+            Support.span(in: text, startMarker: "private func runTestsOnDestination(", endLinePrefix: "    func resultBundlePath("),
             "runTestsOnDestination(...) not found where this test expects it"
         )
         #expect(!body.contains("uninstallStaleApp("), "the non-leased test dispatch must never reach the uninstall choke point: \(body)")
@@ -123,9 +125,9 @@ struct UninstallOnlyOnLeasedPathRegressionTests {
 
     @Test("runSchemataTokenOnDestination (the non-leased schemata dispatch target) never calls uninstallStaleApp")
     func nonLeasedSchemataDispatchNeverUninstalls() throws {
-        let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter.swift")
+        let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter+Schemata.swift")
         let body = try #require(
-            Support.span(in: text, startMarker: "private func runSchemataTokenOnDestination(", endLinePrefix: "    private func "),
+            Support.span(in: text, startMarker: "private func runSchemataTokenOnDestination(", endLinePrefix: "}"),
             "runSchemataTokenOnDestination(...) not found where this test expects it"
         )
         #expect(
@@ -147,8 +149,9 @@ struct UninstallOnlyOnLeasedPathRegressionTests {
         #expect(runTestsBody.contains("guard destinationNeedsSimulatorLease else {"))
         #expect(runTestsBody.contains("return try await runTestsOnDestination("))
 
+        let schemataText = try Support.read("AppleBuildAdapters/XcodeBuildAdapter+Schemata.swift")
         let runSchemataTokenBody = try #require(
-            Support.span(in: text, startMarker: "func runSchemataToken(", endLinePrefix: "    func ")
+            Support.span(in: schemataText, startMarker: "func runSchemataToken(", endLinePrefix: "    func ")
         )
         #expect(runSchemataTokenBody.contains("guard destinationNeedsSimulatorLease else {"))
         #expect(runSchemataTokenBody.contains("return try await runSchemataTokenOnDestination("))
@@ -241,7 +244,7 @@ struct GateTimingRecorderSchemataOnlyRegressionTests {
 
     @Test("The schemata token call chain carries all four documented GateTimingRecorder marks, each in its own function")
     func schemataChokePointHasAllFourMarks() throws {
-        let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter.swift")
+        let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter+Schemata.swift")
 
         let uninstallBody = try #require(
             Support.span(
@@ -263,7 +266,7 @@ struct GateTimingRecorderSchemataOnlyRegressionTests {
 
         let destinationBody = try #require(
             Support.span(
-                in: text, startMarker: "private func runSchemataTokenOnDestination(", endLinePrefix: "    public func readCoverage("
+                in: text, startMarker: "private func runSchemataTokenOnDestination(", endLinePrefix: "}"
             ),
             "runSchemataTokenOnDestination(...) not found where this test expects it"
         )
@@ -286,7 +289,7 @@ struct GateTimingRecorderSchemataOnlyRegressionTests {
 
     @Test("The batch path (runBatchTests) carries no GateTimingRecorder marks")
     func batchPathHasNoMarks() throws {
-        let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter.swift")
+        let text = try Support.read("AppleBuildAdapters/XcodeBuildAdapter+Batch.swift")
         let body = try #require(Support.span(in: text, startMarker: "private func runBatchTests(", endLinePrefix: "    private func "))
         #expect(!body.contains("GateTimingRecorder"))
     }

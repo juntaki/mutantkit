@@ -45,11 +45,17 @@ struct MutationRunnerIncrementalBuildTests {
         try Data("struct A { var enabled = true; var visible = false }".utf8).write(to: url)
     }
 
+    private struct RunOutcome {
+        let report: RunReport
+        let build: SpyBuildAdapter
+        let test: SpyTestAdapter
+    }
+
     private func run(
         incrementalBuild: Bool,
         confirmCrashKills: Bool = false,
         mutantSequence: [TestRunStatus]
-    ) async throws -> (RunReport, SpyBuildAdapter, SpyTestAdapter) {
+    ) async throws -> RunOutcome {
         try writeTwoMutantProject()
 
         let configuration = Configuration(
@@ -76,12 +82,14 @@ struct MutationRunnerIncrementalBuildTests {
             workspaces: workspaces
         )
         let report = try await runner.run()
-        return (report, build, test)
+        return RunOutcome(report: report, build: build, test: test)
     }
 
     @Test("incrementalBuild off: each mutant still gets its own fresh sandbox")
     func nonIncrementalUsesAFreshSandboxPerMutant() async throws {
-        let (report, build, _) = try await run(incrementalBuild: false, mutantSequence: [.failed, .failed])
+        let outcome = try await run(incrementalBuild: false, mutantSequence: [.failed, .failed])
+        let report = outcome.report
+        let build = outcome.build
 
         #expect(report.results.count == 2)
         #expect(report.results.allSatisfy { $0.outcome == .killedByAssertion })
@@ -103,7 +111,9 @@ struct MutationRunnerIncrementalBuildTests {
 
     @Test("incrementalBuild on, one worker: both mutants build in the same reused sandbox")
     func incrementalBuildReusesOneSandboxAcrossMutants() async throws {
-        let (report, build, _) = try await run(incrementalBuild: true, mutantSequence: [.failed, .failed])
+        let outcome = try await run(incrementalBuild: true, mutantSequence: [.failed, .failed])
+        let report = outcome.report
+        let build = outcome.build
 
         #expect(report.results.count == 2)
         // Both scored normally — not `.notApplied` — which is the outcome a
@@ -118,7 +128,8 @@ struct MutationRunnerIncrementalBuildTests {
 
     @Test("incrementalBuild on: the baseline still builds in its own sandbox, not a worker's")
     func baselineSandboxIsNeverAWorkerSandbox() async throws {
-        let (_, build, _) = try await run(incrementalBuild: true, mutantSequence: [.failed, .failed])
+        let outcome = try await run(incrementalBuild: true, mutantSequence: [.failed, .failed])
+        let build = outcome.build
 
         let baselineWorkspace = try #require(await build.buildBaselineCalls.first)
         let mutantWorkspaces = Set(await build.buildMutantCalls.map(\.workspace))
@@ -127,9 +138,11 @@ struct MutationRunnerIncrementalBuildTests {
 
     @Test("incrementalBuild on, confirmCrashKills on: the confirmation rebuild still gets its own independent sandbox")
     func confirmationStaysIndependentUnderIncrementalBuild() async throws {
-        let (report, build, _) = try await run(
+        let outcome = try await run(
             incrementalBuild: true, confirmCrashKills: true, mutantSequence: [.crashed, .crashed, .crashed, .crashed]
         )
+        let report = outcome.report
+        let build = outcome.build
 
         #expect(report.results.count == 2)
         #expect(report.results.allSatisfy { $0.outcome == .killedByCrash })

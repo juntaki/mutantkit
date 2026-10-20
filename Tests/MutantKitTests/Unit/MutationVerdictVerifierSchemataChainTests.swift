@@ -9,50 +9,6 @@ import Testing
 // overall decision-table context.
 @Suite("Mutation verdict verifier: schemata chain verification")
 struct MutationVerdictVerifierSchemataChainTests {
-    private static let planID = "plan-A"
-    private static let workUnitID = "unit-1"
-
-    private func ref(for point: MutationPoint) -> PlannedMutationRef {
-        PlannedMutationRef.forPoint(point, planID: Self.planID, workUnitID: Self.workUnitID)
-    }
-
-    private func verify(
-        policy: MutationVerdictVerifier.VerdictVerificationPolicy = .permissive,
-        _ obs: (PlannedMutationRef) -> MutationObservations
-    ) throws -> VerifiedMutationRecord {
-        let point = try makeAnchoredPoint()
-        return MutationVerdictVerifier.verify(obs(ref(for: point)), policy: policy)
-    }
-
-    private func run(status: TestRunStatus, summary: TestOutcomeSummary? = nil, isBatchAttributedTimeout: Bool = false) -> TestRunResult {
-        TestRunResult(
-            status: status, summary: summary,
-            command: CommandRecord(executable: "/usr/bin/true", arguments: [], workingDirectory: "/tmp"),
-            resultArtifactPath: nil, diagnosis: "diag:\(status.rawValue)",
-            isBatchAttributedTimeout: isBatchAttributedTimeout
-        )
-    }
-
-    // MARK: - Schemata mode (the schemata proof chain: MutationVerdictVerifier.verifySchemataChain)
-
-    private var schemataObservation: SchemataExecutionObservation { makeConsistentSchemataObservation() }
-
-    private func schemataObservations(
-        status: TestRunStatus, observation: SchemataExecutionObservation, coverage: CoverageObservation? = nil
-    ) -> (PlannedMutationRef) -> MutationObservations {
-        { ref in
-            MutationObservations(
-                plannedMutation: ref,
-                sourceApplication: .applied(makeEvidence(buildProductHash: "h1", applicationEvidence: .schemata(observation))),
-                build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
-                coverage: coverage,
-                test: SingleTestObservation(
-                    run: run(status: status), applicationEvidence: .schemata(observation), execution: wholeSuiteExecution
-                )
-            )
-        }
-    }
-
     @Test("schemata survived: passed, the whole chain verifies uniquely")
     func schemataSurvived() throws {
         let record = try verify(schemataObservations(status: .passed, observation: schemataObservation))
@@ -95,37 +51,6 @@ struct MutationVerdictVerifierSchemataChainTests {
             coverage: CoverageObservation(mutatedLineWasExecuted: false, source: "xccov")
         ))
         #expect(record.outcome == .noCoverage)
-    }
-
-    // MARK: - Schemata chain: every stage's ambiguity/mismatch fails closed
-
-    private func schemataOutcome(_ observation: SchemataExecutionObservation, status: TestRunStatus = .passed) throws -> MutationOutcome {
-        try verify(schemataObservations(status: status, observation: observation)).outcome
-    }
-
-    /// One STARTUP (plus, if `includeHit`, a matching HIT) built from the
-    /// shared fixture values, with exactly one field overridden — the
-    /// compact building block every "wrong X never verifies" test below
-    /// shares.
-    private func startupObservation(
-        runID: RunID = schemataFixtureRunID, sourceEmbeddingID: SHA256Digest = schemataFixtureSourceEmbeddingID,
-        compilationUnitID: CompilationUnitID = schemataFixtureCompilationUnitID, token: SchemataSelectorToken = schemataFixtureToken,
-        processID: Int32 = 4242, imageUUID: ImageUUID = schemataFixtureImageUUID, includeHit: Bool = false
-    ) -> SchemataExecutionObservation {
-        var records: [RuntimeEventRecord] = [.startup(RuntimeStartupEvent(
-            runID: runID, sourceEmbeddingID: sourceEmbeddingID, compilationUnitID: compilationUnitID, token: token,
-            processID: processID, imageUUID: imageUUID, runtimeABIVersion: 3
-        ))]
-        if includeHit {
-            records.append(.hit(RuntimeHitEvent(
-                runID: runID, sourceEmbeddingID: sourceEmbeddingID, compilationUnitID: compilationUnitID, token: token,
-                processID: processID, sequence: 1, imageUUID: imageUUID, runtimeABIVersion: 3
-            )))
-        }
-        return SchemataExecutionObservation(
-            expectation: makeSchemataExpectation(), buildReceipt: makeSchemataFixtureReceipt(),
-            transcript: RuntimeTranscript(protocolVersion: 3, records: records)
-        )
     }
 
     @Test("wrong sourceEmbeddingID: a STARTUP/HIT pair for a different chunk build never verifies")
@@ -307,9 +232,12 @@ struct MutationVerdictVerifierSchemataChainTests {
         )
         #expect(try schemataOutcome(observation) == .infrastructureFailure)
     }
+}
 
-    // MARK: - schemataIsolatedFallbackReason (Group 2: no-HIT/no-STARTUP -> isolated fallback)
-
+/// Split from `MutationVerdictVerifierSchemataChainTests` by topic: the isolated-fallback decision for passing
+/// schemata runs that never proved a HIT or STARTUP.
+@Suite("Mutation verdict verifier: schemata isolated fallback")
+struct MutationVerdictVerifierSchemataFallbackTests {
     private func fallbackReason(
         _ observation: SchemataExecutionObservation, status: TestRunStatus = .passed
     ) throws -> MutationVerdictVerifier.SchemataIsolatedFallbackReason? {
@@ -451,4 +379,77 @@ struct MutationVerdictVerifierSchemataChainTests {
         #expect(try fallbackReason(observation) == nil)
         #expect(try schemataOutcome(observation) == .infrastructureFailure)
     }
+}
+
+// MARK: - Shared helpers
+
+private let schemataChainPlanID = "plan-A"
+private let schemataChainWorkUnitID = "unit-1"
+
+private func ref(for point: MutationPoint) -> PlannedMutationRef {
+    PlannedMutationRef.forPoint(point, planID: schemataChainPlanID, workUnitID: schemataChainWorkUnitID)
+}
+
+private func verify(
+    policy: MutationVerdictVerifier.VerdictVerificationPolicy = .permissive,
+    _ obs: (PlannedMutationRef) -> MutationObservations
+) throws -> VerifiedMutationRecord {
+    let point = try makeAnchoredPoint()
+    return MutationVerdictVerifier.verify(obs(ref(for: point)), policy: policy)
+}
+
+private func run(status: TestRunStatus, summary: TestOutcomeSummary? = nil, isBatchAttributedTimeout: Bool = false) -> TestRunResult {
+    TestRunResult(
+        status: status, summary: summary,
+        command: CommandRecord(executable: "/usr/bin/true", arguments: [], workingDirectory: "/tmp"),
+        resultArtifactPath: nil, diagnosis: "diag:\(status.rawValue)",
+        isBatchAttributedTimeout: isBatchAttributedTimeout
+    )
+}
+
+private var schemataObservation: SchemataExecutionObservation { makeConsistentSchemataObservation() }
+
+private func schemataObservations(
+    status: TestRunStatus, observation: SchemataExecutionObservation, coverage: CoverageObservation? = nil
+) -> (PlannedMutationRef) -> MutationObservations {
+    { ref in
+        MutationObservations(
+            plannedMutation: ref,
+            sourceApplication: .applied(makeEvidence(buildProductHash: "h1", applicationEvidence: .schemata(observation))),
+            build: BuildObservation(outcome: .succeeded(buildProductHash: "h1", command: nil)),
+            coverage: coverage,
+            test: SingleTestObservation(
+                run: run(status: status), applicationEvidence: .schemata(observation), execution: wholeSuiteExecution
+            )
+        )
+    }
+}
+
+private func schemataOutcome(_ observation: SchemataExecutionObservation, status: TestRunStatus = .passed) throws -> MutationOutcome {
+    try verify(schemataObservations(status: status, observation: observation)).outcome
+}
+
+/// One STARTUP (plus, if `includeHit`, a matching HIT) built from the
+/// shared fixture values, with exactly one field overridden — the
+/// compact building block every "wrong X never verifies" test below
+/// shares.
+private func startupObservation(
+    runID: RunID = schemataFixtureRunID, sourceEmbeddingID: SHA256Digest = schemataFixtureSourceEmbeddingID,
+    compilationUnitID: CompilationUnitID = schemataFixtureCompilationUnitID, token: SchemataSelectorToken = schemataFixtureToken,
+    processID: Int32 = 4242, imageUUID: ImageUUID = schemataFixtureImageUUID, includeHit: Bool = false
+) -> SchemataExecutionObservation {
+    var records: [RuntimeEventRecord] = [.startup(RuntimeStartupEvent(
+        runID: runID, sourceEmbeddingID: sourceEmbeddingID, compilationUnitID: compilationUnitID, token: token,
+        processID: processID, imageUUID: imageUUID, runtimeABIVersion: 3
+    ))]
+    if includeHit {
+        records.append(.hit(RuntimeHitEvent(
+            runID: runID, sourceEmbeddingID: sourceEmbeddingID, compilationUnitID: compilationUnitID, token: token,
+            processID: processID, sequence: 1, imageUUID: imageUUID, runtimeABIVersion: 3
+        )))
+    }
+    return SchemataExecutionObservation(
+        expectation: makeSchemataExpectation(), buildReceipt: makeSchemataFixtureReceipt(),
+        transcript: RuntimeTranscript(protocolVersion: 3, records: records)
+    )
 }

@@ -20,29 +20,12 @@ jobs:
   # (.swiftlint.yml / .swiftformat), which were tuned against this
   # codebase's actual style rather than stock defaults.
   #
-  # `swiftlint lint` runs `--strict --baseline .swiftlint-baseline.json`:
-  # 145 pre-existing violations by identity (rule + file + line), dominated
-  # by `line_length` (82, mostly long test lines) with the complexity/length
-  # remainder (function_body_length, type_body_length, cyclomatic_complexity,
-  # file_length, large_tuple) concentrated in, but not limited to, a few
-  # deliberately large orchestration files (see .swiftlint.yml's comments
-  # for the full breakdown, including which CLI command handlers are
-  # baselined too) — that aren't worth a risky structural refactor just to
-  # silence a linter. The baseline freezes exactly those pre-existing
-  # violations by identity (rule + file + line), so `--strict` still fails
-  # the build on any *new* violation anywhere, including a new one in an
-  # already-baselined file. Shrink the baseline over time by fixing an
-  # entry and regenerating with
-  # `swiftlint lint --write-baseline .swiftlint-baseline.json`; never grow
-  # it to paper over new debt.
+  # `swiftlint lint --strict` has no baseline: every violation fails the build.
   #
-  # SwiftLint is pinned to an exact version (matching the version the
-  # baseline was generated with) rather than `brew install`'s floating
-  # latest: baseline identity and violation detection are both
-  # SwiftLint-version-sensitive, so an unpinned upgrade could silently
-  # change what the baseline recognizes, in either direction. Bump
-  # SWIFTLINT_VERSION and regenerate .swiftlint-baseline.json together, as
-  # one deliberate change, not independently.
+  # SwiftLint is pinned to an exact version rather than `brew install`'s
+  # floating latest, because rule behavior differs between versions and an
+  # unpinned upgrade could change what is reported. Bump SWIFTLINT_VERSION as
+  # one deliberate change.
   lint:
     name: Lint & format check
     runs-on: xcode-27
@@ -108,7 +91,7 @@ jobs:
             exit 1
           fi
       - name: SwiftLint
-        run: swiftlint lint --strict --config .swiftlint.yml --baseline .swiftlint-baseline.json Sources Tests
+        run: swiftlint lint --strict --config .swiftlint.yml Sources Tests
       - name: SwiftFormat (check only)
         run: swiftformat --lint --config .swiftformat .
 
