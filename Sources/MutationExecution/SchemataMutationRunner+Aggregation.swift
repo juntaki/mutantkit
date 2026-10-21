@@ -1,4 +1,3 @@
-import Foundation
 import MutationModel
 import SwiftFrontend
 
@@ -15,7 +14,8 @@ extension SchemataMutationRunner {
         _ program: SchemataProgram, context: ChunkRunContext
     ) async -> ChunkTaskOutcome {
         let chunkResult = await runChunk(
-            program, context: context)
+            program, context: context
+        )
         // Deduped by `MutationID`, not one increment per outcome: a chunk
         // whose own hang-budget overflow retroactively flags an earlier,
         // already-`.verified` entry in the *same* chunk (§4(b)) returns two

@@ -195,9 +195,9 @@ struct BoolLiteralSchemataLowererTests {
     }
 
     @Test("""
-        Test E: pattern exclusion is ancestor-structural, not only direct-parent — an enum-associated-value \
-        pattern nests the literal several levels below its ExpressionPatternSyntax ancestor
-        """)
+    Test E: pattern exclusion is ancestor-structural, not only direct-parent — an enum-associated-value \
+    pattern nests the literal several levels below its ExpressionPatternSyntax ancestor
+    """)
     func caseE_patternExclusionIsAncestorStructuralNotJustDirectParent() throws {
         let source = """
         func f(_ x: Bool?) -> Int {
@@ -216,11 +216,10 @@ struct BoolLiteralSchemataLowererTests {
             return
         }
         #expect(reason == .patternPosition,
-            """
-            the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax \
-            itself — only an ancestor walk finds it
-            """
-        )
+                """
+                the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax \
+                itself — only an ancestor walk finds it
+                """)
     }
 
     @Test("Test F: the existing result-builder exclusion is unaffected by the new pattern-position check")

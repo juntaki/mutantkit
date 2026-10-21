@@ -575,10 +575,9 @@ extension MutationResultCacheTests {
         // forgotten" shape this mechanism must not depend on to stay sound.
         let newPoint = oldPoint.with(replacementText: "REPLACEMENT_TEXT_AFTER_THE_OPERATOR_BUG_FIX")
         #expect(oldPoint.id == newPoint.id,
-            """
-            an unbumped operatorVersion keeps the MutationID identical — that is what makes this adversarial
-            """
-        )
+                """
+                an unbumped operatorVersion keeps the MutationID identical — that is what makes this adversarial
+                """)
         #expect(oldPoint.replacementText != newPoint.replacementText, "the fixture must actually change what the operator now proposes")
 
         let cache = MutationResultCache(root: makeScratch(), policy: .permissive)

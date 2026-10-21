@@ -1,5 +1,3 @@
-import Foundation
-
 extension MutationVerdictVerifier {
     // MARK: - Classification (ported from ResultClassifier/SchemataResultClassifier)
 

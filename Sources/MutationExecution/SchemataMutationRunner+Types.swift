@@ -1,6 +1,4 @@
-import Foundation
 import MutationModel
-import SwiftFrontend
 
 /// Public result and event types of `SchemataMutationRunner`, plus the small
 /// value types its chunk scheduler passes around.

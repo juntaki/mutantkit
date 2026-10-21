@@ -1,7 +1,6 @@
 import Dispatch
 import Foundation
 import MutationModel
-import SwiftFrontend
 
 /// Executes a plan in isolated mode and reports what it can prove.
 ///

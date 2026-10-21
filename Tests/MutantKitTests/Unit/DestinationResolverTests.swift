@@ -256,10 +256,9 @@ struct DestinationResolverTests {
         )
 
         #expect(resolved.device?.udid == iphone.udid,
-            """
-            a numerically-newer tvOS runtime must never be selected as "latest" for an iOS request
-            """
-        )
+                """
+                a numerically-newer tvOS runtime must never be selected as "latest" for an iOS request
+                """)
     }
 
     /// The mirror of the test above, from the tvOS side: resolving an

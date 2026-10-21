@@ -1,5 +1,3 @@
-import Foundation
-
 /// The only place a `VerifiedMutationRecord` is constructed, and — as of
 /// The authoritative verdict pipeline — the only place a mutation's outcome is *decided*.
 ///

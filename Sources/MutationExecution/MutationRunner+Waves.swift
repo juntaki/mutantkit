@@ -1,7 +1,4 @@
-import Dispatch
-import Foundation
 import MutationModel
-import SwiftFrontend
 
 extension MutationRunner {
     /// Wave-based early kill: the batched replacement for
@@ -553,7 +550,6 @@ extension MutationRunner {
                 attempts: survivor.attempts + [attempt]
             ))
         }
-
     }
 
     /// Ground-truth verification for a mutant whose classification would

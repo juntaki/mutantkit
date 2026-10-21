@@ -1,7 +1,4 @@
-import Dispatch
-import Foundation
 import MutationModel
-import SwiftFrontend
 
 /// Thread-safe result and batch-stat accumulator for the pipelined
 /// incremental+batch path, where build workers and the test lane produce

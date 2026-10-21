@@ -1,7 +1,6 @@
 import Foundation
 import MutationExecution
 import MutationModel
-import SwiftCoreOperators
 import SwiftFrontend
 
 /// Builds and tests anything that needs `xcodebuild`: `.xcodeproj`,

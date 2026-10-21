@@ -1,7 +1,7 @@
 import Foundation
 import MutationExecution
 
-extension SimulatorPool {
+public extension SimulatorPool {
     // MARK: - Worker-pool cloning
 
     /// Every MutantKit-created clone's name carries this prefix, so a later
@@ -18,7 +18,7 @@ extension SimulatorPool {
     /// process is confirmed dead (safe to sweep). Without this, a global
     /// sweep by name prefix alone could delete a concurrently-running run's
     /// live devices — see `parseOwnerPID(fromCloneName:)`.
-    public static let clonePrefix = "mutantkit-clone-"
+    static let clonePrefix = "mutantkit-clone-"
 
     /// Builds the full label passed to `cloneDevice(from:label:)`, embedding
     /// this process's PID ahead of the caller-supplied, human-readable
@@ -34,7 +34,7 @@ extension SimulatorPool {
     /// does not parse (e.g. hand-created, or from a version of this tool
     /// predating PID-embedding) is treated as ownerless — `cleanupOrphanClones`
     /// still sweeps it, matching this method's only caller's own fallback.
-    static func parseOwnerPID(fromCloneName name: String) -> Int32? {
+    internal static func parseOwnerPID(fromCloneName name: String) -> Int32? {
         guard name.hasPrefix(clonePrefix) else { return nil }
         let remainder = name.dropFirst(clonePrefix.count)
         guard let dashIndex = remainder.firstIndex(of: "-") else { return nil }
@@ -50,7 +50,7 @@ extension SimulatorPool {
         return errno == EPERM
     }
 
-    public enum SimulatorCloneError: Error, CustomStringConvertible, Sendable {
+    enum SimulatorCloneError: Error, CustomStringConvertible, Sendable {
         case cloneFailed(source: String, detail: String)
         case cloneNotFound(udid: String)
         case bootFailed(udid: String, detail: String)
@@ -76,7 +76,7 @@ extension SimulatorPool {
     /// device call `prepare(udid:)` afterward, same as any other device —
     /// cloning and booting are kept as separate steps for the same reason
     /// leasing and booting already are (see this type's own doc comment).
-    public func cloneDevice(from source: SimulatorDevice, label: String) async throws -> SimulatorDevice {
+    func cloneDevice(from source: SimulatorDevice, label: String) async throws -> SimulatorDevice {
         let name = "\(Self.clonePrefix)\(label)"
         let result: ProcessResult
         do {
@@ -116,7 +116,7 @@ extension SimulatorPool {
     /// `releaseWorkerPool`/`cleanupOrphanClones`, the two call sites that
     /// actually enforce the `clonePrefix` naming convention before ever
     /// reaching here.
-    public func deleteDevice(udid: String) async throws {
+    func deleteDevice(udid: String) async throws {
         guard !leased.contains(udid) else {
             throw SimulatorPoolError.deviceIsLeased(udid: udid)
         }
@@ -170,7 +170,7 @@ extension SimulatorPool {
     /// method always attempts to reboot it before returning or throwing —
     /// a caller must never be left with a `base` this method quietly put
     /// to sleep and never woke back up.
-    public func provisionWorkerPool(base: SimulatorDevice, count: Int) async throws -> [SimulatorDevice] {
+    func provisionWorkerPool(base: SimulatorDevice, count: Int) async throws -> [SimulatorDevice] {
         guard count > 1 else { return [base] }
 
         // Defense-in-depth, matching `deleteDevice`'s own guard: this call
@@ -244,7 +244,7 @@ extension SimulatorPool {
     /// never thrown, since cleanup failing is not this run's own result to
     /// fail on.
     @discardableResult
-    public func releaseWorkerPool(_ devices: [SimulatorDevice], base: SimulatorDevice) async -> [String] {
+    func releaseWorkerPool(_ devices: [SimulatorDevice], base: SimulatorDevice) async -> [String] {
         var failures: [String] = []
         for device in devices where device.udid != base.udid {
             do {
@@ -288,7 +288,7 @@ extension SimulatorPool {
     /// coincidence is an accepted, vanishingly unlikely false positive, not
     /// a risk this type tries to eliminate further.
     @discardableResult
-    public func cleanupOrphanClones() async -> [String] {
+    func cleanupOrphanClones() async -> [String] {
         loaded = false
         try? await loadIfNeeded()
 

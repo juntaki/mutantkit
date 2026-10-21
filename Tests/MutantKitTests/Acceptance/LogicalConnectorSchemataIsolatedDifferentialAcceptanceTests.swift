@@ -202,9 +202,9 @@ struct LogicalConnectorSchemataIsolatedDifferentialAcceptanceTests {
     }
 
     @Test("""
-        The same MutationID, outcome, scorability, and failing tests come from both backends, for &&/|| over \
-        identifiers and self. member access
-        """)
+    The same MutationID, outcome, scorability, and failing tests come from both backends, for &&/|| over \
+    identifiers and self. member access
+    """)
     func isolatedAndSchemataAgree() async throws {
         let projectDirectory = try stagePackage()
         defer { try? FileManager.default.removeItem(at: projectDirectory) }

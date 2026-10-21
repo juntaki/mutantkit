@@ -30,7 +30,6 @@ import SwiftFrontend
 /// for whatever `SchemataChunkPlanner` embeds — everything else still
 /// routes to isolated fallback.
 public struct SchemataMutationRunner: Sendable {
-
     let planID: String
     /// A real per-shard identity — see `MutationRunner`'s own equivalent
     /// fix (the authoritative verdict pipeline): `planID` alone cannot distinguish two
@@ -399,5 +398,4 @@ public struct SchemataMutationRunner: Sendable {
             infrastructureFallbackEvents: infrastructureFallbackEvents
         )
     }
-
 }

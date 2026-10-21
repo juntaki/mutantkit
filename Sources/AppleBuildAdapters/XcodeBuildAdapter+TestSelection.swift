@@ -1,8 +1,6 @@
 import Foundation
 import MutationExecution
 import MutationModel
-import SwiftCoreOperators
-import SwiftFrontend
 
 // MARK: - Coverage
 

@@ -1,6 +1,5 @@
 import Foundation
 import MutationModel
-import SwiftFrontend
 
 /// Per-mutant primary runs for `SchemataMutationRunner`.
 extension SchemataMutationRunner {

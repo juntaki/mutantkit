@@ -281,9 +281,9 @@ struct SideEffectCallRemovalOperatorREDTests {
 /// SwiftLint's `type_body_length`; same suite in spirit.
 extension SideEffectCallRemovalOperatorREDTests {
     @Test("""
-        Rule 2 extension (codex finding): a trailing call to a custom, non-stdlib Never-returning function \
-        in a multi-statement non-Void body is not a candidate
-        """)
+    Rule 2 extension (codex finding): a trailing call to a custom, non-stdlib Never-returning function \
+    in a multi-statement non-Void body is not a candidate
+    """)
     func trailingCustomNeverReturningCallInMultiStatementBodyExcluded() throws {
         let source = """
         func customNeverHelper() -> Never {
@@ -506,9 +506,9 @@ extension SideEffectCallRemovalOperatorREDTests {
     }
 
     @Test("""
-        Scenario 17: the sole statement of a closure literal with no explicit return type, in a \
-        non-Void-inferred context, is not a candidate
-        """)
+    Scenario 17: the sole statement of a closure literal with no explicit return type, in a \
+    non-Void-inferred context, is not a candidate
+    """)
     func scenario17SoleStatementOfUnannotatedClosureInNonVoidContextExcluded() throws {
         let source = """
         func run() {

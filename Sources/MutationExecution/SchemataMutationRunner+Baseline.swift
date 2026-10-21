@@ -1,6 +1,5 @@
 import Foundation
 import MutationModel
-import SwiftFrontend
 
 /// Baseline establishment for `SchemataMutationRunner`.
 extension SchemataMutationRunner {
