@@ -32,6 +32,26 @@ struct XcodeWorkspaceTargetResolverTests {
         ])
     }
 
+    @Test("a group's scope ends with the group: later siblings resolve under it, then it is left")
+    func groupScopeEndsWithTheGroup() throws {
+        let xml = """
+        <Workspace version = "1.0">
+           <Group location = "group:Apps" name = "Apps">
+              <FileRef location = "group:One/One.xcodeproj"></FileRef>
+              <Group location = "group:Inner" name = "Inner">
+                 <FileRef location = "group:Two/Two.xcodeproj"></FileRef>
+              </Group>
+              <FileRef location = "group:Three/Three.xcodeproj"></FileRef>
+           </Group>
+           <FileRef location = "group:Four.xcodeproj"></FileRef>
+        </Workspace>
+        """
+        #expect(try members(xml) == [
+            "/work/Rx/Apps/One/One.xcodeproj", "/work/Rx/Apps/Inner/Two/Two.xcodeproj",
+            "/work/Rx/Apps/Three/Three.xcodeproj", "/work/Rx/Four.xcodeproj"
+        ])
+    }
+
     @Test("container:, absolute: and self: references; non-project files and duplicates are ignored")
     func otherReferenceKinds() throws {
         let xml = """

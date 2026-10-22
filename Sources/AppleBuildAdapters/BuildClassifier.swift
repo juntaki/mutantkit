@@ -148,13 +148,36 @@ enum BuildClassifier {
             )
         }
 
-        // Non-zero, but nothing identifies it as a compile error. Reporting this as
-        // `.compilationError` would invent a fact about the mutant; `.infrastructure`
-        // only claims that the build is unusable, which is all that is known.
+        return unattributedFailure(exitCode: result.exitCode, output: output, redacted: redacted, command: command)
+    }
+
+    /// Non-zero, but nothing identifies it as a compile error. Reporting this as
+    /// `.compilationError` would invent a fact about the mutant; `.infrastructure`
+    /// only claims that the build is unusable, which is all that is known.
+    /// The tool's own error line is quoted when there is one, because it is
+    /// usually the whole explanation (e.g. a local package SwiftPM cannot
+    /// reach); it never changes the kind.
+    private static func unattributedFailure(
+        exitCode: Int32, output: String, redacted: String, command: CommandRecord
+    ) -> BuildFailure {
+        if let toolError = firstToolError(in: output) {
+            return BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                The build exited with \(exitCode) before compilation; the build tool reported:
+
+                \(toolError)
+
+                The failure cannot be attributed to the mutated source.
+                """,
+                command: command,
+                output: redacted
+            )
+        }
         return BuildFailure(
             kind: .infrastructure,
             diagnosis: """
-            The build exited with \(result.exitCode) but produced no compiler \
+            The build exited with \(exitCode) but produced no compiler \
             diagnostic, so the failure cannot be attributed to the mutated source.
             """,
             command: command,
@@ -185,6 +208,24 @@ enum BuildClassifier {
         let lineEnd = output[matched.lowerBound...].firstIndex(of: "\n") ?? output.endIndex
         return String(output[matched.lowerBound ..< lineEnd])
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Longest tool error line quoted in a diagnosis, in characters.
+    static let toolErrorLengthLimit = 300
+
+    /// The first line that is a build tool's own error rather than a compiler
+    /// diagnostic: it starts with `error: `, so it carries no `file:line:col`.
+    /// Redacted, home-abbreviated and capped, because it lands verbatim in reports.
+    static func firstToolError(in output: String) -> String? {
+        guard let line = output.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
+            .first(where: { $0.hasPrefix("error: ") })
+        else { return nil }
+
+        let cleaned = OutputRedactor.abbreviatingHomeDirectory(
+            OutputRedactor.redact(String(line).trimmingCharacters(in: .whitespaces))
+        )
+        guard cleaned.count > toolErrorLengthLimit else { return cleaned }
+        return String(cleaned.prefix(toolErrorLengthLimit)) + "…"
     }
 
     /// Whether the output carries any compiler diagnostic at all.

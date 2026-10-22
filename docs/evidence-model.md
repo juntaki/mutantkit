@@ -12,15 +12,18 @@ A mutant is one small, deliberate change to your source — a `<` flipped to
 syntax alone proves is safe. MutantKit builds and tests a copy of your
 project with that one change applied, and classifies what happened:
 
-- **`survived`** — the tests ran, covered the mutated line, and all passed
-  anyway. This is the real finding: some test that exercises this code path
+- **`survived`** — the mutation reached the build product, the tests ran,
+  and all passed anyway. With coverage measured
+  (`execution.selectCoveringTests`) the mutated line was also executed by a
+  test; without it `noCoverage` is not evaluated, so a survivor may sit on
+  code no test executes. This is the real finding: some test that exercises this code path
   never actually asserted on the behavior the mutation changed. Line
   coverage cannot show this — a line can run inside a test with nothing
   checking what it produced. Precisely: **a test that still passes after a
   relevant behavior is mutated did not detect that particular fault** — it
   may well be exercising other properties of the same code perfectly well.
 - **`noCoverage`** — the tests passed, but nothing ran the mutated line at
-  all. A coverage gap, not a suite-quality gap, and scored separately
+  all. Reported only when coverage is measured. A coverage gap, not a suite-quality gap, and scored separately
   (below) rather than folded into `survived`.
 - **`notApplied` / `baselineMismatch` / `infrastructureFailure`** — the run
   itself has a problem (a stale source anchor, an unmutated baseline that

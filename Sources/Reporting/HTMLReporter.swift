@@ -194,7 +194,8 @@ public struct HTMLReporter: Reporter {
     /// grouping only avoids repeating the declaration header, it never hides
     /// a member's own change behind a single representative.
     private func survivorsHTML(_ report: RunReport) -> String {
-        let rows = SurvivorPresentationBuilder.build(from: report).rows
+        let presentation = SurvivorPresentationBuilder.build(from: report)
+        let rows = presentation.rows
         guard !rows.isEmpty else {
             return """
             <section class="card">
@@ -218,7 +219,8 @@ public struct HTMLReporter: Reporter {
             for row in notCovered { html += rowHTML(row) }
         }
         if !survived.isEmpty {
-            html += "\n  <h3>Covered but survived — \(survived.aggregate.totalMutants) mutant(s)</h3>"
+            html += "\n  <h3>\(presentation.survivedHeading(mutants: survived.aggregate.totalMutants))</h3>"
+            if !presentation.coverageMeasured { html += "\n  <p>\(SurvivorPresentation.coverageNotMeasuredNote)</p>" }
             for row in survived { html += rowHTML(row) }
         }
 

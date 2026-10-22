@@ -244,22 +244,27 @@ enum MachOCodeHash {
     /// symbol-stub/lazy-pointer/non-lazy-pointer sections it declares.
     /// Splits `semanticIdentity`'s per-segment work into its own function so
     /// that function's own branch count stays reviewable.
-    private static func symbolTableLocation(in data: Data, commandCursor: Int) -> SymbolTableLocation? {
+    /// The offsets `LC_SYMTAB` and `LC_DYSYMTAB` carry are relative to the start of their own
+    /// slice, so inside a universal binary each is shifted by `sliceOffset` into file offsets.
+    private static func symbolTableLocation(in data: Data, sliceOffset: Int, commandCursor: Int) -> SymbolTableLocation? {
         guard let symoff = data.readUInt32(at: commandCursor + 8, bigEndian: false),
               let nsyms = data.readUInt32(at: commandCursor + 12, bigEndian: false),
               let stroff = data.readUInt32(at: commandCursor + 16, bigEndian: false),
               let strsize = data.readUInt32(at: commandCursor + 20, bigEndian: false)
         else { return nil }
         return SymbolTableLocation(
-            symbolOffset: Int(symoff), symbolCount: Int(nsyms), stringOffset: Int(stroff), stringSize: Int(strsize)
+            symbolOffset: sliceOffset + Int(symoff), symbolCount: Int(nsyms),
+            stringOffset: sliceOffset + Int(stroff), stringSize: Int(strsize)
         )
     }
 
-    private static func indirectSymbolTableLocation(in data: Data, commandCursor: Int) -> IndirectSymbolTableLocation? {
+    private static func indirectSymbolTableLocation(
+        in data: Data, sliceOffset: Int, commandCursor: Int
+    ) -> IndirectSymbolTableLocation? {
         guard let indirectOffset = data.readUInt32(at: commandCursor + 56, bigEndian: false),
               let indirectCount = data.readUInt32(at: commandCursor + 60, bigEndian: false)
         else { return nil }
-        return IndirectSymbolTableLocation(offset: Int(indirectOffset), count: Int(indirectCount))
+        return IndirectSymbolTableLocation(offset: sliceOffset + Int(indirectOffset), count: Int(indirectCount))
     }
 
     private static func segmentContribution(
@@ -423,11 +428,13 @@ enum MachOCodeHash {
                 result.linkageSections.append(contentsOf: contribution.linkageSections)
 
             case symtabCommand:
-                guard let location = symbolTableLocation(in: data, commandCursor: cursor) else { return nil }
+                guard let location = symbolTableLocation(in: data, sliceOffset: sliceOffset, commandCursor: cursor)
+                else { return nil }
                 result.symtab = location
 
             case dysymtabCommand:
-                guard let location = indirectSymbolTableLocation(in: data, commandCursor: cursor) else { return nil }
+                guard let location = indirectSymbolTableLocation(in: data, sliceOffset: sliceOffset, commandCursor: cursor)
+                else { return nil }
                 result.dysymtab = location
 
             default:

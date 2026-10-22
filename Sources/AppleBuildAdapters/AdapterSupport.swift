@@ -112,6 +112,14 @@ enum OutputRedactor {
         }
     }
 
+    /// Replaces the current user's home directory with `~`, so a quoted path
+    /// does not carry the account name into a report.
+    static func abbreviatingHomeDirectory(_ text: String, home: String = NSHomeDirectory()) -> String {
+        let trimmedHome = home.hasSuffix("/") ? String(home.dropLast()) : home
+        guard trimmedHome.count > 1 else { return text }
+        return text.replacingOccurrences(of: trimmedHome + "/", with: "~/")
+    }
+
     /// Redacts, then keeps the tail.
     ///
     /// The tail, because a compiler's first error is followed by hundreds of

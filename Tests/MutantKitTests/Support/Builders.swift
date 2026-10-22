@@ -71,14 +71,15 @@ func makeTestSummary(total: Int = 10, passed: Int = 10, failed: Int = 0) -> Test
     )
 }
 
-func makeBaseline(passed: Bool = true) -> BaselineRecord {
+func makeBaseline(passed: Bool = true, coverageMeasured: Bool = false) -> BaselineRecord {
     BaselineRecord(
         passed: passed,
         testSummary: passed ? makeTestSummary() : makeTestSummary(passed: 9, failed: 1),
         durationSeconds: 12,
         buildProductHash: ContentHash.of("baseline-binary"),
         buildCommand: nil,
-        testCommand: nil
+        testCommand: nil,
+        profilingDurationSeconds: coverageMeasured ? 3 : nil
     )
 }
 
@@ -461,7 +462,8 @@ func makeLedger(_ results: [MutationResult]) -> ResultLedger<MutationResult> {
 func makeReport(
     plan: MutationPlan,
     results: [MutationResult],
-    baselinePassed: Bool = true
+    baselinePassed: Bool = true,
+    coverageMeasured: Bool = false
 ) -> RunReport {
     RunReport(
         planID: plan.planID,
@@ -469,7 +471,7 @@ func makeReport(
         finishedAt: Date(timeIntervalSince1970: 1_700_000_100),
         projectRoot: plan.projectRoot,
         toolchain: makeToolchain(),
-        baseline: makeBaseline(passed: baselinePassed),
+        baseline: makeBaseline(passed: baselinePassed, coverageMeasured: coverageMeasured),
         ledger: makeLedger(results),
         integrity: IntegrityChecker.check(plan: plan, ledger: makeLedger(results), baselinePassed: baselinePassed)
     )

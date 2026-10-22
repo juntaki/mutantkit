@@ -132,6 +132,9 @@ public struct LogicalConnectorReplacementSchemataLowerer: SchemataLowerer {
             guard let base = member.base else { return nil }
             return Self.unsafetyReason(for: base)
         }
+        if ComposedBooleanOperand.isComposed(unwrapped) {
+            return ComposedBooleanOperand.unsafetyReason(for: unwrapped, recurse: Self.unsafetyReason(for:))
+        }
         return Self.unsafeOperandReason(for: unwrapped)
     }
 

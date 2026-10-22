@@ -173,7 +173,7 @@ struct CrossReporterSurvivorPresentationTests {
             makeResult(point: notCovered, outcome: .noCoverage),
             makeResult(point: covered, outcome: .survived, evidence: evidenceWithNarrowedTests(["Tests/testB"], diff: "diff"))
         ]
-        let report = makeReport(plan: makePlan(mutations: [notCovered, covered]), results: results)
+        let report = makeReport(plan: makePlan(mutations: [notCovered, covered]), results: results, coverageMeasured: true)
 
         let ci = try CISummaryReporter().render(report)
         let console = try ConsoleReporter(colorEnabled: false).render(report)
@@ -186,5 +186,23 @@ struct CrossReporterSurvivorPresentationTests {
         #expect(console.contains("Covered but survived"))
         #expect(html.contains("Not covered"))
         #expect(html.contains("Covered but survived"))
+    }
+
+    /// Without a coverage measurement nothing can be classified `.noCoverage`, so a survivor may
+    /// sit on code no test executes. Console and HTML must not call it "covered", and must say why.
+    @Test("Without a coverage measurement the survivors are not called covered, and the report says why")
+    func survivorsAreNotCalledCoveredWithoutCoverage() throws {
+        let point = try makeAnchoredPoint(file: "Sources/B.swift")
+        let results = [makeResult(point: point, outcome: .survived, evidence: evidenceWithNarrowedTests(["Tests/testB"], diff: "diff"))]
+        let report = makeReport(plan: makePlan(mutations: [point]), results: results, coverageMeasured: false)
+
+        let console = try ConsoleReporter(colorEnabled: false).render(report)
+        let html = try HTMLReporter().render(report)
+
+        for output in [console, html] {
+            #expect(!output.contains("Covered but survived"))
+            #expect(output.contains("Survived, coverage not measured"))
+            #expect(output.contains("execution.selectCoveringTests"))
+        }
     }
 }

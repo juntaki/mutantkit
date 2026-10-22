@@ -623,6 +623,7 @@ extension SwiftPackageMacOSAdapter: CoverageMeasuring {
         // `workspace` prefix (not `resolvedWorkspace(workspace)` or the
         // caller's `projectRoot`) keeps whatever `project.path` prefix the
         // plan itself expects.
+        await SwiftPMTestBundleCoverageExport.refresh(productsDirectory: buildDir, codecovDirectory: codecovDir)
         return SourceCoverageReader.read(directory: codecovDir, projectRoot: workspace)
     }
 }
@@ -758,17 +759,21 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         // be proven are all `PerTestCoverageAttribution.attribute`'s -- see
         // its doc comment. What is adapter-specific, and all that is left
         // here, is how one test is run and how its coverage is read back.
-        return await PerTestCoverageAttribution.attribute(
-            tests: tests, source: "swiftpm-codecov-per-test",
-            progress: ProgressReporter(total: tests.count, label: "per-test coverage")
-        ) { test, _ in
+        let granularity = configuration.execution.coverageGranularity
+        let suiteSizes = Self.suiteSizes(of: tests)
+        let attempts = 2
+        let suiteMemo = SuiteCoverageMemo()
+
+        // One test, or (`coverageGranularity: suite`) one whole suite, run in
+        // isolation with coverage; the coverage read back is what gets credited.
+        func measure(_ unit: CoverageUnit) async -> CoverageMap? {
             guard let run = try? await runTests(
                 in: workspace,
                 timeoutSeconds: timeoutSeconds,
                 enableCoverage: true,
                 skipBuild: coverageArtifactBuilt,
-                testFilters: [test.swiftTestFilterArgument],
-                reliableExpectedTestCount: test.isSwiftTestingShaped ? 1 : nil
+                testFilters: [unit.filter],
+                reliableExpectedTestCount: unit.expectedTestCount
             ) else { return nil }
             // `runTests`'s xunit report path is unique per invocation (never
             // reused by a later iteration), and this loop -- unlike a real
@@ -777,11 +782,43 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
             // project with many discovered tests would otherwise accumulate
             // one report pair per test, for the lifetime of this whole
             // method's loop, inside one sandbox.
+            let skippedCount = run.resultArtifactPath.flatMap { XUnitParser.swiftTestingSkippedCount(forRequestedOutput: $0) }
             Self.removeXUnitReports(at: run.resultArtifactPath)
+            // Tests that ran as skipped execute nothing, here and in every mutant run under the same
+            // configuration, so they cover nothing. Leaving them unattributed would put them in every
+            // mutant's selection, where they can never run and fail the shortfall check.
+            if run.status == .infrastructureFailure,
+               Self.allSelectedTestsSkipped(skippedCount: skippedCount, expectedTestCount: unit.expectedTestCount) {
+                return CoverageMap(executedLines: [:], source: "swiftpm-codecov-per-test")
+            }
             guard run.status == .passed else { return nil }
 
             guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { return nil }
             coverageArtifactBuilt = true
+            return map
+        }
+
+        return await PerTestCoverageAttribution.attribute(
+            tests: tests, source: "swiftpm-codecov-per-test", attempts: attempts,
+            progress: ProgressReporter(total: tests.count, label: "per-test coverage")
+        ) { test, attemptNumber in
+            let unit = Self.coverageUnit(for: test, granularity: granularity, suiteSizes: suiteSizes)
+            guard let suiteKey = unit.suiteKey else { return await measure(unit) }
+
+            // A suite is run once and its outcome shared by every test in it.
+            // A failure is only remembered after the last attempt, so the
+            // retry policy still gets its second try at the suite.
+            switch suiteMemo.outcome(for: suiteKey) {
+            case let .measured(map): return map
+            case .failed: return nil
+            case nil: break
+            }
+            let map = await measure(unit)
+            if let map {
+                suiteMemo.record(.measured(map), for: suiteKey)
+            } else if attemptNumber >= attempts {
+                suiteMemo.record(.failed, for: suiteKey)
+            }
             return map
         }
     }
@@ -855,7 +892,7 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
     }
 }
 
-private extension TestIdentifier {
+extension TestIdentifier {
     /// The exact string `swift test --filter` accepts for exactly this one
     /// test: an anchored regex over the same `<target>.<Class>/<method>`
     /// shape `swift test list` itself emits (see

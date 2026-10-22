@@ -185,7 +185,8 @@ public struct ConsoleReporter: Reporter {
     /// never hides a member's own change the way an earlier version's
     /// single-representative-per-row design did.
     private func survivorSection(_ report: RunReport) -> String {
-        let rows = SurvivorPresentationBuilder.build(from: report).rows
+        let presentation = SurvivorPresentationBuilder.build(from: report)
+        let rows = presentation.rows
 
         guard !rows.isEmpty else {
             // "Every mutant that ran was killed" is vacuous when none ran (a red
@@ -211,7 +212,8 @@ public struct ConsoleReporter: Reporter {
         }
         if !survived.isEmpty {
             lines.append("")
-            lines.append(palette.bold("Covered but survived — \(survived.aggregate.totalMutants) mutant(s)"))
+            lines.append(palette.bold(presentation.survivedHeading(mutants: survived.aggregate.totalMutants)))
+            if !presentation.coverageMeasured { lines.append("  \(SurvivorPresentation.coverageNotMeasuredNote)") }
             for row in survived { lines.append(contentsOf: renderRow(row)) }
         }
         return lines.joined(separator: "\n")

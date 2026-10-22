@@ -63,7 +63,8 @@ struct ConfigurationSchemaParityTests {
             ),
             diffBase: "origin/main", measureCoverage: true, retestKilledMutants: true,
             confirmCrashKills: true, confirmTimedOutMutants: true, selectCoveringTests: true,
-            incrementalBuild: true, earlyAbortSelectedTests: true, testBatchSize: 8
+            incrementalBuild: true, earlyAbortSelectedTests: true, testBatchSize: 8,
+            coverageGranularity: .suite
         )
         #expect(try encodedKeys(execution) == section("execution", in: schema))
 
