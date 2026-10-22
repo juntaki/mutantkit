@@ -49,7 +49,9 @@ struct SchemataEligibilityClassifierTests {
     @Test("An invalid plan (duplicate MutationID) is rejected, not silently accepted by a permissive decoder")
     func invalidPlanRejected() async throws {
         let source = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
-        let points = try discoverPoints(source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
+        let points = try discoverPoints(
+            source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
         let point = try #require(points.first)
         // Two distinct plan entries sharing one MutationID — exactly what
         // `IntegrityChecker.validatePlan`'s `.duplicateMutationID` case
@@ -76,7 +78,9 @@ struct SchemataEligibilityClassifierTests {
     @Test("A source file whose on-disk content no longer matches the plan's recorded hash is a run-level failure")
     func sourceDriftRejected() async throws {
         let originalSource = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
-        let points = try discoverPoints(originalSource, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
+        let points = try discoverPoints(
+            originalSource, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
         let mutationPlan = makePlan(mutations: points, sourceFileHashes: ["Widget.swift": ContentHash.of(originalSource)])
         let planData = try MutationPlan.encoder().encode(mutationPlan)
 
@@ -102,7 +106,9 @@ struct SchemataEligibilityClassifierTests {
     @Test("A mutation candidate file with no entry in sourceFileHashes is a run-level failure, not silently unverified")
     func missingSourceHashRejected() async throws {
         let source = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
-        let points = try discoverPoints(source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
+        let points = try discoverPoints(
+            source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
         // sourceFileHashes deliberately omits "Widget.swift" — legal under
         // MutationPlan.decode's own integrity check, which does not require
         // full coverage there.
@@ -126,7 +132,9 @@ struct SchemataEligibilityClassifierTests {
     @Test("A target-resolution failure surfaces as a thrown error before any classification is produced")
     func targetResolutionFailureSurfaces() async throws {
         let source = "func add(_ a: Int, _ b: Int) -> Int { a + b }\n"
-        let points = try discoverPoints(source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift")
+        let points = try discoverPoints(
+            source, operatorID: ArithmeticOperatorReplacementOperator.descriptor.id, relativePath: "Widget.swift"
+        )
         let mutationPlan = makePlan(mutations: points, sourceFileHashes: ["Widget.swift": ContentHash.of(source)])
         let planData = try MutationPlan.encoder().encode(mutationPlan)
         let root = try makeProjectRoot(files: ["Widget.swift": source])

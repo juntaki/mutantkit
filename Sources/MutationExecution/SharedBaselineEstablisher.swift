@@ -25,14 +25,30 @@ public enum SharedBaselineEstablisher {
         case failed(record: BaselineRecord, diagnosis: String)
     }
 
+    /// The per-test coverage cache the baseline pass may load from or store
+    /// into, and the key that decides whether a prior measurement matches —
+    /// bundled so `establish` stays within swiftlint's parameter-count limit.
+    /// Both are optional independently, exactly as the runners' own
+    /// `coverageCache`/`coverageCacheKey` pair is.
+    public struct CoverageCacheSelection: Sendable {
+        public let cache: CoverageProfileCache?
+        public let key: CoverageProfileCache.Key?
+
+        public static let none = CoverageCacheSelection(cache: nil, key: nil)
+
+        public init(cache: CoverageProfileCache?, key: CoverageProfileCache.Key?) {
+            self.cache = cache
+            self.key = key
+        }
+    }
+
     public static func establish(
         build: any BuildAdapter,
         test: any TestAdapter,
         in sandbox: URL,
         configuration: Configuration,
         projectRoot: URL,
-        coverageCache: CoverageProfileCache?,
-        coverageCacheKey: CoverageProfileCache.Key?,
+        coverageCache: CoverageCacheSelection = .none,
         operationalIssues: OperationalIssueLog? = nil,
         workspaces: WorkspaceManager? = nil
     ) async -> Outcome {
@@ -95,7 +111,7 @@ public enum SharedBaselineEstablisher {
         // `BaselineCoverageMeasurement`'s own doc comment for why this
         // particular step must not have two copies.
         let measured = await BaselineCoverageMeasurement(
-            configuration: configuration, cache: coverageCache, cacheKey: coverageCacheKey,
+            configuration: configuration, cache: coverageCache.cache, cacheKey: coverageCache.key,
             operationalIssues: operationalIssues
         ).measure(
             with: test, against: artifact, in: sandbox, projectRoot: projectRoot,

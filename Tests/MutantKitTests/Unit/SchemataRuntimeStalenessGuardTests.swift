@@ -47,7 +47,9 @@ struct SchemataRuntimeStalenessGuardTests {
 
         let archive = root.appendingPathComponent("lib.a")
         try makeFile(archive, modified: Date(timeIntervalSince1970: 1000))
-        let header = try makeFile(source.appendingPathComponent("include/mutantkit_protocol_v3.h"), modified: Date(timeIntervalSince1970: 2000))
+        let header = try makeFile(
+            source.appendingPathComponent("include/mutantkit_protocol_v3.h"), modified: Date(timeIntervalSince1970: 2000)
+        )
 
         let stale = SchemataRuntimeStalenessGuard.staleSources(archivePath: archive, sourceDirectory: source)
         #expect(stale.map(\.path) == [header.path])

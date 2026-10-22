@@ -26,7 +26,13 @@ public struct ExecutedMutationProof: Encodable, Sendable, Hashable {
     /// `outcome` must be one of `.killedByAssertion`/`.killedByCrash`/
     /// `.verifiedTimeout`/`.survived` — enforced here as defense in depth,
     /// even though `MutationVerdictVerifier` is the only real caller.
-    public init(mutationRef: PlannedMutationRef, outcome: MutationOutcome, evidence: MutationEvidence, testSummary: TestOutcomeSummary?, diagnosis: String) {
+    public init(
+        mutationRef: PlannedMutationRef,
+        outcome: MutationOutcome,
+        evidence: MutationEvidence,
+        testSummary: TestOutcomeSummary?,
+        diagnosis: String
+    ) {
         precondition(
             [.killedByAssertion, .killedByCrash, .verifiedTimeout, .survived].contains(outcome),
             "ExecutedMutationProof.outcome must be a real execution outcome, got \(outcome)"

@@ -355,7 +355,10 @@ struct TestObligationAnalyzerTests {
         json["results"] = results
         let corruptedData = try JSONSerialization.data(withJSONObject: json)
         let corrupted = try MutationPlan.decoder().decode(RunReport.self, from: corruptedData)
-        #expect(corrupted.results[0].point.id == corrupted.results[1].point.id, "the fixture must actually collide, or this test proves nothing")
+        #expect(corrupted.results[0].point.id == corrupted.results[1].point.id,
+                """
+                the fixture must actually collide, or this test proves nothing
+                """)
 
         // The actual assertion: this exact input used to trap the whole
         // process. It must now return normally.

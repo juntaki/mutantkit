@@ -39,7 +39,9 @@ struct SchemataMutationRunnerSharedChunkBuildFailureTests {
         return sorted
     }
 
-    private func entry(mutationID: MutationID, target: String, chunkID: String, localIndex: UInt32, namespace: UInt64) -> SchemataPlanEntry {
+    private func entry(
+        mutationID: MutationID, target: String, chunkID: String, localIndex: UInt32, namespace: UInt64
+    ) -> SchemataPlanEntry {
         SchemataPlanEntry(
             mutationID: mutationID,
             placement: .embedded(placements: [
@@ -185,7 +187,10 @@ struct SchemataMutationRunnerSharedChunkBuildFailureTests {
     /// chunk build failing outright. The whole `MutationID` — including the
     /// already-produced, individually-valid verdict from the first target —
     /// must fall back, never a partial schemata/isolated split.
-    @Test("Multi-target: one target's shared build failure discards the whole MutationID, including the other target's already-verified result")
+    @Test("""
+    Multi-target: one target's shared build failure discards the whole MutationID, \
+    including the other target's already-verified result
+    """)
     func multiTargetSharedBuildFailureDiscardsAlreadyVerifiedPlacement() async throws {
         let points = try threePoints()
         let point = points[0]
@@ -260,7 +265,10 @@ struct SchemataMutationRunnerSharedChunkBuildFailureTests {
         #expect(Set(outcome.isolatedFallbacks.map(\.mutationID)) == Set([pointA.id, pointB.id]))
     }
 
-    @Test("A chunk whose build fails with an untyped error or a nil product hash reports no observability event — only a typed BuildFailure does")
+    @Test("""
+    A chunk whose build fails with an untyped error or a nil product hash reports no observability event \
+    — only a typed BuildFailure does
+    """)
     func nonTypedBuildFailuresReportNoEvent() async throws {
         let points = try threePoints()
         let pointsByID = Dictionary(uniqueKeysWithValues: points.map { ($0.id, $0) })
@@ -313,7 +321,9 @@ private struct NeverCalledPastBaselineTestAdapter: TestAdapter {
         )
     }
 
-    func runMutant(_ point: MutationPoint, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double) async throws -> TestRunResult {
+    func runMutant(
+        _ point: MutationPoint, artifact: BuildArtifact, in workspace: URL, timeoutSeconds: Double
+    ) async throws -> TestRunResult {
         fatalError("unreachable: buildMutant always throws before any test runs")
     }
 }

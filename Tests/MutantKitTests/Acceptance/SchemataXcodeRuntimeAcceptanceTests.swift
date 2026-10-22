@@ -328,7 +328,8 @@ struct SchemataXcodeRuntimeAcceptanceTests {
         }.first, "a real xctest process, whose PID this host never predicted, must still leave a startup event")
         #expect(startup.compilationUnitID == Self.compilationUnitID)
         let hit = try #require(transcript.records.compactMap { record -> RuntimeHitEvent? in
-            guard case let .hit(event) = record, event.token == staged.token, event.runID == startup.runID, event.processID == startup.processID
+            guard case let .hit(event) = record, event.token == staged.token,
+                  event.runID == startup.runID, event.processID == startup.processID
             else { return nil }
             return event
         }.first, "and a hit from that same process")

@@ -125,7 +125,8 @@ struct SchemataMutationRunnerConcurrencyTests {
             programs.append(program(chunkID: chunkID, entries: [planEntry]))
             entries[point.id] = point
             adapter.scripts[SchemataSelectorToken(namespace: namespace, localIndex: 1)] = .init(
-                compilationUnitID: compilationUnitID(target: target, point: point), sourceEmbeddingID: Self.sourceEmbeddingID, includeHit: true
+                compilationUnitID: compilationUnitID(target: target, point: point),
+                sourceEmbeddingID: Self.sourceEmbeddingID, includeHit: true
             )
         }
 
@@ -398,7 +399,10 @@ struct SchemataMutationRunnerConcurrencyTests {
         #expect(defaultOutcome.results.map(\.id) == explicitOutcome.results.map(\.id))
         #expect(defaultOutcome.results.map(\.outcome) == explicitOutcome.results.map(\.outcome))
         #expect(defaultOutcome.isolatedFallbacks == explicitOutcome.isolatedFallbacks)
-        #expect(defaultOutcome.multiTargetVerdicts.map(\.mutationRef.mutationID) == explicitOutcome.multiTargetVerdicts.map(\.mutationRef.mutationID))
+        #expect(
+            defaultOutcome.multiTargetVerdicts.map(\.mutationRef.mutationID)
+                == explicitOutcome.multiTargetVerdicts.map(\.mutationRef.mutationID)
+        )
 
         // And matches the known-correct sequential expectation itself
         // (mirrors `overflowDropsCrossProgramMutationIDEntirely`): Y keeps

@@ -1,41 +1,9 @@
 # SwiftLint configuration for MutantKit.
 #
-# Tuned against the codebase as it already reads, not against a stock
-# ruleset: thresholds below were derived by running a config-less
-# `swiftlint lint` over Sources/ and Tests/ and looking at what actually
-# fired, then deciding per rule whether the violation was a real defect
-# (fixed), a deliberate house pattern (rule adjusted or disabled), or
-# unavoidable-without-a-refactor complexity debt (threshold raised enough
-# to stop erroring, left as a warning, documented here).
-#
-# CI runs `swiftlint lint --strict --baseline .swiftlint-baseline.json`:
-# the baseline freezes 134 pre-existing violations by identity (rule + file +
-# line) so `--strict` still catches every new violation, including a new one
-# in an already-baselined file, without forcing a refactor of any of them
-# just to silence the linter. By rule: `line_length` 78 (mostly long test
-# lines and interpolated diagnostics), `type_body_length` 16, `large_tuple`
-# 13, `function_body_length` 9, `function_parameter_count` 6,
-# `file_length` 5, `cyclomatic_complexity` 3, `force_try` 2, plus one
-# `unused_enumerated` and one `orphaned_doc_comment`. The length/complexity
-# rules concentrate in a few deliberately large orchestration files
-# (MutationRunner.swift, SchemataMutationRunner.swift, XcodeBuildAdapter.swift
-# and similar), but `cyclomatic_complexity` also covers ConfigurationValidation
-# (13), DeclarationIdentityResolver (15) and one simulator-pool test — and
-# `large_tuple` is spread across several test files.
-# (Earlier versions of this comment also named InspectCommand.run()/
-# RunCommand.run(), then QualityGate.evaluate (16)/
-# BudgetSelectorV2.allocateCounts (18), then a ReproduceCommand handler (13);
-# all five have since been split far enough that none is baselined anymore.)
-#
-# Baseline entries key on line number, so an unrelated edit earlier in a
-# baselined file shifts every violation below it and makes CI fail on an
-# "unrecognized" (but not actually new) violation — regenerate with
-# `swiftlint lint --write-baseline .swiftlint-baseline.json` when that
-# happens, and diff the regenerated file against the old one to confirm only
-# line numbers moved, not that a genuinely new violation got swept in
-# unnoticed. The baseline format is also SwiftLint-version-specific; CI pins
-# an exact version (see ci.yml) so a SwiftLint upgrade can't silently change
-# which violations the baseline recognizes.
+# CI runs `swiftlint lint --strict` with no baseline and a pinned SwiftLint
+# version (see ci.yml), so every violation fails the build. Fix a violation
+# rather than raising a threshold; a threshold below was chosen to match the
+# code as it reads, not to hide a violation.
 
 excluded:
   - .build

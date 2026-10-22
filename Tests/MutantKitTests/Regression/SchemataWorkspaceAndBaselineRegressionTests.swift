@@ -92,7 +92,7 @@ struct SchemataResultArtifactAlwaysNilRegressionTests {
 
     @Test("SchemataMutationRunner never passes resultArtifact: to MutationEvidence")
     func schemataNeverPassesResultArtifact() throws {
-        let text = try Support.read("MutationExecution/SchemataMutationRunner.swift")
+        let text = try Support.readSchemataMutationRunner()
         #expect(
             !text.contains("resultArtifact:"),
             """
@@ -115,7 +115,7 @@ struct SchemataResultArtifactAlwaysNilRegressionTests {
     /// from this file.
     @Test("SchemataMutationRunner never calls MutationEvidenceAssembler.preserve")
     func schemataNeverCallsPreserve() throws {
-        let text = try Support.read("MutationExecution/SchemataMutationRunner.swift")
+        let text = try Support.readSchemataMutationRunner()
         #expect(!text.contains(".preserve("))
     }
 
@@ -152,7 +152,7 @@ struct SchemataBaselineStderrOnlySplitRegressionTests {
 
     @Test("SchemataMutationRunner has no OperationalIssueLog of its own, and says so at its stderr-only report site")
     func schemataHasNoOperationalIssueLog() throws {
-        let text = try Support.read("MutationExecution/SchemataMutationRunner.swift")
+        let text = try Support.readSchemataMutationRunner()
         #expect(
             !text.contains("OperationalIssueLog()"),
             """
@@ -175,7 +175,7 @@ struct SchemataBaselineStderrOnlySplitRegressionTests {
     @Test("MutationRunner stores exactly one OperationalIssueLog and reports into it")
     func mutationRunnerHasOperationalIssueLog() throws {
         let text = try Support.read("MutationExecution/MutationRunner.swift")
-        #expect(text.contains("private let operationalIssues = OperationalIssueLog()"))
+        #expect(text.contains("let operationalIssues = OperationalIssueLog()"))
         #expect(
             Support.occurrenceCount(of: "OperationalIssueLog()", in: text) == 1,
             "expected exactly one OperationalIssueLog() construction in MutationRunner.swift"

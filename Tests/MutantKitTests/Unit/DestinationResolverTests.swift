@@ -255,7 +255,10 @@ struct DestinationResolverTests {
             "platform=iOS Simulator,name=iPhone 16", against: [iphone, appleTV]
         )
 
-        #expect(resolved.device?.udid == iphone.udid, "a numerically-newer tvOS runtime must never be selected as \"latest\" for an iOS request")
+        #expect(resolved.device?.udid == iphone.udid,
+                """
+                a numerically-newer tvOS runtime must never be selected as "latest" for an iOS request
+                """)
     }
 
     /// The mirror of the test above, from the tvOS side: resolving an
@@ -278,7 +281,8 @@ struct DestinationResolverTests {
     @Test("SimulatorDevice.destination reports the device's own real platform, not a hardcoded iOS Simulator")
     func destinationStringReportsRealPlatform() {
         #expect(Self.device("Apple TV", platformRuntimeIdentifier: "tvOS-18-0").destination.hasPrefix("platform=tvOS Simulator,id="))
-        #expect(Self.device("Apple Watch", platformRuntimeIdentifier: "watchOS-11-0").destination.hasPrefix("platform=watchOS Simulator,id="))
+        let watch = Self.device("Apple Watch", platformRuntimeIdentifier: "watchOS-11-0")
+        #expect(watch.destination.hasPrefix("platform=watchOS Simulator,id="))
         #expect(Self.device("Vision Pro", platformRuntimeIdentifier: "xrOS-2-0").destination.hasPrefix("platform=visionOS Simulator,id="))
         #expect(Self.device("iPhone", platformRuntimeIdentifier: "iOS-26-5").destination.hasPrefix("platform=iOS Simulator,id="))
     }

@@ -262,6 +262,80 @@ struct MutationPlannerEndToEndTests {
         }
     }
 
+    // MARK: - Integrity validation
+
+    /// The planner validates the plan it just built. If a future edit breaks an
+    /// invariant — unstable IDs, duplicate IDs — the planner is the first to
+    /// see it, and refusing the plan here costs milliseconds rather than an
+    /// hour of builds.
+    @Test("A plan the planner emits passes its own integrity check")
+    func emittedPlanPassesIntegrity() async throws {
+        try write("Sources/Foo.swift", """
+        struct Foo {
+            var enabled = true
+            var ready = false
+        }
+        """)
+
+        let plan = try await makePlan()
+
+        #expect(IntegrityChecker.validatePlan(plan).isEmpty)
+        #expect(plan.integrityPassesValidation)
+    }
+
+    // MARK: - Empty input
+
+    @Test("An empty project yields an empty plan, not an error")
+    func emptyProjectIsEmptyPlan() async throws {
+        // Create the root directory but put no Swift files in it.
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Sources"),
+            withIntermediateDirectories: true
+        )
+
+        let plan = try await makePlan()
+
+        #expect(plan.mutations.isEmpty)
+        #expect(plan.skipped.isEmpty)
+        #expect(plan.discoveredCount == 0)
+    }
+
+    // MARK: - Schemata eligibility
+
+    /// `plan.operators` is what `MutationRegistry.resolve(_:)` hands back,
+    /// embedded verbatim (`MutationPlanner.swift`: "operators:
+    /// resolution.descriptors") — so this is the actual serialized artifact
+    /// an external consumer reads, not a proxy for it. Requests every
+    /// operator (`.experimental` admits all 12) so both `true` and `false`
+    /// values are exercised, then round-trips through the same JSON
+    /// encoding `MutationPlan.write(to:)` uses, confirming the fix survives
+    /// the exact path a real plan file on disk takes.
+    @Test("A plan's embedded operator descriptors carry the effective schemataEligible answer, through JSON round-trip")
+    func planOperatorsCarryEffectiveSchemataEligible() async throws {
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Sources"), withIntermediateDirectories: true
+        )
+        let configuration = Configuration(operators: OperatorSettings(profile: .experimental))
+        let plan = try await makePlan(configuration: configuration)
+        #expect(plan.operators.count == MutationRegistry.builtIn.count)
+
+        func checkSchemataEligible(_ descriptors: [OperatorDescriptor], context: String) {
+            for descriptor in descriptors {
+                #expect(
+                    descriptor.schemataEligible == schemataEligibleOperatorIDs.contains(descriptor.id),
+                    "\(descriptor.id) \(context)"
+                )
+            }
+        }
+
+        checkSchemataEligible(plan.operators, context: "in plan.operators")
+        let data = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(MutationPlan.self, from: data)
+        checkSchemataEligible(decoded.operators, context: "after JSON round-trip")
+    }
+}
+
+extension MutationPlannerEndToEndTests {
     // MARK: - Budget gate integration
 
     @Test("The budget gate drops mutants as budgetExceeded")
@@ -417,78 +491,6 @@ struct MutationPlannerEndToEndTests {
         #expect(selectedOperators.count == 2, "\(selectedOperators)")
         #expect(plan.skipped.allSatisfy { $0.reason == .budgetExceeded })
         #expect(plan.skipped.allSatisfy { $0.operatorID != nil })
-    }
-
-    // MARK: - Integrity validation
-
-    /// The planner validates the plan it just built. If a future edit breaks an
-    /// invariant — unstable IDs, duplicate IDs — the planner is the first to
-    /// see it, and refusing the plan here costs milliseconds rather than an
-    /// hour of builds.
-    @Test("A plan the planner emits passes its own integrity check")
-    func emittedPlanPassesIntegrity() async throws {
-        try write("Sources/Foo.swift", """
-        struct Foo {
-            var enabled = true
-            var ready = false
-        }
-        """)
-
-        let plan = try await makePlan()
-
-        #expect(IntegrityChecker.validatePlan(plan).isEmpty)
-        #expect(plan.integrityPassesValidation)
-    }
-
-    // MARK: - Empty input
-
-    @Test("An empty project yields an empty plan, not an error")
-    func emptyProjectIsEmptyPlan() async throws {
-        // Create the root directory but put no Swift files in it.
-        try FileManager.default.createDirectory(
-            at: root.appendingPathComponent("Sources"),
-            withIntermediateDirectories: true
-        )
-
-        let plan = try await makePlan()
-
-        #expect(plan.mutations.isEmpty)
-        #expect(plan.skipped.isEmpty)
-        #expect(plan.discoveredCount == 0)
-    }
-
-    // MARK: - Schemata eligibility
-
-    /// `plan.operators` is what `MutationRegistry.resolve(_:)` hands back,
-    /// embedded verbatim (`MutationPlanner.swift`: "operators:
-    /// resolution.descriptors") — so this is the actual serialized artifact
-    /// an external consumer reads, not a proxy for it. Requests every
-    /// operator (`.experimental` admits all 12) so both `true` and `false`
-    /// values are exercised, then round-trips through the same JSON
-    /// encoding `MutationPlan.write(to:)` uses, confirming the fix survives
-    /// the exact path a real plan file on disk takes.
-    @Test("A plan's embedded operator descriptors carry the effective schemataEligible answer, through JSON round-trip")
-    func planOperatorsCarryEffectiveSchemataEligible() async throws {
-        try FileManager.default.createDirectory(
-            at: root.appendingPathComponent("Sources"), withIntermediateDirectories: true
-        )
-        let configuration = Configuration(operators: OperatorSettings(profile: .experimental))
-        let plan = try await makePlan(configuration: configuration)
-        #expect(plan.operators.count == MutationRegistry.builtIn.count)
-
-        func checkSchemataEligible(_ descriptors: [OperatorDescriptor], context: String) {
-            for descriptor in descriptors {
-                #expect(
-                    descriptor.schemataEligible == schemataEligibleOperatorIDs.contains(descriptor.id),
-                    "\(descriptor.id) \(context)"
-                )
-            }
-        }
-
-        checkSchemataEligible(plan.operators, context: "in plan.operators")
-        let data = try JSONEncoder().encode(plan)
-        let decoded = try JSONDecoder().decode(MutationPlan.self, from: data)
-        checkSchemataEligible(decoded.operators, context: "after JSON round-trip")
     }
 }
 

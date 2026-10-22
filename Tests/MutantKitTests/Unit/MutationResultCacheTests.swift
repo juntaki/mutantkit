@@ -60,7 +60,11 @@ struct MutationResultCacheTests {
         let point = try makeAnchoredPoint()
         let cache = MutationResultCache(root: root, policy: .permissive)
         let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "digest-A")
-        await store(cache, observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID), for: key)
+        await store(
+            cache,
+            observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID),
+            for: key
+        )
 
         await cache.removeAll()
         let loaded = await load(cache, key, point: point)
@@ -91,7 +95,11 @@ struct MutationResultCacheTests {
         // result cache specifically — it never causes a phantom verdict to
         // be silently served. It just falls back to nil, which forces a
         // fresh evaluation, which is exactly what a miss already means.
-        await store(cache, observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID), for: key)
+        await store(
+            cache,
+            observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID),
+            for: key
+        )
         let anyFile = try #require(
             try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).first
         )
@@ -120,7 +128,11 @@ struct MutationResultCacheTests {
         let point = try makeAnchoredPoint()
         let cache = MutationResultCache(root: root, policy: .permissive)
         let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "forged")
-        await store(cache, observations: makeObservations(point: point, outcome: .survived, planID: planID, workUnitID: workUnitID), for: key)
+        await store(
+            cache,
+            observations: makeObservations(point: point, outcome: .survived, planID: planID, workUnitID: workUnitID),
+            for: key
+        )
 
         let url = root.appendingPathComponent(storageName(for: key))
         var object = try #require(
@@ -155,7 +167,11 @@ struct MutationResultCacheTests {
         let point = try makeAnchoredPoint()
         let cache = MutationResultCache(root: root, policy: .permissive)
         let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "edited-non-reusable")
-        await store(cache, observations: makeObservations(point: point, outcome: .survived, planID: planID, workUnitID: workUnitID), for: key)
+        await store(
+            cache,
+            observations: makeObservations(point: point, outcome: .survived, planID: planID, workUnitID: workUnitID),
+            for: key
+        )
 
         let url = root.appendingPathComponent(storageName(for: key))
         var object = try #require(
@@ -242,6 +258,39 @@ struct MutationResultCacheTests {
         #expect(loaded == nil, "a pre-PR-C record must be discarded, not silently trusted")
     }
 
+    private func makeScratch() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mutation-result-cache-tests-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func storageName(for key: MutationResultCache.Key) -> String {
+        ContentHash.shortDigest(of: key.mutationID.rawValue + "\u{1F}" + key.contextDigest, length: 32) + ".json"
+    }
+
+    private func writeRawCacheRecord(
+        key: MutationResultCache.Key, observations: MutationObservations,
+        verificationVersion: Int, executionVersion: Int = ExecutionImplementationVersion.current
+    ) throws {
+        struct RawCacheRecord: Codable {
+            let key: MutationResultCache.Key
+            let observations: MutationObservations
+            let verificationVersion: Int
+            let executionVersion: Int
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(
+            RawCacheRecord(
+                key: key, observations: observations,
+                verificationVersion: verificationVersion, executionVersion: executionVersion
+            )
+        )
+        try data.write(to: root.appendingPathComponent(storageName(for: key)))
+    }
+}
+
+extension MutationResultCacheTests {
     // MARK: - Content-identity gating
 
     @Test("An entry whose point content no longer matches the current plan is a miss")
@@ -249,7 +298,11 @@ struct MutationResultCacheTests {
         let point = try makeAnchoredPoint()
         let cache = MutationResultCache(root: root, policy: .permissive)
         let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "digest-A")
-        await store(cache, observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID), for: key)
+        await store(
+            cache,
+            observations: makeObservations(point: point, outcome: .killedByAssertion, planID: planID, workUnitID: workUnitID),
+            for: key
+        )
 
         // Same ID, different content — the anchor moved since this was cached.
         let movedPoint = point.with(utf8Range: ByteRange(start: point.utf8Range.start + 1, end: point.utf8Range.end + 1))
@@ -374,7 +427,11 @@ struct MutationResultCacheTests {
                         .killedByCrash, .verifiedTimeout] {
             let cache = MutationResultCache(root: makeScratch(), policy: .permissive)
             let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "c-\(outcome.rawValue)")
-            await store(cache, observations: makeObservations(point: point, outcome: outcome, planID: planID, workUnitID: workUnitID), for: key)
+            await store(
+                cache,
+                observations: makeObservations(point: point, outcome: outcome, planID: planID, workUnitID: workUnitID),
+                for: key
+            )
 
             let loaded = await load(cache, key, point: point)
             #expect(loaded != nil, "\(outcome.rawValue) should be cached")
@@ -395,7 +452,11 @@ struct MutationResultCacheTests {
         for outcome in rejected {
             let cache = MutationResultCache(root: makeScratch(), policy: .permissive)
             let key = MutationResultCache.Key(mutationID: point.id, contextDigest: "n-\(outcome.rawValue)")
-            await store(cache, observations: makeObservations(point: point, outcome: outcome, planID: planID, workUnitID: workUnitID), for: key)
+            await store(
+                cache,
+                observations: makeObservations(point: point, outcome: outcome, planID: planID, workUnitID: workUnitID),
+                for: key
+            )
 
             let loaded = await load(cache, key, point: point)
             #expect(loaded == nil, "\(outcome.rawValue) must not be cached — a re-run is expected to differ")
@@ -431,37 +492,6 @@ struct MutationResultCacheTests {
         let loaded = await load(cache, key, point: point)
 
         #expect(loaded == nil)
-    }
-
-    private func makeScratch() -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mutation-result-cache-tests-\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
-    private func storageName(for key: MutationResultCache.Key) -> String {
-        ContentHash.shortDigest(of: key.mutationID.rawValue + "\u{1F}" + key.contextDigest, length: 32) + ".json"
-    }
-
-    private func writeRawCacheRecord(
-        key: MutationResultCache.Key, observations: MutationObservations,
-        verificationVersion: Int, executionVersion: Int = ExecutionImplementationVersion.current
-    ) throws {
-        struct RawCacheRecord: Codable {
-            let key: MutationResultCache.Key
-            let observations: MutationObservations
-            let verificationVersion: Int
-            let executionVersion: Int
-        }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(
-            RawCacheRecord(
-                key: key, observations: observations,
-                verificationVersion: verificationVersion, executionVersion: executionVersion
-            )
-        )
-        try data.write(to: root.appendingPathComponent(storageName(for: key)))
     }
 }
 
@@ -544,7 +574,10 @@ extension MutationResultCacheTests {
         // that changed, simulating exactly the "bug fixed, version bump
         // forgotten" shape this mechanism must not depend on to stay sound.
         let newPoint = oldPoint.with(replacementText: "REPLACEMENT_TEXT_AFTER_THE_OPERATOR_BUG_FIX")
-        #expect(oldPoint.id == newPoint.id, "an unbumped operatorVersion keeps the MutationID identical — that is what makes this adversarial")
+        #expect(oldPoint.id == newPoint.id,
+                """
+                an unbumped operatorVersion keeps the MutationID identical — that is what makes this adversarial
+                """)
         #expect(oldPoint.replacementText != newPoint.replacementText, "the fixture must actually change what the operator now proposes")
 
         let cache = MutationResultCache(root: makeScratch(), policy: .permissive)

@@ -392,7 +392,10 @@ extension RelationalOperatorReplacementSchemataLowerer {
                 throw SchemataLoweringError.anchorRejected(mutationID: point.id, diagnosis: verification.diagnosis)
             }
             guard let resolved = resolveInfix(for: point, in: originalData) else {
-                throw SchemataLoweringError.anchorRejected(mutationID: point.id, diagnosis: "no InfixOperatorExprSyntax resolved at splice time")
+                throw SchemataLoweringError.anchorRejected(
+                    mutationID: point.id,
+                    diagnosis: "no InfixOperatorExprSyntax resolved at splice time"
+                )
             }
             let range = ByteRange(
                 start: resolved.infix.positionAfterSkippingLeadingTrivia.utf8Offset,
@@ -401,12 +404,16 @@ extension RelationalOperatorReplacementSchemataLowerer {
             resolvedByPoint[point.id] = (resolved.infix, range)
         }
 
-        if let (first, second) = firstOverlap(among: filePoints.map { resolvedByPoint[$0.point.id]!.range }, ids: filePoints.map(\.point.id)) {
+        let envelopes = filePoints.map { resolvedByPoint[$0.point.id]!.range }
+        if let (first, second) = firstOverlap(among: envelopes, ids: filePoints.map(\.point.id)) {
             throw SchemataLoweringError.overlappingRewriteEnvelopes(file: source.relativePath, first: first, second: second)
         }
 
         var bytes = [UInt8](originalData)
-        for (point, token) in filePoints.sorted(by: { resolvedByPoint[$0.point.id]!.range.start > resolvedByPoint[$1.point.id]!.range.start }) {
+        let descendingByStart = filePoints.sorted {
+            resolvedByPoint[$0.point.id]!.range.start > resolvedByPoint[$1.point.id]!.range.start
+        }
+        for (point, token) in descendingByStart {
             let (infix, range) = resolvedByPoint[point.id]!
             let lhsText = infix.leftOperand.trimmedDescription
             let rhsText = infix.rightOperand.trimmedDescription

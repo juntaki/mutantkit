@@ -200,7 +200,7 @@ public enum HybridExecutionEngine {
         let outcome = await SharedBaselineEstablisher.establish(
             build: context.adapter.build, test: context.testAdapter, in: sandbox.workspaceRoot,
             configuration: context.configuration, projectRoot: context.projectRoot,
-            coverageCache: context.coverageCache, coverageCacheKey: context.coverageCacheKey,
+            coverageCache: .init(cache: context.coverageCache, key: context.coverageCacheKey),
             operationalIssues: operationalIssues, workspaces: workspaces
         )
         // The control's products carry this sandbox's paths (`#filePath`), so

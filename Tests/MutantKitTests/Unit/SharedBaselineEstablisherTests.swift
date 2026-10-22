@@ -33,8 +33,7 @@ struct SharedBaselineEstablisherTests {
         let configuration = Configuration(execution: ExecutionSettings(selectCoveringTests: false))
 
         let outcome = await SharedBaselineEstablisher.establish(
-            build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox,
-            coverageCache: nil, coverageCacheKey: nil
+            build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox
         )
 
         guard case let .established(baseline) = outcome else {
@@ -60,8 +59,7 @@ struct SharedBaselineEstablisherTests {
         let configuration = Configuration()
 
         let outcome = await SharedBaselineEstablisher.establish(
-            build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox,
-            coverageCache: nil, coverageCacheKey: nil
+            build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox
         )
 
         guard case let .failed(record, diagnosis) = outcome else {
@@ -86,8 +84,7 @@ struct SharedBaselineEstablisherTests {
         let configuration = Configuration()
 
         let outcome = await SharedBaselineEstablisher.establish(
-            build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox,
-            coverageCache: nil, coverageCacheKey: nil
+            build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox
         )
 
         guard case let .failed(record, diagnosis) = outcome else {
@@ -104,7 +101,9 @@ struct SharedBaselineEstablisherTests {
         let addTest = TestIdentifier(target: "FooTests", qualifiedName: "AddTests/testAdd")
         let measured = PerTestCoverageMap(coveringTests: ["A.swift": [1: [addTest]]], source: "test")
         let test = SpyTestAdapter(
-            baselineResult: TestRunResult(status: .passed, summary: nil, command: command("test"), resultArtifactPath: nil, diagnosis: "ok"),
+            baselineResult: TestRunResult(
+                status: .passed, summary: nil, command: command("test"), resultArtifactPath: nil, diagnosis: "ok"
+            ),
             coverageResult: measured
         )
         let configuration = Configuration(execution: ExecutionSettings(selectCoveringTests: true))
@@ -114,7 +113,7 @@ struct SharedBaselineEstablisherTests {
 
         let outcome = await SharedBaselineEstablisher.establish(
             build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox,
-            coverageCache: cache, coverageCacheKey: key
+            coverageCache: .init(cache: cache, key: key)
         )
 
         guard case let .established(baseline) = outcome else {
@@ -144,7 +143,7 @@ struct SharedBaselineEstablisherTests {
 
         let outcome = await SharedBaselineEstablisher.establish(
             build: build, test: test, in: sandbox, configuration: configuration, projectRoot: sandbox,
-            coverageCache: cache, coverageCacheKey: key
+            coverageCache: .init(cache: cache, key: key)
         )
 
         guard case let .established(baseline) = outcome else {

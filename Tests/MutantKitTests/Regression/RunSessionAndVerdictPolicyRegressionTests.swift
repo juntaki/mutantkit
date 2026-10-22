@@ -36,8 +36,8 @@ struct RunSessionForceUnwrapAsymmetryRegressionTests {
         #expect(runSession.contains("let toolchain: ToolchainFingerprint?"))
 
         let mutationRunner = try Support.read("MutationExecution/MutationRunner.swift")
-        #expect(mutationRunner.contains("private var projectRoot: URL { session.projectRoot! }"))
-        #expect(mutationRunner.contains("private var toolchain: ToolchainFingerprint { session.toolchain! }"))
+        #expect(mutationRunner.contains("var projectRoot: URL { session.projectRoot! }"))
+        #expect(mutationRunner.contains("var toolchain: ToolchainFingerprint { session.toolchain! }"))
     }
 
     /// §1's actual load-bearing half: `MutationRunner`'s own `session`
@@ -72,7 +72,7 @@ struct RunSessionForceUnwrapAsymmetryRegressionTests {
     /// guards the documented, intentional shape itself.
     @Test("SchemataMutationRunner's own RunSession construction always supplies nil for projectRoot/toolchain")
     func schemataMutationRunnerSessionConstructionAlwaysPassesNil() throws {
-        let text = try Support.read("MutationExecution/SchemataMutationRunner.swift")
+        let text = try Support.readSchemataMutationRunner()
         let call = try #require(
             Support.span(in: text, startMarker: "self.session = RunSession(", untilLineEquals: ")"),
             "SchemataMutationRunner.init no longer builds `self.session = RunSession(...)` the way this test expects"
@@ -203,7 +203,7 @@ struct SchemataConfirmationNeverRebuildsRegressionTests {
 
     @Test("confirmSchemataToken's body never creates a sandbox or rebuilds — it reruns the given artifact")
     func confirmSchemataTokenNeverRebuilds() throws {
-        let text = try Support.read("MutationExecution/SchemataMutationRunner.swift")
+        let text = try Support.readSchemataMutationRunner()
         let body = try #require(
             Support.span(
                 in: text, startMarker: "func confirmSchemataToken(",
@@ -232,8 +232,12 @@ struct SchemataConfirmationNeverRebuildsRegressionTests {
         #expect(crashBody.contains("build.buildMutant"))
 
         let timeoutBody = try #require(Support.span(in: text, startMarker: "func confirmTimeout", endLinePrefix: "    func "))
-        #expect(timeoutBody.contains("workspaces.createSandbox"))
-        #expect(timeoutBody.contains("build.buildMutant"))
+        #expect(timeoutBody.contains("rebuildForTimeoutConfirmation("))
+        let rebuildBody = try #require(
+            Support.span(in: text, startMarker: "func rebuildForTimeoutConfirmation", endLinePrefix: "}")
+        )
+        #expect(rebuildBody.contains("workspaces.createSandbox"))
+        #expect(rebuildBody.contains("build.buildMutant"))
     }
 }
 

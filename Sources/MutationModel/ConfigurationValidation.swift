@@ -85,8 +85,27 @@ public enum ConfigurationValidator {
         }
 
         issues += validateBudgetSampling(configuration.execution.budget) + validateEvidence(configuration.evidence)
+        issues += validateTimeouts(configuration.timeouts)
+        issues += validateExecutionDependencies(configuration.execution)
 
-        if configuration.timeouts.baselineSeconds <= 0 {
+        // `.schemata` is now consumed — `RunCommand` dispatches to
+        // `SchemataRunOrchestration` for it (SwiftPM only; see the schemata
+        // production-integration plan). Unsupported project kinds fail
+        // closed at run time instead (`SchemataRunOrchestration
+        // .OrchestrationError.adapterNotSchemataCapable`), not here: this
+        // preflight runs before the project adapter is even resolved, so it
+        // cannot yet know whether `.schemata` is viable for this project.
+
+        issues += validateDerivedDataPath(configuration.project.derivedDataPath, projectRoot: projectRoot)
+        issues += validateXcodeTestTargets(configuration) + validateProfileCoverageSkip(configuration.execution)
+
+        return issues
+    }
+
+    private static func validateTimeouts(_ timeouts: TimeoutSettings) -> [ConfigurationIssue] {
+        var issues: [ConfigurationIssue] = []
+
+        if timeouts.baselineSeconds <= 0 {
             issues.append(ConfigurationIssue(
                 severity: .error,
                 path: "timeouts.baseline",
@@ -94,7 +113,7 @@ public enum ConfigurationValidator {
             ))
         }
 
-        let mutant = configuration.timeouts.mutant
+        let mutant = timeouts.mutant
         if mutant.minimumSeconds <= 0 || mutant.maximumSeconds <= 0 {
             issues.append(ConfigurationIssue(
                 severity: .error,
@@ -122,7 +141,13 @@ public enum ConfigurationValidator {
             ))
         }
 
-        if configuration.execution.selectCoveringTests, !configuration.execution.measureCoverage {
+        return issues
+    }
+
+    private static func validateExecutionDependencies(_ execution: ExecutionSettings) -> [ConfigurationIssue] {
+        var issues: [ConfigurationIssue] = []
+
+        if execution.selectCoveringTests, !execution.measureCoverage {
             issues.append(ConfigurationIssue(
                 severity: .warning,
                 path: "execution.selectCoveringTests",
@@ -131,7 +156,7 @@ public enum ConfigurationValidator {
             ))
         }
 
-        if let batchSize = configuration.execution.testBatchSize, batchSize < 1 {
+        if let batchSize = execution.testBatchSize, batchSize < 1 {
             issues.append(ConfigurationIssue(
                 severity: .error,
                 path: "execution.testBatchSize",
@@ -139,12 +164,12 @@ public enum ConfigurationValidator {
             ))
         }
 
-        if !(0 ... 1).contains(configuration.execution.noOpCanarySampleRate) {
+        if !(0 ... 1).contains(execution.noOpCanarySampleRate) {
             issues.append(ConfigurationIssue(
                 severity: .error,
                 path: "execution.noOpCanarySampleRate",
                 message: "Must be between 0 and 1 (a fraction of hash-matched mutants to sample), not "
-                    + "\(configuration.execution.noOpCanarySampleRate)."
+                    + "\(execution.noOpCanarySampleRate)."
             ))
         }
 
@@ -154,8 +179,8 @@ public enum ConfigurationValidator {
         // here would take the batched code path while batching nothing — pure
         // overhead with no speedup, and a configuration that looks like it
         // asked for batching but silently got none.
-        if configuration.execution.testBatchSize != nil,
-           !configuration.execution.selectCoveringTests {
+        if execution.testBatchSize != nil,
+           !execution.selectCoveringTests {
             issues.append(ConfigurationIssue(
                 severity: .warning,
                 path: "execution.testBatchSize",
@@ -166,8 +191,8 @@ public enum ConfigurationValidator {
         // `earlyAbortSelectedTests` wraps the covering-tests adapter, so it is
         // inert without `selectCoveringTests` (see RunCommand's test-adapter
         // selection). Flag it rather than silently ignoring the setting.
-        if configuration.execution.earlyAbortSelectedTests,
-           !configuration.execution.selectCoveringTests {
+        if execution.earlyAbortSelectedTests,
+           !execution.selectCoveringTests {
             issues.append(ConfigurationIssue(
                 severity: .warning,
                 path: "execution.earlyAbortSelectedTests",
@@ -175,23 +200,6 @@ public enum ConfigurationValidator {
                     + "without it, earlyAbortSelectedTests has no effect."
             ))
         }
-
-        // `.schemata` is now consumed — `RunCommand` dispatches to
-        // `SchemataRunOrchestration` for it (SwiftPM only; see the schemata
-        // production-integration plan). Unsupported project kinds fail
-        // closed at run time instead (`SchemataRunOrchestration
-        // .OrchestrationError.adapterNotSchemataCapable`), not here: this
-        // preflight runs before the project adapter is even resolved, so it
-        // cannot yet know whether `.schemata` is viable for this project.
-
-        issues += validateDerivedDataPath(configuration.project.derivedDataPath, projectRoot: projectRoot)
-        // `validateProfileCoverageSkip` folded onto this same line (rather
-        // than its own `issues += ...` statement, the shape every sibling
-        // check above uses) specifically so adding it does not grow
-        // `validate`'s own already-baselined `cyclomatic_complexity`/
-        // `function_body_length` debt by even one line — see that
-        // function's own doc comment for the check itself.
-        issues += validateXcodeTestTargets(configuration) + validateProfileCoverageSkip(configuration.execution)
 
         return issues
     }

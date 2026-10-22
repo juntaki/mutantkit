@@ -155,26 +155,36 @@ func makeSchemataFixtureReceipt() -> SchemataBuildReceipt {
         compilationUnitID: schemataFixtureCompilationUnitID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID,
         buildTarget: schemataFixtureBuildTarget
     )
-    let image = try! BuiltImageReceipt(
-        buildTarget: schemataFixtureBuildTarget, binaryPath: "/build/App", contentHash: SHA256Digest.of("app-binary"),
-        slices: [BuiltImageSlice(architecture: BuiltArchitectureIdentity(cpuType: 0x0100_000C, cpuSubtype: 0), imageUUID: schemataFixtureImageUUID)]
-    )
-    return try! SchemataBuildReceipt(
-        planID: "plan-1", workUnitID: "wu-1", chunkID: "chunk-1", toolchainHash: SHA256Digest.of("toolchain"),
-        buildArgumentsHash: SHA256Digest.of("args"), runtimeABIVersion: 3, images: [image], compilationUnits: [unit]
-    )
+    let image: BuiltImageReceipt
+    let receipt: SchemataBuildReceipt
+    do {
+        let architecture = BuiltArchitectureIdentity(cpuType: 0x0100_000C, cpuSubtype: 0)
+        image = try BuiltImageReceipt(
+            buildTarget: schemataFixtureBuildTarget, binaryPath: "/build/App", contentHash: SHA256Digest.of("app-binary"),
+            slices: [BuiltImageSlice(architecture: architecture, imageUUID: schemataFixtureImageUUID)]
+        )
+        receipt = try SchemataBuildReceipt(
+            planID: "plan-1", workUnitID: "wu-1", chunkID: "chunk-1", toolchainHash: SHA256Digest.of("toolchain"),
+            buildArgumentsHash: SHA256Digest.of("args"), runtimeABIVersion: 3, images: [image], compilationUnits: [unit]
+        )
+    } catch {
+        fatalError("schemata fixture receipt must be self-consistent: \(error)")
+    }
+    return receipt
 }
 
 private func schemataFixtureStartup(processID: Int32 = 4242) -> RuntimeStartupEvent {
     RuntimeStartupEvent(
-        runID: schemataFixtureRunID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID, compilationUnitID: schemataFixtureCompilationUnitID,
+        runID: schemataFixtureRunID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID,
+        compilationUnitID: schemataFixtureCompilationUnitID,
         token: schemataFixtureToken, processID: processID, imageUUID: schemataFixtureImageUUID, runtimeABIVersion: 3
     )
 }
 
 private func schemataFixtureHit(processID: Int32 = 4242, sequence: UInt64 = 1) -> RuntimeHitEvent {
     RuntimeHitEvent(
-        runID: schemataFixtureRunID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID, compilationUnitID: schemataFixtureCompilationUnitID,
+        runID: schemataFixtureRunID, sourceEmbeddingID: schemataFixtureSourceEmbeddingID,
+        compilationUnitID: schemataFixtureCompilationUnitID,
         token: schemataFixtureToken, processID: processID, sequence: sequence, imageUUID: schemataFixtureImageUUID, runtimeABIVersion: 3
     )
 }

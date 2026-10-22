@@ -48,8 +48,12 @@ struct SchemataMutationRunnerVerifierAuthorityRegressionTests {
             .deletingLastPathComponent() // MutantKitTests/
             .deletingLastPathComponent() // Tests/
             .deletingLastPathComponent() // repo root
-        let runnerSourceURL = repoRoot.appendingPathComponent("Sources/MutationExecution/SchemataMutationRunner.swift")
-        let contents = try String(contentsOf: runnerSourceURL, encoding: .utf8)
+        let sourcesDirectory = repoRoot.appendingPathComponent("Sources/MutationExecution")
+        let runnerFiles = try FileManager.default.contentsOfDirectory(atPath: sourcesDirectory.path)
+            .filter { $0.hasPrefix("SchemataMutationRunner") && $0.hasSuffix(".swift") }
+        let contents = try runnerFiles
+            .map { try String(contentsOf: sourcesDirectory.appendingPathComponent($0), encoding: .utf8) }
+            .joined(separator: "\n")
         let occurrences = contents.components(separatedBy: "MutationVerdictVerifier.verify(").count - 1
         #expect(occurrences == 1, "expected exactly one MutationVerdictVerifier.verify(...) call site (finalize); found \(occurrences)")
     }

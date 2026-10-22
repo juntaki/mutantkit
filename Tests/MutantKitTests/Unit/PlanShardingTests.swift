@@ -7,7 +7,6 @@ import Testing
 /// but only because the assignment is a pure function of the mutation ID. A
 /// shard run that landed on different mutants each time it was scheduled would
 /// silently change the score; a merge that combined reports from different
-/// plans would publish a number for a project state that never existed.
 @Suite("Plan sharding")
 struct PlanShardingTests {
     /// Assignment is `FNV-1a(id) % count`. The same mutant lands in the same
@@ -43,7 +42,7 @@ struct PlanShardingTests {
 
     @Test("Shard count 1 returns the original plan untouched")
     func shardCountOneIsIdentity() throws {
-        let plan = Self.plan(mutations: Self.points(count: 5))
+        let plan = PlanShardingTests.plan(mutations: PlanShardingTests.points(count: 5))
 
         let shards = try PlanSharding.shard(plan: plan, count: 1)
 
@@ -54,7 +53,7 @@ struct PlanShardingTests {
 
     @Test("Shard count 0 is refused")
     func shardCountZeroIsRefused() {
-        let plan = Self.plan(mutations: Self.points(count: 5))
+        let plan = PlanShardingTests.plan(mutations: PlanShardingTests.points(count: 5))
 
         #expect(throws: ShardingError.self) {
             try PlanSharding.shard(plan: plan, count: 0)
@@ -66,8 +65,8 @@ struct PlanShardingTests {
     /// property that makes merge a concatenation rather than a reconciliation.
     @Test("Shards partition the parent's mutations")
     func shardsPartitionMutations() throws {
-        let points = Self.points(count: 20)
-        let plan = Self.plan(mutations: points)
+        let points = PlanShardingTests.points(count: 20)
+        let plan = PlanShardingTests.plan(mutations: points)
 
         let shards = try PlanSharding.shard(plan: plan, count: 4)
 
@@ -89,11 +88,11 @@ struct PlanShardingTests {
     /// have it, the parent's skips duplicated `count` times.
     @Test("Shards partition skipped records by the same rule")
     func shardsPartitionSkipped() throws {
-        let skippedPoints = Self.points(count: 10)
+        let skippedPoints = PlanShardingTests.points(count: 10)
         let skipped = skippedPoints.map {
             SkippedMutation(id: $0.id, file: $0.file, reason: .budgetExceeded)
         }
-        let plan = Self.plan(mutations: [], skipped: skipped)
+        let plan = PlanShardingTests.plan(mutations: [], skipped: skipped)
 
         let shards = try PlanSharding.shard(plan: plan, count: 3)
 
@@ -113,7 +112,7 @@ struct PlanShardingTests {
     /// `planID` cannot be a checkpoint key because every shard has it.
     @Test("Shards share the parent's plan ID")
     func shardsShareParentPlanID() throws {
-        let plan = Self.plan(id: "plan_shared", mutations: Self.points(count: 6))
+        let plan = PlanShardingTests.plan(id: "plan_shared", mutations: PlanShardingTests.points(count: 6))
         let shards = try PlanSharding.shard(plan: plan, count: 3)
 
         #expect(shards.allSatisfy { $0.planID == "plan_shared" })
@@ -129,13 +128,13 @@ struct PlanShardingTests {
             planID: "plan_a",
             createdAt: Date(timeIntervalSince1970: 0),
             projectRoot: "/p",
-            toolchain: Self.toolchain,
+            toolchain: PlanShardingTests.toolchain,
             configurationHash: ContentHash.of("config"),
             sourceFileHashes: [
                 "Sources/A.swift": ContentHash.of("a"),
                 "Sources/B.swift": ContentHash.of("b")
             ],
-            mutations: Self.points(count: 3),
+            mutations: PlanShardingTests.points(count: 3),
             skipped: [],
             operators: []
         )
@@ -149,233 +148,9 @@ struct PlanShardingTests {
         }
     }
 
-    // MARK: - merge
-
-    /// Merging the shard reports for a plan reproduces the unsharded report:
-    /// same mutation IDs, same outcomes, no mutant added and none dropped.
-    @Test("Merge reconstructs the unsharded report exactly")
-    func mergeReconstructsUnsharded() throws {
-        let points = Self.points(count: 12)
-        let plan = Self.plan(mutations: points)
-        let unshardedReport = Self.report(
-            plan: plan,
-            results: points.map { Self.result(point: $0, outcome: .killedByAssertion) }
-        )
-
-        let shards = try PlanSharding.shard(plan: plan, count: 4)
-        let shardReports = shards.map { shard in
-            Self.report(
-                plan: shard,
-                results: shard.mutations.map { Self.result(point: $0, outcome: .killedByAssertion) }
-            )
-        }
-
-        let merged = try PlanSharding.merge(reports: shardReports, plan: plan)
-
-        let byID = Dictionary(uniqueKeysWithValues: merged.results.map { ($0.id, $0.outcome) })
-        let originalByID = Dictionary(uniqueKeysWithValues: unshardedReport.results.map { ($0.id, $0.outcome) })
-        #expect(byID == originalByID)
-        #expect(merged.integrity.passed == unshardedReport.integrity.passed)
-        #expect(merged.score == unshardedReport.score)
-    }
-
-    /// Merge refuses reports from different plans. The two reports would
-    /// otherwise be stitched into a number for a project state that never
-    /// existed.
-    @Test("Merge refuses reports from different plans")
-    func mergeRefusesDifferentPlans() throws {
-        let planA = Self.plan(id: "plan_a", mutations: Self.points(count: 3))
-        let planB = Self.plan(id: "plan_b", mutations: Self.points(count: 3))
-
-        let reportA = Self.report(plan: planA, results: [])
-        let reportB = Self.report(plan: planB, results: [])
-
-        #expect(throws: ShardingError.self) {
-            try PlanSharding.merge(reports: [reportA, reportB], plan: planA)
-        }
-    }
-
-    /// Merge refuses a toolchain mismatch. Numbers measured against different
-    /// compilers are not comparable.
-    @Test("Merge refuses reports from different toolchains")
-    func mergeRefusesDifferentToolchains() throws {
-        let plan = Self.plan(mutations: Self.points(count: 3))
-        let otherToolchain = ToolchainFingerprint(
-            toolVersion: "0.1.0",
-            toolCommitSHA: nil,
-            swiftVersion: "6.0.0",
-            swiftSyntaxVersion: "600.0.0",
-            xcodeVersion: nil
-        )
-
-        let a = Self.report(plan: plan, results: [], toolchain: Self.toolchain)
-        let b = Self.report(plan: plan, results: [], toolchain: otherToolchain)
-
-        #expect(throws: ShardingError.self) {
-            try PlanSharding.merge(reports: [a, b], plan: plan)
-        }
-    }
-
-    /// A duplicate result — the same mutant reported by two shards — is
-    /// refused. A merge that quietly took the first would let a re-run of one
-    /// shard double-count its mutants and silently widen its share of the score.
-    @Test("Merge refuses duplicate results across shards")
-    func mergeRefusesDuplicates() throws {
-        let points = Self.points(count: 3)
-        let plan = Self.plan(mutations: points)
-
-        let firstShard = try PlanSharding.shard(plan: plan, count: 2)[0]
-        let firstShardReport = Self.report(
-            plan: firstShard,
-            results: firstShard.mutations.map { Self.result(point: $0, outcome: .killedByAssertion) }
-        )
-
-        // The second shard is set up to report one mutant the first already
-        // reported — exactly what would happen if a checkpoint let a shard
-        // resume its sibling's results.
-        let duplicatedPoint = firstShard.mutations.first!
-        let secondReport = Self.report(
-            plan: plan,
-            results: [Self.result(point: duplicatedPoint, outcome: .survived)]
-        )
-
-        #expect(throws: ShardingError.self) {
-            try PlanSharding.merge(reports: [firstShardReport, secondReport], plan: plan)
-        }
-    }
-
-    /// A failed baseline in any shard invalidates the merged report. A baseline
-    /// that passed everywhere carries the (shared) passing record; a baseline
-    /// that failed somewhere carries the failing one so the reader sees the
-    /// actual failure rather than a silent pass.
-    @Test("A failed baseline in one shard fails the merged report")
-    func failedBaselineIsCarriedThroughMerge() throws {
-        let points = Self.points(count: 4)
-        let plan = Self.plan(mutations: points)
-
-        let passing = Self.report(
-            plan: plan,
-            results: points.map { Self.result(point: $0, outcome: .killedByAssertion) },
-            baselinePassed: true
-        )
-        let failing = Self.report(
-            plan: plan,
-            results: [],
-            baselinePassed: false
-        )
-
-        let merged = try PlanSharding.merge(reports: [passing, failing], plan: plan)
-
-        #expect(!merged.baseline.passed)
-        #expect(merged.score == nil, "a red baseline anywhere withholds the merged score")
-    }
-
-    @Test("Merging an empty set is refused")
-    func mergingEmptyIsRefused() throws {
-        let plan = Self.plan(mutations: [])
-        #expect(throws: ShardingError.self) {
-            try PlanSharding.merge(reports: [], plan: plan)
-        }
-    }
-
-    // MARK: - subset
-
-    /// An arbitrary subset survives encode -> decode: `MutationPlan.decode`
-    /// (the real, model-level API — not raw JSON parsing) accepts the
-    /// derived plan and reports it as internally consistent, the same way it
-    /// would for a plan produced by real discovery.
-    @Test("An arbitrary subset survives encode -> decode round-trip")
-    func subsetSurvivesRoundTrip() throws {
-        let points = Self.decodablePoints(count: 20)
-        let plan = Self.plan(mutations: points)
-        let requested = Array(points.prefix(7).map(\.id))
-
-        let derived = try PlanSharding.subset(of: plan, mutationIDs: requested)
-        let redecoded = try MutationPlan.decode(from: derived.encoded())
-
-        #expect(redecoded.mutations.count == 7)
-    }
-
-    /// The selected IDs in the round-tripped plan are exactly what was
-    /// requested — no more, no fewer.
-    @Test("The subset contains exactly the requested MutationIDs")
-    func subsetContainsExactlyRequestedIDs() throws {
-        let points = Self.decodablePoints(count: 20)
-        let plan = Self.plan(mutations: points)
-        let requested = Set(points.enumerated().filter { $0.offset % 3 == 0 }.map(\.element.id))
-
-        let derived = try PlanSharding.subset(of: plan, mutationIDs: Array(requested))
-        let redecoded = try MutationPlan.decode(from: derived.encoded())
-
-        #expect(Set(redecoded.mutations.map(\.id)) == requested)
-        #expect(redecoded.mutations.count == requested.count)
-    }
-
-    /// Source/operator context for each retained mutation is preserved
-    /// byte-for-byte, not just its ID — a real `mutantkit run`/`verify`
-    /// against the derived plan needs the full `MutationPoint`, not a stub.
-    @Test("Source and operator context is preserved for each retained mutation")
-    func subsetPreservesSourceAndOperatorContext() throws {
-        let points = Self.decodablePoints(count: 10)
-        let plan = Self.plan(mutations: points)
-        let requested = [points[2].id, points[5].id]
-
-        let derived = try PlanSharding.subset(of: plan, mutationIDs: requested)
-        let redecoded = try MutationPlan.decode(from: derived.encoded())
-
-        let byID = Dictionary(uniqueKeysWithValues: redecoded.mutations.map { ($0.id, $0) })
-        for original in [points[2], points[5]] {
-            #expect(byID[original.id] == original)
-        }
-        #expect(redecoded.operators == plan.operators)
-        #expect(redecoded.sourceFileHashes == plan.sourceFileHashes)
-        #expect(redecoded.planID == plan.planID)
-    }
-
-    /// The parent plan itself is never mutated by deriving a subset from it —
-    /// `subset` returns a fresh `MutationPlan`, and the parent's own
-    /// `mutations` are exactly what they were before the call.
-    @Test("Deriving a subset does not mutate the parent plan")
-    func subsetDoesNotMutateParent() throws {
-        let points = Self.points(count: 10)
-        let plan = Self.plan(mutations: points)
-        let parentMutationsBefore = plan.mutations
-
-        _ = try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, points[1].id])
-
-        #expect(plan.mutations == parentMutationsBefore)
-        #expect(plan.mutations.count == 10)
-    }
-
-    /// Requesting a `MutationID` that is not in the parent plan fails closed
-    /// — a silent skip would make the derived plan smaller than the caller
-    /// asked for with no signal anything was lost.
-    @Test("Requesting a nonexistent MutationID fails closed")
-    func subsetRefusesUnknownID() throws {
-        let points = Self.points(count: 5)
-        let plan = Self.plan(mutations: points)
-        let unknown = MutationID(rawValue: "mut_does_not_exist")
-
-        #expect(throws: PlanSubsetError.self) {
-            try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, unknown])
-        }
-    }
-
-    /// Requesting the same `MutationID` twice fails closed rather than
-    /// silently de-duplicating.
-    @Test("Requesting a duplicate MutationID fails closed")
-    func subsetRefusesDuplicateRequest() throws {
-        let points = Self.points(count: 5)
-        let plan = Self.plan(mutations: points)
-
-        #expect(throws: PlanSubsetError.self) {
-            try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, points[0].id])
-        }
-    }
-
     // MARK: - Fixtures
 
-    private static let toolchain = ToolchainFingerprint(
+    fileprivate static let toolchain = ToolchainFingerprint(
         toolVersion: "0.1.0",
         toolCommitSHA: nil,
         swiftVersion: "6.3.3",
@@ -383,7 +158,7 @@ struct PlanShardingTests {
         xcodeVersion: nil
     )
 
-    private static func points(count: Int) -> [MutationPoint] {
+    fileprivate static func points(count: Int) -> [MutationPoint] {
         (0 ..< count).map { index in
             point(id: "mut_\(String(format: "%04d", index))", file: "Sources/File\(index % 3).swift")
         }
@@ -396,7 +171,7 @@ struct PlanShardingTests {
     /// JSON parsing) runs `IntegrityChecker.validatePlan` and rejects both a
     /// declared ID that does not reproduce from its own components and a
     /// duplicate ID within one plan.
-    private static func decodablePoints(count: Int) -> [MutationPoint] {
+    fileprivate static func decodablePoints(count: Int) -> [MutationPoint] {
         (0 ..< count).map { index in
             let base = point(id: "mut_placeholder", file: "Sources/File\(index).swift")
             return MutationPoint(
@@ -421,7 +196,7 @@ struct PlanShardingTests {
         }
     }
 
-    private static func point(id: String, file: String) -> MutationPoint {
+    fileprivate static func point(id: String, file: String) -> MutationPoint {
         MutationPoint(
             id: MutationID(rawValue: id),
             file: file,
@@ -443,7 +218,7 @@ struct PlanShardingTests {
         )
     }
 
-    private static func plan(
+    fileprivate static func plan(
         id: String = "plan_test",
         mutations: [MutationPoint],
         skipped: [SkippedMutation] = []
@@ -461,7 +236,7 @@ struct PlanShardingTests {
         )
     }
 
-    private static func result(point: MutationPoint, outcome: MutationOutcome) -> MutationResult {
+    fileprivate static func result(point: MutationPoint, outcome: MutationOutcome) -> MutationResult {
         makeResult(
             point: point,
             outcome: outcome,
@@ -483,7 +258,7 @@ struct PlanShardingTests {
         )
     }
 
-    private static func report(
+    fileprivate static func report(
         plan: MutationPlan,
         results: [MutationResult],
         baselinePassed: Bool = true,
@@ -515,5 +290,237 @@ struct PlanShardingTests {
                 plan: plan, ledger: makeLedger(results), baselinePassed: baselinePassed
             )
         )
+    }
+}
+
+/// Merging shard reports back into the unsharded report, and what the merge refuses.
+@Suite("Plan sharding: merge")
+struct PlanShardingMergeTests {
+    // MARK: - merge
+
+    /// Merging the shard reports for a plan reproduces the unsharded report:
+    /// same mutation IDs, same outcomes, no mutant added and none dropped.
+    @Test("Merge reconstructs the unsharded report exactly")
+    func mergeReconstructsUnsharded() throws {
+        let points = PlanShardingTests.points(count: 12)
+        let plan = PlanShardingTests.plan(mutations: points)
+        let unshardedReport = PlanShardingTests.report(
+            plan: plan,
+            results: points.map { PlanShardingTests.result(point: $0, outcome: .killedByAssertion) }
+        )
+
+        let shards = try PlanSharding.shard(plan: plan, count: 4)
+        let shardReports = shards.map { shard in
+            PlanShardingTests.report(
+                plan: shard,
+                results: shard.mutations.map { PlanShardingTests.result(point: $0, outcome: .killedByAssertion) }
+            )
+        }
+
+        let merged = try PlanSharding.merge(reports: shardReports, plan: plan)
+
+        let byID = Dictionary(uniqueKeysWithValues: merged.results.map { ($0.id, $0.outcome) })
+        let originalByID = Dictionary(uniqueKeysWithValues: unshardedReport.results.map { ($0.id, $0.outcome) })
+        #expect(byID == originalByID)
+        #expect(merged.integrity.passed == unshardedReport.integrity.passed)
+        #expect(merged.score == unshardedReport.score)
+    }
+
+    /// Merge refuses reports from different plans. The two reports would
+    /// otherwise be stitched into a number for a project state that never
+    /// existed.
+    @Test("Merge refuses reports from different plans")
+    func mergeRefusesDifferentPlans() throws {
+        let planA = PlanShardingTests.plan(id: "plan_a", mutations: PlanShardingTests.points(count: 3))
+        let planB = PlanShardingTests.plan(id: "plan_b", mutations: PlanShardingTests.points(count: 3))
+
+        let reportA = PlanShardingTests.report(plan: planA, results: [])
+        let reportB = PlanShardingTests.report(plan: planB, results: [])
+
+        #expect(throws: ShardingError.self) {
+            try PlanSharding.merge(reports: [reportA, reportB], plan: planA)
+        }
+    }
+
+    /// Merge refuses a toolchain mismatch. Numbers measured against different
+    /// compilers are not comparable.
+    @Test("Merge refuses reports from different toolchains")
+    func mergeRefusesDifferentToolchains() throws {
+        let plan = PlanShardingTests.plan(mutations: PlanShardingTests.points(count: 3))
+        let otherToolchain = ToolchainFingerprint(
+            toolVersion: "0.1.0",
+            toolCommitSHA: nil,
+            swiftVersion: "6.0.0",
+            swiftSyntaxVersion: "600.0.0",
+            xcodeVersion: nil
+        )
+
+        let a = PlanShardingTests.report(plan: plan, results: [], toolchain: PlanShardingTests.toolchain)
+        let b = PlanShardingTests.report(plan: plan, results: [], toolchain: otherToolchain)
+
+        #expect(throws: ShardingError.self) {
+            try PlanSharding.merge(reports: [a, b], plan: plan)
+        }
+    }
+
+    /// A duplicate result — the same mutant reported by two shards — is
+    /// refused. A merge that quietly took the first would let a re-run of one
+    /// shard double-count its mutants and silently widen its share of the score.
+    @Test("Merge refuses duplicate results across shards")
+    func mergeRefusesDuplicates() throws {
+        let points = PlanShardingTests.points(count: 3)
+        let plan = PlanShardingTests.plan(mutations: points)
+
+        let firstShard = try PlanSharding.shard(plan: plan, count: 2)[0]
+        let firstShardReport = PlanShardingTests.report(
+            plan: firstShard,
+            results: firstShard.mutations.map { PlanShardingTests.result(point: $0, outcome: .killedByAssertion) }
+        )
+
+        // The second shard is set up to report one mutant the first already
+        // reported — exactly what would happen if a checkpoint let a shard
+        // resume its sibling's results.
+        let duplicatedPoint = firstShard.mutations.first!
+        let secondReport = PlanShardingTests.report(
+            plan: plan,
+            results: [PlanShardingTests.result(point: duplicatedPoint, outcome: .survived)]
+        )
+
+        #expect(throws: ShardingError.self) {
+            try PlanSharding.merge(reports: [firstShardReport, secondReport], plan: plan)
+        }
+    }
+
+    /// A failed baseline in any shard invalidates the merged report. A baseline
+    /// that passed everywhere carries the (shared) passing record; a baseline
+    /// that failed somewhere carries the failing one so the reader sees the
+    /// actual failure rather than a silent pass.
+    @Test("A failed baseline in one shard fails the merged report")
+    func failedBaselineIsCarriedThroughMerge() throws {
+        let points = PlanShardingTests.points(count: 4)
+        let plan = PlanShardingTests.plan(mutations: points)
+
+        let passing = PlanShardingTests.report(
+            plan: plan,
+            results: points.map { PlanShardingTests.result(point: $0, outcome: .killedByAssertion) },
+            baselinePassed: true
+        )
+        let failing = PlanShardingTests.report(
+            plan: plan,
+            results: [],
+            baselinePassed: false
+        )
+
+        let merged = try PlanSharding.merge(reports: [passing, failing], plan: plan)
+
+        #expect(!merged.baseline.passed)
+        #expect(merged.score == nil, "a red baseline anywhere withholds the merged score")
+    }
+
+    @Test("Merging an empty set is refused")
+    func mergingEmptyIsRefused() throws {
+        let plan = PlanShardingTests.plan(mutations: [])
+        #expect(throws: ShardingError.self) {
+            try PlanSharding.merge(reports: [], plan: plan)
+        }
+    }
+}
+
+/// Deriving an arbitrary subset of a plan by `MutationID`.
+@Suite("Plan sharding: subset")
+struct PlanShardingSubsetTests {
+    // MARK: - subset
+
+    /// An arbitrary subset survives encode -> decode: `MutationPlan.decode`
+    /// (the real, model-level API — not raw JSON parsing) accepts the
+    /// derived plan and reports it as internally consistent, the same way it
+    /// would for a plan produced by real discovery.
+    @Test("An arbitrary subset survives encode -> decode round-trip")
+    func subsetSurvivesRoundTrip() throws {
+        let points = PlanShardingTests.decodablePoints(count: 20)
+        let plan = PlanShardingTests.plan(mutations: points)
+        let requested = Array(points.prefix(7).map(\.id))
+
+        let derived = try PlanSharding.subset(of: plan, mutationIDs: requested)
+        let redecoded = try MutationPlan.decode(from: derived.encoded())
+
+        #expect(redecoded.mutations.count == 7)
+    }
+
+    /// The selected IDs in the round-tripped plan are exactly what was
+    /// requested — no more, no fewer.
+    @Test("The subset contains exactly the requested MutationIDs")
+    func subsetContainsExactlyRequestedIDs() throws {
+        let points = PlanShardingTests.decodablePoints(count: 20)
+        let plan = PlanShardingTests.plan(mutations: points)
+        let requested = Set(points.enumerated().filter { $0.offset % 3 == 0 }.map(\.element.id))
+
+        let derived = try PlanSharding.subset(of: plan, mutationIDs: Array(requested))
+        let redecoded = try MutationPlan.decode(from: derived.encoded())
+
+        #expect(Set(redecoded.mutations.map(\.id)) == requested)
+        #expect(redecoded.mutations.count == requested.count)
+    }
+
+    /// Source/operator context for each retained mutation is preserved
+    /// byte-for-byte, not just its ID — a real `mutantkit run`/`verify`
+    /// against the derived plan needs the full `MutationPoint`, not a stub.
+    @Test("Source and operator context is preserved for each retained mutation")
+    func subsetPreservesSourceAndOperatorContext() throws {
+        let points = PlanShardingTests.decodablePoints(count: 10)
+        let plan = PlanShardingTests.plan(mutations: points)
+        let requested = [points[2].id, points[5].id]
+
+        let derived = try PlanSharding.subset(of: plan, mutationIDs: requested)
+        let redecoded = try MutationPlan.decode(from: derived.encoded())
+
+        let byID = Dictionary(uniqueKeysWithValues: redecoded.mutations.map { ($0.id, $0) })
+        for original in [points[2], points[5]] {
+            #expect(byID[original.id] == original)
+        }
+        #expect(redecoded.operators == plan.operators)
+        #expect(redecoded.sourceFileHashes == plan.sourceFileHashes)
+        #expect(redecoded.planID == plan.planID)
+    }
+
+    /// The parent plan itself is never mutated by deriving a subset from it —
+    /// `subset` returns a fresh `MutationPlan`, and the parent's own
+    /// `mutations` are exactly what they were before the call.
+    @Test("Deriving a subset does not mutate the parent plan")
+    func subsetDoesNotMutateParent() throws {
+        let points = PlanShardingTests.points(count: 10)
+        let plan = PlanShardingTests.plan(mutations: points)
+        let parentMutationsBefore = plan.mutations
+
+        _ = try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, points[1].id])
+
+        #expect(plan.mutations == parentMutationsBefore)
+        #expect(plan.mutations.count == 10)
+    }
+
+    /// Requesting a `MutationID` that is not in the parent plan fails closed
+    /// — a silent skip would make the derived plan smaller than the caller
+    /// asked for with no signal anything was lost.
+    @Test("Requesting a nonexistent MutationID fails closed")
+    func subsetRefusesUnknownID() throws {
+        let points = PlanShardingTests.points(count: 5)
+        let plan = PlanShardingTests.plan(mutations: points)
+        let unknown = MutationID(rawValue: "mut_does_not_exist")
+
+        #expect(throws: PlanSubsetError.self) {
+            try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, unknown])
+        }
+    }
+
+    /// Requesting the same `MutationID` twice fails closed rather than
+    /// silently de-duplicating.
+    @Test("Requesting a duplicate MutationID fails closed")
+    func subsetRefusesDuplicateRequest() throws {
+        let points = PlanShardingTests.points(count: 5)
+        let plan = PlanShardingTests.plan(mutations: points)
+
+        #expect(throws: PlanSubsetError.self) {
+            try PlanSharding.subset(of: plan, mutationIDs: [points[0].id, points[0].id])
+        }
     }
 }

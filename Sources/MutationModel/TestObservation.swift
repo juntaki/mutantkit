@@ -1,12 +1,12 @@
 import Foundation
 
-/// Moved here from `MutationExecution` (the authoritative verdict pipeline): `MutationVerdictVerifier`
-/// is the only place a mutation's outcome may be decided, and it lives in
-/// `MutationModel` (so its exclusive-construction guarantee on
-/// `VerifiedMutationRecord` holds across every caller). It therefore needs
-/// to inspect these observation types directly, not a lossy re-encoding of
-/// them — `MutationModel` cannot depend on `MutationExecution`, so the
-/// types move down instead.
+// Moved here from `MutationExecution` (the authoritative verdict pipeline): `MutationVerdictVerifier`
+// is the only place a mutation's outcome may be decided, and it lives in
+// `MutationModel` (so its exclusive-construction guarantee on
+// `VerifiedMutationRecord` holds across every caller). It therefore needs
+// to inspect these observation types directly, not a lossy re-encoding of
+// them — `MutationModel` cannot depend on `MutationExecution`, so the
+// types move down instead.
 
 // MARK: - Build
 

@@ -194,7 +194,10 @@ struct BoolLiteralSchemataLowererTests {
         )
     }
 
-    @Test("Test E: pattern exclusion is ancestor-structural, not only direct-parent — an enum-associated-value pattern nests the literal several levels below its ExpressionPatternSyntax ancestor")
+    @Test("""
+    Test E: pattern exclusion is ancestor-structural, not only direct-parent — an enum-associated-value \
+    pattern nests the literal several levels below its ExpressionPatternSyntax ancestor
+    """)
     func caseE_patternExclusionIsAncestorStructuralNotJustDirectParent() throws {
         let source = """
         func f(_ x: Bool?) -> Int {
@@ -212,7 +215,11 @@ struct BoolLiteralSchemataLowererTests {
             Issue.record("expected .isolatedOnly, got \(eligibility)")
             return
         }
-        #expect(reason == .patternPosition, "the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax itself — only an ancestor walk finds it")
+        #expect(reason == .patternPosition,
+                """
+                the literal's direct parent is a function-call/labeled-expr chain, not ExpressionPatternSyntax \
+                itself — only an ancestor walk finds it
+                """)
     }
 
     @Test("Test F: the existing result-builder exclusion is unaffected by the new pattern-position check")
@@ -272,6 +279,19 @@ struct BoolLiteralSchemataLowererTests {
             return
         }
         #expect(reason == .patternPosition)
+    }
+}
+
+/// `BoolLiteralSchemataLowerer` eligibility for `while` / `repeat`-`while` constant conditions.
+@Suite("BoolLiteralSchemataLowerer: control-flow constants")
+struct BoolLiteralSchemataLowererControlFlowTests {
+    private let lowerer = BoolLiteralSchemataLowerer()
+
+    private func point(_ source: String, relativePath: String = "Sample.swift") throws -> MutationPoint {
+        let points = try CoreOperatorExpansionTestSupport.discover(
+            source, operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: relativePath
+        )
+        return try #require(points.first)
     }
 
     // MARK: - Control-flow-constant conditions (`while` / `repeat`-`while`)
@@ -428,6 +448,19 @@ struct BoolLiteralSchemataLowererTests {
             return
         }
         #expect(patternReason == .patternPosition, "must still report its own reason, not .controlFlowConstant")
+    }
+}
+
+/// `BoolLiteralSchemataLowerer.lower(_:sources:)`: rewriting, pass-through and fail-closed failure modes.
+@Suite("BoolLiteralSchemataLowerer: lowering")
+struct BoolLiteralSchemataLowererLoweringTests {
+    private let lowerer = BoolLiteralSchemataLowerer()
+
+    private func point(_ source: String, relativePath: String = "Sample.swift") throws -> MutationPoint {
+        let points = try CoreOperatorExpansionTestSupport.discover(
+            source, operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: relativePath
+        )
+        return try #require(points.first)
     }
 
     // MARK: - lower: single point
