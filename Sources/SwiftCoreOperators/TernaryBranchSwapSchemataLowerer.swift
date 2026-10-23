@@ -100,6 +100,9 @@ public struct TernaryBranchSwapSchemataLowerer: SchemataLowerer {
             if let reason = Self.unsafetyReason(for: nested.thenExpression) { return reason }
             return Self.unsafetyReason(for: nested.elseExpression)
         }
+        if ComposedBooleanOperand.isComposed(unwrapped) {
+            return ComposedBooleanOperand.unsafetyReason(for: unwrapped, recurse: Self.unsafetyReason(for:))
+        }
         return Self.unsafeOperandReason(for: unwrapped)
     }
 

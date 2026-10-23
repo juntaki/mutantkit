@@ -36,6 +36,17 @@ public enum ExecutionMode: String, Codable, Sendable {
     case schemata
 }
 
+/// How finely the baseline coverage pass attributes coverage to tests.
+public enum CoverageGranularity: String, Codable, Sendable {
+    /// One isolated run per test. The finest map, and the slowest pass: a
+    /// suite of thousands of tests pays one process start for each.
+    case test
+    /// One run per test suite, its coverage given to every test in it. The
+    /// map can only name more tests for a line than `.test` would, never
+    /// fewer, so a mutant runs a few more tests and misses none.
+    case suite
+}
+
 // MARK: - Byte range
 
 /// A half-open UTF-8 byte range within a source file.

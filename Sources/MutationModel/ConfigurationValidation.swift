@@ -605,7 +605,8 @@ public enum ConfigurationJSONSchema {
             "simulatorPool": { "type": "boolean" },
             "sharedModuleCache": { "type": "boolean" },
             "cleanSubtreeCloning": { "type": "boolean" },
-            "profileCoverageSkip": { "type": "boolean" }
+            "profileCoverageSkip": { "type": "boolean" },
+            "coverageGranularity": { "enum": ["test", "suite"] }
           }
         },
         "timeouts": {

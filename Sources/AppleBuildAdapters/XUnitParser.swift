@@ -101,6 +101,13 @@ enum XUnitParser {
         return report.total - report.skipped
     }
 
+    /// How many tests the Swift Testing report records as skipped. A skipped test is reported as a
+    /// `testcase` with a `skipped` child under a suite that counts `tests="0"`, which is why the
+    /// merged summary of such a run is empty; this reads the count the report states.
+    static func swiftTestingSkippedCount(forRequestedOutput requested: URL) -> Int? {
+        parse(contentsOf: swiftTestingSiblingPath(for: requested))?.skipped
+    }
+
     struct Report {
         var total = 0
         var failed = 0

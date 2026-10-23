@@ -81,7 +81,9 @@ execution:
   confirmTimedOutMutants: true
   # Narrows each mutant's test run to only the tests that cover its mutated
   # line, measured once against the unmutated baseline. A mutant on a line no
-  # test reaches is `noCoverage` without ever being built. The single largest
+  # test reaches is `noCoverage` without ever being built. Without it, nothing
+  # is classified `noCoverage`: such a mutant runs against the whole suite and
+  # is reported as `survived`. The single largest
   # speedup available before touching incrementalBuild/simulatorPool below —
   # cached against an unchanged source tree, test suite, scheme, test targets
   # and toolchain, and reused across runs that differ in anything else

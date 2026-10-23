@@ -26,11 +26,28 @@ import MutationModel
 public struct SurvivorPresentation: Codable, Sendable {
     public let planID: String
     public let rows: [Row]
+    /// Whether the run measured baseline coverage. Without it nothing can be
+    /// classified `.noCoverage`, so a `.survived` mutant may sit on code no
+    /// test executes, and a reporter must not call it "covered".
+    public let coverageMeasured: Bool
 
-    public init(planID: String, rows: [Row]) {
+    public init(planID: String, rows: [Row], coverageMeasured: Bool = true) {
         self.planID = planID
         self.rows = rows
+        self.coverageMeasured = coverageMeasured
     }
+
+    /// The heading for the `.survived` rows of a full local report.
+    public func survivedHeading(mutants: Int) -> String {
+        coverageMeasured
+            ? "Covered but survived — \(mutants) mutant(s)"
+            : "Survived, coverage not measured — \(mutants) mutant(s)"
+    }
+
+    /// Shown under the survived heading when coverage was not measured.
+    public static let coverageNotMeasuredNote =
+        "Coverage was not measured, so code that no test executes is listed here as survived too. " +
+        "Set execution.selectCoveringTests to separate it as noCoverage."
 
     public struct Aggregate: Codable, Sendable, Equatable {
         public let totalMutants: Int
@@ -101,7 +118,10 @@ public enum SurvivorPresentationBuilder {
                 )
             }
         }
-        return SurvivorPresentation(planID: actionability.planID, rows: rows)
+        return SurvivorPresentation(
+            planID: actionability.planID, rows: rows,
+            coverageMeasured: report.baseline.profilingDurationSeconds != nil
+        )
     }
 }
 

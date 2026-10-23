@@ -21,7 +21,9 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
     /// crash confirmed the same way, so it counts as one. See `.timedOut`
     /// and `confirmTimedOutMutants`.
     case verifiedTimeout
-    /// Tests ran, covered the code, and all passed. A real gap.
+    /// The mutation reached the build product, tests ran, and all passed. With coverage
+    /// measured the mutated line was also executed; without it `.noCoverage` is not
+    /// evaluated and the line may be one no test runs. A real gap.
     case survived
     /// Tests ran and passed, but nothing executed the mutated line.
     case noCoverage
@@ -65,7 +67,8 @@ public enum MutationOutcome: String, Codable, Sendable, CaseIterable {
     public enum Detection: String, Codable, Sendable {
         /// The suite caught it, however it happened to show up.
         case detected
-        /// The suite ran, covered the mutation, and did not catch it.
+        /// The suite ran against the mutation and did not catch it (see `MutationOutcome.survived`
+        /// for what is known about coverage).
         case survived
         /// Neither proven: a build/infra problem, a plan/integrity issue, an
         /// unconfirmed timeout, or a result excluded before it could be

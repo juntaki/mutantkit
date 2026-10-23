@@ -170,7 +170,7 @@ public enum SchemataChunkPlanner {
             // is what lets a file with many independent comparisons still
             // batch into as few builds as its worst site's own candidate
             // count requires — not one build per mutation.
-            for wave in nonOverlappingWaves(points) {
+            for wave in nonOverlappingWaves(points, envelopes: classified.envelopeByMutationID) {
                 for batch in wave.chunked(into: maxChunkSize) {
                     do {
                         let program = try lower(batch: batch, key: key, lowerer: lowerer, filesByTarget: filesByTarget, sources: sources)
@@ -232,6 +232,10 @@ public enum SchemataChunkPlanner {
         var fallbackEntries: [SchemataPlanEntry] = []
         var groups: [GroupKey: [MutationPoint]] = [:]
         var lowererByID: [String: any SchemataLowerer] = [:]
+        /// Each embedded point's `analyze` rewrite envelope — what the lowerer
+        /// will actually rewrite, which can be wider than `utf8Range` (a
+        /// logical connector's envelope is its whole `lhs op rhs`).
+        var envelopeByMutationID: [MutationID: ByteRange] = [:]
     }
 
     private static func classify(
@@ -290,7 +294,8 @@ public enum SchemataChunkPlanner {
             switch lowerer.analyze(point, source: source) {
             case let .isolatedOnly(reason):
                 result.fallbackEntries.append(fallbackEntry(point: point, info: representative, reason: reason))
-            case .eligible:
+            case let .eligible(_, envelope, _):
+                result.envelopeByMutationID[point.id] = envelope
                 // A file compiled into more than one target (a shared
                 // model file added directly to an app target and a widget
                 // extension's own Compile Sources, say) embeds
@@ -416,10 +421,17 @@ public enum SchemataChunkPlanner {
         let point: MutationPoint
     }
 
-    private static func nonOverlappingWaves(_ points: [MutationPoint]) -> [[MutationPoint]] {
+    private static func nonOverlappingWaves(
+        _ points: [MutationPoint], envelopes: [MutationID: ByteRange]
+    ) -> [[MutationPoint]] {
         var waves: [[WavePoint]] = []
-        for point in points.sorted(by: { ($0.file, $0.utf8Range.start) < ($1.file, $1.utf8Range.start) }) {
-            let wavePoint = WavePoint(file: point.file, range: point.utf8Range, point: point)
+        // Waves are split on the lowerer's rewrite envelope, not just the
+        // anchor token: `a && b && c` has two non-overlapping operator
+        // tokens whose envelopes (`a && b` inside `(a && b) && c`) nest, and
+        // `lower()` rejects overlapping envelopes for the whole batch.
+        func range(of point: MutationPoint) -> ByteRange { envelopes[point.id] ?? point.utf8Range }
+        for point in points.sorted(by: { ($0.file, range(of: $0).start) < ($1.file, range(of: $1).start) }) {
+            let wavePoint = WavePoint(file: point.file, range: range(of: point), point: point)
             if let index = waves.firstIndex(where: { wave in
                 wave.allSatisfy {
                     $0.file != wavePoint.file || $0.range.end <= wavePoint.range.start || wavePoint.range.end <= $0.range.start

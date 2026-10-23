@@ -132,14 +132,14 @@ Once a run finishes, each mutation gets one of the following results:
 | Result                   | Meaning                                                      |
 | ------------------------- | ------------------------------------------------------------- |
 | `killed`                | A test detected the change the mutation made                  |
-| `survived`              | Code reached the mutation, but every test still passed          |
-| `noCoverage`            | No test ever executed the mutated code                          |
+| `survived`              | The mutation reached the build product, but every test still passed (with coverage measured, the mutated line was also executed) |
+| `noCoverage`            | No test ever executed the mutated code (reported only when coverage is measured) |
 | `notApplied`            | The mutation could not be safely applied                        |
 | `baselineMismatch`      | What ran does not match the verified baseline                   |
 | `notMaterialized`       | The edit compiled, but the build product is identical to the baseline's, so the mutation never reached what the tests run |
 | `infrastructureFailure` | The execution environment itself had a problem                  |
 
-`survived` may mean your tests are too weak to catch that mutation. `noCoverage` means the mutated code was never exercised by any test at all.
+`survived` may mean your tests are too weak to catch that mutation. `noCoverage` means the mutated code was never exercised by any test at all. Coverage is measured only with `execution.selectCoveringTests`; without it nothing is classified `noCoverage`, and a `survived` mutant may sit on code no test executes.
 
 To dig into a specific result, use its mutation ID:
 
@@ -154,13 +154,13 @@ mutantkit reproduce mut_a1b2c3d4e5f6a7b8
 
 In mutation testing, a mutation can be applied to the source but never reach the compiled binary, and infrastructure failures — a stale build, a crashed Simulator — can get treated as test results.
 
-MutantKit verifies both that a mutation was applied and that it was executed. It never guesses at `killed` or `survived` for a mutant it cannot confirm — it fails closed instead.
+MutantKit verifies that a mutation was applied and that it reached the compiled product, and — with coverage measured — separates mutations no test executed. It never guesses at `killed` or `survived` for a mutant it cannot confirm — it fails closed instead.
 
 * Compares compiled code against the baseline to confirm a mutation actually reached what ran
-* Uses coverage to separate mutations that were actually executed from ones that were never reached
+* With `execution.selectCoveringTests`, uses coverage to separate mutations that were actually executed from ones that were never reached
 * Never folds a result it cannot reconcile with its evidence into the ordinary score
 
-> **v1.3.0 (latest release).** SwiftPM and Xcode projects, isolated and schemata execution, CI gating, coverage-based test selection, caching, sharding, and resumable runs. Six operators are enabled by default; more are added as they clear validation — see [Operators](docs/operators.md) and [Supported today](#supported-today) below.
+> **v1.3.1 (latest release).** SwiftPM and Xcode projects, isolated and schemata execution, CI gating, coverage-based test selection, caching, sharding, and resumable runs. Six operators are enabled by default; more are added as they clear validation — see [Operators](docs/operators.md) and [Supported today](#supported-today) below.
 
 ## Reading the results
 
