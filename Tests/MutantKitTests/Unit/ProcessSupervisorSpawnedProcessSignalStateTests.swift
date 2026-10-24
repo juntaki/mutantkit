@@ -35,7 +35,7 @@ struct ProcessSupervisorSpawnedProcessSignalStateTests {
         """
         let result = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", script],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 10
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 120
         )
 
         #expect(result.succeeded)

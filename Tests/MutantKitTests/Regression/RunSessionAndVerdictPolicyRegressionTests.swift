@@ -223,12 +223,12 @@ struct SchemataConfirmationNeverRebuildsRegressionTests {
     /// both confirmation methods really do create a fresh sandbox and
     /// rebuild, so "schemata never rebuilds" reads as a genuine asymmetry,
     /// not a project-wide absence of any rebuild-on-confirm behavior at all.
-    @Test("Isolated confirmation (crash and timeout) both create a fresh sandbox and rebuild")
+    @Test("Isolated confirmation (crash and timeout) both acquire a confirmation sandbox and rebuild")
     func isolatedConfirmationAlwaysRebuilds() throws {
         let text = try Support.read("MutationExecution/MutationConfirmationCoordinator.swift")
 
         let crashBody = try #require(Support.span(in: text, startMarker: "func confirmCrashKill", endLinePrefix: "    func "))
-        #expect(crashBody.contains("workspaces.createSandbox"))
+        #expect(crashBody.contains("acquireConfirmationSandbox"))
         #expect(crashBody.contains("build.buildMutant"))
 
         let timeoutBody = try #require(Support.span(in: text, startMarker: "func confirmTimeout", endLinePrefix: "    func "))
@@ -236,7 +236,7 @@ struct SchemataConfirmationNeverRebuildsRegressionTests {
         let rebuildBody = try #require(
             Support.span(in: text, startMarker: "func rebuildForTimeoutConfirmation", endLinePrefix: "}")
         )
-        #expect(rebuildBody.contains("workspaces.createSandbox"))
+        #expect(rebuildBody.contains("acquireConfirmationSandbox"))
         #expect(rebuildBody.contains("build.buildMutant"))
     }
 }

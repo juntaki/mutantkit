@@ -37,6 +37,11 @@ enum ProcessSupervisorOwnershipFixture {
     /// `setsid`/`setpgid`), the ordinary, unescaped case, and blocks
     /// (`time.sleep`) long enough that it can only end via a real signal,
     /// never by outliving the fixture on its own.
+    /// The surviving child holds the output pipe open, so the supervisor waits out its drain period before
+    /// it reaps the child (5 s by default). What these scenarios assert is that the child is owned and then
+    /// reaped, not how long the drain is, so it is 1 s.
+    private static let shortDrainGracePeriodSeconds: Double = 1
+
     static func runFastParentExit(timeoutSeconds: Double = 30) async throws -> FastExitResult {
         let readyPath = uniquePath("ready")
         defer { try? FileManager.default.removeItem(atPath: readyPath) }
@@ -66,7 +71,9 @@ enum ProcessSupervisorOwnershipFixture {
 
         let result = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", script],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: timeoutSeconds
+            workingDirectory: FileManager.default.temporaryDirectory, environment: ProcessInfo.processInfo.environment,
+            timeoutSeconds: timeoutSeconds, lifecycleEventHook: nil,
+            drainGracePeriodSeconds: shortDrainGracePeriodSeconds
         )
         guard result.exitCode == 0, !result.timedOut else {
             throw SetupFailure(description: "root did not exit promptly and successfully: \(result)")
@@ -127,7 +134,9 @@ enum ProcessSupervisorOwnershipFixture {
 
         let result = try await ProcessSupervisor.run(
             executable: "/usr/bin/python3", arguments: ["-c", script],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: timeoutSeconds
+            workingDirectory: FileManager.default.temporaryDirectory, environment: ProcessInfo.processInfo.environment,
+            timeoutSeconds: timeoutSeconds, lifecycleEventHook: nil,
+            drainGracePeriodSeconds: shortDrainGracePeriodSeconds
         )
         guard result.exitCode == 0, !result.timedOut else {
             throw SetupFailure(description: "root did not exit promptly and successfully: \(result)")
@@ -183,9 +192,38 @@ enum ProcessSupervisorOwnershipFixture {
     /// polite termination attempt provably cannot end it — only escalation
     /// to `SIGKILL` after the grace period can. Announces readiness the
     /// same way every other fixture here does.
+    ///
+    /// A lost startup race (see `runIgnoringSIGTERMOnce`) is retried instead of answered with a longer
+    /// timeout: the timeout is also how long the test waits for the escalation, so a margin big enough for
+    /// the worst load would be paid on every run, while a retry is paid only when the race is really lost.
     static func runIgnoringSIGTERM(
         timeoutSeconds: Double, terminationGracePeriodSeconds: Double,
         lifecycleEventHook: (@Sendable (ProcessSupervisor.LifecycleEvent) -> Void)? = nil
+    ) async throws -> FastExitResult {
+        let maxAttempts = 3
+        for _ in 1 ..< maxAttempts {
+            do {
+                return try await runIgnoringSIGTERMOnce(
+                    timeoutSeconds: timeoutSeconds, terminationGracePeriodSeconds: terminationGracePeriodSeconds,
+                    lifecycleEventHook: lifecycleEventHook
+                )
+            } catch is LostStartupRace {
+                continue
+            }
+        }
+        return try await runIgnoringSIGTERMOnce(
+            timeoutSeconds: timeoutSeconds, terminationGracePeriodSeconds: terminationGracePeriodSeconds,
+            lifecycleEventHook: lifecycleEventHook
+        )
+    }
+
+    private struct LostStartupRace: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    private static func runIgnoringSIGTERMOnce(
+        timeoutSeconds: Double, terminationGracePeriodSeconds: Double,
+        lifecycleEventHook: (@Sendable (ProcessSupervisor.LifecycleEvent) -> Void)?
     ) async throws -> FastExitResult {
         let readyPath = uniquePath("sigterm-ignoring-ready")
         defer { try? FileManager.default.removeItem(atPath: readyPath) }
@@ -227,10 +265,10 @@ enum ProcessSupervisorOwnershipFixture {
             stallDetection: nil, lifecycleEventHook: lifecycleEventHook
         )
         guard FileManager.default.fileExists(atPath: readyPath) else {
-            throw SetupFailure(description: """
-            the SIGTERM-ignoring child never announced its pid within timeoutSeconds=\(timeoutSeconds)s — \
-            python3 startup lost the race against the supervisor's own deadline, which is a machine-load \
-            artifact of this fixture, not a ProcessSupervisor failure. Raise timeoutSeconds at the call site.
+            throw LostStartupRace(description: """
+            the SIGTERM-ignoring child never announced its pid within timeoutSeconds=\(timeoutSeconds)s on any \
+            attempt — python3 startup lost the race against the supervisor's own deadline each time, which is a \
+            machine-load artifact of this fixture, not a ProcessSupervisor failure.
             """)
         }
         let descendantPID = try readPID(at: readyPath)

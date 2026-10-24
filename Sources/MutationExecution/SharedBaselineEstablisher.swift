@@ -127,7 +127,8 @@ public enum SharedBaselineEstablisher {
             testCommand: record.testCommand,
             buildDurationSeconds: record.buildDurationSeconds,
             testDurationSeconds: record.testDurationSeconds,
-            profilingDurationSeconds: measured.profilingDurationSeconds
+            profilingDurationSeconds: measured.profilingDurationSeconds,
+            coverageReused: measured.reusedFromCache ? true : nil
         )
 
         var established = EstablishedBaseline(

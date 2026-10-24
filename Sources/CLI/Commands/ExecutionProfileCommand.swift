@@ -59,11 +59,46 @@ struct ExecutionProfileCommand: AsyncParsableCommand {
         print("Project: \(resolution.detection.kind.rawValue) — \(resolution.detection.reason)")
 
         let characteristics = await ExecutionProfileSupport.characteristics(plan: loadedPlan, resolution: resolution)
+        let preview = characteristics.schemataEligibleMutationCount > 0
+            ? await SchemataRunOrchestration.preview(
+                SchemataRunOrchestration.Inputs(
+                    plan: loadedPlan, projectRoot: root, kind: resolution.adapter.kind,
+                    scheme: settings.project.scheme, toolchainHash: "preview",
+                    buildArgumentsHash: settings.buildIdentityHash
+                )
+            )
+            : nil
 
         print(Self.render(
             projectRoot: root, planPath: planURL.path, configuredProfile: settings.execution.profile,
-            currentExecution: settings.execution, characteristics: characteristics
+            currentExecution: settings.execution, characteristics: characteristics, schemataPreview: preview
         ))
+    }
+
+    /// The planner's own answer, which the operator-level count above cannot give: how many mutations
+    /// embed into shared builds, in how many chunks, and why the rest would run one at a time.
+    static func schemataPreviewLines(_ preview: SchemataRunOrchestration.Preview) -> [String] {
+        if let failure = preview.failure {
+            let scope = preview.isSample ? " (sample of \(preview.sampled) of \(preview.total) mutations)" : ""
+            return ["Schemata planner\(scope): nothing would embed — \(failure)"]
+        }
+        guard preview.total > 0 else { return [] }
+        let percent = String(format: "%.1f", 100.0 * Double(preview.embedded) / Double(preview.sampled))
+        let label = preview.isSample
+            ? "Schemata planner (sample of \(preview.sampled) of \(preview.total) mutations; the shares are estimates)"
+            : "Schemata planner"
+        // A sample spreads over more files than a whole plan's chunks do, so its chunk count says nothing
+        // about the plan's.
+        let builds = preview.isSample
+            ? "embed (the sample alone needs \(preview.chunks) shared build(s))"
+            : "embed into \(preview.chunks) shared build(s)"
+        var lines = [
+            "\(label): \(preview.embedded)/\(preview.sampled) (\(percent)%) \(builds); "
+                + "\(preview.sampled - preview.embedded) would run isolated, one build each."
+        ]
+        let top = preview.fallbackReasons.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(5)
+        lines.append(contentsOf: top.map { "  \($0.value) × \($0.key)" })
+        return lines
     }
 }
 
@@ -78,7 +113,8 @@ extension ExecutionProfileCommand {
         planPath: String,
         configuredProfile: ExecutionProfile,
         currentExecution: ExecutionSettings,
-        characteristics: ProjectExecutionCharacteristics
+        characteristics: ProjectExecutionCharacteristics,
+        schemataPreview: SchemataRunOrchestration.Preview? = nil
     ) -> String {
         let decisions = ExecutionProfileResolver.decisions(for: characteristics, current: currentExecution)
         let optimized = ExecutionProfileResolver.resolve(profile: .optimized, current: currentExecution, characteristics: characteristics)
@@ -125,9 +161,15 @@ extension ExecutionProfileCommand {
             lines.append(
                 "Schemata-eligible (operator-level): \(characteristics.schemataEligibleMutationCount)/" +
                     "\(characteristics.totalMutationCount) (\(String(format: "%.0f", percent))%) — a necessary, not " +
-                    "sufficient, condition for embedding; the exact embedded/chunk count depends on real target " +
-                    "resolution this report does not attempt."
+                    "sufficient, condition for embedding; " + (
+                        schemataPreview == nil
+                            ? "the exact embedded/chunk count depends on real target resolution this report does not attempt."
+                            : "the planner's own count follows."
+                    )
             )
+        }
+        if let schemataPreview {
+            lines.append(contentsOf: Self.schemataPreviewLines(schemataPreview))
         }
 
         // Not one of the `[enable]`/`[skip]` decisions above: `optimized`/

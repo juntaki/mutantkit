@@ -9,8 +9,11 @@ import Testing
 /// at whether a race resolved favorably.
 @Suite("ProcessSupervisor: deterministic descendant ownership (F3)", .serialized, .subprocessExclusive)
 struct ProcessSupervisorOwnershipTests {
+    /// Whether the process is still running. A killed process whose zombie launchd has not reaped yet is not:
+    /// `kill(pid, 0)` would call it alive for as long as that takes, which under load is long enough to fail
+    /// assertions that a child was torn down.
     private func isAlive(_ pid: pid_t) -> Bool {
-        ProcessTree.isAlive(pid)
+        ProcessTree.isRunning(pid: pid)
     }
 
     private func cleanup(_ pid: pid_t) {
@@ -124,7 +127,10 @@ struct ProcessSupervisorOwnershipTests {
         // (5 -> 20), matching that test's own fix and reasoning. What this
         // test measures is that the grace period elapses *after* the
         // timeout fires, which is independent of how large the timeout is.
-        let timeout: Double = 20
+        //
+        // The 20 s of that history is now 6 s: this test waits the whole timeout, and the fixture
+        // retries a lost startup race instead (see `runIgnoringSIGTERM`).
+        let timeout: Double = 6
         let grace: Double = 2
 
         let started = Date()

@@ -207,7 +207,8 @@ public struct MutationRunner: Sendable {
         // though every call always agreed bit-for-bit.
         let policy = MutationVerdictVerifier.VerdictVerificationPolicy(configuration.execution)
         self.confirmationCoordinator = MutationConfirmationCoordinator(
-            workspaces: workspaces, build: build, test: test, policy: policy, projectRoot: projectRoot
+            workspaces: workspaces, build: build, test: test, policy: policy, projectRoot: projectRoot,
+            reusesConfirmationSandboxes: configuration.execution.incrementalBuild
         )
         self.evidenceAssembler = MutationEvidenceAssembler(
             plan: plan,
@@ -297,6 +298,7 @@ public struct MutationRunner: Sendable {
             let known = Set(resumed.map(\.id))
             evaluated = persisted.filter { !known.contains($0.id) }
         }
+        await confirmationCoordinator.drainConfirmationPool()
         // Results of mutants cut short by a forced stop are artifacts of the
         // termination (see `MutationEvidenceAssembler.finalize`), not verdicts.
         if let stop { evaluated.removeAll { stop.wasDiscarded($0.id) } }

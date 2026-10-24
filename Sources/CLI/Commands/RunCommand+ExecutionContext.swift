@@ -337,8 +337,11 @@ extension RunCommand {
             return nil
         }
         do {
+            // The project's `mutantkit.yml` is keyed as the parsed configuration, per identity scope, not
+            // as bytes: editing `workers` or `budget` must not discard a coverage map they cannot affect.
             return try await RunInputState.compute(
-                projectRoot: root, layout: layout, scratchRoots: scratchRoots, processRunner: processRunner
+                projectRoot: root, layout: layout, scratchRoots: scratchRoots,
+                excludingProjectRelativePaths: [ConfigurationLoader.fileName], processRunner: processRunner
             )
         } catch {
             // Printed, not swallowed: "no cache this run" is a real slowdown

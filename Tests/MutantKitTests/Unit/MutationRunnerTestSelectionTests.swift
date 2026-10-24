@@ -189,8 +189,10 @@ struct MutationRunnerTestSelectionTests {
         #expect(report.results.first?.outcome == .killedByAssertion)
         let observed = try #require(await adapter.recordedTimeoutSeconds.first)
         // Default `TimeoutSettings()` with an unmeasured (~0s) baseline
-        // resolves to ~ the adaptive default's overheadAllowance (60s).
-        #expect(abs(observed - 60) < 1)
+        // resolves to the adaptive default's overheadAllowance (60s) plus 3x the baseline's real measured
+        // wall-clock (a starved task in the full parallel suite has made that tens of seconds), so the
+        // window is [60, 300): a narrower clamp lands below, the 300s ceiling at its edge.
+        #expect(observed >= 60 && observed < 300, "whole-suite limit (60 s allowance plus the measured baseline x3), not a narrower clamp or the 300 s ceiling: \(observed)")
     }
 
     @Test("An unknown/unattributed selection keeps today's whole-suite-scaled timeout, completely unchanged")
@@ -202,8 +204,10 @@ struct MutationRunnerTestSelectionTests {
         #expect(report.results.first?.outcome == .killedByAssertion)
         let observed = try #require(await adapter.recordedTimeoutSeconds.first)
         // Default `TimeoutSettings()` with an unmeasured (~0s) baseline
-        // resolves to ~ the adaptive default's overheadAllowance (60s).
-        #expect(abs(observed - 60) < 1)
+        // resolves to the adaptive default's overheadAllowance (60s) plus 3x the baseline's real measured
+        // wall-clock (a starved task in the full parallel suite has made that tens of seconds), so the
+        // window is [60, 300): a narrower clamp lands below, the 300s ceiling at its edge.
+        #expect(observed >= 60 && observed < 300, "whole-suite limit (60 s allowance plus the measured baseline x3), not a narrower clamp or the 300 s ceiling: \(observed)")
     }
 
     @Test("A confirmation reruns under the exact same resolved limit the original observation used, never a separately-resolved one")

@@ -77,8 +77,13 @@ public enum MutationVerdictVerifier {
     /// 18: a build failure recorded as a confirmed compiler crash (the compiler crashed
     /// on the mutant and again in an independent rebuild) is `.unviable`; no older
     /// observation carries that kind, so this only keeps the version honest about the
-    /// rules that judged a cached verdict.
-    public static let currentVersion = 18
+    /// rules that judged a cached verdict. Bumped to 19: a selection recorded for
+    /// a parameterized Swift Testing test as `method(value:)()` is now read as
+    /// `method(value:)`, so the identical `MutationObservations` whose failing test
+    /// was that very test, which used to classify as `.infrastructureFailure`
+    /// (outside the selection), now classify as `.killedByAssertion`; a pre-bump
+    /// cached verdict must never be reused as-is.
+    public static let currentVersion = 19
 
     /// `verify(_:)` alone cannot tell a primary kill/crash that skipped its
     /// confirmation because the run's own configuration never enabled one

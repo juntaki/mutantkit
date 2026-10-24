@@ -60,7 +60,9 @@ public enum SourceCoverageReader {
             }
         }
 
-        guard !executed.isEmpty else { return nil }
+        // A map in which nothing at all ran is no coverage information (a test run that never
+        // started looks the same), however many files it names.
+        guard executed.values.contains(where: { !$0.isEmpty }) else { return nil }
         return CoverageMap(executedLines: executed, source: "swift-package-codecov")
     }
 
@@ -81,7 +83,7 @@ public enum SourceCoverageReader {
         case .malformed:
             return nil
         case let .parsed(executed):
-            return executed.isEmpty ? nil : executed
+            return executed.values.contains(where: { !$0.isEmpty }) ? executed : nil
         }
     }
 
@@ -162,7 +164,11 @@ public enum SourceCoverageReader {
                 guard let segments = file["segments"] as? [[Any]] else { return .malformed }
 
                 guard let lines = Self.executedLines(from: segments) else { return .malformed }
-                guard !lines.isEmpty else { continue }
+                // A file with mapped regions of which none ran is recorded with an empty set: that is
+                // a claim ("the suite never reached this file"), and dropping it made every mutant in
+                // a never-executed file run the whole suite as if the map had nothing to say. A file
+                // with no regions at all (`segments` empty) still has no claim.
+                guard !segments.isEmpty else { continue }
                 executed[relativePath, default: []].formUnion(lines)
             }
         }

@@ -41,7 +41,9 @@ struct ProcessSupervisorStallDetectionTests {
         // timeout (20s) hasn't been reached yet.
         //
         // The gap between one append and the next (0.1s) is deliberately
-        // 15x under the stall timeout. It was 0.3s against the same 0.1s
+        // 30x under the stall timeout (3s; it was 1.5s until a full-suite run on a host at load
+        // average 60 stalled once more), and the run (~6s) still outlasts the stall timeout, which
+        // is what makes the test prove anything. It was 0.3s against the same 0.1s
         // interval — a 3x margin — and that flaked for real on a public CI
         // runner: `sleep 0.1` in a shell only bounds how long the process
         // sleeps, not how long until it is scheduled again, and on a
@@ -56,7 +58,7 @@ struct ProcessSupervisorStallDetectionTests {
         // what the test proves intact — the alternative, relaxing the
         // assertion to accept a stall, would delete the proof entirely.
         let script = """
-        for i in $(seq 1 30); do
+        for i in $(seq 1 60); do
             echo "progress $i" >> '\(path.path)'
             sleep 0.1
         done
@@ -64,8 +66,8 @@ struct ProcessSupervisorStallDetectionTests {
         """
         let result = try await ProcessSupervisor.run(
             executable: "/bin/sh", arguments: ["-c", script],
-            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 20,
-            stallDetection: StallDetection(progressFilePath: path, stallTimeoutSeconds: 1.5, checkIntervalSeconds: 0.1)
+            workingDirectory: FileManager.default.temporaryDirectory, timeoutSeconds: 60,
+            stallDetection: StallDetection(progressFilePath: path, stallTimeoutSeconds: 3, checkIntervalSeconds: 0.1)
         )
         #expect(result.succeeded, "diagnosis: exitCode=\(result.exitCode) timedOut=\(result.timedOut) signal=\(String(describing: result.terminatingSignal))")
         #expect(!result.timedOut)

@@ -48,7 +48,8 @@ public struct SchemataLowererRegistry: Sendable {
         LogicalConnectorReplacementSchemataLowerer(),
         UnaryNotRemovalSchemataLowerer(),
         ReturnValueReplacementSchemataLowerer(),
-        TernaryBranchSwapSchemataLowerer()
+        TernaryBranchSwapSchemataLowerer(),
+        NilCoalescingFallbackSchemataLowerer()
     ]
 
     public enum RegistrationError: Error, Equatable, CustomStringConvertible {

@@ -56,7 +56,7 @@ public struct RelationalMutationVariant: Codable, Hashable, Sendable {
 /// exactly as the original, unmutated expression does.
 public struct RelationalOperatorReplacementSchemataLowerer: SchemataLowerer {
     public static let lowererID = "swift.core.relational-operator-replacement.schemata"
-    public static let lowererVersion = 2
+    public static let lowererVersion = 4
     /// Same v3 runtime protocol `BoolLiteralSchemataLowerer` already uses —
     /// one shared runtime, not a second one invented for this operator.
     public static let runtimeABIVersion = BoolLiteralSchemataLowerer.runtimeABIVersion
@@ -172,6 +172,7 @@ public struct RelationalOperatorReplacementSchemataLowerer: SchemataLowerer {
         if ComposedBooleanOperand.isComposed(unwrapped) {
             return ComposedBooleanOperand.unsafetyReason(for: unwrapped, recurse: Self.unsafetyReason(for:))
         }
+        if ComposedBooleanOperand.isAcceptedCall(unwrapped) { return nil }
         return Self.unsafeOperandReason(for: unwrapped)
     }
 

@@ -42,11 +42,12 @@ public struct TestIdentifier: Sendable, Hashable, Codable {
     /// identical Swift-Testing-matching question is ever raised for the
     /// batched-test-execution path specifically.
     ///
-    /// A `qualifiedName` that already ends in `()` (SwiftPM spells a Swift
-    /// Testing function that way, in `swift test list` and in the event
-    /// stream) is used as it is, not given a second `()`.
+    /// A `qualifiedName` that already ends in `)` (SwiftPM spells a Swift
+    /// Testing function with its parameter list, `method()` or
+    /// `method(value:)`, in `swift test list` and in the event stream) is used
+    /// as it is, not given a second `()`: `method(value:)()` names no test.
     public var onlyTestingArgument: String {
-        qualifiedName.hasSuffix("()") ? "\(target)/\(qualifiedName)" : "\(target)/\(qualifiedName)()"
+        qualifiedName.hasSuffix(")") ? "\(target)/\(qualifiedName)" : "\(target)/\(qualifiedName)()"
     }
 }
 

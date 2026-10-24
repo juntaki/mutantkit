@@ -66,10 +66,14 @@ struct MutationConfirmationCoordinator: Sendable {
     /// `test`'s `TestSelecting` conformance, memoized on the same terms as
     /// `manifestDependentTest` above.
     let selectingTest: (any TestSelecting)?
+    /// Persistent sandboxes the crash and timeout confirmations reuse; `nil`
+    /// outside an incremental-build run, where each gets a fresh one.
+    let confirmationPool: ConfirmationSandboxPool?
 
     init(
         workspaces: WorkspaceManager, build: any BuildAdapter, test: any TestAdapter,
-        policy: MutationVerdictVerifier.VerdictVerificationPolicy, projectRoot: URL
+        policy: MutationVerdictVerifier.VerdictVerificationPolicy, projectRoot: URL,
+        reusesConfirmationSandboxes: Bool = false
     ) {
         self.workspaces = workspaces
         self.build = build
@@ -78,6 +82,29 @@ struct MutationConfirmationCoordinator: Sendable {
         self.projectRoot = projectRoot
         manifestDependentTest = packageManifestConfirmationRetesting(for: test)
         selectingTest = testAdapterCapability((any TestSelecting).self, for: test)
+        confirmationPool = reusesConfirmationSandboxes ? ConfirmationSandboxPool(workspaces: workspaces) : nil
+    }
+
+    /// The sandbox a crash or timeout confirmation rebuilds in: a pooled one
+    /// when the run is incremental, a fresh one named for `label` otherwise.
+    private func acquireConfirmationSandbox(_ point: MutationPoint, label: String) async throws -> Sandbox {
+        if let confirmationPool { return try await confirmationPool.acquire() }
+        return try await workspaces.createSandbox(id: "\(point.id.rawValue)-\(label)")
+    }
+
+    /// Ends a confirmation's use of `sandbox`: back to the pool with the
+    /// mutated file restored, or destroyed when there is no pool.
+    private func disposeConfirmationSandbox(_ sandbox: Sandbox, for point: MutationPoint) async {
+        if let confirmationPool {
+            await confirmationPool.release(sandbox, restoring: point.file)
+        } else {
+            try? await workspaces.destroySandbox(sandbox)
+        }
+    }
+
+    /// Destroys the pooled sandboxes once the run has no more confirmations to make.
+    func drainConfirmationPool() async {
+        await confirmationPool?.drain()
     }
 
     /// Runs a mutant's tests, narrowed to `selectedTests` when the adapter
@@ -255,7 +282,7 @@ struct MutationConfirmationCoordinator: Sendable {
 
         let sandbox: Sandbox
         do {
-            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-crash-confirm")
+            sandbox = try await acquireConfirmationSandbox(point, label: "crash-confirm")
         } catch {
             return unconfirmed("No confirmation sandbox could be created: \(error)")
         }
@@ -264,7 +291,7 @@ struct MutationConfirmationCoordinator: Sendable {
         do {
             sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
         } catch {
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return unconfirmed("The confirmation sandbox's source could not be located: \(error)")
         }
 
@@ -272,7 +299,7 @@ struct MutationConfirmationCoordinator: Sendable {
         do {
             applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
         } catch {
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return unconfirmed("The mutation could not be re-applied for confirmation: \(error)")
         }
 
@@ -280,7 +307,7 @@ struct MutationConfirmationCoordinator: Sendable {
         do {
             artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
         } catch {
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return unconfirmed("The confirmation rebuild did not build: \(error)")
         }
 
@@ -296,11 +323,11 @@ struct MutationConfirmationCoordinator: Sendable {
                 selectedTests: selectedTests
             )
         } catch {
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
         }
 
-        try? await workspaces.destroySandbox(sandbox)
+        await disposeConfirmationSandbox(sandbox, for: point)
 
         let normalizedOriginal = originalDiagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedConfirming = confirmingRun.diagnosis.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -410,7 +437,7 @@ struct MutationConfirmationCoordinator: Sendable {
             )
         } catch {
             if let innerConfirmationSandbox { try? await workspaces.destroyProductsClone(at: innerConfirmationSandbox) }
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return unconfirmed("The confirmation rebuild's tests could not be run: \(error)")
         }
 
@@ -438,7 +465,7 @@ struct MutationConfirmationCoordinator: Sendable {
         }
 
         if let innerConfirmationSandbox { try? await workspaces.destroyProductsClone(at: innerConfirmationSandbox) }
-        try? await workspaces.destroySandbox(sandbox)
+        await disposeConfirmationSandbox(sandbox, for: point)
 
         // A crash, unlike an assertion kill, is never confirmed on the same
         // artifact (see `confirmCrashKill`'s doc comment) — its own fresh,
@@ -529,7 +556,7 @@ extension MutationConfirmationCoordinator {
     ) async -> Result<TimeoutConfirmationRebuild, TimeoutConfirmationRebuildFailure> {
         let sandbox: Sandbox
         do {
-            sandbox = try await workspaces.createSandbox(id: "\(point.id.rawValue)-timeout-confirm")
+            sandbox = try await acquireConfirmationSandbox(point, label: "timeout-confirm")
         } catch {
             return .failure(.init(diagnosis: "No confirmation sandbox could be created: \(error)"))
         }
@@ -538,7 +565,7 @@ extension MutationConfirmationCoordinator {
         do {
             sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
         } catch {
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return .failure(.init(diagnosis: "The confirmation sandbox's source could not be located: \(error)"))
         }
 
@@ -546,7 +573,7 @@ extension MutationConfirmationCoordinator {
         do {
             applied = try MutationApplication.applyInPlace(point, fileAt: sourceURL)
         } catch {
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return .failure(.init(diagnosis: "The mutation could not be re-applied for confirmation: \(error)"))
         }
 
@@ -554,7 +581,7 @@ extension MutationConfirmationCoordinator {
             let artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
             return .success(TimeoutConfirmationRebuild(sandbox: sandbox, artifact: artifact))
         } catch {
-            try? await workspaces.destroySandbox(sandbox)
+            await disposeConfirmationSandbox(sandbox, for: point)
             return .failure(.init(diagnosis: "The confirmation rebuild did not build: \(error)"))
         }
     }

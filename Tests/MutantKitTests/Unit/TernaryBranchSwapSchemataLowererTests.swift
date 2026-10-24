@@ -49,32 +49,18 @@ struct TernaryBranchSwapSchemataLowererTests {
         }
     }
 
-    @Test("A function-call condition falls back to isolated")
-    func functionCallConditionFallsBack() throws {
+    @Test("A function-call condition is eligible")
+    func functionCallConditionIsEligible() throws {
         let source = "func isReady() -> Bool { true }\nfunc f(a: Int, b: Int) -> Int { isReady() ? a : b }"
         let mutation = try point(source)
-        guard case let .isolatedOnly(reason) = lowerer.analyze(mutation, source: Data(source.utf8)) else {
-            Issue.record("expected .isolatedOnly")
-            return
-        }
-        guard case .unsupportedOperand = reason else {
-            Issue.record("expected .unsupportedOperand, got \(reason)")
-            return
-        }
+        #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible)
     }
 
-    @Test("A function-call then-branch falls back to isolated")
-    func functionCallThenBranchFallsBack() throws {
+    @Test("A function-call then-branch is eligible")
+    func functionCallThenBranchIsEligible() throws {
         let source = "func computeA() -> Int { 1 }\nfunc f(cond: Bool, b: Int) -> Int { cond ? computeA() : b }"
         let mutation = try point(source)
-        guard case let .isolatedOnly(reason) = lowerer.analyze(mutation, source: Data(source.utf8)) else {
-            Issue.record("expected .isolatedOnly")
-            return
-        }
-        guard case .unsupportedOperand = reason else {
-            Issue.record("expected .unsupportedOperand, got \(reason)")
-            return
-        }
+        #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible)
     }
 
     @Test("A negation inside a @ViewBuilder-style result-builder body is not eligible")

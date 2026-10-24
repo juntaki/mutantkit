@@ -76,8 +76,152 @@ enum SchemataRunOrchestration {
     /// finding), still handed to `HybridExecutionEngine.runHybrid` as an
     /// explicit parameter.
     static func classify(_ context: Context) async throws -> Classification {
+        try await classify(
+            Inputs(
+                plan: context.plan, projectRoot: context.projectRoot, kind: context.adapter.kind,
+                scheme: context.configuration.project.scheme,
+                toolchainHash: HybridExecutionEngine.toolchainHash(context.toolchain),
+                buildArgumentsHash: context.configuration.buildIdentityHash
+            ),
+            warn: { print($0) }
+        )
+    }
+
+    /// What `classify` needs of a run, so `mutantkit execution-profile` can plan the same chunks without
+    /// building a run context: the ids it derives from the toolchain and build arguments do not change
+    /// which mutations embed.
+    struct Inputs {
+        let plan: MutationPlan
+        let projectRoot: URL
+        let kind: ProjectKind
+        let scheme: String?
+        let toolchainHash: String
+        let buildArgumentsHash: String
+
+        /// The same inputs over only `mutations`.
+        func replacingMutations(_ mutations: [MutationPoint]) -> Inputs {
+            Inputs(
+                plan: MutationPlan(
+                    planID: plan.planID, createdAt: plan.createdAt, projectRoot: plan.projectRoot,
+                    toolchain: plan.toolchain, configurationHash: plan.configurationHash,
+                    sourceFileHashes: plan.sourceFileHashes, mutations: mutations, skipped: plan.skipped,
+                    operators: plan.operators, planningHash: plan.planningHash
+                ),
+                projectRoot: projectRoot, kind: kind, scheme: scheme,
+                toolchainHash: toolchainHash, buildArgumentsHash: buildArgumentsHash
+            )
+        }
+    }
+
+    /// What the planner would do with a plan, for a report that must not run anything.
+    struct Preview {
+        /// Mutations in the plan.
+        let total: Int
+        /// Mutations the planner ran over: `total`, or an evenly spaced sample of it when the plan is large.
+        let sampled: Int
+        /// Of `sampled`.
+        let embedded: Int
+        /// Shared builds the sample needs.
+        let chunks: Int
+        /// Reason text to the number of sampled mutations falling back for it.
+        let fallbackReasons: [String: Int]
+        /// Set when the schemata machinery could not be set up at all (every mutation would run isolated), or
+        /// when planning did not finish in time.
+        let failure: String?
+
+        init(
+            total: Int, sampled: Int? = nil, embedded: Int, chunks: Int, fallbackReasons: [String: Int], failure: String?
+        ) {
+            self.total = total
+            self.sampled = sampled ?? total
+            self.embedded = embedded
+            self.chunks = chunks
+            self.fallbackReasons = fallbackReasons
+            self.failure = failure
+        }
+
+        var isSample: Bool { sampled < total }
+    }
+
+    /// Most mutations `preview` plans; a larger plan is sampled. Planning a few thousand mutations takes
+    /// minutes (every file of every target is read and lowered), which is too long for a report.
+    static let previewSampleLimit = 500
+
+    /// Longest `preview` waits for the planner.
+    static let previewTimeLimitSeconds = 60.0
+
+    /// `limit` elements of `mutations` at an even stride. A plan is sorted by mutation id, which is a hash, so
+    /// this is spread over files and operators and does not follow file order. The same plan gives the same
+    /// sample.
+    static func evenlySpaced(_ mutations: [MutationPoint], limit: Int) -> [MutationPoint] {
+        guard limit > 0, mutations.count > limit else { return mutations }
+        return (0 ..< limit).map { mutations[$0 * mutations.count / limit] }
+    }
+
+    /// Plans the chunks for `inputs` without printing, building or running anything. A plan over
+    /// `previewSampleLimit` is sampled, and the result says so; planning that has not finished within
+    /// `previewTimeLimitSeconds` is reported as such.
+    static func preview(_ inputs: Inputs) async -> Preview {
+        let total = inputs.plan.mutations.count
+        let sample = evenlySpaced(inputs.plan.mutations, limit: previewSampleLimit)
+        let planned = sample.count == total ? inputs : inputs.replacingMutations(sample)
+        let outcome = await withTimeLimit(seconds: previewTimeLimitSeconds) { await plannedPreview(planned, total: total) }
+        return outcome ?? Preview(
+            total: total, sampled: sample.count, embedded: 0, chunks: 0, fallbackReasons: [:],
+            failure: "planning \(sample.count) mutation(s) did not finish within \(Int(previewTimeLimitSeconds)) s"
+        )
+    }
+
+    private static func plannedPreview(_ inputs: Inputs, total: Int) async -> Preview {
+        var warnings: [String] = []
+        let sampled = inputs.plan.mutations.count
+        do {
+            let classification = try await classify(inputs, warn: { warnings.append($0) })
+            var reasons: [String: Int] = [:]
+            for reason in classification.plannerFallbackReasons.values { reasons["\(reason)", default: 0] += 1 }
+            let failure = classification.programs.isEmpty && classification.embeddedIDs.isEmpty
+                ? warnings.first { $0.hasPrefix("!") } : nil
+            return Preview(
+                total: total, sampled: sampled, embedded: classification.embeddedIDs.count,
+                chunks: classification.programs.count, fallbackReasons: reasons, failure: failure
+            )
+        } catch {
+            return Preview(total: total, sampled: sampled, embedded: 0, chunks: 0, fallbackReasons: [:], failure: "\(error)")
+        }
+    }
+
+    /// The result of `work`, or `nil` if it has not finished after `seconds`. The work is not cancelled (it
+    /// does not check for cancellation); the process ends soon after, so an abandoned plan costs nothing.
+    private static func withTimeLimit<T: Sendable>(seconds: Double, _ work: @escaping @Sendable () async -> T) async -> T? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            let gate = OneShot(continuation)
+            Task { gate.resume(await work()) }
+            Task {
+                try? await Task.sleep(for: .seconds(seconds))
+                gate.resume(nil)
+            }
+        }
+    }
+
+    /// Resumes a continuation once, whichever of two racing tasks gets there first.
+    private final class OneShot<T: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T?, Never>?
+
+        init(_ continuation: CheckedContinuation<T?, Never>) { self.continuation = continuation }
+
+        func resume(_ value: T?) {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: value)
+        }
+    }
+
+    private static func classify(_ inputs: Inputs, warn: (String) -> Void) async throws -> Classification {
         var sources: [String: Data] = [:]
-        try read(files: Set(context.plan.mutations.map(\.file)), projectRoot: context.projectRoot, into: &sources)
+        try read(files: Set(inputs.plan.mutations.map(\.file)), projectRoot: inputs.projectRoot, into: &sources)
 
         let empty = Classification(programs: [], embeddedIDs: [], sources: sources, plannerFallbackReasons: [:])
 
@@ -85,20 +229,20 @@ enum SchemataRunOrchestration {
         let backendID: String
         var filesOutsideBuild: [String: String] = [:]
         do {
-            switch context.adapter.kind {
+            switch inputs.kind {
             case .swiftPackageMacOS, .swiftPackageApple:
-                targetInfo = try await SwiftPMTargetResolver.resolveTargetInfo(projectRoot: context.projectRoot)
+                targetInfo = try await SwiftPMTargetResolver.resolveTargetInfo(projectRoot: inputs.projectRoot)
                 backendID = "swiftpm-schemata-v1"
             case .xcodeProject:
                 let scoped = try await XcodeTargetResolver.resolveSchemeScopedTargetInfo(
-                    projectRoot: context.projectRoot, scheme: context.configuration.project.scheme
+                    projectRoot: inputs.projectRoot, scheme: inputs.scheme
                 )
                 targetInfo = scoped.targetInfo
                 filesOutsideBuild = outsideSchemeReasons(scoped.filesOutsideScheme)
                 backendID = "xcode-schemata-v1"
             case .xcodeWorkspace:
                 let scoped = try await XcodeTargetResolver.resolveSchemeScopedWorkspaceTargetInfo(
-                    projectRoot: context.projectRoot, scheme: context.configuration.project.scheme
+                    projectRoot: inputs.projectRoot, scheme: inputs.scheme
                 )
                 targetInfo = scoped.targetInfo
                 filesOutsideBuild = outsideSchemeReasons(scoped.filesOutsideScheme)
@@ -113,22 +257,22 @@ enum SchemataRunOrchestration {
                 // fail-closed-to-isolated degradation as a genuine
                 // resolution failure below, just without pretending an
                 // attempt was made.
-                print(
-                    "! Schemata target resolution is not yet implemented for \(context.adapter.kind.rawValue); "
+                warn(
+                    "! Schemata target resolution is not yet implemented for \(inputs.kind.rawValue); "
                         + "every mutation will run in isolated mode this run."
                 )
                 return empty
             }
         } catch {
-            print("! Schemata target resolution failed (\(error)); every mutation will run in isolated mode this run.")
+            warn("! Schemata target resolution failed (\(error)); every mutation will run in isolated mode this run.")
             return empty
         }
 
         // One scheme build compiles every target it reaches from the same sandbox, so a lowered file that
         // two of those targets compile must declare the schemata runtime in both modules; a chunk is
         // planned per target and only declares it in its own. Such files run isolated, per mutation.
-        if context.adapter.kind == .xcodeProject || context.adapter.kind == .xcodeWorkspace {
-            let mutatedFiles = Set(context.plan.mutations.map(\.file))
+        if inputs.kind == .xcodeProject || inputs.kind == .xcodeWorkspace {
+            let mutatedFiles = Set(inputs.plan.mutations.map(\.file))
             for (file, infos) in targetInfo where mutatedFiles.contains(file) && Set(infos.map(\.target)).count > 1 {
                 targetInfo[file] = nil
                 filesOutsideBuild[file] = "the file is compiled by several targets that one scheme build compiles together"
@@ -137,7 +281,7 @@ enum SchemataRunOrchestration {
         // A mutated file with no resolved target (compiled only by targets the scheme does not build, or
         // listed through a mechanism the resolver does not read) gets its own isolated fallback; it must
         // not take the whole plan's schemata down with it.
-        for file in Set(context.plan.mutations.map(\.file)).subtracting(targetInfo.keys) where filesOutsideBuild[file] == nil {
+        for file in Set(inputs.plan.mutations.map(\.file)).subtracting(targetInfo.keys) where filesOutsideBuild[file] == nil {
             filesOutsideBuild[file] = "the file's target membership could not be resolved"
         }
 
@@ -151,17 +295,17 @@ enum SchemataRunOrchestration {
         // closed on it (`.missingSource`), degrading a real, otherwise-
         // embeddable target to isolated fallback for no structural reason.
         let targetFiles = Set(targetInfo.keys).subtracting(sources.keys)
-        try read(files: targetFiles, projectRoot: context.projectRoot, into: &sources)
+        try read(files: targetFiles, projectRoot: inputs.projectRoot, into: &sources)
 
         let backend = SchemataBackendInfo(
             backendID: backendID, backendVersion: 1,
-            toolchainHash: HybridExecutionEngine.toolchainHash(context.toolchain),
-            buildArgumentsHash: context.configuration.buildIdentityHash
+            toolchainHash: inputs.toolchainHash,
+            buildArgumentsHash: inputs.buildArgumentsHash
         )
         do {
             let registry = try SchemataLowererRegistry()
             let result = try SchemataChunkPlanner.plan(
-                mutationPlan: context.plan, registry: registry, sources: sources, targetInfo: targetInfo, backend: backend,
+                mutationPlan: inputs.plan, registry: registry, sources: sources, targetInfo: targetInfo, backend: backend,
                 filesOutsideBuild: filesOutsideBuild
             )
             let embeddedIDs = Set(result.schemataPlan.entries.filter(\.isEmbedded).map(\.mutationID))
@@ -170,13 +314,13 @@ enum SchemataRunOrchestration {
                     entry.fallbackReason.map { (entry.mutationID, $0) }
                 }
             )
-            printPlannerFallbackSummary(plannerFallbackReasons, embeddedCount: embeddedIDs.count)
+            if let summary = plannerFallbackSummary(plannerFallbackReasons, embeddedCount: embeddedIDs.count) { warn(summary) }
             return Classification(
                 programs: result.programs, embeddedIDs: embeddedIDs, sources: sources,
                 plannerFallbackReasons: plannerFallbackReasons
             )
         } catch {
-            print("! Schemata chunk planning failed (\(error)); every mutation will run in isolated mode this run.")
+            warn("! Schemata chunk planning failed (\(error)); every mutation will run in isolated mode this run.")
             return empty
         }
     }
@@ -187,15 +331,17 @@ enum SchemataRunOrchestration {
         )
     }
 
-    private static func printPlannerFallbackSummary(_ plannerFallbackReasons: [MutationID: SchemataUnsupportedReason], embeddedCount: Int) {
-        guard !plannerFallbackReasons.isEmpty else { return }
+    private static func plannerFallbackSummary(
+        _ plannerFallbackReasons: [MutationID: SchemataUnsupportedReason], embeddedCount: Int
+    ) -> String? {
+        guard !plannerFallbackReasons.isEmpty else { return nil }
         // The report records only counts per reason kind, and nothing at all when the whole plan
         // falls back; the detail (which target, which operand) is what a corpus owner needs.
         var detail: [String: Int] = [:]
         for reason in plannerFallbackReasons.values { detail["\(reason)", default: 0] += 1 }
         let lines = detail.sorted { $0.key < $1.key }.map { "  \($0.value) × \($0.key)" }
-        print("Schemata planner: \(embeddedCount) embeddable, \(plannerFallbackReasons.count) isolated per mutation:\n"
-            + lines.joined(separator: "\n"))
+        return "Schemata planner: \(embeddedCount) embeddable, \(plannerFallbackReasons.count) isolated per mutation:\n"
+            + lines.joined(separator: "\n")
     }
 
     /// Reads each of `files` (repository-relative, exactly as recorded on

@@ -15,14 +15,57 @@ import SwiftSyntax
 /// accepting a composed operand never duplicates an evaluation or changes
 /// order. The remaining hazards are compile-time ones (operator overload
 /// resolution, type-checker cost of a ternary holding two copies of the
-/// text), which is why only the built-in comparison/logical spellings below
-/// are accepted and the operand size is capped; assignments, custom or
-/// arithmetic operators, `??`, ranges, calls, closures, `try`/`await`,
-/// optional chaining and `&x` all keep falling back, each with its own
-/// reason text.
+/// text), which is why only the built-in comparison/logical/arithmetic
+/// spellings below are accepted and the operand size is capped; assignments,
+/// custom operators, ranges, closures, `try`/`await` and `&x` all keep
+/// falling back, each with its own reason text. A plain call, subscript,
+/// optional chain or force unwrap is accepted by `isAcceptedCall`.
 enum ComposedBooleanOperand {
-    /// Comparison and short-circuit logical spellings only.
-    static let acceptedInfixOperators: Set<String> = ["&&", "||", "==", "!=", "<", "<=", ">", ">="]
+    /// Upper bound on the source length of a call operand, for the same reason as `maxOperatorNodes`:
+    /// the text is duplicated into both arms of the ternary the compiler must type-check.
+    static let maxCallOperandCharacters = 160
+
+    /// Whether `unwrapped` is a plain call, subscript, optional-chaining or force-unwrap expression the
+    /// lowerers may duplicate into both arms.
+    ///
+    /// The lowering selects exactly one arm, so the expression runs at most once and in its original
+    /// order, as for any other operand, and the operand text (hence the extent of an optional chain, the
+    /// trap of a `!`, the arguments of a subscript) is unchanged in both arms; what is left is the
+    /// compile-time cost of the duplicated text.
+    /// Expressions containing `try`, `await` or a macro expansion keep falling back, as does a long one
+    /// and an immediately invoked closure (`{ ... }()`), which stays a closure operand.
+    static func isAcceptedCall(_ unwrapped: ExprSyntax) -> Bool {
+        guard isAccessKind(unwrapped), unwrapped.trimmedDescription.count <= maxCallOperandCharacters else { return false }
+        let scanner = CallHazardScanner(viewMode: .sourceAccurate)
+        scanner.walk(unwrapped)
+        return !scanner.foundHazard
+    }
+
+    private static func isAccessKind(_ unwrapped: ExprSyntax) -> Bool {
+        if let call = unwrapped.as(FunctionCallExprSyntax.self) { return !call.calledExpression.is(ClosureExprSyntax.self) }
+        return unwrapped.is(SubscriptCallExprSyntax.self) || unwrapped.is(OptionalChainingExprSyntax.self)
+            || unwrapped.is(ForceUnwrapExprSyntax.self)
+    }
+
+    private final class CallHazardScanner: SyntaxVisitor {
+        var foundHazard = false
+
+        override func visit(_: TryExprSyntax) -> SyntaxVisitorContinueKind { mark() }
+        override func visit(_: AwaitExprSyntax) -> SyntaxVisitorContinueKind { mark() }
+        override func visit(_: MacroExpansionExprSyntax) -> SyntaxVisitorContinueKind { mark() }
+
+        private func mark() -> SyntaxVisitorContinueKind {
+            foundHazard = true
+            return .skipChildren
+        }
+    }
+
+    /// Comparison, short-circuit logical, standard arithmetic and nil-coalescing spellings only. A custom
+    /// operator may be overloaded to anything, so it keeps falling back; the operand-count cap keeps
+    /// arithmetic from making the duplicated expression expensive to type-check.
+    static let acceptedInfixOperators: Set<String> = [
+        "&&", "||", "==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%", "&+", "&-", "&*", "??"
+    ]
     /// Upper bound on infix/prefix operator nodes inside one operand
     /// (counting the operand itself): keeps the duplicated text, and the
     /// ternary the compiler must type-check, small.

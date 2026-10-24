@@ -387,6 +387,10 @@ public struct BaselineRecord: Codable, Sendable {
     /// `selectCoveringTests` nor `measureCoverage` is configured, or the
     /// baseline never got that far.
     public let profilingDurationSeconds: Double?
+    /// `true` when this run used a per-test coverage measurement served from the
+    /// cache instead of measuring one, so `profilingDurationSeconds` is `nil` (this
+    /// run paid nothing) although the coverage was used. `nil` otherwise.
+    public let coverageReused: Bool?
 
     public init(
         passed: Bool,
@@ -397,7 +401,8 @@ public struct BaselineRecord: Codable, Sendable {
         testCommand: CommandRecord?,
         buildDurationSeconds: Double? = nil,
         testDurationSeconds: Double? = nil,
-        profilingDurationSeconds: Double? = nil
+        profilingDurationSeconds: Double? = nil,
+        coverageReused: Bool? = nil
     ) {
         self.passed = passed
         self.testSummary = testSummary
@@ -408,6 +413,7 @@ public struct BaselineRecord: Codable, Sendable {
         self.buildDurationSeconds = buildDurationSeconds
         self.testDurationSeconds = testDurationSeconds
         self.profilingDurationSeconds = profilingDurationSeconds
+        self.coverageReused = coverageReused
     }
 }
 

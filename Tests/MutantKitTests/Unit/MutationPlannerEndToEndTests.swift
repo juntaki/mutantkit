@@ -502,7 +502,7 @@ private extension MutationPlan {
     }
 }
 
-/// The 6 operators with a real, registered `SchemataLowererRegistry`
+/// The 7 operators with a real, registered `SchemataLowererRegistry`
 /// lowerer today — see `planOperatorsCarryEffectiveSchemataEligible`.
 private let schemataEligibleOperatorIDs: Set<String> = [
     "swift.core.bool-literal-inversion",
@@ -510,5 +510,6 @@ private let schemataEligibleOperatorIDs: Set<String> = [
     "swift.core.relational-operator-replacement",
     "swift.core.ternary-branch-swap",
     "swift.core.unary-not-removal",
-    "swift.core.return-value-replacement"
+    "swift.core.return-value-replacement",
+    "swift.core.nil-coalescing-fallback"
 ]

@@ -23,7 +23,7 @@ struct RunInputState: Sendable, Equatable {
 
     /// Bumped whenever what this state covers changes, so a digest computed
     /// under an older scheme is never mistaken for one computed under this.
-    static let closureVersion = "v1"
+    static let closureVersion = "v2"
 
     /// The components every identity derived from this state folds in.
     var identityComponents: [String] {
@@ -52,9 +52,12 @@ struct RunInputState: Sendable, Equatable {
         layout: SandboxLayout,
         scratchRoots: [URL] = [],
         excludes: [String] = WorkspaceManager.defaultExcludes,
+        excludingProjectRelativePaths: Set<String> = [],
         processRunner: RunContextProbe.ProcessRunner = RunContextProbe.defaultProcessRunner
     ) async throws -> RunInputState {
-        let worktree = try await RunContextProbe.worktreeContentState(in: projectRoot, processRunner: processRunner)
+        let worktree = try await RunContextProbe.worktreeContentState(
+            in: projectRoot, excludingProjectRelativePaths: excludingProjectRelativePaths, processRunner: processRunner
+        )
         return try RunInputState(
             worktreeContentState: worktree,
             workspaceRelativePath: layout.workspaceRelativePath,

@@ -33,7 +33,7 @@ import SwiftSyntax
 /// that were ever untrue.
 public struct UnaryNotRemovalSchemataLowerer: SchemataLowerer {
     public static let lowererID = "swift.core.unary-not-removal.schemata"
-    public static let lowererVersion = 1
+    public static let lowererVersion = 3
     /// Same v3 runtime protocol every other lowerer uses.
     public static let runtimeABIVersion = BoolLiteralSchemataLowerer.runtimeABIVersion
 
@@ -106,6 +106,7 @@ public struct UnaryNotRemovalSchemataLowerer: SchemataLowerer {
         if let nestedPrefix = unwrapped.as(PrefixOperatorExprSyntax.self) {
             return Self.unsafetyReason(for: nestedPrefix.expression)
         }
+        if ComposedBooleanOperand.isAcceptedCall(unwrapped) { return nil }
         return Self.unsafeOperandReason(for: unwrapped)
     }
 

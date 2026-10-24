@@ -32,6 +32,9 @@ public struct BaselineCoverageMeasurement: Sendable {
         /// is that this run did not pay the cost, and a record claiming
         /// otherwise would misreport where a run's time actually went.
         public let profilingDurationSeconds: Double?
+        /// Whether the per-test attribution came from the cache. The coverage was used
+        /// all the same; only its measurement cost was not paid by this run.
+        public let reusedFromCache: Bool
     }
 
     let configuration: Configuration
@@ -65,6 +68,7 @@ public struct BaselineCoverageMeasurement: Sendable {
         var perTestCoverage: PerTestCoverageMap?
         var coverage: CoverageMap?
         var profilingDurationSeconds: Double?
+        var reusedFromCache = false
 
         if configuration.execution.selectCoveringTests {
             if let cacheKey, let cached = await cache?.load(cacheKey) {
@@ -74,6 +78,7 @@ public struct BaselineCoverageMeasurement: Sendable {
                 )
                 perTestCoverage = cached
                 coverage = cached.aggregate()
+                reusedFromCache = true
             } else if let selecting = test as? any TestSelecting {
                 Self.note("coverage cache: \(Self.missReason(hasKey: cacheKey != nil, hasCache: cache != nil))")
                 let profilingStarted = Date()
@@ -121,7 +126,8 @@ public struct BaselineCoverageMeasurement: Sendable {
         }
 
         return Result(
-            perTestCoverage: perTestCoverage, coverage: coverage, profilingDurationSeconds: profilingDurationSeconds
+            perTestCoverage: perTestCoverage, coverage: coverage, profilingDurationSeconds: profilingDurationSeconds,
+            reusedFromCache: reusedFromCache
         )
     }
 

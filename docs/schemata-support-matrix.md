@@ -56,20 +56,20 @@ scope here.
 
 ## SwiftPM packages with more than one test target on Xcode 27
 
-The `swiftPackageMacOS` rows above were measured with one test target. With
-Xcode 27 (Swift 6.4), `swift build --build-tests` links each test target into
-its own bundle (`<Target>.xctest`) instead of one combined
+With Xcode 27 (Swift 6.4), `swift build --build-tests` links each test target
+into its own bundle (`<Target>.xctest`) instead of one combined
 `<Package>PackageTests.xctest`, and a package's library code is statically
-linked into every one of them. For a package with two or more test targets the
-chunk's build receipt cannot say which single image holds a target's code, and
-the resolver refuses to pick one (`more than one built image was discovered and
-none exactly matches a declared product containing target <name>`). Every
-chunk then forfeits schemata and its mutants run in isolated mode, reported in
-`fallbackReasonCounts["buildReceiptUnavailable"]`. Results stay correct; there
-is no schemata speedup for such a package on Xcode 27. Xcode 26.5 and earlier
-resolve the single combined bundle and are not affected. Resolving it would
-need a receipt that names every image containing the code, which the current
-receipt format does not express.
+linked into every one of them. The build receipt names every image that holds a
+unit's code (one per dependent test target, plus any executable or dynamic
+library product that links it), so a package with two or more test targets runs
+on the shared schemata build like a single-target one. A dependent test target
+whose image cannot be found by its exact name still fails closed for that
+target, reported in `fallbackReasonCounts["buildReceiptUnavailable"]`.
+
+Proof: `SchemataMultiTestTargetAcceptanceTests` runs
+`Fixtures/DisjointTestTargets` (two libraries, each tested by its own target)
+with `execution.strategy: schemata` and requires mutations to run on the shared
+build with no `buildReceiptUnavailable` fallback.
 
 ## Why the two unsupported rows are unsupported
 
@@ -135,6 +135,7 @@ run:
 | `unary-not-removal` | `UnaryNotSchemataIsolatedDifferentialAcceptanceTests` |
 | `return-value-replacement` | `ReturnValueSchemataIsolatedDifferentialAcceptanceTests` |
 | `ternary-branch-swap` | `TernaryBranchSwapSchemataIsolatedDifferentialAcceptanceTests` |
+| `nil-coalescing-fallback` (`stronger`, not default) | `NilCoalescingFallbackDifferentialTests` (compiles the lowered text with `swiftc` and compares result and evaluation trace with the isolated mutant) |
 
 All six show 100% verdict parity between backends today. `ArithmeticOperatorReplacementOperator`
 is schemata-ineligible (no registered lowerer) and always runs isolated,

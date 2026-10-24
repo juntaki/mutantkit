@@ -68,18 +68,19 @@ struct SchemataLowererRegistryTests {
     /// for it. If this test ever needs to change, a new operator's schemata
     /// scoring is being turned on — that must never happen silently as a
     /// side effect of an unrelated change to `SchemataLowererRegistry.builtIn`.
-    @Test("Six operators are schemata-eligible for schemata scoring")
-    func exactlySixOperatorsAreEligible() throws {
+    @Test("Seven operators are schemata-eligible for schemata scoring")
+    func exactlySevenOperatorsAreEligible() throws {
         let registry = try SchemataLowererRegistry()
         let eligible = MutationRegistry.builtIn.filter { registry.lowerer(forOperatorID: $0.descriptor.id) != nil }
         let eligibleIDs =
             "bool-literal-inversion/relational-operator-replacement/logical-connector-replacement/"
-                + "unary-not-removal/return-value-replacement/ternary-branch-swap"
+                + "unary-not-removal/return-value-replacement/ternary-branch-swap/nil-coalescing-fallback"
         #expect(
             Set(eligible.map(\.descriptor.id)) == [
                 BoolLiteralInversionOperator.descriptor.id, RelationalOperatorReplacementOperator.descriptor.id,
                 LogicalConnectorReplacementOperator.descriptor.id, UnaryNotRemovalOperator.descriptor.id,
-                ReturnValueReplacementOperator.descriptor.id, TernaryBranchSwapOperator.descriptor.id
+                ReturnValueReplacementOperator.descriptor.id, TernaryBranchSwapOperator.descriptor.id,
+                NilCoalescingFallbackOperator.descriptor.id
             ],
             "\(eligibleIDs) score under schemata"
         )
@@ -90,9 +91,9 @@ struct SchemataLowererRegistryTests {
     /// routes to `nil` (isolated fallback), so a new operator silently
     /// picking up schemata eligibility (e.g. by accidentally matching an
     /// existing `lowererID`'s `supportedOperatorIDs` glob, if one were ever
-    /// introduced) would fail this test even if `exactlySixOperatorsAreEligible`
+    /// introduced) would fail this test even if `exactlySevenOperatorsAreEligible`
     /// above somehow still passed.
-    @Test("Every operator besides the six schemata-eligible operators above is isolated-only")
+    @Test("Every operator besides the seven schemata-eligible operators above is isolated-only")
     func everyOtherOperatorRoutesToIsolatedFallback() throws {
         let registry = try SchemataLowererRegistry()
         let others = MutationRegistry.builtIn.filter {
@@ -102,6 +103,7 @@ struct SchemataLowererRegistryTests {
                 && $0.descriptor.id != UnaryNotRemovalOperator.descriptor.id
                 && $0.descriptor.id != ReturnValueReplacementOperator.descriptor.id
                 && $0.descriptor.id != TernaryBranchSwapOperator.descriptor.id
+                && $0.descriptor.id != NilCoalescingFallbackOperator.descriptor.id
         }
         #expect(!others.isEmpty, "this test is meaningless if there is nothing else registered to check")
         for other in others {

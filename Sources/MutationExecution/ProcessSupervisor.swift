@@ -226,7 +226,7 @@ public enum ProcessSupervisor {
     ///
     /// Only ever reached when something survived a SIGKILL — normally the pipes
     /// close the moment the writers die and the drain ends immediately.
-    private static let drainGracePeriodSeconds: Double = 5
+    static let defaultDrainGracePeriodSeconds: Double = 5
 
     /// The descendant-tracking poll interval on an unloaded machine — see
     /// `wait(for:policy:)`'s own doc comment for
@@ -338,7 +338,8 @@ public enum ProcessSupervisor {
         timeoutSeconds: Double,
         terminationGracePeriodSeconds: Double = 5,
         stallDetection: StallDetection? = nil,
-        lifecycleEventHook: (@Sendable (LifecycleEvent) -> Void)?
+        lifecycleEventHook: (@Sendable (LifecycleEvent) -> Void)?,
+        drainGracePeriodSeconds: Double = defaultDrainGracePeriodSeconds
     ) async throws -> ProcessResult {
         let cancellationFlag = CancellationFlag()
         return try await withTaskCancellationHandler(
@@ -358,7 +359,8 @@ public enum ProcessSupervisor {
                                     terminationGracePeriodSeconds: terminationGracePeriodSeconds,
                                     stallDetection: stallDetection,
                                     cancellationFlag: cancellationFlag,
-                                    lifecycleEventHook: lifecycleEventHook
+                                    lifecycleEventHook: lifecycleEventHook,
+                                    drainGracePeriodSeconds: drainGracePeriodSeconds
                                 )
                             )
                             if cancellationFlag.isCancelled {
@@ -418,6 +420,9 @@ public enum ProcessSupervisor {
         /// ordinary caller, a per-invocation closure only ever set by a
         /// test going through the `internal` `run(...)` overload.
         let lifecycleEventHook: (@Sendable (LifecycleEvent) -> Void)?
+        /// How long to keep reading output after the process is gone; see `defaultDrainGracePeriodSeconds`.
+        /// Only a test going through the `internal` `run(...)` overload shortens it.
+        let drainGracePeriodSeconds: Double
     }
 
     private static func runBlocking(
@@ -618,7 +623,7 @@ public enum ProcessSupervisor {
             // `ProcessSupervisorZeroBaseReviewFindingsTests
             // .cancellationAfterRootExitEscalatesPromptlyRatherThanWaitingOutTheDrain`).
             drainOutcome = waitForDrain(
-                drainGroup, timeoutSeconds: drainGracePeriodSeconds, cancellationFlag: policy.cancellationFlag
+                drainGroup, timeoutSeconds: policy.drainGracePeriodSeconds, cancellationFlag: policy.cancellationFlag
             )
         }
 

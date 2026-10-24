@@ -39,27 +39,38 @@ struct RelationalOperatorReplacementSchemataLowererOperandKindTests {
         #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible)
     }
 
-    @Test("A function-call left operand is unsupported (not just the right operand)")
-    func functionCallLeftOperandIsUnsupported() throws {
-        let reason = try unsupportedOperandReason("func f(g: () -> Int, b: Int) -> Bool { g() < b }")
-        #expect(reason.contains("function call operand"))
+    @Test("A subscript operand is accepted on either side, unless it contains try")
+    func subscriptOperandIsAccepted() throws {
+        for source in ["func f(a: [Int], b: Int) -> Bool { a[0] < b }", "func f(a: [Int], b: Int) -> Bool { b < a[0] }"] {
+            let mutation = try point(source, replacement: ">=")
+            #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible, "\(source)")
+        }
+        let reason = try unsupportedOperandReason(
+            "func i() throws -> Int { 0 }\nfunc f(a: [Int], b: Int) throws -> Bool { a[try i()] < b }"
+        )
+        #expect(reason.contains("subscript operand"))
     }
 
-    @Test("An optional-chaining operand, reached by recursing through a member-access base, is unsupported")
-    func optionalChainingOperandIsUnsupported() throws {
+    @Test("A function-call left operand is accepted, as is the right one")
+    func functionCallOperandsAreAccepted() throws {
+        for source in ["func f(g: () -> Int, b: Int) -> Bool { g() < b }", "func f(g: () -> Int, b: Int) -> Bool { b < g() }"] {
+            let mutation = try point(source, replacement: ">=")
+            #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible, "\(source)")
+        }
+    }
+
+    @Test("An optional-chaining operand, reached by recursing through a member-access base, is accepted")
+    func optionalChainingOperandIsAccepted() throws {
         let source = "struct S { var v: Int }\nfunc f(s: S?, b: Int) -> Bool? { s?.v.magnitude < b }"
         let mutation = try point(source, replacement: ">=")
-        guard case let .isolatedOnly(reason) = lowerer.analyze(mutation, source: Data(source.utf8)) else {
-            Issue.record("expected .isolatedOnly")
-            return
-        }
-        #expect(reason == .unsupportedOperand(reason: "optional-chaining operand: s?"))
+        #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible)
     }
 
-    @Test("A force-unwrap operand is unsupported")
-    func forceUnwrapOperandIsUnsupported() throws {
-        let reason = try unsupportedOperandReason("func f(a: Int?, b: Int) -> Bool { a! < b }")
-        #expect(reason.contains("force-unwrap operand"))
+    @Test("A force-unwrap operand is accepted")
+    func forceUnwrapOperandIsAccepted() throws {
+        let source = "func f(a: Int?, b: Int) -> Bool { a! < b }"
+        let mutation = try point(source, replacement: ">=")
+        #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible)
     }
 
     @Test("An unrecognized operand kind (an array literal) is unsupported via the catch-all branch")

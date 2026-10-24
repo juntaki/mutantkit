@@ -77,6 +77,17 @@ struct KillAttributionMatchingTests {
         #expect(!inside("AppTests/Suite/check(value:)", selected: ["AppTests/Suite/check()"]))
     }
 
+    /// A selection built before the identifier fix spelled a parameterized test `method(value:)()`; the
+    /// run's own report spells it `method(value:)`. They are one test.
+    @Test("A parameterized selection carrying a trailing empty list still matches its own report spelling")
+    func parameterizedSelectionWithTrailingEmptyList() {
+        let selected = ["AppTests/ParamTests/check(value:)()"]
+        #expect(inside("AppTests.ParamTests/check(value:)", selected: selected))
+        #expect(inside("AppTests/ParamTests/check(value:)", selected: selected))
+        #expect(!inside("AppTests.ParamTests/check(other:)", selected: selected), "another parameter list is another test")
+        #expect(!inside("AppTests.ParamTests/check()", selected: selected), "an empty list is not the parameterized one")
+    }
+
     @Test("Any unmatched failing test among several keeps the kill out of its selection")
     func oneUnmatchedIsEnough() {
         let execution = TestExecutionRecord(attribution: .standalone, selectedTests: ["AppTests/A/m()"])

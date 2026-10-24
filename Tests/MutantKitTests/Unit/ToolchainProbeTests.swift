@@ -20,6 +20,18 @@ struct ToolchainProbeTests {
             .fingerprint
     }
 
+    /// The same, retried while the real `xcrun` SDK probe comes back empty. A probe that times out
+    /// reports `nil` by design, and on a host saturated by other builds (load average 60 on an
+    /// 8-core machine) the first call can; the identity the tests assert on is a fact about the
+    /// toolchain, so one more look is the honest remedy, not a weaker assertion.
+    private func fingerprintWithSDK(for resolvedDestination: ResolvedDestination?) async -> ToolchainFingerprint {
+        var result = await fingerprint(for: resolvedDestination)
+        for _ in 0 ..< 2 where result.buildSDKIdentity == nil {
+            result = await fingerprint(for: resolvedDestination)
+        }
+        return result
+    }
+
     private func simulator(udid: String, runtimeIdentifier: String = "com.apple.CoreSimulator.SimRuntime.iOS-26-5") -> SimulatorDevice {
         SimulatorDevice(udid: udid, name: "iPhone 16e", runtimeIdentifier: runtimeIdentifier, state: "Booted")
     }
@@ -59,7 +71,7 @@ struct ToolchainProbeTests {
     func macOSDestinationProducesBuildSDKIdentityNoRuntimeIdentity() async throws {
         let resolved = ResolvedDestination(requested: "platform=macOS", device: nil)
 
-        let fingerprint = await fingerprint(for: resolved)
+        let fingerprint = await fingerprintWithSDK(for: resolved)
 
         #expect(fingerprint.destinationRuntimeIdentity == nil, "a macOS destination has no simulator runtime to report")
         // Only asserted when a real toolchain is actually present (this
@@ -78,7 +90,7 @@ struct ToolchainProbeTests {
             requested: "platform=iOS Simulator,name=iPhone 16e", device: simulator(udid: "12345678-0000-0000-0000-000000000000")
         )
 
-        let fingerprint = await fingerprint(for: resolved)
+        let fingerprint = await fingerprintWithSDK(for: resolved)
 
         #expect(fingerprint.destinationRuntimeIdentity == "simulator:com.apple.CoreSimulator.SimRuntime.iOS-26-5")
         if FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") {
