@@ -160,7 +160,7 @@ MutantKit verifies that a mutation was applied and that it reached the compiled 
 * With `execution.selectCoveringTests`, uses coverage to separate mutations that were actually executed from ones that were never reached
 * Never folds a result it cannot reconcile with its evidence into the ordinary score
 
-> **v1.3.1 (latest release).** SwiftPM and Xcode projects, isolated and schemata execution, CI gating, coverage-based test selection, caching, sharding, and resumable runs. Six operators are enabled by default; more are added as they clear validation — see [Operators](docs/operators.md) and [Supported today](#supported-today) below.
+> **v1.3.2 (latest release).** SwiftPM and Xcode projects, isolated and schemata execution, CI gating, coverage-based test selection, caching, sharding, and resumable runs. Six operators are enabled by default; more are added as they clear validation — see [Operators](docs/operators.md) and [Supported today](#supported-today) below.
 
 ## Reading the results
 
