@@ -1,5 +1,3 @@
-import Foundation
-
 /// Persistent sandboxes for the crash and timeout confirmations of an
 /// incremental-build run.
 ///
