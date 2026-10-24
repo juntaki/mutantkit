@@ -181,7 +181,7 @@ extension MutationRunner {
             testCommand: record.testCommand,
             buildDurationSeconds: record.buildDurationSeconds,
             testDurationSeconds: record.testDurationSeconds,
-            profilingDurationSeconds: measured.profilingDurationSeconds
+            profilingDurationSeconds: measured.profilingDurationSeconds, coverageReused: measured.reusedFromCache ? true : nil
         )
 
         return .established(BaselineContext(

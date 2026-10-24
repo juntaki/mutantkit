@@ -121,7 +121,8 @@ public enum OperatorProfile: String, Codable, Sendable, CaseIterable {
     /// `swift.core.nil-coalescing-fallback`: Stage 1 operator-parity baseline
     /// (8 corpora): 59 of 64 mutants scorable, no flaky, timed-out or
     /// non-materialized mutants, and 25 of its 26 survivors were hand-judged
-    /// meaningful. It stays out of `default` and has no schemata lowerer.
+    /// meaningful. It stays out of `default`; its schemata lowerer lets a
+    /// `stronger` run build its sites in shared chunks instead of one by one.
     public static let strongerAdditionalOperatorIDs: Set<String> = [
         "swift.core.nil-coalescing-fallback"
     ]

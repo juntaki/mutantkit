@@ -98,22 +98,53 @@ struct ComposedBooleanOperandAnalyzeTests {
 
     // MARK: - still rejected, each with its own reason
 
-    @Test("A call inside a composed operand still falls back (function call operand)")
-    func callInsideComposedOperandRejected() throws {
+    @Test("A call inside a composed operand is accepted")
+    func callInsideComposedOperandAccepted() throws {
         let src = "func g() -> Int { 1 }\nfunc f(a: Bool, b: Bool) -> Bool { g() == 1 && b }"
-        #expect(unsupportedReason(try logical(src, opText: "&&", in: "g() == 1 && b"))?.hasPrefix("function call operand") == true)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "g() == 1 && b")) == nil)
     }
 
-    @Test("A non-comparison infix operator in an operand falls back with a reason naming that operator")
-    func arithmeticOrCustomOperatorOperandRejected() throws {
+    @Test("A call that contains try or await, a macro, or is too long still falls back")
+    func hazardousOrLongCallsStillFallBack() throws {
+        let long = String(repeating: "x", count: 160) // the call is then longer than the 160-character limit
+        let src = """
+        func g(_ v: Int) -> Int { v }
+        func h() throws -> Int { 1 }
+        func a() async -> Int { 1 }
+        func f1(b: Bool) throws -> Bool { g(try h()) == 1 && b }
+        func f2(b: Bool) async -> Bool { g(await a()) == 1 && b }
+        func f3(b: Bool) -> Bool { g(#line) == 1 && b }
+        func f4(b: Bool) -> Bool { g("\(long)".count) == 1 && b }
+        func f5(b: Bool) -> Bool { { 1 }() == 1 && b }
+        """
+        for text in ["g(try h()) == 1 && b", "g(await a()) == 1 && b", "g(#line) == 1 && b", "g(\"\(long)\".count) == 1 && b", "{ 1 }() == 1 && b"] {
+            #expect(unsupportedReason(try logical(src, opText: "&&", in: text)) != nil, "\(text.prefix(40))")
+        }
+    }
+
+    @Test("Standard arithmetic and nil-coalescing operators in an operand are accepted")
+    func arithmeticOperandAccepted() throws {
         let src = """
         func f(a: Int, b: Int, c: Bool) -> Bool { a + b == 3 && c }
         func g(a: Int, b: Int, c: Bool) -> Bool { a &+ b == 3 && c }
         func h(a: Int?, b: Int, c: Bool) -> Bool { (a ?? b) == 3 && c }
         """
-        #expect(unsupportedReason(try logical(src, opText: "&&", in: "a + b == 3 && c"))?.contains("operator '+'") == true)
-        #expect(unsupportedReason(try logical(src, opText: "&&", in: "a &+ b == 3 && c"))?.contains("operator '&+'") == true)
-        #expect(unsupportedReason(try logical(src, opText: "&&", in: "(a ?? b) == 3 && c"))?.contains("operator '??'") == true)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "a + b == 3 && c")) == nil)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "a &+ b == 3 && c")) == nil)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "(a ?? b) == 3 && c")) == nil)
+    }
+
+    @Test("A custom or range operator in an operand falls back with a reason naming that operator")
+    func customOperatorOperandRejected() throws {
+        let src = """
+        infix operator <+>: AdditionPrecedence
+        func <+> (lhs: Int, rhs: Int) -> Int { lhs + rhs }
+        func f(a: Int, b: Int, c: Bool) -> Bool { a <+> b == 3 && c }
+        func g(a: Int, b: Int, c: Bool) -> Bool { (a ..< b).contains(3) == true && c }
+        func h(a: Int, b: Int, c: Bool) -> Bool { (a ... b == (1 ... 2)) && c }
+        """
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "a <+> b == 3 && c"))?.contains("operator '<+>'") == true)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "(a ... b == (1 ... 2)) && c"))?.contains("operator '...'") == true)
     }
 
     @Test("A prefix operator other than ! in an operand falls back with its own reason")
@@ -122,21 +153,31 @@ struct ComposedBooleanOperandAnalyzeTests {
         #expect(unsupportedReason(try logical(src, opText: "&&", in: "-a == b && c"))?.contains("other than '!'") == true)
     }
 
-    @Test("A closure, optional chain, force unwrap, subscript or try inside a composed operand still falls back")
-    func otherUnsafeLeavesInsideComposedOperandRejected() throws {
+    @Test("An optional chain, force unwrap or subscript inside a composed operand is accepted")
+    func accessLeavesInsideComposedOperandAccepted() throws {
         let src = """
         struct S { let o: S?; let b: Bool; let xs: [Bool] }
         func f(s: S, c: Bool) -> Bool { s.o?.b == true && c }
         func g(s: S, c: Bool) -> Bool { s.o!.b == true && c }
         func h(s: S, c: Bool) -> Bool { s.xs[0] == true && c }
+        """
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "s.o?.b == true && c")) == nil)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "s.o!.b == true && c")) == nil)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "s.xs[0] == true && c")) == nil)
+    }
+
+    @Test("A subscript with try inside, a try or an immediately invoked closure inside a composed operand still falls back")
+    func hazardousLeavesInsideComposedOperandRejected() throws {
+        let src = """
+        struct S { let b: Bool; let xs: [Bool] }
+        func k() throws -> Int { 0 }
         func i(s: S, c: Bool) throws -> Bool { (try s.b == true) && c }
         func j(s: S, c: Bool) -> Bool { { s.b }() == true && c }
+        func l(s: S, c: Bool) throws -> Bool { s.xs[try k()] == true && c }
         """
-        #expect(unsupportedReason(try logical(src, opText: "&&", in: "s.o?.b == true && c"))?.hasPrefix("optional-chaining") == true)
-        #expect(unsupportedReason(try logical(src, opText: "&&", in: "s.o!.b == true && c"))?.hasPrefix("force-unwrap") == true)
-        #expect(unsupportedReason(try logical(src, opText: "&&", in: "s.xs[0] == true && c"))?.hasPrefix("subscript") == true)
         #expect(unsupportedReason(try logical(src, opText: "&&", in: "(try s.b == true) && c")) != nil)
         #expect(unsupportedReason(try logical(src, opText: "&&", in: "{ s.b }() == true && c")) != nil)
+        #expect(unsupportedReason(try logical(src, opText: "&&", in: "s.xs[try k()] == true && c"))?.hasPrefix("subscript") == true)
     }
 
     @Test("An assignment-shaped operand is not accepted as a composed boolean operand")

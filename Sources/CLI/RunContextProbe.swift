@@ -407,7 +407,16 @@ enum RunContextProbe {
     /// changing the digest every run and silently defeating both caches.
     /// `.mutare/` is the prior tool name and is excluded for the same reason
     /// during any mixed-version transition.
-    static func worktreeContentState(in root: URL, processRunner: ProcessRunner = defaultProcessRunner) async throws -> String {
+    ///
+    /// `excludingProjectRelativePaths` drops named files of the project root from the digest. Only a
+    /// file whose meaning reaches every identity some other way may be named: the run's config file is
+    /// folded in as the parsed `Configuration` (narrowed per identity scope), so its raw bytes, a
+    /// comment or a key that does not apply to the identity, would only cost hit rate.
+    static func worktreeContentState(
+        in root: URL,
+        excludingProjectRelativePaths excluded: Set<String> = [],
+        processRunner: ProcessRunner = defaultProcessRunner
+    ) async throws -> String {
         // Both listings are made repository-root-relative and resolved
         // against the repository root, not against `root`. `git ls-files`
         // reports paths relative to the working directory while
@@ -449,7 +458,8 @@ enum RunContextProbe {
         let toolOwnedPrefix = projectRelativePrefix(of: root, within: toplevel)
         var entries: [String] = []
         entries.reserveCapacity(paths.count)
-        for path in paths.sorted() where !isToolOwned(repositoryRelativePath: path, projectPrefix: toolOwnedPrefix) {
+        for path in paths.sorted() where !isToolOwned(repositoryRelativePath: path, projectPrefix: toolOwnedPrefix)
+            && !isExcluded(repositoryRelativePath: path, projectPrefix: toolOwnedPrefix, excluded: excluded) {
             let identity = try contentIdentity(
                 of: toplevel.appendingPathComponent(path), path: path, gitlinkOID: gitlinkOIDs[path]
             )
@@ -474,6 +484,12 @@ enum RunContextProbe {
         if rootPath == toplevelPath { return "" }
         guard rootPath.hasPrefix(toplevelPath + "/") else { return nil }
         return String(rootPath.dropFirst(toplevelPath.count + 1)) + "/"
+    }
+
+    private static func isExcluded(repositoryRelativePath path: String, projectPrefix: String?, excluded: Set<String>) -> Bool {
+        guard !excluded.isEmpty, let projectPrefix else { return false }
+        guard projectPrefix.isEmpty || path.hasPrefix(projectPrefix) else { return false }
+        return excluded.contains(String(path.dropFirst(projectPrefix.count)))
     }
 
     /// Tool-owned roots live under the *project* root, but git reports paths

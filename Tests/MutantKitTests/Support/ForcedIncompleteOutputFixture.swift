@@ -112,11 +112,17 @@ enum ForcedIncompleteOutputFixture {
             throw SetupFailure(description: "the fd-holder process never became ready to receive the descriptor")
         }
 
+        // The drain wait is shortened from its 5 s default to 1 s: the holder keeps its copy of the pipe
+        // open for `holderSleepSeconds` (60), so the drain still cannot reach EOF, and every caller no
+        // longer waits out the full default.
         return try await ProcessSupervisor.run(
             executable: "/usr/bin/python3",
             arguments: ["-c", senderScript(socketPath: socketPath, partialOutput: partialOutput)],
             workingDirectory: workDirectory,
-            timeoutSeconds: timeoutSeconds
+            environment: ProcessInfo.processInfo.environment,
+            timeoutSeconds: timeoutSeconds,
+            lifecycleEventHook: nil,
+            drainGracePeriodSeconds: 1
         )
     }
 

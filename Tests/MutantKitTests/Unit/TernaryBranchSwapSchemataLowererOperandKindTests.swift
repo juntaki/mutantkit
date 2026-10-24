@@ -32,9 +32,14 @@ struct TernaryBranchSwapSchemataLowererOperandKindTests {
         return detail
     }
 
-    @Test("A subscript operand is unsupported")
-    func subscriptOperandIsUnsupported() throws {
-        let reason = try unsupportedOperandReason("func f(cond: Bool, arr: [Int], b: Int) -> Int { cond ? arr[0] : b }")
+    @Test("A subscript operand is eligible, unless it contains try")
+    func subscriptOperandIsEligible() throws {
+        let source = "func f(cond: Bool, arr: [Int], b: Int) -> Int { cond ? arr[0] : b }"
+        #expect(lowerer.analyze(try point(source), source: Data(source.utf8)).isEligible)
+
+        let reason = try unsupportedOperandReason(
+            "func i() throws -> Int { 0 }\nfunc f(cond: Bool, arr: [Int], b: Int) throws -> Int { cond ? arr[try i()] : b }"
+        )
         #expect(reason.contains("subscript operand"))
     }
 
@@ -44,18 +49,16 @@ struct TernaryBranchSwapSchemataLowererOperandKindTests {
         #expect(reason.contains("closure operand"))
     }
 
-    @Test("An optional-chaining operand is unsupported")
-    func optionalChainingOperandIsUnsupported() throws {
-        let reason = try unsupportedOperandReason(
-            "struct S { var v: Int? }\nfunc f(cond: Bool, s: S?, b: Int?) -> Int? { cond ? s?.v : b }"
-        )
-        #expect(reason.contains("optional-chaining operand"))
+    @Test("An optional-chaining operand is eligible")
+    func optionalChainingOperandIsEligible() throws {
+        let source = "struct S { var v: Int? }\nfunc f(cond: Bool, s: S?, b: Int?) -> Int? { cond ? s?.v : b }"
+        #expect(lowerer.analyze(try point(source), source: Data(source.utf8)).isEligible)
     }
 
-    @Test("A force-unwrap operand is unsupported")
-    func forceUnwrapOperandIsUnsupported() throws {
-        let reason = try unsupportedOperandReason("func f(cond: Bool, a: Int?, b: Int) -> Int { cond ? a! : b }")
-        #expect(reason.contains("force-unwrap operand"))
+    @Test("A force-unwrap operand is eligible")
+    func forceUnwrapOperandIsEligible() throws {
+        let source = "func f(cond: Bool, a: Int?, b: Int) -> Int { cond ? a! : b }"
+        #expect(lowerer.analyze(try point(source), source: Data(source.utf8)).isEligible)
     }
 
     @Test("A key-path operand is unsupported")
@@ -89,19 +92,14 @@ struct TernaryBranchSwapSchemataLowererOperandKindTests {
             cond ? a?.0 : b
         }
         """
-        let mutation = try point(source)
-        guard case let .isolatedOnly(reason) = lowerer.analyze(mutation, source: Data(source.utf8)) else {
-            Issue.record("expected .isolatedOnly")
-            return
-        }
-        #expect(reason == .unsupportedOperand(reason: "optional-chaining operand: a?"))
+        #expect(lowerer.analyze(try point(source), source: Data(source.utf8)).isEligible)
     }
 
     @Test("A nested ternary in one branch recurses into that ternary's own condition and both sub-branches")
     func nestedTernaryRecursesIntoItsOwnOperands() throws {
         let source = """
-        func f(cond: Bool, sub: Bool, arr: [Int], a: Int, b: Int) -> Int {
-            cond ? (sub ? arr[0] : a) : b
+        func f(cond: Bool, sub: Bool, a: Int) -> () -> Int {
+            cond ? (sub ? { 1 } : { a }) : { 3 }
         }
         """
         let mutation = try point(source)
@@ -109,7 +107,7 @@ struct TernaryBranchSwapSchemataLowererOperandKindTests {
             Issue.record("expected .isolatedOnly")
             return
         }
-        #expect(reason == .unsupportedOperand(reason: "subscript operand: arr[0]"))
+        #expect(reason == .unsupportedOperand(reason: "closure operand: { 1 }"))
     }
 
     @Test("A safe leaf operand (integer/float/string/bool/nil literal, or a plain identifier) is eligible")

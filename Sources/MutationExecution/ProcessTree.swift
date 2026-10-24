@@ -201,6 +201,14 @@ enum ProcessTree {
         processTable().contains { $0.identity == identity && !$0.isZombie }
     }
 
+    /// `true` only when a process with this PID is genuinely still running: a zombie reports `false`, as in
+    /// `isRunning(_:)`, and `kill(pid, 0)` (`isAlive(_:)` above) reports `true` for one until launchd gets to reap it,
+    /// which under load can be seconds after the process was killed. For a caller that only has a PID (a
+    /// test asserting that a torn-down child is no longer running).
+    static func isRunning(pid: pid_t) -> Bool {
+        processTable().contains { $0.identity.pid == pid && !$0.isZombie }
+    }
+
     // MARK: - Kernel process table
 
     private struct Entry {

@@ -20,10 +20,11 @@ extension AssertionKillAttribution {
             var components = identifier.split(separator: "/", omittingEmptySubsequences: true)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             var last = components.popLast() ?? identifier
-            // A selection built from an identifier that already ended in `()`
-            // once carried it twice (`method()()`). Only that exact doubled
-            // empty list is read as one; any other list is left alone.
-            while last.hasSuffix("()()") { last.removeLast(2) }
+            // A selection built from an identifier that already ended in `)`
+            // once carried an empty list after it: `method()()`, and for a
+            // parameterized test `method(value:)()`. That trailing empty list
+            // is dropped; any other list is left alone.
+            while last.hasSuffix(")()") { last.removeLast(2) }
             if let open = last.firstIndex(of: "(") {
                 method = String(last[..<open])
                 var list = String(last[last.index(after: open)...])

@@ -56,6 +56,8 @@ public enum PerTestCoverageAttribution {
             }
             if let measured {
                 for (file, lines) in measured.executedLines {
+                    // Kept even when empty, so `aggregate()` can say "never reached" for the file.
+                    if lines.isEmpty { coveringTests[file, default: [:]] = coveringTests[file] ?? [:] }
                     for line in lines {
                         coveringTests[file, default: [:]][line, default: []].insert(test)
                     }
@@ -70,7 +72,7 @@ public enum PerTestCoverageAttribution {
             await progress?.recordCompletion()
         }
 
-        guard !coveringTests.isEmpty else { return nil }
+        guard coveringTests.values.contains(where: { !$0.isEmpty }) else { return nil }
         return PerTestCoverageMap(
             coveringTests: coveringTests, source: source, unattributedTests: unattributedTests
         )

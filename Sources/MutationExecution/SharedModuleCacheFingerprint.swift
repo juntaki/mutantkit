@@ -102,14 +102,32 @@ public actor ToolchainCacheFingerprintProbe {
     public static let shared = ToolchainCacheFingerprintProbe()
 
     private var cached: SharedModuleCacheFingerprint?
+    /// The probe a concurrent caller is already waiting on. An actor is re-entrant across `await`, so
+    /// without this two callers that arrive together each run the probe, and when the probe is
+    /// untrustworthy each gets its own random value: the first caller keeps a value the cache no
+    /// longer holds, and the cache directory it resolves differs from the one the next caller gets.
+    private var inFlight: Task<SharedModuleCacheFingerprint, Never>?
+    private let probeOverride: (@Sendable (URL) async -> SharedModuleCacheFingerprint)?
 
-    public init() {}
+    public init() {
+        probeOverride = nil
+    }
+
+    init(probe: @escaping @Sendable (URL) async -> SharedModuleCacheFingerprint) {
+        probeOverride = probe
+    }
 
     public func fingerprint(workingDirectory: URL) async -> SharedModuleCacheFingerprint {
         if let cached { return cached }
-        let value = await Self.probe(workingDirectory: workingDirectory)
-        cached = value
-        return value
+        let task = inFlight ?? Task { [probeOverride] in
+            if let probeOverride { return await probeOverride(workingDirectory) }
+            return await Self.probe(workingDirectory: workingDirectory)
+        }
+        inFlight = task
+        let value = await task.value
+        if cached == nil { cached = value }
+        inFlight = nil
+        return cached ?? value
     }
 
     /// `internal`, not `private`: exercised directly by

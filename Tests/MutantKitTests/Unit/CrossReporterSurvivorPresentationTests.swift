@@ -190,6 +190,23 @@ struct CrossReporterSurvivorPresentationTests {
 
     /// Without a coverage measurement nothing can be classified `.noCoverage`, so a survivor may
     /// sit on code no test executes. Console and HTML must not call it "covered", and must say why.
+    /// A cache hit pays no profiling time (`profilingDurationSeconds` is nil on purpose) but the
+    /// coverage was used: the survivors are covered and the "not measured" note would be false.
+    @Test("A coverage measurement served from the cache still counts as measured")
+    func reusedCoverageCountsAsMeasured() throws {
+        let point = try makeAnchoredPoint(file: "Sources/B.swift")
+        let results = [makeResult(point: point, outcome: .survived, evidence: evidenceWithNarrowedTests(["Tests/testB"], diff: "diff"))]
+        let report = makeReport(plan: makePlan(mutations: [point]), results: results, coverageReused: true)
+
+        let console = try ConsoleReporter(colorEnabled: false).render(report)
+        let html = try HTMLReporter().render(report)
+
+        for output in [console, html] {
+            #expect(output.contains("Covered but survived"))
+            #expect(!output.contains("coverage not measured"))
+        }
+    }
+
     @Test("Without a coverage measurement the survivors are not called covered, and the report says why")
     func survivorsAreNotCalledCoveredWithoutCoverage() throws {
         let point = try makeAnchoredPoint(file: "Sources/B.swift")

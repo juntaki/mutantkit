@@ -112,7 +112,7 @@
     "confidence" : "medium",
     "id" : "swift.core.nil-coalescing-fallback",
     "requiresSymbolResolution" : false,
-    "schemata" : false,
+    "schemata" : true,
     "tier" : "stronger",
     "version" : 1
   },

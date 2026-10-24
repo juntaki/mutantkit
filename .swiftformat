@@ -91,3 +91,9 @@
 # Measured: 2101 multi-line collection/argument closings have no trailing
 # comma vs. 34 that do. "Never" matches the dominant convention and
 # normalizes the 34 outliers.
+
+--disable repeatedGuard
+# New in SwiftFormat 0.64: merges consecutive guards with identical bodies
+# into one `guard a, b, c else { ... }`. On the project's multi-condition
+# guards that produces lines well past SwiftLint's 140-column limit, so the
+# two linters would disagree; the separate guards are also easier to read.

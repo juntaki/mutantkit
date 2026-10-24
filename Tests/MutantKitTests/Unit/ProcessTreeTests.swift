@@ -21,8 +21,12 @@ struct ProcessTreeTests {
         process.arguments = ["-c", "sleep 30 & sleep 30"]
         try process.run()
 
-        // The grandchild needs a moment to exist before it can be found.
-        Thread.sleep(forTimeInterval: 0.4)
+        // The grandchild needs a moment to exist before it can be found. Polled, not a fixed
+        // sleep: under heavy host load the fork can take far longer than any short pause.
+        let deadline = Date().addingTimeInterval(30)
+        while ProcessTree.descendants(of: process.processIdentifier).isEmpty, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
 
         return (
             process.processIdentifier,

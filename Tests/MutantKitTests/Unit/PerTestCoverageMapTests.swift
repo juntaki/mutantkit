@@ -209,4 +209,24 @@ struct PerTestCoverageMapPartialAttributionTests {
             try JSONDecoder().decode(PerTestCoverageMap.self, from: superseded)
         }
     }
+
+    @Test("A file no test reached is kept as an empty entry, so the aggregate can call it uncovered")
+    func neverReachedFileSurvivesAttribution() async throws {
+        let test = addTest
+        let map = try #require(await PerTestCoverageAttribution.attribute(tests: [test], source: "test") { _, _ in
+            CoverageMap(executedLines: ["Sources/Live.swift": [1], "Sources/Dead.swift": []], source: "test")
+        })
+        let aggregate = try #require(map.aggregate())
+        #expect(aggregate.observation(forFile: "Sources/Dead.swift", line: 3)?.mutatedLineWasExecuted == false)
+        #expect(aggregate.observation(forFile: "Sources/Live.swift", line: 1)?.mutatedLineWasExecuted == true)
+    }
+
+    @Test("Attribution that reached no line at all is still no map")
+    func nothingReachedIsNil() async throws {
+        let test = addTest
+        let map = await PerTestCoverageAttribution.attribute(tests: [test], source: "test") { _, _ in
+            CoverageMap(executedLines: ["Sources/Dead.swift": []], source: "test")
+        }
+        #expect(map == nil)
+    }
 }

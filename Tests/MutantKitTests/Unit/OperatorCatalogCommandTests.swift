@@ -138,9 +138,9 @@ struct OperatorCatalogCommandTests {
 
     // MARK: - Schemata eligibility
 
-    /// The exact set this command must report `true` for — the 6 operators
-    /// with a real, registered `SchemataLowererRegistry` lowerer, all of
-    /// which happen to also be the `default`-profile operators today. Pinned
+    /// The exact set this command must report `true` for — the 7 operators
+    /// with a real, registered `SchemataLowererRegistry` lowerer: the six
+    /// `default`-profile operators and the `stronger` nil-coalescing-fallback. Pinned
     /// as a literal ID list, not derived from the registry in this test, so
     /// a regression that breaks `MutationRegistry.effectiveDescriptor(for:)`
     /// itself can't also quietly break the thing checking it.
@@ -150,14 +150,15 @@ struct OperatorCatalogCommandTests {
         "swift.core.relational-operator-replacement",
         "swift.core.ternary-branch-swap",
         "swift.core.unary-not-removal",
-        "swift.core.return-value-replacement"
+        "swift.core.return-value-replacement",
+        "swift.core.nil-coalescing-fallback"
     ]
 
     /// Human table/detail output and `--json` output must agree with each
     /// other and with the pinned set above — this is the exact regression
     /// `descriptor.schemataEligible` being stale once produced: every
     /// operator, including these 6, reported `false` here.
-    @Test("schemataEligible is true for exactly the 6 operators with a registered schemata lowerer, everywhere this command reports it")
+    @Test("schemataEligible is true for exactly the 7 operators with a registered schemata lowerer, everywhere this command reports it")
     func schemataEligibleMatchesRegisteredLowerers() throws {
         let entries = OperatorCatalogCommand.entries()
         #expect(entries.count == MutationRegistry.builtIn.count)

@@ -49,7 +49,7 @@ public struct LogicalConnectorMutationVariant: Codable, Hashable, Sendable {
 /// function-call operand does today.
 public struct LogicalConnectorReplacementSchemataLowerer: SchemataLowerer {
     public static let lowererID = "swift.core.logical-connector-replacement.schemata"
-    public static let lowererVersion = 1
+    public static let lowererVersion = 3
     /// Same v3 runtime protocol every other lowerer uses — one shared
     /// runtime, not a second one invented per operator.
     public static let runtimeABIVersion = BoolLiteralSchemataLowerer.runtimeABIVersion
@@ -135,6 +135,7 @@ public struct LogicalConnectorReplacementSchemataLowerer: SchemataLowerer {
         if ComposedBooleanOperand.isComposed(unwrapped) {
             return ComposedBooleanOperand.unsafetyReason(for: unwrapped, recurse: Self.unsafetyReason(for:))
         }
+        if ComposedBooleanOperand.isAcceptedCall(unwrapped) { return nil }
         return Self.unsafeOperandReason(for: unwrapped)
     }
 

@@ -162,34 +162,19 @@ struct RelationalOperatorReplacementSchemataLowererTests {
         #expect(reason == .controlFlowConstant)
     }
 
-    @Test("A function-call operand falls back to isolated")
-    func functionCallOperandFallsBack() throws {
+    @Test("A function-call operand is eligible")
+    func functionCallOperandIsEligible() throws {
         let source = "func lhs() -> Int { 1 }\nfunc f(b: Int) -> Bool { lhs() < b }"
         let mutation = try point(source, replacement: ">=")
         let eligibility = lowerer.analyze(mutation, source: Data(source.utf8))
-        guard case let .isolatedOnly(reason) = eligibility else {
-            Issue.record("expected .isolatedOnly, got \(eligibility)")
-            return
-        }
-        guard case .unsupportedOperand = reason else {
-            Issue.record("expected .unsupportedOperand, got \(reason)")
-            return
-        }
+        #expect(eligibility.isEligible, "the lowering runs the call once, in the selected arm")
     }
 
-    @Test("A subscript operand falls back to isolated")
-    func subscriptOperandFallsBack() throws {
+    @Test("A subscript operand is eligible")
+    func subscriptOperandIsEligible() throws {
         let source = "func f(a: [Int], b: Int) -> Bool { a[0] < b }"
         let mutation = try point(source, replacement: ">=")
-        let eligibility = lowerer.analyze(mutation, source: Data(source.utf8))
-        guard case let .isolatedOnly(reason) = eligibility else {
-            Issue.record("expected .isolatedOnly, got \(eligibility)")
-            return
-        }
-        guard case .unsupportedOperand = reason else {
-            Issue.record("expected .unsupportedOperand, got \(reason)")
-            return
-        }
+        #expect(lowerer.analyze(mutation, source: Data(source.utf8)).isEligible)
     }
 
     @Test("A try operand falls back to isolated")

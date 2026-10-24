@@ -148,7 +148,7 @@ struct ProcessSupervisorZeroBaseReviewFindingsTests {
         // case that startup is genuinely slow; the escalation and log
         // assertions below are unaffected by the fixture's own budget.
         let outcome = try await ProcessSupervisorOwnershipFixture.runIgnoringSIGTERM(
-            timeoutSeconds: 20, terminationGracePeriodSeconds: 1,
+            timeoutSeconds: 6, terminationGracePeriodSeconds: 1, // a lost startup race is retried by the fixture
             lifecycleEventHook: { log.record($0) }
         )
         defer { if ProcessTree.isAlive(outcome.descendantPID) { kill(outcome.descendantPID, SIGKILL) } }
@@ -221,7 +221,7 @@ struct ProcessSupervisorZeroBaseReviewFindingsTests {
         // Root is now confirmed gone (fact-polled, not guessed) -- the
         // supervisor is inside, or about to enter, the post-exit drain.
         #expect(
-            ProcessTree.isAlive(started.childPID),
+            ProcessTree.isRunning(pid: started.childPID),
             "the descendant holding the pipe must still be alive at the moment of cancellation for this to test anything"
         )
 
@@ -246,7 +246,7 @@ struct ProcessSupervisorZeroBaseReviewFindingsTests {
             """
         )
         #expect(
-            !ProcessTree.isAlive(started.childPID),
+            !ProcessTree.isRunning(pid: started.childPID),
             "the descendant holding the pipe must be torn down as part of cancellation, not left running"
         )
     }

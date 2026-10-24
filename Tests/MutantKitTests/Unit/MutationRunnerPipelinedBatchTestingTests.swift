@@ -94,7 +94,13 @@ struct MutationRunnerPipelinedBatchTestingTests {
     /// resolves in well under a millisecond, and the generous timeout only
     /// matters if something has actually regressed (in which case the
     /// subsequent `#expect` fails with a clear message instead of hanging).
-    private func waitUntil(timeout: Duration = .seconds(5), _ condition: @Sendable () async -> Bool) async {
+    ///
+    /// The timeout is two minutes, not seconds: in the full parallel suite on a
+    /// busy or coverage-instrumented host, this test's tasks can wait that long
+    /// for a thread of the cooperative pool, which blocking subprocess tests
+    /// occupy. A few seconds failed here on every full run on an 8-core host
+    /// while the suite passed alone.
+    private func waitUntil(timeout: Duration = .seconds(120), _ condition: @Sendable () async -> Bool) async {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if await condition() { return }

@@ -27,4 +27,18 @@ struct MultiTestTargetCoverageAcceptanceTests {
         #expect(targets(covering: "Sources/Alpha/Alpha.swift") == ["AlphaTests"])
         #expect(targets(covering: "Sources/Beta/Beta.swift") == ["BetaTests"], "the other target's coverage was lost")
     }
+
+    @Test("A file no test ever runs is known uncovered, not left for the whole suite to run")
+    func neverExecutedFileIsKnownUncovered() async throws {
+        let workspace = try Acceptance.stageFixture("DisjointTestTargets")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let adapter = SwiftPackageMacOSAdapter(configuration: Configuration())
+        let artifact = try await adapter.buildBaseline(in: workspace)
+        let map = try #require(await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: 120))
+        let aggregate = try #require(map.aggregate())
+
+        #expect(aggregate.observation(forFile: "Sources/Alpha/Unused.swift", line: 3)?.mutatedLineWasExecuted == false)
+        #expect(aggregate.observation(forFile: "Sources/Alpha/Alpha.swift", line: 1) != nil)
+    }
 }

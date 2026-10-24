@@ -172,17 +172,15 @@ struct SchemataMutationRunnerTimeoutBudgetTests {
         )
         let (adapter, _) = try await run(timeouts: timeouts)
         let observed = try #require(adapter.tokenTimeoutSeconds.first)
-        // The fake baseline's own "measured duration" is real wall-clock
-        // time around instant fake work, not a true ~0 -- under real CI
-        // contention (observed directly: this recurred as a flake more than
-        // once at a tolerance of 1s, once by over 6s) that measurement can
-        // drift by several seconds. Widened to 15s: still two orders of
-        // magnitude tighter than the 310s gap to the nearest wrong answer
-        // (600s baseline / 400s ceiling), so this remains a real
-        // discriminating assertion, not a rubber-stamp.
+        // The fake baseline's own "measured duration" is real wall-clock time around instant fake
+        // work, not a true ~0, and `resolve` multiplies it by 3: a task starved for ~14 s in the full
+        // parallel suite on a busy host gave 133 s here (this recurred as a flake at tolerances of 1 s
+        // and 15 s). So the assertion is a window that the drift cannot leave but each wrong answer
+        // can never enter: at least the 90 s allowance (not the 5 s minimum), and below 300 s (not
+        // the 400 s ceiling or the 600 s baseline limit, which is what a regression would produce).
         #expect(
-            abs(observed - 90) < 15,
-            "adaptive resolve(baseline≈0) is overheadAllowance (90 s), not the 600 s baseline limit and not the 400 s ceiling: \(observed)"
+            observed >= 90 && observed < 300,
+            "adaptive resolve(baseline≈0) is overheadAllowance (90 s) plus the tiny measured duration, not the 600 s baseline limit and not the 400 s ceiling: \(observed)"
         )
     }
 

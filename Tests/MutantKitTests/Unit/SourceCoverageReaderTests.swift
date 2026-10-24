@@ -394,12 +394,12 @@ struct SourceCoverageReaderTests {
         return url
     }
 
-    private static func makeExport(files: [(path: String, segments: [[Any]])]) -> Data {
+    static func makeExport(files: [(path: String, segments: [[Any]])]) -> Data {
         let rawFiles = files.map { makeFile(path: $0.path, segments: $0.segments) }
         return makeExport(rawFiles: rawFiles)
     }
 
-    private static func makeExport(rawFiles: [String]) -> Data {
+    static func makeExport(rawFiles: [String]) -> Data {
         let document = """
         {
           "version": "2.0.1",
@@ -417,7 +417,7 @@ struct SourceCoverageReaderTests {
     }
 
     @discardableResult
-    private static func makeFile(path: String, segments: [[Any]]) -> String {
+    static func makeFile(path: String, segments: [[Any]]) -> String {
         let segJSON = segments.map { segment in
             "[" + segment.map { jsonLiteral(for: $0) }.joined(separator: ",") + "]"
         }.joined(separator: ",")

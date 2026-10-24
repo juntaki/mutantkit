@@ -120,7 +120,7 @@ public enum SurvivorPresentationBuilder {
         }
         return SurvivorPresentation(
             planID: actionability.planID, rows: rows,
-            coverageMeasured: report.baseline.profilingDurationSeconds != nil
+            coverageMeasured: report.baseline.profilingDurationSeconds != nil || report.baseline.coverageReused == true
         )
     }
 }
