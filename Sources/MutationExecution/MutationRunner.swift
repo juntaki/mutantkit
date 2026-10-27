@@ -235,11 +235,26 @@ public struct MutationRunner: Sendable {
 
     // MARK: - Run
 
+    /// Runs inside a `RunContainmentMonitor` scope (reusing the hybrid
+    /// engine's when there is one). If any process's post-SIGKILL cleanup
+    /// cannot be verified, this throws `RunAbortedError` instead of
+    /// returning a report — including when the baseline exposed it, which
+    /// takes precedence over a fail-closed baseline report.
     public func run() async throws -> RunReport {
-        let startedAt = Date()
+        try await RunContainmentMonitor.withRunScope { monitor in
+            try await runWithinContainmentScope(monitor)
+        }
+    }
 
+    private func runWithinContainmentScope(_ monitor: RunContainmentMonitor) async throws -> RunReport {
+        let startedAt = Date()
+        monitor.discardOnAbort(checkpoints: checkpoints, resultCache: resultCache)
+
+        try monitor.throwIfAborted() // a trip before the engine started builds nothing
         let baseline: BaselineContext
-        switch await establishBaseline() {
+        let attempt = await establishBaseline()
+        try monitor.throwIfAborted()
+        switch attempt {
         case let .failed(record, diagnosis):
             return failClosedReport(startedAt: startedAt, baseline: record, diagnosis: diagnosis)
         case let .established(context):

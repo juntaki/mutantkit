@@ -140,6 +140,22 @@ struct MutationEvidenceAssembler: Sendable {
             return result
         }
 
+        // An unverified cleanup in any observed run aborts the run (the
+        // verifier has already made this record `.infrastructureFailure`).
+        // Once the run is aborting, nothing is persisted: a checkpoint or
+        // cache entry written now would carry an observation from a run
+        // whose isolation is unproven into a resume or a later run. `run()`
+        // throws, so `result` is never reported. What was persisted before
+        // the trip is discarded when the run's scope ends (`MutationRunner`'s
+        // `onAbort` registration).
+        let monitor = RunContainmentMonitor.current
+        if let unverified = observations.firstUnverifiedCleanupRun {
+            monitor?.observe(unverified)
+        }
+        if monitor?.isAborted == true {
+            return result
+        }
+
         do {
             try await checkpoints?.record(
                 observations, durationSeconds: durationSeconds, buildDurationSeconds: buildDurationSeconds,

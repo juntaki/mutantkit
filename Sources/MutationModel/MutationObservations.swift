@@ -173,4 +173,17 @@ public struct MutationObservations: Codable, Sendable {
         self.confirmations = confirmations
         self.infrastructureFailureDiagnosis = infrastructureFailureDiagnosis
     }
+
+    /// Every test run observed for this mutation, primary first, then each
+    /// confirmation in the order it was gathered, each followed by its
+    /// baseline control run when it has one.
+    public var observedRuns: [TestRunResult] {
+        (test.map { [$0.run] } ?? []) + confirmations.flatMap { [$0.run] + ($0.baselineControl.map { [$0.run] } ?? []) }
+    }
+
+    /// The first observed run whose supervising process's post-SIGKILL
+    /// cleanup could not be verified, or `nil`.
+    public var firstUnverifiedCleanupRun: TestRunResult? {
+        observedRuns.first { !$0.cleanupVerified }
+    }
 }

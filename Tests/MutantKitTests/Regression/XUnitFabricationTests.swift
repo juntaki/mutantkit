@@ -263,6 +263,44 @@ struct XUnitSwiftTestingExecutedCountTests {
         #expect(XUnitParser.swiftTestingExecutedCount(forRequestedOutput: requested) == 0)
     }
 
+    /// Real SwiftPM output for a four-test suite where one test is `.enabled(if:)`-skipped: the suite
+    /// says `tests="3" skipped="1"`, so `total - skipped` undercounts and a skipped selected test would
+    /// read as a silent shortfall.
+    @Test("A skipped test the report records is accounted for; a test with no record is not")
+    func skippedTestcaseIsAccountedFor() throws {
+        let requested = try write([
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" errors="0" tests="3" failures="0" skipped="1" time="0.5">
+                <testcase classname="T.S" name="a()" time="0.1" />
+                <testcase classname="T.S" name="b()" time="0.1" />
+                <testcase classname="T.S" name="skipped()" >
+                  <skipped />
+                </testcase>
+                <testcase classname="T.S" name="c()" time="0.1" />
+              </testsuite>
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.swiftTestingAccountedCount(forRequestedOutput: requested) == 4)
+    }
+
+    @Test("Without testcase elements the accounted count falls back to the suite attributes")
+    func accountedCountFallsBackToSuiteAttributes() throws {
+        let requested = try write([
+            "report-swift-testing.xml": """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites>
+              <testsuite name="TestResults" tests="2" failures="0" skipped="1" time="0.001" />
+            </testsuites>
+            """
+        ])
+
+        #expect(XUnitParser.swiftTestingAccountedCount(forRequestedOutput: requested) == 1)
+    }
+
     @Test("A missing Swift Testing sibling stays unknown, even if the requested path has a report")
     func missingSwiftTestingSiblingStaysUnknown() throws {
         let requested = try write([

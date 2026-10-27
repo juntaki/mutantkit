@@ -108,7 +108,7 @@ public struct BaselineCoverageMeasurement: Sendable {
                 coverage = perTestCoverage.flatMap { $0.aggregate() }
                 profilingDurationSeconds = Date().timeIntervalSince(profilingStarted)
                 if let measured = perTestCoverage, let cacheKey {
-                    await cache?.store(measured, for: cacheKey)
+                    await cache?.storeUnlessRunAborted(measured, for: cacheKey)
                 }
             }
             // After both branches, so a partial attribution served from the

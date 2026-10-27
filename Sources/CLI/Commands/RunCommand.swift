@@ -64,6 +64,14 @@ struct RunCommand: AsyncParsableCommand {
     var noHistory = false
 
     func run() async throws {
+        // One containment scope over everything this command launches, from
+        // adapter resolution and simulator preparation to the report. A
+        // process whose post-SIGKILL cleanup cannot be verified anywhere in
+        // it aborts the run.
+        try await Self.failClosedOnAbort { try await runInContainmentScope() }
+    }
+
+    private func runInContainmentScope() async throws {
         let root = common.resolvedProjectRoot
         var settings = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
         try overrides.apply(to: &settings)
@@ -222,6 +230,9 @@ struct RunCommand: AsyncParsableCommand {
         // included, since they are ordinary thrown errors from this `do`
         // block's point of view).
         do {
+            // Nothing is built or tested if preparation or provisioning
+            // already tripped the run-level abort.
+            try RunContainmentMonitor.current?.throwIfAborted()
             try await runAfterSimulatorPoolProvisioned(PostProvisioningInputs(
                 root: root, settings: RunConfiguration(resolved: settings, asConfigured: settingsAsConfigured),
                 loadedPlan: loadedPlan, resolution: resolution,
@@ -392,18 +403,16 @@ struct RunCommand: AsyncParsableCommand {
         await progress.finish()
         let report = Self.sealEvidenceArchive(evidenceArchive, in: executed, keep: settings.resolved.evidence?.keep)
 
-        // Rewritten with the *measured* baseline-adaptive timeout once the
-        // baseline has actually run — the pre-run write above used
-        // `baselineDuration: 0` as a placeholder for a strategy that scales
-        // with it, which is only ever right for `.fixed`. `--replay` needs
-        // the number every mutant in this run was actually held to.
-        if report.baseline.passed {
+        try await publish(
+            report, stop: stop, checkpointURL: checkpoints.fileURL, settings: settings.resolved, runDirectory: runDirectory
+        ) {
+            // Rewritten with the *measured* baseline-adaptive timeout once the
+            // baseline has actually run — the pre-run write above used
+            // `baselineDuration: 0` as a placeholder for a strategy that scales
+            // with it, which is only ever right for `.fixed`. `--replay` needs
+            // the number every mutant in this run was actually held to.
             writeManifest(plan: loadedPlan, context: manifestContext, baselineDuration: report.baseline.durationSeconds, to: manifestURL)
         }
-
-        try await concludeRun(
-            report, stop: stop, checkpointURL: checkpoints.fileURL, settings: settings.resolved, runDirectory: runDirectory
-        )
     }
 
     /// What follows a finished (or interrupted) execution: the interruption exit, the reports, the optional
@@ -533,5 +542,46 @@ struct RunCommand: AsyncParsableCommand {
                 schemataWorkspaces: schemataWorkspaces, startedAt: startedAt
             )
         }
+    }
+}
+
+// The run-level abort on an unverified post-SIGKILL cleanup. Outside the
+// struct body only to keep it within `type_body_length`.
+extension RunCommand {
+    /// Runs `body` in one `RunContainmentMonitor` scope. If any process in
+    /// it had a post-SIGKILL cleanup that could not be verified, the run
+    /// fails closed: the diagnosis goes to stderr and the exit is
+    /// `operationalError`, whatever `body` returned or threw.
+    static func failClosedOnAbort(
+        stderr: (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) },
+        _ body: () async throws -> Void
+    ) async throws {
+        do {
+            try await RunContainmentMonitor.withRunScope { _ in try await body() }
+        } catch let abort as RunAbortedError {
+            stderr("Error: \(abort)\n")
+            throw ExitCode(MutantKitExit.operationalError)
+        }
+    }
+
+    /// Everything `run` does with a finished report: the manifest refresh
+    /// (`refreshManifest`, only for a passing baseline), then `concludeRun`.
+    /// Throws `RunAbortedError` first, without writing anything, if the
+    /// run's containment monitor has tripped: no report file, history entry
+    /// or manifest refresh could then be read as a result. What the run
+    /// persisted is discarded here, while the run lock is still held, not
+    /// only when the scope ends.
+    func publish(
+        _ report: RunReport, stop: RunStopRequest?, checkpointURL: URL, settings: Configuration, runDirectory: URL,
+        refreshManifest: () -> Void
+    ) async throws {
+        if let monitor = RunContainmentMonitor.current, monitor.isAborted {
+            await monitor.discardPersistedEvidence()
+            try monitor.throwIfAborted()
+        }
+        if report.baseline.passed {
+            refreshManifest()
+        }
+        try await concludeRun(report, stop: stop, checkpointURL: checkpointURL, settings: settings, runDirectory: runDirectory)
     }
 }

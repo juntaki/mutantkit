@@ -437,7 +437,8 @@ extension MutationRunner {
                     run: TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: next.item.artifact.command,
                         resultArtifactPath: nil,
-                        diagnosis: "The batch test adapter no longer conforms to BatchTestable."
+                        diagnosis: "The batch test adapter no longer conforms to BatchTestable.",
+                        cleanupVerified: true
                     ),
                     attribution: .standalone
                 )

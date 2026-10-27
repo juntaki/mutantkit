@@ -28,13 +28,22 @@ sources:
 
 tests:
   targets: [AppTests]
-  # Swift packages only. Off by default: SwiftPM writes the XCTest half of its
-  # structured report only when tests run in parallel, so leaving this off costs
-  # per-test counts (`inspect` cannot name which test caught a mutant). Outcomes
-  # stay correct either way. Turning it on is a real trade: a suite that is not
-  # parallel-safe flakes, and a flaky failure during a mutant's run is recorded
-  # as that mutant being killed — silently inflating the score. Only enable it if
-  # `swift test --parallel` already passes reliably.
+  # Swift packages only. Off by default. SwiftPM writes the XCTest half of its
+  # structured report only in parallel mode, so every ordinary test run (the
+  # baseline, each mutant, retests and controls) asks for parallel mode with a
+  # single XCTest worker (`--parallel --num-workers 1`): XCTests still run one
+  # at a time, and the report names each XCTest that failed. In that mode each
+  # XCTest runs in its own process, so a test that only passes after another
+  # test left state behind fails, in the baseline as well. Coverage
+  # measurement runs get neither flag.
+  # An exit 1 that leaves no report naming any test (the test process ended
+  # before either framework wrote its report) is an infrastructure failure,
+  # not a kill.
+  # Turning this on runs XCTests concurrently (SwiftPM's default worker count).
+  # That is a real trade: a suite that is not parallel-safe flakes, and a flaky
+  # failure during a mutant's run is recorded as that mutant being killed —
+  # silently inflating the score. Only enable it if `swift test --parallel`
+  # already passes reliably.
   parallel: false
 
 operators:
@@ -60,11 +69,7 @@ execution:
   # and the kill is not counted. That control run is shared by kills with the
   # same test selection, so it adds one run per distinct selection, not one per
   # kill.
-  # The default stays false. Two measured limits of turning it on:
-  # with `tests.parallel: false` (the default) SwiftPM writes no per-test
-  # breakdown, so the first run cannot name which tests failed and every
-  # retest-confirmed kill ends up `flaky` ("which test caught it could not be
-  # compared between the two runs"); enable `tests.parallel` with it. And the
+  # The default stays false. A measured limit of turning it on: the
   # unmutated control runs in a clone of the built products, so a test that
   # reaches a built binary through a path relative to the original products
   # directory fails in the clone; if it is among the tests that caught the
@@ -105,6 +110,16 @@ execution:
   # stderr and in `report.json`'s `operationalIssues`, and no mutant is
   # classified `noCoverage` from that map.
   selectCoveringTests: true
+  # Swift packages (macOS) only. How many runs of the one-time per-test
+  # measurement above may be in flight at once; the default is 1. Each extra
+  # run works on its own clone of the build products, so runs never share
+  # coverage output, and the attribution has the same shape as the serial
+  # one. Measured on the mutantkit package (3245 tests, 4 workers): 14m53s
+  # became 4m38s. The trade is load: a test that depends on timing can fail
+  # under it, and a test that still cannot be proven after its retry is
+  # included in every mutant's selection, so a higher number can make the
+  # later mutant runs slower, never wrong.
+  # coverageWorkers: 4
   # Reuses one persistent, incrementally-recompiled sandbox per worker across
   # its mutants instead of a fresh build for each — real Swift incremental
   # compilation savings on a project with more than a handful of mutants.

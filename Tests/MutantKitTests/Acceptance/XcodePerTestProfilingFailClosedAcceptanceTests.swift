@@ -69,11 +69,11 @@ struct XcodePerTestProfilingFailClosedAcceptanceTests {
         let adapter = XcodeBuildAdapter(configuration: configuration, kind: .xcodeProject, projectFile: nil, projectRoot: workspace)
 
         let artifact = try await adapter.buildBaseline(in: workspace)
-        let baseline = try await adapter.runBaseline(artifact, in: workspace, timeoutSeconds: 120)
+        let baseline = try await adapter.runBaseline(artifact, in: workspace, timeoutSeconds: Self.runTimeoutSeconds)
         #expect(baseline.status == .failed, "testWidgetBNeverProfiles must fail the baseline run unconditionally; got \(baseline)")
 
         let map = try #require(
-            await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: 120),
+            await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: Self.runTimeoutSeconds),
             "the per-test pass should keep the measurable test's attribution and carry the unmeasurable one explicitly"
         )
 
@@ -97,5 +97,14 @@ struct XcodePerTestProfilingFailClosedAcceptanceTests {
         }
         let unseen = try #require(map.testsCovering(file: "PerTestWidgets/NoSuchFile.swift", line: 1))
         #expect(unseen.isSuperset(of: unmeasurable), "a line no test was attributed must still select the unmeasurable test")
+
+        try await PerTestProfilingFailClosedAcceptanceTests.expectNoCoverageClaimAndReportedDegradation(map, unmeasurable: unmeasurable)
     }
+
+    /// For the baseline run and for each isolated per-test run of the
+    /// partial-failure scheme. Under a heavily loaded full parallel run 120 s
+    /// turned the baseline into an infrastructure failure and could time out
+    /// the always-passing test's isolated runs, leaving nothing attributed.
+    /// Generous on purpose; these runs take seconds when the machine is idle.
+    private static let runTimeoutSeconds: Double = 600
 }

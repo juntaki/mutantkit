@@ -46,6 +46,10 @@ extension SchemataMutationRunner {
     ) async -> ChunkRunResult {
         let embeddedEntries = program.entries.filter(\.isEmbedded)
         guard !embeddedEntries.isEmpty else { return .empty }
+        // A chunk that starts after the run began aborting on an unverified
+        // cleanup builds and runs nothing. `run()` throws, so this is never
+        // reported.
+        guard RunContainmentMonitor.current?.isAborted != true else { return .empty }
 
         let sandbox: Sandbox
         do {
@@ -57,6 +61,12 @@ extension SchemataMutationRunner {
                 infrastructureFailureResult(for: $0, reason: "the chunk sandbox could not be created: \(error)")
             }.map(EntryRunOutcome.verified)
             return ChunkRunResult(outcomes: outcomes, buildFailureEvents: [], infrastructureFallbackEvents: [])
+        }
+        // Another chunk may have tripped the monitor while this one was
+        // creating its sandbox.
+        guard RunContainmentMonitor.current?.isAborted != true else {
+            try? await session.workspaces.destroySandbox(sandbox)
+            return .empty
         }
 
         let result = await runChunk(
@@ -145,6 +155,10 @@ extension SchemataMutationRunner {
         let artifact: BuildArtifact
         do {
             artifact = try await build.buildSchemataChunk(loweredSources: program.loweredSources, in: sandbox)
+            // Receipt resolution launches resolver processes, so a chunk
+            // build that tripped the run-level abort stops here as an
+            // infrastructure failure.
+            try RunContainmentMonitor.current?.throwIfAborted()
         } catch let failure as BuildFailure {
             // Chunk-level evidence only (shared chunk build-failure attribution): the shared
             // lowered program did not compile, which proves nothing about
@@ -270,8 +284,8 @@ extension SchemataMutationRunner {
     ///
     /// Sandbox recreation reuses `program.chunkID` — `WorkspaceManager
     /// .createSandbox(id:)` is deterministic by `id`, so destroy-then-create
-    /// under the same chunk ID always yields the same directory, freshly
-    /// emptied. The rebuild itself (once a fresh sandbox exists) routes
+    /// under the same chunk ID always yields the same directory — freshly
+    /// emptied only because the destroy is required to succeed first. The rebuild itself (once a fresh sandbox exists) routes
     /// through the exact same `prepareChunkState` every initial chunk build
     /// already uses, so a mid-chunk recovery rebuild failure is handled by
     /// the identical four-way split (the post-hang recovery semantics(d)), never a separately
@@ -279,7 +293,25 @@ extension SchemataMutationRunner {
     func rebuildChunkState(
         program: SchemataProgram, entries remainingEntries: [SchemataPlanEntry], state: ChunkExecutionState
     ) async -> ChunkPreparationOutcome {
-        try? await session.workspaces.destroySandbox(state.container)
+        // An aborting run rebuilds nothing, so the chunk stops here; no
+        // confirmation or later entry spawns either (`runSchemataToken`
+        // refuses to launch). `run()` then throws, so none of these
+        // placeholders is ever reported.
+        if let abort = RunContainmentMonitor.current?.abortDiagnosis {
+            return .failed(remainingEntries.compactMap {
+                infrastructureFailureResult(for: $0, reason: "not rebuilt: the run is aborting (\(abort))")
+            }.map(EntryRunOutcome.verified))
+        }
+        // `createSandbox` reuses this chunk ID's directory without emptying it, so a failed destroy would leave
+        // the timed-out process's residue under the "fresh" sandbox. Fail closed exactly like a recreation
+        // failure: no rebuild, nothing further runs.
+        do {
+            try await session.workspaces.destroySandbox(state.container)
+        } catch {
+            return .failed(remainingEntries.compactMap {
+                infrastructureFailureResult(for: $0, reason: "the timed-out chunk sandbox could not be destroyed: \(error)")
+            }.map(EntryRunOutcome.verified))
+        }
         let sandbox: Sandbox
         do {
             let sandboxCreateStart = GateTimingRecorder.shared.now()
@@ -340,6 +372,11 @@ extension SchemataMutationRunner {
             confirmations: confirmations,
             infrastructureFailureDiagnosis: infrastructureFailureDiagnosis
         )
+        // The verifier makes such a record `.infrastructureFailure`; this
+        // makes sure the run aborts too.
+        if let unverified = observations.firstUnverifiedCleanupRun {
+            RunContainmentMonitor.current?.observe(unverified)
+        }
         archive(observations)
         return MutationVerdictVerifier.verify(observations, policy: session.policy)
     }

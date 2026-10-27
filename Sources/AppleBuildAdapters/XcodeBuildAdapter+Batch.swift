@@ -23,7 +23,8 @@ extension XcodeBuildAdapter: SchemataBatchTestable {
         guard let xctestrunPath = artifact.xctestrunPath else {
             let failure = TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
-                diagnosis: "The chunk build produced no .xctestrun, so there is nothing for a token batch to run."
+                diagnosis: "The chunk build produced no .xctestrun, so there is nothing for a token batch to run.",
+                cleanupVerified: true
             )
             return Dictionary(uniqueKeysWithValues: items.map { ($0.mutationID, failure) })
         }
@@ -45,7 +46,8 @@ extension XcodeBuildAdapter: SchemataBatchTestable {
             guard let selectedTests = item.selectedTests, !selectedTests.isEmpty else {
                 results[item.mutationID] = TestRunResult(
                     status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
-                    diagnosis: "This token has no known test selection, so it cannot share a batch — it must run unbatched."
+                    diagnosis: "This token has no known test selection, so it cannot share a batch — it must run unbatched.",
+                    cleanupVerified: true
                 )
                 continue
             }
@@ -61,7 +63,7 @@ extension XcodeBuildAdapter: SchemataBatchTestable {
             let failure = TestRunResult(
                 status: .infrastructureFailure, summary: nil,
                 command: CommandRecording.record(executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil),
-                resultArtifactPath: nil, diagnosis: diagnosis
+                resultArtifactPath: nil, diagnosis: diagnosis, cleanupVerified: true
             )
             for mutationID in idsByConfigurationName.values { results[mutationID] = failure }
             return results
@@ -91,11 +93,13 @@ extension XcodeBuildAdapter: SchemataBatchTestable {
             nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
         )
 
+        let batchCleanup = Self.batchCleanup(outcomes)
         for (configurationName, mutationID) in idsByConfigurationName {
             results[mutationID] = outcomes[configurationName] ?? TestRunResult(
                 status: .infrastructureFailure, summary: nil,
                 command: CommandRecording.record(executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil),
-                resultArtifactPath: nil, diagnosis: "This token's outcome went unreported by the batch classifier."
+                resultArtifactPath: nil, diagnosis: "This token's outcome went unreported by the batch classifier.",
+                cleanupVerified: batchCleanup.verified, cleanupDiagnosis: batchCleanup.diagnosis
             )
         }
         return results
@@ -193,6 +197,7 @@ extension XcodeBuildAdapter: BatchTestable {
             nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
         )
 
+        let batchCleanup = Self.batchCleanup(outcomes)
         for item in batchable {
             guard let id = idsByConfigurationName[item.configurationName] else { continue }
             // Fail-closed even here: `outcomes` is keyed by every name this
@@ -201,7 +206,8 @@ extension XcodeBuildAdapter: BatchTestable {
             // still handled rather than trusted blindly.
             results[id] = outcomes[item.configurationName] ?? Self.batchInfrastructureFailure(
                 in: workspace,
-                diagnosis: "This configuration's outcome went unreported by the batch classifier."
+                diagnosis: "This configuration's outcome went unreported by the batch classifier.",
+                cleanup: batchCleanup
             )
         }
 
@@ -225,7 +231,7 @@ extension XcodeBuildAdapter: BatchTestable {
                     )
                     return (item.id, result ?? TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: item.artifact.command,
-                        resultArtifactPath: nil, diagnosis: "The mutant's tests could not be run."
+                        resultArtifactPath: nil, diagnosis: "The mutant's tests could not be run.", cleanupVerified: true
                     ))
                 }
             }
@@ -237,14 +243,29 @@ extension XcodeBuildAdapter: BatchTestable {
     }
 
     /// A fail-closed result for a batch configuration that never produced an outcome.
-    private static func batchInfrastructureFailure(in workspace: URL, diagnosis: String) -> TestRunResult {
+    /// `cleanup` defaults to verified: no process was launched for it. A stand-in for a member of a batch
+    /// that did run passes that batch's `batchCleanup`.
+    private static func batchInfrastructureFailure(
+        in workspace: URL, diagnosis: String, cleanup: (verified: Bool, diagnosis: String?) = (true, nil)
+    ) -> TestRunResult {
         TestRunResult(
             status: .infrastructureFailure, summary: nil,
             command: CommandRecording.record(
                 executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil
             ),
-            resultArtifactPath: nil, diagnosis: diagnosis
+            resultArtifactPath: nil, diagnosis: diagnosis,
+            cleanupVerified: cleanup.verified, cleanupDiagnosis: cleanup.diagnosis
         )
+    }
+
+    /// The one batch invocation's cleanup verification, recovered from
+    /// whichever reported member carries it, for a member the classifier
+    /// left unreported: every member of one invocation shares that
+    /// process's `cleanupVerified`, so a synthesized stand-in must not
+    /// report `true` for a batch whose cleanup failed.
+    static func batchCleanup(_ outcomes: [String: TestRunResult]) -> (verified: Bool, diagnosis: String?) {
+        guard let unverified = outcomes.values.first(where: { !$0.cleanupVerified }) else { return (true, nil) }
+        return (false, unverified.cleanupDiagnosis)
     }
 
     /// Leases a device (when the destination needs one) and runs the batch
@@ -283,7 +304,8 @@ extension XcodeBuildAdapter: BatchTestable {
                     executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil
                 ),
                 resultArtifactPath: nil,
-                diagnosis: "No simulator could be leased for this batch: \(error.description)"
+                diagnosis: "No simulator could be leased for this batch: \(error.description)",
+                cleanupVerified: true
             )
             return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
         } catch {
@@ -293,7 +315,8 @@ extension XcodeBuildAdapter: BatchTestable {
                     executable: ToolPaths.xcodebuild, arguments: [], workingDirectory: workspace, result: nil
                 ),
                 resultArtifactPath: nil,
-                diagnosis: "The batch could not be leased or run: \(error)"
+                diagnosis: "The batch could not be leased or run: \(error)",
+                cleanupVerified: true
             )
             return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
         }

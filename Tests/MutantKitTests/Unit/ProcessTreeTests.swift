@@ -157,4 +157,17 @@ struct ProcessTreeTests {
         ProcessTree.reap([])
         #expect(ProcessTree.isAlive(getpid()), "the test process should still be here")
     }
+
+    /// `closeOutOwnedGroup`'s escalation decision rides on `isRunning`: an
+    /// unreadable process table (a failed `sysctl`, e.g. the table growing
+    /// between the size and fill calls) must never read as "every tracked
+    /// descendant stopped", or the SIGKILL escalation is skipped for a
+    /// descendant that may still be running.
+    @Test("An unreadable process table never proves a tracked process stopped")
+    func unreadableProcessTableFailsClosed() throws {
+        let me = try #require(ProcessTree.readProcessTable()?.first { $0.pid == getpid() }?.identity)
+        #expect(ProcessTree.isRunning(me, in: nil), "a failed table read cannot prove termination")
+        #expect(!ProcessTree.isRunning(me, in: []), "a readable table that lacks the identity does prove it stopped")
+        #expect(ProcessTree.isRunning(me), "the live table still reports this test process as running")
+    }
 }

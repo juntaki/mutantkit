@@ -173,5 +173,30 @@ public enum ExecutionImplementationVersion {
     ///    behaviour produces, so reusing one was never unsound in this
     ///    particular direction. The contract does not ask each change to be
     ///    re-argued case by case, and a bump costs one cold cache.)
-    public static let current = 2
+    /// 3. Selection and the `.noCoverage` fast path stopped treating a line the coverage export has
+    ///    no region for as a line no test reaches. A literal default argument such as
+    ///    `isBuiltInDefault: Bool = false` has no counter, so it never appeared in any test's executed
+    ///    lines; the mutant on it was scored `.noCoverage` (per-test granularity) or run against an
+    ///    empty selection and scored `.survived`, although a test kills it. Found by re-running a
+    ///    sample of survivors against the whole suite. A verdict cached under the old behaviour can be
+    ///    that false one, so unlike version 2 reusing it is unsound; this bump drops those entries.
+    /// 4. The instrumented build of a per-test coverage measurement wraps the initializer of every
+    ///    `static let` and global in a closure, so a literal in one now has coverage lines. They were
+    ///    unmeasured before, so every mutant on one ran the whole suite. A map cached before has no
+    ///    lines there, which only means a wider selection, but the bump measures them once.
+    /// 5. A multi-target MutationID aggregated as `.survived` although a sibling placement could not be
+    ///    scored (`infrastructureFailure`, `flaky`, an unconfirmed timeout, ...), and a placement-level
+    ///    fallback could discard a kill another placement had verified. Aggregation policy version 2 sends
+    ///    the former to isolated mode and keeps the latter. A verdict cached under the old policy can be that
+    ///    false survivor, so reusing one is unsound.
+    /// 6. Process close-out now sends a group SIGKILL on every exit and verifies afterwards that the root,
+    ///    every tracked descendant and every other member of its process group are gone; when that cannot be
+    ///    verified the whole run aborts and discards what it persisted. A verdict cached before was observed
+    ///    without that proof, possibly next to a stray process from an earlier observation, so it is not reused.
+    /// 7. An exit 1 with no xunit report naming any test was credited as an assertion kill with no test
+    ///    recorded, and a failing XCTest in a mixed package read as `infrastructureFailure` because only the
+    ///    Swift Testing report was written. Ordinary runs now request the XCTest report too, and a run that
+    ///    recorded no test is not a kill. A kill cached under the old reading can be that unrecorded one, so it
+    ///    is not reused.
+    public static let current = 7
 }

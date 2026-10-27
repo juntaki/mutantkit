@@ -51,13 +51,23 @@ public struct MultiTargetVerdict: Encodable, Sendable, Hashable {
     /// is not reproducible run to run.
     public let perTarget: [TargetVerdict]
 
-    /// The current aggregation policy: kill in any target counts as killed
-    /// overall (the product decision multi-target embedding settled on). Ranked so
-    /// a kill always wins over `.survived`, which wins over `.noCoverage`,
-    /// which wins over a build failure, which wins over an environmental/
-    /// indeterminate outcome. Bumping this requires bumping
-    /// `aggregationPolicyVersion` alongside it.
-    public static let currentAggregationPolicyVersion = 1
+    /// The current aggregation policy:
+    ///
+    /// 1. A kill in any placement (`isKillLike`) wins: the mutation is killed overall and needs nothing
+    ///    further.
+    /// 2. With no kill, if every placement is scorable (`isScorable`), the usual ranking applies:
+    ///    `.survived` over `.noCoverage`.
+    /// 3. With no kill and at least one non-scorable placement, the aggregate is that non-scorable outcome,
+    ///    never `.survived` or `.noCoverage`, and `requiresIsolatedFallback` asks for the whole MutationID to
+    ///    be re-run once in isolated mode.
+    /// 4. Isolated mode builds and tests the whole project once per MutationID and never produces a
+    ///    `MultiTargetVerdict`, so a re-run that is still not scorable is reported as such, with no second
+    ///    fallback.
+    ///
+    /// Version 1 ranked `.survived` above every non-scorable outcome, so a survived placement hid a sibling
+    /// whose own verdict could not be trusted. Bumping this requires bumping `aggregationPolicyVersion`
+    /// alongside it.
+    public static let currentAggregationPolicyVersion = 2
 
     /// A `MultiTargetVerdict` claims every entry in `perTarget` is this same
     /// mutation's own verdict from a distinct target — a claim callers must
@@ -104,7 +114,39 @@ public struct MultiTargetVerdict: Encodable, Sendable, Hashable {
     /// ever be a real function of `perTarget`, not a value some caller set
     /// alongside it that could disagree.
     public var aggregateOutcome: MutationOutcome {
-        perTarget.map(\.record.outcome).max { Self.rank($0) < Self.rank($1) } ?? .infrastructureFailure
+        let outcomes = perTarget.map(\.record.outcome)
+        let byRank: (MutationOutcome, MutationOutcome) -> Bool = { Self.rank($0) < Self.rank($1) }
+        if let kill = outcomes.filter(Self.isKillLike).max(by: byRank) { return kill }
+        if let unscorable = outcomes.filter({ !Self.isScorable($0) }).max(by: byRank) { return unscorable }
+        return outcomes.max(by: byRank) ?? .infrastructureFailure
+    }
+
+    /// True when this is a genuine multi-target aggregate (more than one placement), no placement killed, and
+    /// at least one placement is not scorable. Such a MutationID must not be scored from these placements; it
+    /// goes to isolated mode as a whole instead.
+    public var requiresIsolatedFallback: Bool {
+        guard perTarget.count > 1 else { return false }
+        let outcomes = perTarget.map(\.record.outcome)
+        return !outcomes.contains(where: Self.isKillLike) && !outcomes.allSatisfy(Self.isScorable)
+    }
+
+    /// An outcome that settles the mutation as caught.
+    public static func isKillLike(_ outcome: MutationOutcome) -> Bool {
+        switch outcome {
+        case .killedByAssertion, .killedByCrash, .verifiedTimeout: true
+        case .survived, .noCoverage, .unviable, .timedOut, .flaky, .notApplied, .baselineMismatch, .notMaterialized,
+             .infrastructureFailure, .skipped: false
+        }
+    }
+
+    /// An outcome that is evidence about the test suite either way. Every other outcome says nothing about
+    /// whether the tests would catch the mutation in that placement.
+    public static func isScorable(_ outcome: MutationOutcome) -> Bool {
+        switch outcome {
+        case .killedByAssertion, .killedByCrash, .verifiedTimeout, .survived, .noCoverage: true
+        case .unviable, .timedOut, .flaky, .notApplied, .baselineMismatch, .notMaterialized, .infrastructureFailure,
+             .skipped: false
+        }
     }
 
     private static func rank(_ outcome: MutationOutcome) -> Int {

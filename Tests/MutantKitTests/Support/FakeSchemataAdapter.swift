@@ -103,6 +103,22 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
     /// real wall-clock racing between fake, effectively-instant adapter
     /// calls. Nanoseconds, passed straight to `Task.sleep(nanoseconds:)`.
     var delayNanosecondsBeforeRun: [SchemataSelectorToken: UInt64] = [:]
+    /// A stand-in for what a real
+    /// forced timeout-kill can leave behind (files, locks, an escaped
+    /// child). When `true`, every `.timedOut` run plants a residue file in
+    /// the workspace it ran in, and any later run that finds that file in
+    /// its own workspace reports `.crashed` instead of its scripted
+    /// behavior — a contaminated, wrong verdict. Only a containment rebuild
+    /// (which destroys the sandbox) clears it. Set during setup only.
+    var timedOutRunsLeaveResidue = false
+    /// Every token whose *individual* run (one the runner itself spawned,
+    /// outside any batch invocation) found `timedOutRunsLeaveResidue`'s
+    /// residue — direct evidence the runner spawned something against a
+    /// sandbox a forced kill had left uncontained. A sibling inside the
+    /// same batch invocation as the kill is not the runner's spawn; the
+    /// runner's duty there is to not score it.
+    private(set) var individualRunsThatSawResidue: [SchemataSelectorToken] = []
+    static let residueFileName = "fake-timed-out-residue"
 
     /// How many times `buildSchemataChunk` has been called for this
     /// adapter's whole lifetime — the schemata timeout-isolation design's direct evidence that a
@@ -143,6 +159,20 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
     /// relies on.
     var baselineResult: TestRunResult?
 
+    /// The 0-based dispatch index (0 = primary, 1 = first confirmation, ...)
+    /// at which a token's run reports `cleanupVerified == false`, as a real
+    /// adapter does when its supervisor could not verify descendant cleanup
+    /// after SIGKILL. The scripted status is unchanged. Set during setup only.
+    var unverifiedCleanupOnDispatch: [SchemataSelectorToken: Int] = [:]
+    /// The 1-based `buildSchemataChunk` call that first runs a real
+    /// supervised process whose post-SIGKILL cleanup cannot be verified
+    /// (`UnverifiedCleanupFixture`). Set during setup only.
+    var buildRunsUnverifiedProcessOnCall: Int?
+    /// When set, `buildBaseline` first runs that same unverified supervised
+    /// process. Set during setup only.
+    var baselineBuildRunsUnverifiedProcess = false
+    private(set) var baselineBuildCallCount = 0
+
     private struct UntypedFakeError: Error {}
 
     private static func imageUUID(forBuildCall callIndex: Int) -> ImageUUID {
@@ -173,7 +203,12 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
     }
 
     func diagnose() async throws -> BuildDiagnosis { BuildDiagnosis(items: []) }
-    func buildBaseline(in workspace: URL) async throws -> BuildArtifact { baselineArtifact() }
+    func buildBaseline(in workspace: URL) async throws -> BuildArtifact {
+        lock.withLock { baselineBuildCallCount += 1 }
+        if baselineBuildRunsUnverifiedProcess { _ = try await UnverifiedCleanupFixture.run() }
+        return baselineArtifact()
+    }
+
     func buildMutant(_ mutation: AppliedMutation, in workspace: URL) async throws -> BuildArtifact { baselineArtifact() }
 
     func buildSchemataChunk(loweredSources: [SchemataSourceFile], in workspace: URL) async throws -> BuildArtifact {
@@ -187,6 +222,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
         // here — unlocked, keyed by this call's own already-locked-and-
         // captured `callIndex` rather than a re-read of the shared counter —
         // is safe even when another chunk's build is running concurrently.
+        if buildRunsUnverifiedProcessOnCall == callIndex { _ = try await UnverifiedCleanupFixture.run() }
         switch buildFailureScript[callIndex] {
         case let .throwBuildFailure(kind, diagnosis):
             throw BuildFailure(kind: kind, diagnosis: diagnosis, command: Self.command, output: "")
@@ -324,11 +360,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
         else {
             fatalError("FakeSchemataAdapter requires the schemata protocol env vars to be set")
         }
-        let parts = tokenString.split(separator: ":")
-        guard parts.count == 2, let namespace = UInt64(parts[0]), let localIndex = UInt32(parts[1]) else {
-            fatalError("malformed token env var: \(tokenString)")
-        }
-        let token = SchemataSelectorToken(namespace: namespace, localIndex: localIndex)
+        let token = Self.token(from: tokenString)
         if lock.withLock({ throwOnNextRun.remove(token) }) != nil {
             struct ScriptedLaunchFailure: Error {}
             throw ScriptedLaunchFailure()
@@ -355,7 +387,7 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
             runIDsSeenByToken[token, default: []].append(runID)
             return index
         }
-        let behavior = script.behaviors[min(tokenCallIndex, script.behaviors.count - 1)]
+        let behavior = residueAdjusted(script.behaviors[min(tokenCallIndex, script.behaviors.count - 1)], token: token, in: workspace)
 
         // `.timedOut`/`.crashed` always include HIT: both simulate a mutant
         // that was genuinely activated and only then hung/crashed — the
@@ -389,7 +421,40 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
         }
         try data.write(to: URL(fileURLWithPath: transcriptPathString))
 
-        return TestRunResult(status: status, summary: nil, command: Self.command, resultArtifactPath: nil, diagnosis: "diag:\(status)")
+        let verified = unverifiedCleanupOnDispatch[token] != tokenCallIndex
+        return TestRunResult(
+            status: status, summary: nil, command: Self.command, resultArtifactPath: nil, diagnosis: "diag:\(status)",
+            cleanupVerified: verified, cleanupDiagnosis: verified ? nil : "injected unverified cleanup"
+        )
+    }
+
+    /// `timedOutRunsLeaveResidue`'s effect on one run: a run that finds
+    /// residue is contaminated (`.crashed`); a clean `.timedOut` run leaves
+    /// residue behind for whatever runs next in the same workspace.
+    private func residueAdjusted(_ behavior: Behavior, token: SchemataSelectorToken, in workspace: URL) -> Behavior {
+        guard timedOutRunsLeaveResidue else { return behavior }
+        let residue = workspace.appendingPathComponent(Self.residueFileName)
+        if FileManager.default.fileExists(atPath: residue.path) {
+            lock.withLock { if !isInsideBatchDispatch { individualRunsThatSawResidue.append(token) } }
+            return .crashed
+        }
+        if case .timedOut = behavior {
+            FileManager.default.createFile(atPath: residue.path, contents: Data())
+        }
+        return behavior
+    }
+
+    /// Whether `item`'s next dispatch is scripted to time out — lets
+    /// `runSchemataTokenBatch` run such items first under
+    /// `timedOutRunsLeaveResidue`, the worst-case order a real XCTest
+    /// invocation is free to pick for its configurations.
+    private func nextRunTimesOut(_ item: SchemataBatchTokenItem) -> Bool {
+        guard let tokenString = item.environment[SchemataEvidenceCollector.tokenEnvironmentVariable] else { return false }
+        let token = Self.token(from: tokenString)
+        guard let script = scripts[token] else { return false }
+        let callIndex = lock.withLock { callCounts[token, default: 0] }
+        if case .timedOut = script.behaviors[min(callIndex, script.behaviors.count - 1)] { return true }
+        return false
     }
 
     // MARK: - SchemataBatchTestable (Gate 3 Phase H5)
@@ -433,7 +498,8 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
             isInsideBatchDispatch = true
         }
         var results: [MutationID: TestRunResult] = [:]
-        for item in items {
+        let orderedItems = timedOutRunsLeaveResidue ? items.filter(nextRunTimesOut) + items.filter { !nextRunTimesOut($0) } : items
+        for item in orderedItems {
             do {
                 let result = try await runSchemataToken(
                     artifact, in: workspace, timeoutSeconds: timeoutSeconds, environment: item.environment,
@@ -493,6 +559,17 @@ final class FakeSchemataAdapter: BuildAdapter, SchemataBuildable, TestAdapter, S
         data.appendBE(UInt32(3)) // runtimeABIVersion
         precondition(data.count == 136)
         return data
+    }
+}
+
+// Outside the class body only to keep it within `type_body_length`.
+private extension FakeSchemataAdapter {
+    static func token(from tokenString: String) -> SchemataSelectorToken {
+        let parts = tokenString.split(separator: ":")
+        guard parts.count == 2, let namespace = UInt64(parts[0]), let localIndex = UInt32(parts[1]) else {
+            fatalError("malformed token env var: \(tokenString)")
+        }
+        return SchemataSelectorToken(namespace: namespace, localIndex: localIndex)
     }
 }
 

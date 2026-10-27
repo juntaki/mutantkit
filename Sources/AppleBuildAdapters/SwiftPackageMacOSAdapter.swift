@@ -226,7 +226,10 @@ extension SwiftPackageMacOSAdapter: BuildAdapter {
         // `--build-tests` so the test bundle exists before `swift test --skip-build`
         // runs. Without it the test step would silently rebuild, and the build and
         // test timings — which drive the adaptive mutant timeout — would be wrong.
-        let arguments = ["swift", "build", "--build-tests"] + extraArguments
+        //
+        // `--disable-index-store` skips writing the IDE index, which no test or verdict reads; it only costs
+        // build time.
+        let arguments = ["swift", "build", "--build-tests", "--disable-index-store"] + extraArguments
 
         let result: ProcessResult
         do {
@@ -423,7 +426,34 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
         return flags
     }
 
-    private func runTests(
+    /// The `swift test` parallelism flags for one invocation.
+    ///
+    /// SwiftPM writes the XCTest half of the xunit report only in parallel
+    /// mode; without it an XCTest failure has no structured record at all. So
+    /// an ordinary run always asks for parallel mode, but with a single XCTest
+    /// worker: one XCTest runs at a time, as in a serial run, and the report
+    /// names each XCTest that failed. Parallel mode runs every XCTest in its
+    /// own process, so a test that only passes after another test left state
+    /// behind fails here; the baseline runs with the same flags, so such a
+    /// test turns the baseline red instead of killing mutants.
+    ///
+    /// `tests.parallel: true` keeps its own meaning (`--parallel`, SwiftPM's
+    /// default worker count). Coverage runs get neither: their profile data
+    /// is collected per invocation, and splitting one invocation into one
+    /// process per test is not what that collection was built for.
+    static func swiftTestParallelismFlags(parallel: Bool, enableCoverage: Bool) -> [String] {
+        if parallel { return ["--parallel"] }
+        if enableCoverage { return [] }
+        return ["--parallel", "--num-workers", "1"]
+    }
+
+    /// Whether an invocation built with `swiftTestParallelismFlags` asks
+    /// SwiftPM for the XCTest xunit report.
+    static func requestsXCTestReport(parallel: Bool, enableCoverage: Bool) -> Bool {
+        swiftTestParallelismFlags(parallel: parallel, enableCoverage: enableCoverage).contains("--parallel")
+    }
+
+    func runTests(
         in rawWorkspace: URL,
         timeoutSeconds: Double,
         enableCoverage: Bool = false,
@@ -484,14 +514,9 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
             arguments.append(contentsOf: ["--package-path", workspace.path, "--scratch-path", scratchPath.path])
         }
 
-        // Opt-in only. SwiftPM writes the XCTest half of the xunit report only in
-        // parallel mode, so this is the difference between having per-test counts
-        // and not — but a parallel-unsafe suite flakes, and a flake during a
-        // mutant's run is recorded as that mutant being killed. Losing counts is
-        // visible; an inflated score is not.
-        if configuration.tests.parallel {
-            arguments.append("--parallel")
-        }
+        arguments.append(contentsOf: Self.swiftTestParallelismFlags(
+            parallel: configuration.tests.parallel, enableCoverage: enableCoverage
+        ))
 
         // `testFilters` narrows to a specific set of tests (per-test coverage
         // measurement, `TestSelecting.runMutant`'s selected-test narrowing);
@@ -531,7 +556,9 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
                     result: nil
                 ),
                 resultArtifactPath: nil,
-                diagnosis: "Could not launch the Swift toolchain: \(error)"
+                diagnosis: "Could not launch the Swift toolchain: \(error)",
+                // No process was launched, so none can have escaped.
+                cleanupVerified: true
             )
         }
 
@@ -544,7 +571,8 @@ extension SwiftPackageMacOSAdapter: TestAdapter {
 
         return Self.classify(
             result: result, command: command, xunitOutput: xunitOutput,
-            reliableExpectedTestCount: reliableExpectedTestCount
+            reliableExpectedTestCount: reliableExpectedTestCount,
+            xctestReportRequested: Self.requestsXCTestReport(parallel: configuration.tests.parallel, enableCoverage: enableCoverage)
         )
     }
 
@@ -615,7 +643,16 @@ extension SwiftPackageMacOSAdapter: CoverageMeasuring {
         // `.build/debug` is normally a symlink; resolving it is what makes
         // the enumerator actually descend. Resolved via
         // `resolvedWorkspace(_:)` since that's where the build actually ran.
-        let buildDir = productsDirectory(in: resolvedWorkspace(workspace)).resolvingSymlinksInPath()
+        await readCoverage(
+            productsDirectory: productsDirectory(in: resolvedWorkspace(workspace)), projectRoot: workspace
+        )
+    }
+
+    /// Reads the codecov JSON under `productsDirectory`, which is not necessarily the sandbox's own
+    /// build directory: a concurrent measurement slot has a clone of it. `projectRoot` is still the
+    /// sandbox, because the paths in the report were recorded where the build ran, not in the clone.
+    func readCoverage(productsDirectory: URL, projectRoot: URL) async -> CoverageMap? {
+        let buildDir = productsDirectory.resolvingSymlinksInPath()
         let codecovDir = buildDir.appendingPathComponent("codecov", isDirectory: true)
         // Codecov paths are absolute, rooted at the sandbox where the build
         // ran. The plan uses repo-relative paths, and the sandbox is a
@@ -624,7 +661,7 @@ extension SwiftPackageMacOSAdapter: CoverageMeasuring {
         // caller's `projectRoot`) keeps whatever `project.path` prefix the
         // plan itself expects.
         await SwiftPMTestBundleCoverageExport.refresh(productsDirectory: buildDir, codecovDirectory: codecovDir)
-        return SourceCoverageReader.read(directory: codecovDir, projectRoot: workspace)
+        return SourceCoverageReader.read(directory: codecovDir, projectRoot: projectRoot)
     }
 }
 
@@ -696,133 +733,6 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         .unavailable(reason: "no fast per-test coverage backend is implemented yet")
     }
 
-    /// Runs every test `swift test list` reports, one at a time, with
-    /// coverage enabled, against the artifact already built for the
-    /// baseline — no separate coverage build step: `swift test
-    /// --enable-code-coverage` re-instruments as a side effect the same way
-    /// `runBaseline`'s own coverage pass already relies on (see its doc
-    /// comment above), so only the first of these per-test invocations needs
-    /// to pay for that one-shot rebuild. Every later one passes `skipBuild:
-    /// true` explicitly — sources never change between iterations of this
-    /// loop, so there is nothing for SwiftPM's own build-graph check to
-    /// find, and skipping it outright avoids paying for that check on every
-    /// one of what can be hundreds of invocations, with no change to what
-    /// coverage gets attributed to which test (confirmed: `swift test
-    /// --skip-build --enable-code-coverage` still exports a fresh, correct,
-    /// unaccumulated `codecov/*.json` per invocation). Each individual run's
-    /// codecov JSON is read right after that run finishes and merged into a
-    /// reverse index.
-    ///
-    /// A one-time cost paid once per execution, not per mutant: worth it on
-    /// a real project, where the fixed cost of re-running an entire suite
-    /// dominates every mutant's wall clock regardless of how few tests
-    /// actually exercise the mutated line.
-    ///
-    /// The retry, and what becomes of a test that still cannot be proven,
-    /// are `PerTestCoverageAttribution.attribute`'s — see its doc comment,
-    /// and `PerTestCoverageMap`'s, for the policy and why it is safe. Two
-    /// things specific to this adapter. The failure class includes a
-    /// selection SwiftPM silently ran zero of (P12-B Finding A/B/C, before
-    /// this adapter's own filter and `classify` fixes), which is why
-    /// `reliableExpectedTestCount` is passed below. And a test that
-    /// legitimately covers nothing — a genuine, successfully-read empty
-    /// `CoverageMap` — is *not* that failure class here, unlike in
-    /// `XcodeBuildAdapter`: it is fully attributed, contributing no lines.
-    /// - Parameter artifact: `runBaseline`'s own, uninstrumented artifact —
-    ///   unused here beyond satisfying the protocol; test identifiers come
-    ///   from `swift test list`, not from the artifact, and per-test
-    ///   coverage needs its own coverage-instrumented run regardless of what
-    ///   `artifact` was built with.
-    private func measurePerTestCoverageSerial(
-        artifact: BuildArtifact,
-        in workspace: URL,
-        timeoutSeconds: Double
-    ) async -> PerTestCoverageMap? {
-        let enumerated = await Self.enumerateTestIdentifiers(
-            in: resolvedWorkspace(workspace),
-            timeoutSeconds: timeoutSeconds,
-            terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
-        )
-        let tests = Self.scope(enumerated, toConfiguredTargets: configuration.tests.targets)
-        guard !tests.isEmpty else { return nil }
-
-        // Set only once a coverage-enabled run has completed *and* its
-        // coverage was actually read -- not merely after an attempt
-        // finished. A failed attempt (build error, infra failure, unreadable
-        // coverage) must never leave a later iteration skipping the build
-        // against an artifact that may not exist or may be stale, and that
-        // matters in practice rather than only in principle: unlike the
-        // all-or-nothing predecessor, the loop keeps going after a failure.
-        var coverageArtifactBuilt = false
-
-        // The loop, the retry policy and what becomes of a test that cannot
-        // be proven are all `PerTestCoverageAttribution.attribute`'s -- see
-        // its doc comment. What is adapter-specific, and all that is left
-        // here, is how one test is run and how its coverage is read back.
-        let granularity = configuration.execution.coverageGranularity
-        let suiteSizes = Self.suiteSizes(of: tests)
-        let attempts = 2
-        let suiteMemo = SuiteCoverageMemo()
-
-        // One test, or (`coverageGranularity: suite`) one whole suite, run in
-        // isolation with coverage; the coverage read back is what gets credited.
-        func measure(_ unit: CoverageUnit) async -> CoverageMap? {
-            guard let run = try? await runTests(
-                in: workspace,
-                timeoutSeconds: timeoutSeconds,
-                enableCoverage: true,
-                skipBuild: coverageArtifactBuilt,
-                testFilters: [unit.filter],
-                reliableExpectedTestCount: unit.expectedTestCount
-            ) else { return nil }
-            // `runTests`'s xunit report path is unique per invocation (never
-            // reused by a later iteration), and this loop -- unlike a real
-            // mutant run -- never preserves it as evidence afterward: once
-            // this iteration is done with it, it is pure disk usage a
-            // project with many discovered tests would otherwise accumulate
-            // one report pair per test, for the lifetime of this whole
-            // method's loop, inside one sandbox.
-            let skippedCount = run.resultArtifactPath.flatMap { XUnitParser.swiftTestingSkippedCount(forRequestedOutput: $0) }
-            Self.removeXUnitReports(at: run.resultArtifactPath)
-            // Tests that ran as skipped execute nothing, here and in every mutant run under the same
-            // configuration, so they cover nothing. Leaving them unattributed would put them in every
-            // mutant's selection, where they can never run and fail the shortfall check.
-            if run.status == .infrastructureFailure,
-               Self.allSelectedTestsSkipped(skippedCount: skippedCount, expectedTestCount: unit.expectedTestCount) {
-                return CoverageMap(executedLines: [:], source: "swiftpm-codecov-per-test")
-            }
-            guard run.status == .passed else { return nil }
-
-            guard let map = await readCoverage(in: workspace, projectRoot: workspace) else { return nil }
-            coverageArtifactBuilt = true
-            return map
-        }
-
-        return await PerTestCoverageAttribution.attribute(
-            tests: tests, source: "swiftpm-codecov-per-test", attempts: attempts,
-            progress: ProgressReporter(total: tests.count, label: "per-test coverage")
-        ) { test, attemptNumber in
-            let unit = Self.coverageUnit(for: test, granularity: granularity, suiteSizes: suiteSizes)
-            guard let suiteKey = unit.suiteKey else { return await measure(unit) }
-
-            // A suite is run once and its outcome shared by every test in it.
-            // A failure is only remembered after the last attempt, so the
-            // retry policy still gets its second try at the suite.
-            switch suiteMemo.outcome(for: suiteKey) {
-            case let .measured(map): return map
-            case .failed: return nil
-            case nil: break
-            }
-            let map = await measure(unit)
-            if let map {
-                suiteMemo.record(.measured(map), for: suiteKey)
-            } else if attemptNumber >= attempts {
-                suiteMemo.record(.failed, for: suiteKey)
-            }
-            return map
-        }
-    }
-
     /// Removes the xunit report(s) one `measurePerTestCoverage` iteration's
     /// `runTests` call wrote, once this loop is done reading them. Best-
     /// effort: unlike the freshness fix this exists alongside, a failed
@@ -830,7 +740,7 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
     /// invocation and is never read again by anything, so a leftover file
     /// is at worst a little unclaimed disk space, not a stale report a
     /// later run could mistake for its own.
-    private static func removeXUnitReports(at resultArtifactPath: URL?, fileManager: FileManager = .default) {
+    static func removeXUnitReports(at resultArtifactPath: URL?, fileManager: FileManager = .default) {
         guard let resultArtifactPath else { return }
         for candidate in XUnitParser.candidatePaths(for: resultArtifactPath) {
             try? fileManager.removeItem(at: candidate)
