@@ -55,6 +55,12 @@ extension MutationRunner {
 
     func applyMutation(in sandbox: Sandbox, scope: PrepareScope) async -> PrepareApplyStep {
         let point = scope.point
+        // Once the run is aborting on an unverified cleanup, nothing new is
+        // built or tested. The placeholder below is never persisted or
+        // reported (`finalize`, `run()`).
+        if let abort = RunContainmentMonitor.current?.abortDiagnosis {
+            return .failed(await scope.infrastructureFailure("Not evaluated: the run is aborting (\(abort))."))
+        }
         let sourceURL: URL
         do {
             sourceURL = try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)

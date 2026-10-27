@@ -21,16 +21,14 @@ import Testing
 /// The mirror-image contradiction (exit 0 claiming success while the report
 /// records real failures) is closed by the same fix, on the same reasoning.
 ///
-/// Deliberately NOT closed: exit 1 with no xunit report parsed at all
-/// (`summary == nil`). XCTest's own xunit report is only written when
-/// `tests.parallel` is on (see `SwiftPackageMacOSShortfallClassificationTests`'
-/// own doc comment for the parser-level half of this fact) -- under this
-/// codebase's own default configuration, a missing report proves nothing
-/// about whether a real assertion actually failed, unlike a *present but
-/// empty* report, which is a positive, informative contradiction. Failing
-/// closed on `summary == nil` too would risk reclassifying large numbers of
-/// genuine assertion kills as indeterminate for every project that leaves
-/// `tests.parallel` at its default -- a correctness regression, not a fix.
+/// Exit 1 with no xunit report naming any test (`summary == nil`) depends on
+/// what the run asked for. An ordinary run requests the XCTest report too
+/// (SwiftPM writes it only in parallel mode, so the adapter passes
+/// `--parallel --num-workers 1`); there, a missing record means the test
+/// process ended before either framework wrote its report, and the exit
+/// status alone is not credited as a kill. A coverage run requests only the
+/// Swift Testing report, so its missing XCTest half still proves nothing and
+/// keeps the original `.failed` reading.
 @Suite("SwiftPM exit-code / xunit-report contradiction classification")
 struct SwiftPackageMacOSExitXUnitContradictionTests {
     private func result(exitCode: Int32) -> ProcessResult {
@@ -118,15 +116,52 @@ struct SwiftPackageMacOSExitXUnitContradictionTests {
         #expect(outcome.status == .infrastructureFailure)
     }
 
-    // Case 5 (legacy preservation, load-bearing): exit=1 + summary=nil ->
-    // still failed, exactly as before this fix.
-    @Test("exit 1 with no xunit report parsed at all still fails as an assertion kill (legacy behavior preserved)")
-    func exitOneWithNoReportIsStillFailed() {
+    // Case 5: exit=1 + summary=nil from a run that requested only the Swift
+    // Testing report (a coverage run) -> still failed.
+    @Test("exit 1 with no xunit report from a run without the XCTest report still fails as an assertion kill")
+    func exitOneWithNoReportWithoutXCTestReportIsStillFailed() {
         let outcome = SwiftPackageMacOSAdapter.classify(
             result: result(exitCode: 1), command: command(),
-            xunitOutput: URL(fileURLWithPath: "/tmp/nonexistent-\(UUID().uuidString)/mutantkit-xunit.xml")
+            xunitOutput: URL(fileURLWithPath: "/tmp/nonexistent-\(UUID().uuidString)/mutantkit-xunit.xml"),
+            xctestReportRequested: false
         )
         #expect(outcome.status == .failed)
+    }
+
+    // Case 5b: exit=1 + summary=nil from a run that requested both reports ->
+    // infrastructureFailure: nothing structured names a failing test.
+    @Test("exit 1 with no report naming any test, when both reports were requested, is not a kill")
+    func exitOneWithNoReportWithXCTestReportIsInfrastructureFailure() {
+        let outcome = SwiftPackageMacOSAdapter.classify(
+            result: result(exitCode: 1), command: command(),
+            xunitOutput: URL(fileURLWithPath: "/tmp/nonexistent-\(UUID().uuidString)/mutantkit-xunit.xml"),
+            xctestReportRequested: true
+        )
+        #expect(outcome.status == .infrastructureFailure)
+        #expect(outcome.diagnosis.contains("names any test"))
+    }
+
+    // Case 5c: reports that exist but record zero tests (the shape SwiftPM
+    // leaves when the test process ended before reporting) are the same
+    // "no record" case.
+    @Test("exit 1 with only empty reports, when both reports were requested, is not a kill")
+    func exitOneWithEmptyReportsWithXCTestReportIsInfrastructureFailure() throws {
+        let xunitOutput = try writeXCTestReport(total: 0, failed: 0)
+        let outcome = SwiftPackageMacOSAdapter.classify(
+            result: result(exitCode: 1), command: command(), xunitOutput: xunitOutput, xctestReportRequested: true
+        )
+        #expect(outcome.status == .infrastructureFailure)
+    }
+
+    // Case 5d: a real XCTest failure in the requested report stays a kill.
+    @Test("exit 1 with a failing test named, when both reports were requested, is an assertion kill")
+    func exitOneWithFailuresWithXCTestReportIsFailed() throws {
+        let xunitOutput = try writeXCTestReport(total: 3, failed: 1)
+        let outcome = SwiftPackageMacOSAdapter.classify(
+            result: result(exitCode: 1), command: command(), xunitOutput: xunitOutput, xctestReportRequested: true
+        )
+        #expect(outcome.status == .failed)
+        #expect(outcome.summary?.failingTests == ["ArgumentParserEndToEndTests/failingTest0"])
     }
 
     // Case 6: any other exit code -> infrastructureFailure (pre-existing

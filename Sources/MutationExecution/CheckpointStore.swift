@@ -42,6 +42,10 @@ public enum CheckpointError: Error, CustomStringConvertible {
 public actor CheckpointStore {
     private let url: URL
     private var handle: FileHandle?
+    /// Where this store's own appends began: the file's length once any
+    /// trailing partial record was dropped, when it was first opened for
+    /// appending. Everything after it was recorded by this store instance.
+    private var sessionStartOffset: UInt64?
     /// The confirmation policy `loadAll`'s reverify uses — see
     /// `MutationResultCache`'s own `policy` doc comment for why this is
     /// required rather than defaulted.
@@ -98,6 +102,33 @@ public actor CheckpointStore {
             try handle.synchronize()
         } catch {
             throw CheckpointError.unwritable(path: url.path, underlying: error.localizedDescription)
+        }
+    }
+
+    /// Drops every record this store instance appended, keeping the records
+    /// earlier runs left. Called when the run aborts on an unverified
+    /// cleanup, because those records were observed while a stray process
+    /// may have been alive, and a resume or `--replay` would otherwise score
+    /// them. If the file cannot be truncated it is deleted, so an abort
+    /// never leaves a tainted record behind. Deleting it only costs
+    /// re-running the mutants recorded before this run.
+    public func discardRecordsFromThisSession() {
+        guard let handle, let sessionStartOffset else { return }
+        do {
+            try handle.truncate(atOffset: sessionStartOffset)
+            try handle.synchronize()
+        } catch {
+            try? handle.close()
+            self.handle = nil
+            self.sessionStartOffset = nil
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "warning: could not discard checkpoint records from an aborted run at \(url.path): \(error). Rerun with --no-resume.\n"
+                        .utf8
+                ))
+            }
         }
     }
 
@@ -202,7 +233,7 @@ public actor CheckpointStore {
         do {
             opened = try FileHandle(forUpdating: url)
             try truncateToLastCompleteRecord(opened)
-            try opened.seekToEnd()
+            sessionStartOffset = try opened.seekToEnd()
         } catch let error as CheckpointError {
             throw error
         } catch {

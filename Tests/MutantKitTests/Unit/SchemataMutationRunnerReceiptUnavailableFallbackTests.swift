@@ -169,6 +169,75 @@ struct SchemataMutationRunnerReceiptUnavailableFallbackTests {
         #expect(fallback.reason == .buildReceiptUnavailable)
     }
 
+    @Test("Multi-target: one target's receipt-unavailable failure never discards the other target's verified kill")
+    func multiTargetReceiptUnavailableKeepsOtherPlacementKill() async throws {
+        let point = try threePoints()[0]
+        let unitA = CompilationUnitID.derive(
+            projectIdentity: Self.projectIdentity, target: "App", module: "App",
+            sourcePath: point.file, lowererID: Self.lowererID, lowererVersion: Self.lowererVersion
+        )
+
+        let adapter = FakeSchemataAdapter()
+        adapter.scripts[SchemataSelectorToken(namespace: 1, localIndex: 1)] = .init(
+            compilationUnitID: unitA, sourceEmbeddingID: Self.sourceEmbeddingID, behaviors: [.crashed]
+        )
+        adapter.buildFailureScript[2] = .throwOnReceiptResolution
+
+        let entryA = entry(mutationID: point.id, target: "App", chunkID: "chunk-A", localIndex: 1, namespace: 1)
+        let entryB = entry(mutationID: point.id, target: "Widget", chunkID: "chunk-B", localIndex: 1, namespace: 2)
+        let outcome = try await run(
+            points: [point.id: point],
+            programs: [program(chunkID: "chunk-A", entries: [entryA]), program(chunkID: "chunk-B", entries: [entryB])],
+            adapter: adapter
+        )
+
+        #expect(outcome.isolatedFallbacks.isEmpty, "a kill in any placement settles the MutationID with no fallback")
+        #expect(outcome.results.count == 1)
+        #expect(outcome.results.first?.outcome == .killedByCrash)
+        #expect(outcome.multiTargetVerdicts.first?.aggregateOutcome == .killedByCrash)
+        #expect(outcome.infrastructureFallbackEvents.count == 1)
+    }
+
+    @Test("""
+    Multi-target: one target's missing activation proof never discards the other target's verified kill, while the \
+    same missing proof beside a survivor still sends the whole MutationID to isolated mode
+    """)
+    func multiTargetActivationFallbackKeepsOtherPlacementKillOnly() async throws {
+        let point = try threePoints()[0]
+        func unit(_ target: String) -> CompilationUnitID {
+            CompilationUnitID.derive(
+                projectIdentity: Self.projectIdentity, target: target, module: target,
+                sourcePath: point.file, lowererID: Self.lowererID, lowererVersion: Self.lowererVersion
+            )
+        }
+        for killsInA in [true, false] {
+            let adapter = FakeSchemataAdapter()
+            adapter.scripts[SchemataSelectorToken(namespace: 1, localIndex: 1)] = .init(
+                compilationUnitID: unit("App"), sourceEmbeddingID: Self.sourceEmbeddingID,
+                behaviors: killsInA ? [.crashed] : [.passed(includeHit: true)]
+            )
+            // Target B's passing run carries no HIT: no activation proof.
+            adapter.scripts[SchemataSelectorToken(namespace: 2, localIndex: 1)] = .init(
+                compilationUnitID: unit("Widget"), sourceEmbeddingID: Self.sourceEmbeddingID, includeHit: false
+            )
+            let entryA = entry(mutationID: point.id, target: "App", chunkID: "chunk-A", localIndex: 1, namespace: 1)
+            let entryB = entry(mutationID: point.id, target: "Widget", chunkID: "chunk-B", localIndex: 1, namespace: 2)
+            let outcome = try await run(
+                points: [point.id: point],
+                programs: [program(chunkID: "chunk-A", entries: [entryA]), program(chunkID: "chunk-B", entries: [entryB])],
+                adapter: adapter
+            )
+
+            if killsInA {
+                #expect(outcome.isolatedFallbacks.isEmpty)
+                #expect(outcome.results.first?.outcome == .killedByCrash)
+            } else {
+                #expect(outcome.results.isEmpty, "a survivor must never stand in for an unproven sibling placement")
+                #expect(outcome.isolatedFallbacks.map(\.mutationID) == [point.id])
+            }
+        }
+    }
+
     // MARK: - Observability: one event per failed chunk, never merged or duplicated across chunks
 
     @Test("Two independently receipt-unavailable chunks each report their own event — never merged into one, never duplicated per entry")

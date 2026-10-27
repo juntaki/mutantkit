@@ -102,7 +102,7 @@ Also exercised on macOS (native destination) against RxSwift's `Rx.xcworkspace`.
 
 A `schemata`-requested run against a *supported* configuration can still
 report individual mutations falling back to isolated — this is expected,
-correct behavior, not a defect, in two cases:
+correct behavior, not a defect, in these cases:
 
 - A candidate the run's own shared baseline coverage already proves is
   never reached (`SchemataMutationRunner.SchemataFallbackReason
@@ -114,6 +114,12 @@ correct behavior, not a defect, in two cases:
   `buildReceiptUnavailable`) removes that chunk's mutations from schemata's
   fast path for that run, but never removes them from the report — they
   still get a real isolated verdict.
+- A mutation compiled into more than one target where no target killed it
+  and at least one target's result cannot be scored (for example an
+  infrastructure failure, a flaky result or an unconfirmed timeout) is re-run
+  once in isolated mode as a whole (`multiTargetUnscorablePlacement`). A
+  survivor in one target is never reported while another target's result
+  is untrustworthy; a kill in any target still counts as killed.
 
 The **Supported** rows above were specifically verified against fixtures
 where every discovered candidate is fully covered by a dedicated test, so a

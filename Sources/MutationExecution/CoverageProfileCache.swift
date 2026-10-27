@@ -80,6 +80,32 @@ public actor CoverageProfileCache {
         try? data.write(to: root.appendingPathComponent(key.storageName), options: .atomic)
     }
 
+    /// `store`, unless the run has aborted on an unverified cleanup.
+    /// Attribution measured while a stray process may have been alive can
+    /// miss covering tests, and a narrower selection is the false-survivor
+    /// direction, so it must never reach the next run. The entry is also
+    /// removed if the run aborts after this store (see
+    /// `RunContainmentMonitor.onAbort`).
+    public func storeUnlessRunAborted(_ coverage: PerTestCoverageMap, for key: Key) {
+        let monitor = RunContainmentMonitor.current
+        guard monitor?.isAborted != true else { return }
+        store(coverage, for: key)
+        monitor?.onAbort { await self.remove(key) }
+    }
+
+    /// Removes one entry, warning when it exists but cannot be removed.
+    public func remove(_ key: Key) {
+        let url = root.appendingPathComponent(key.storageName)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        do {
+            try fileManager.removeItem(at: url)
+        } catch {
+            FileHandle.standardError.write(Data(
+                "warning: could not discard a coverage-cache entry from an aborted run at \(url.path): \(error)\n".utf8
+            ))
+        }
+    }
+
     /// Removes every cached entry. Used by `mutantkit run --no-cache`-style
     /// invocations and by tests.
     public func removeAll() {

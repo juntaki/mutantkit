@@ -232,6 +232,38 @@ struct SchemataMutationRunnerSharedChunkBuildFailureTests {
         #expect(fallback.reason == .sharedChunkBuildFailure)
     }
 
+    @Test("Multi-target: one target's shared build failure never discards the other target's verified kill")
+    func multiTargetSharedBuildFailureKeepsOtherPlacementKill() async throws {
+        let point = try threePoints()[0]
+        let targetA = "App"
+        let unitA = CompilationUnitID.derive(
+            projectIdentity: Self.projectIdentity, target: targetA, module: targetA,
+            sourcePath: point.file, lowererID: Self.lowererID, lowererVersion: Self.lowererVersion
+        )
+
+        let adapter = FakeSchemataAdapter()
+        // Target A's own token crashes: a verified kill.
+        adapter.scripts[SchemataSelectorToken(namespace: 1, localIndex: 1)] = .init(
+            compilationUnitID: unitA, sourceEmbeddingID: Self.sourceEmbeddingID, behaviors: [.crashed]
+        )
+        adapter.buildFailureScript[2] = .throwBuildFailure(kind: .compilationError, diagnosis: "synthetic target-B chunk compile error")
+
+        let entryA = entry(mutationID: point.id, target: targetA, chunkID: "chunk-A", localIndex: 1, namespace: 1)
+        let entryB = entry(mutationID: point.id, target: "Widget", chunkID: "chunk-B", localIndex: 1, namespace: 2)
+        let outcome = try await run(
+            points: [point.id: point],
+            programs: [program(chunkID: "chunk-A", entries: [entryA]), program(chunkID: "chunk-B", entries: [entryB])],
+            adapter: adapter
+        )
+
+        #expect(outcome.isolatedFallbacks.isEmpty, "a kill in any placement settles the MutationID with no fallback")
+        #expect(outcome.results.count == 1)
+        #expect(outcome.results.first?.outcome == .killedByCrash)
+        #expect(outcome.multiTargetVerdicts.first?.aggregateOutcome == .killedByCrash)
+        // The failed chunk is still reported as an event.
+        #expect(outcome.sharedChunkBuildFailureEvents.count == 1)
+    }
+
     // MARK: - Observability: one event per failed chunk, never merged or duplicated across chunks
 
     @Test("Two independently-failing chunks each report their own event — never merged into one, never duplicated per entry")

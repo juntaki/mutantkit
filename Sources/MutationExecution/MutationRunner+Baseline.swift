@@ -82,11 +82,12 @@ extension MutationRunner {
         let testStarted = Date()
         let run: TestRunResult
         do {
-            run = try await test.runBaseline(
-                artifact,
-                in: sandbox,
-                timeoutSeconds: timeouts.baselineLimitSeconds
-            )
+            try RunContainmentMonitor.current?.throwIfAborted() // no baseline test after an unverified build
+            run = try await test.runBaseline(artifact, in: sandbox, timeoutSeconds: timeouts.baselineLimitSeconds)
+            RunContainmentMonitor.current?.observe(run)
+            // No coverage pass after a baseline that tripped the run-level
+            // abort; `run()` throws.
+            try RunContainmentMonitor.current?.throwIfAborted()
         } catch {
             await control?.teardown()
             return .failed(

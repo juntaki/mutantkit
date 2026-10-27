@@ -86,6 +86,20 @@ extension SchemataMutationRunner {
         }
     }
 
+    /// The multi-target aggregation policy's routing half (`MultiTargetVerdict.currentAggregationPolicyVersion`):
+    /// a MutationID whose placements include no kill and at least one that cannot be scored is removed here and
+    /// sent to isolated mode as a whole, with reason `.multiTargetUnscorablePlacement`, exactly like a
+    /// placement-level fallback. Everything else is returned unchanged.
+    static func divertUnscorableMultiTarget(
+        _ grouped: [GroupedMutation], into fallbackReasons: inout [MutationID: SchemataFallbackReason]
+    ) -> [GroupedMutation] {
+        grouped.filter { mutation in
+            guard mutation.verdict.requiresIsolatedFallback else { return true }
+            fallbackReasons[mutation.verdict.mutationRef.mutationID] = .multiTargetUnscorablePlacement
+            return false
+        }
+    }
+
     /// Projects a mutation's aggregate outcome into a single
     /// `MutationResult` for display — the specific `TargetRecord` whose
     /// own outcome equals `aggregateOutcome` (ties broken by `perTarget`'s

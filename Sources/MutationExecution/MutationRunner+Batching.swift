@@ -164,7 +164,7 @@ extension MutationRunner {
                     prepared, baseline: baseline,
                     run: run ?? TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
-                        resultArtifactPath: nil, diagnosis: "The mutant's tests could not be run."
+                        resultArtifactPath: nil, diagnosis: "The mutant's tests could not be run.", cleanupVerified: true
                     ),
                     attribution: .standalone,
                     testDurationSeconds: testDurationSeconds
@@ -219,17 +219,22 @@ extension MutationRunner {
         var batchDurations: [Double] = []
         for prepared in unattributed {
             do {
+                // No batch once the run is aborting on an unverified cleanup.
+                try RunContainmentMonitor.current?.throwIfAborted()
                 let batchSandbox = try await workspaces.createSandbox(id: "wave-unattributed-\(prepared.point.id.rawValue)")
                 let items = [BatchMutantItem(id: prepared.point.id, artifact: prepared.artifact, selectedTests: nil)]
                 let batchTimeout = baseline.timeouts.mutantLimitSeconds
                 let batchStarted = Date()
-                let runs = await batchable.runBatch(items, in: batchSandbox.workspaceRoot, timeoutSeconds: batchTimeout)
+                let runs = Self.observingCleanup(
+                    await batchable.runBatch(items, in: batchSandbox.workspaceRoot, timeoutSeconds: batchTimeout)
+                )
                 let duration = Date().timeIntervalSince(batchStarted)
                 batchDurations.append(duration)
 
                 let run = runs[prepared.point.id] ?? TestRunResult(
                     status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
-                    resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its batch."
+                    resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its batch.",
+                    cleanupVerified: true
                 )
                 let result = await finishAfterTest(
                     prepared, baseline: baseline, run: run, attribution: .batch, testDurationSeconds: duration
@@ -242,7 +247,8 @@ extension MutationRunner {
                     prepared, baseline: baseline,
                     run: TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
-                        resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
+                        resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)",
+                        cleanupVerified: true
                     ),
                     attribution: .standalone
                 )
@@ -280,7 +286,14 @@ extension MutationRunner {
 
         let batchSandbox: Sandbox
         do {
+            // No batch once the run is aborting on an unverified cleanup.
+            try RunContainmentMonitor.current?.throwIfAborted()
             batchSandbox = try await workspaces.createSandbox(id: "batch-\(batchIndex)")
+            if RunContainmentMonitor.current?.isAborted == true {
+                // Tripped while the sandbox was being created.
+                try? await workspaces.destroySandbox(batchSandbox)
+                try RunContainmentMonitor.current?.throwIfAborted()
+            }
         } catch {
             // No place to write the batch xctestrun/result bundle: every
             // mutant in this chunk is unproven, not silently dropped. No
@@ -293,7 +306,8 @@ extension MutationRunner {
                     prepared, baseline: baseline,
                     run: TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
-                        resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)"
+                        resultArtifactPath: nil, diagnosis: "No batch sandbox could be created: \(error)",
+                        cleanupVerified: true
                     ),
                     attribution: .standalone
                 )
@@ -330,17 +344,18 @@ extension MutationRunner {
             return allowance >= 60 ? allowance : nil
         }()
         let batchStarted = Date()
-        let runs = await batchable.runBatch(
+        let runs = await Self.observingCleanup(batchable.runBatch(
             items, in: batchSandbox.workspaceRoot, timeoutSeconds: batchTimeout,
             nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
-        )
+        ))
         let batchTestDuration = Date().timeIntervalSince(batchStarted)
 
         for prepared in chunk {
             var run = runs[prepared.point.id] ?? TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
                 resultArtifactPath: nil,
-                diagnosis: "This mutant's outcome was not reported back from its batch."
+                diagnosis: "This mutant's outcome was not reported back from its batch.",
+                cleanupVerified: true
             )
             // `.infrastructureFailure` here — whether `classifyBatch` itself
             // produced it (no per-configuration evidence in the result
@@ -378,6 +393,16 @@ extension MutationRunner {
 
         try? await workspaces.destroySandbox(batchSandbox)
         return BatchTestOutcome(results: collected, configurations: chunk.count, duration: batchTestDuration)
+    }
+
+    /// Records every batch member's cleanup verification before any member
+    /// is kept, rerun standalone or replaced, so a replaced member's
+    /// unverified cleanup still aborts the run.
+    static func observingCleanup(_ runs: [MutationID: TestRunResult]) -> [MutationID: TestRunResult] {
+        for run in runs.values {
+            RunContainmentMonitor.current?.observe(run)
+        }
+        return runs
     }
 
     // MARK: - Baseline

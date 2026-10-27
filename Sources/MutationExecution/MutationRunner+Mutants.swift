@@ -188,7 +188,7 @@ extension MutationRunner {
         // has none. `nil` — unknown attribution, or none configured — always
         // falls back to the full configured test list inside the adapter.
         let selectedTests = baseline.perTestCoverage
-            .flatMap { $0.testsCovering(file: point.file, line: point.line) }
+            .flatMap { $0.selection(for: point, originalSource: try? Data(contentsOf: projectRoot.appendingPathComponent(point.file))) }
             .flatMap { $0.isEmpty ? nil : $0 }
 
         let artifact: BuildArtifact

@@ -229,7 +229,8 @@ extension RunCommand {
                     runDirectory.appendingPathComponent("sandboxes"),
                     runDirectory.appendingPathComponent("schemata-sandboxes")
                 ],
-                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete
+                toolchainCacheIdentityComplete: toolchainProbe.identityEvidenceComplete,
+                planProjectRelativePath: Self.projectRelativePath(of: URL(fileURLWithPath: plan), in: root)
             ),
             configuration: settings, toolchain: toolchain, workUnitID: loadedPlan.workUnitID
         )
@@ -330,6 +331,7 @@ extension RunCommand {
         layout: SandboxLayout,
         scratchRoots: [URL],
         toolchainCacheIdentityComplete: Bool,
+        planProjectRelativePath: String? = nil,
         processRunner: RunContextProbe.ProcessRunner = RunContextProbe.defaultProcessRunner
     ) async -> RunInputState? {
         guard toolchainCacheIdentityComplete else {
@@ -339,9 +341,15 @@ extension RunCommand {
         do {
             // The project's `mutantkit.yml` is keyed as the parsed configuration, per identity scope, not
             // as bytes: editing `workers` or `budget` must not discard a coverage map they cannot affect.
+            //
+            // The plan file the run executes is left out too. `mutantkit plan` writes it into the project
+            // root, where it is an untracked file, so a re-plan with another budget would otherwise change
+            // the digest and throw away a coverage map the plan cannot affect. It reaches the checkpoint
+            // through the work unit ID, and neither cache keys on which mutants were planned.
+            let excluded = Set([ConfigurationLoader.fileName] + [planProjectRelativePath].compactMap { $0 })
             return try await RunInputState.compute(
                 projectRoot: root, layout: layout, scratchRoots: scratchRoots,
-                excludingProjectRelativePaths: [ConfigurationLoader.fileName], processRunner: processRunner
+                excludingProjectRelativePaths: excluded, processRunner: processRunner
             )
         } catch {
             // Printed, not swallowed: "no cache this run" is a real slowdown
@@ -352,6 +360,15 @@ extension RunCommand {
             print("\(error)")
             return nil
         }
+    }
+
+    /// `file`'s path relative to `root`, or `nil` when it is not inside the project root.
+    static func projectRelativePath(of file: URL, in root: URL) -> String? {
+        let filePath = file.resolvingSymlinksInPath().standardizedFileURL.path
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard filePath.hasPrefix(prefix) else { return nil }
+        return String(filePath.dropFirst(prefix.count))
     }
 
     static func runIdentities(

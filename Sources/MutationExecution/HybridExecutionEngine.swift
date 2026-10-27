@@ -33,13 +33,21 @@ public enum HybridExecutionEngine {
     /// CLI-side `ClassificationError` — see `SchemataRunOrchestration
     /// .ClassificationError`'s own doc comment for why the split follows
     /// the module boundary, not just a cosmetic reshuffle.
-    public enum EngineError: Error, CustomStringConvertible {
+    public enum EngineError: Error, Equatable, CustomStringConvertible {
         case adapterNotSchemataCapable
+        /// Exactly-once violation in the hybrid merge: more than one result
+        /// for the same `MutationID` reached the run's `ResultLedger`. Never
+        /// resolved by keeping either one (no first-wins, no last-wins): the
+        /// run fails and produces no report.
+        case duplicateMutationResult(mutationID: String, portions: String)
 
         public var description: String {
             switch self {
             case .adapterNotSchemataCapable:
                 "the resolved project adapter does not support schemata execution (SwiftPM only in this release)"
+            case let .duplicateMutationResult(mutationID, portions):
+                "exactly-once violation: mutation \(mutationID) has more than one result (\(portions)); "
+                    + "the run failed closed and no report was produced"
             }
         }
     }
@@ -387,15 +395,14 @@ public enum HybridExecutionEngine {
     private static func merge(
         _ context: Context, startedAt: Date, schemataPortion: SchemataPortionResult,
         fallbackReport: RunReport?, counts: PortionCounts, baselineIssues: [OperationalIssue]
-    ) -> RunReport {
+    ) throws -> RunReport {
         let (embeddedCount, fallbackCount) = (counts.embedded, counts.fallback)
         let plannerFallbackReasonCounts = counts.plannerFallbackReasonCounts
         let schemataOutcome: SchemataMutationRunner.Outcome? = if case let .succeeded(outcome) = schemataPortion { outcome } else { nil }
 
-        var ledger = ResultLedger<MutationResult>()
-        for result in (schemataOutcome?.results ?? []) + (fallbackReport?.results ?? []) {
-            try? ledger.insert(result)
-        }
+        let ledger = try mergedLedger(
+            schemataResults: schemataOutcome?.results ?? [], fallbackResults: fallbackReport?.results ?? []
+        )
 
         let resolved = resolveBaseline(
             schemataPortion, schemataBaseline: schemataOutcome?.baseline, fallbackBaseline: fallbackReport?.baseline,
@@ -469,6 +476,22 @@ public enum HybridExecutionEngine {
         context: Context, classification: SchemataClassification,
         workspaces: WorkspaceManager, schemataWorkspaces: WorkspaceManager, startedAt: Date
     ) async throws -> RunReport {
+        // One containment scope over the shared baseline and both portions,
+        // so an unverified cleanup anywhere stops the run before the next
+        // portion instead of after it.
+        try await RunContainmentMonitor.withRunScope { monitor in
+            try await runHybridWithinContainmentScope(
+                context: context, classification: classification, workspaces: workspaces,
+                schemataWorkspaces: schemataWorkspaces, startedAt: startedAt, monitor: monitor
+            )
+        }
+    }
+
+    private static func runHybridWithinContainmentScope(
+        context: Context, classification: SchemataClassification,
+        workspaces: WorkspaceManager, schemataWorkspaces: WorkspaceManager, startedAt: Date,
+        monitor: RunContainmentMonitor
+    ) async throws -> RunReport {
         guard let schemataBuild = context.adapter.schemataBuild,
               let schemataTest = context.testAdapter as? SchemataTestable
         else {
@@ -491,6 +514,10 @@ public enum HybridExecutionEngine {
         // exactly the cost it always paid (one baseline), and a fully-
         // embeddable run likewise, so there is no case where this is
         // wasted relative to before.
+        //
+        // A pre-engine helper that tripped the run-level abort (dependency
+        // preflight, target resolution) means nothing is built.
+        try monitor.throwIfAborted()
         let sharedBaselineStart = GateTimingRecorder.shared.now()
         // Neither portion establishes this baseline, so neither portion's
         // own issue log can record what establishing it observed. This one
@@ -499,6 +526,7 @@ public enum HybridExecutionEngine {
         let baselineIssues = OperationalIssueLog()
         let sharedBaseline = await establishSharedBaseline(context, workspaces: workspaces, operationalIssues: baselineIssues)
         await GateTimingRecorder.shared.record("sharedBaseline.total", start: sharedBaselineStart)
+        try monitor.throwIfAborted()
 
         let schemataPortionStart = GateTimingRecorder.shared.now()
         let schemataPortion = try await runSchemataPortion(
@@ -509,6 +537,9 @@ public enum HybridExecutionEngine {
             workspaces: schemataWorkspaces
         )
         await GateTimingRecorder.shared.record("schemata.portion.total", start: schemataPortionStart)
+        // Never an isolated fallback after an unverified cleanup: the stray
+        // may still exist and would contaminate that evidence too.
+        try monitor.throwIfAborted()
 
         // A mutation `SchemataChunkPlanner` embedded can still end up here:
         // `SchemataMutationRunner` itself may have found no runtime
@@ -533,7 +564,7 @@ public enum HybridExecutionEngine {
         if case let .established(shared) = sharedBaseline { await shared.control?.teardown() }
 
         let mergeStart = GateTimingRecorder.shared.now()
-        let report = merge(
+        let report = try merge(
             context, startedAt: startedAt, schemataPortion: schemataPortion, fallbackReport: fallbackReport,
             counts: PortionCounts(
                 // Effective counts, not planner-time ones (the end-to-end trust chain Group 2):
@@ -599,13 +630,16 @@ public enum HybridExecutionEngine {
             self.progress = progress
         }
     }
+}
 
+// Outside the enum body only to keep it within `type_body_length`.
+public extension HybridExecutionEngine {
     /// Moved verbatim from `RunCommand.execute`'s own `.isolated` case (plan
     /// §3 Step 5) — the existing, unmodified `MutationRunner`'s construction
     /// and `run()` call, parameter-for-parameter unchanged. `MutationRunner
     /// .swift` itself is not opened for editing by this step, only where the
     /// call to it textually lives.
-    public static func runIsolated(
+    static func runIsolated(
         context: Context, workspaces: WorkspaceManager, options: IsolatedRunOptions
     ) async throws -> RunReport {
         try await MutationRunner(
@@ -760,6 +794,7 @@ public extension HybridExecutionEngine {
             case .sharedChunkBuildFailure: "sharedChunkBuildFailure"
             case .knownUncovered: "knownUncovered"
             case .buildReceiptUnavailable: "buildReceiptUnavailable"
+            case .multiTargetUnscorablePlacement: "multiTargetUnscorablePlacement"
             }
             counts[key, default: 0] += 1
         }
@@ -821,3 +856,39 @@ public extension HybridExecutionEngine {
 // never mutates them afterwards; every member is a `let`.
 extension HybridExecutionEngine.Context: @unchecked Sendable {}
 extension HybridExecutionEngine.IsolatedRunOptions: @unchecked Sendable {}
+
+// MARK: - Exactly-once merge
+
+extension HybridExecutionEngine {
+    /// The one `ResultLedger` a hybrid run reports from: every schemata
+    /// result, then every isolated-fallback result.
+    ///
+    /// Exactly once per MutationID. A second result for a MutationID that
+    /// already has one throws `EngineError.duplicateMutationResult`, and the
+    /// run fails without a report. The duplicate is never resolved by
+    /// keeping one of the two (no first-wins, no last-wins): it means the
+    /// schemata/fallback routing broke, and neither result can be trusted
+    /// to be the one the run meant to score.
+    ///
+    /// Checked by `MutationID`, not left to `ResultLedger.insert`: the
+    /// ledger keys on the whole `PlannedMutationRef`, and the two portions
+    /// stamp different `workUnitID`s (schemata: `plan.planID`; the fallback
+    /// `MutationRunner`: its own `fallbackPlan.workUnitID`). A MutationID
+    /// arriving from both portions has two distinct refs, which the ledger
+    /// alone would accept. `PlanSharding.merge` guards shards the same way.
+    static func mergedLedger(
+        schemataResults: [MutationResult], fallbackResults: [MutationResult]
+    ) throws -> ResultLedger<MutationResult> {
+        var ledger = ResultLedger<MutationResult>()
+        var portionByMutationID: [MutationID: String] = [:]
+        let labelled = schemataResults.map { ($0, "schemata") } + fallbackResults.map { ($0, "isolated fallback") }
+        for (result, portion) in labelled {
+            if let earlier = portionByMutationID[result.id] {
+                throw EngineError.duplicateMutationResult(mutationID: result.id.rawValue, portions: "\(earlier) + \(portion)")
+            }
+            portionByMutationID[result.id] = portion
+            try ledger.insert(result)
+        }
+        return ledger
+    }
+}

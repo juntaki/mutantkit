@@ -16,14 +16,17 @@ extension BaselineControlMemo {
         return await observation(key: key) {
             let run: TestRunResult
             do {
+                try RunContainmentMonitor.current?.throwIfAborted()
                 run = try await test.runSchemataToken(
                     artifact, in: sandbox, timeoutSeconds: timeoutSeconds, environment: [:], selectedTests: selectedTests
                 )
+                RunContainmentMonitor.current?.observe(run)
             } catch {
                 run = TestRunResult(
                     status: .infrastructureFailure, summary: nil,
                     command: CommandRecord(executable: "", arguments: [], workingDirectory: ""),
-                    resultArtifactPath: nil, diagnosis: "the baseline control run could not be started: \(error)"
+                    resultArtifactPath: nil, diagnosis: "the baseline control run could not be started: \(error)",
+                    cleanupVerified: true
                 )
             }
             return BaselineControlObservation(method: .unmutatedSchemataRun, run: run, selectedTests: selection)

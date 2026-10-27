@@ -494,6 +494,16 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
     /// each costs a process start. Only the SwiftPM macOS adapter reads it;
     /// other adapters attribute per test regardless.
     public var coverageGranularity: CoverageGranularity
+    /// How many measurement runs the one-time per-test coverage pass may have in flight at once
+    /// (`nil`, the default, is one).
+    ///
+    /// Each extra run works on its own clone of the build products, so runs never share coverage
+    /// output, and the pass attributes exactly what the serial pass would. What changes is load:
+    /// a test whose result depends on timing can fail under it. Such a test is handled as it
+    /// always is, retried once and, if it still cannot be proven, included in every mutant's
+    /// selection, so a higher number can make the later mutant runs slower but never wrong.
+    /// Only the SwiftPM macOS adapter reads it.
+    public var coverageWorkers: Int?
 
     public init(
         profile: ExecutionProfile = .reference,
@@ -514,7 +524,8 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         sharedModuleCache: Bool = false,
         cleanSubtreeCloning: Bool = false,
         profileCoverageSkip: Bool = false,
-        coverageGranularity: CoverageGranularity = .test
+        coverageGranularity: CoverageGranularity = .test,
+        coverageWorkers: Int? = nil
     ) {
         self.profile = profile
         self.strategy = strategy
@@ -535,6 +546,7 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         self.cleanSubtreeCloning = cleanSubtreeCloning
         self.profileCoverageSkip = profileCoverageSkip
         self.coverageGranularity = coverageGranularity
+        self.coverageWorkers = coverageWorkers
     }
 
     public init(from decoder: Decoder) throws {
@@ -563,10 +575,11 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         cleanSubtreeCloning = try container.decodeIfPresent(Bool.self, forKey: .cleanSubtreeCloning) ?? false
         profileCoverageSkip = try container.decodeIfPresent(Bool.self, forKey: .profileCoverageSkip) ?? false
         coverageGranularity = try container.decodeIfPresent(CoverageGranularity.self, forKey: .coverageGranularity) ?? .test
+        coverageWorkers = try container.decodeIfPresent(Int.self, forKey: .coverageWorkers)
     }
 
     /// Every key is encoded as the synthesized conformance would, except
-    /// `coverageGranularity`, which is written only when it is not the default.
+    /// `coverageGranularity` and `coverageWorkers`, which are written only when they are not the default.
     /// `Configuration.configurationHash` hashes this encoding, so a new key written
     /// unconditionally would change the hash of every existing configuration and
     /// make every plan made before it look stale.
@@ -593,6 +606,7 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         if coverageGranularity != .test {
             try container.encode(coverageGranularity, forKey: .coverageGranularity)
         }
+        try container.encodeIfPresent(coverageWorkers, forKey: .coverageWorkers)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -600,6 +614,7 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         case confirmCrashKills, confirmTimedOutMutants, selectCoveringTests, incrementalBuild
         case earlyAbortSelectedTests, testBatchSize, noOpCanarySampleRate, simulatorPool
         case sharedModuleCache, cleanSubtreeCloning, profileCoverageSkip, coverageGranularity
+        case coverageWorkers
     }
 
     public func resolvedWorkerCount() -> Int {

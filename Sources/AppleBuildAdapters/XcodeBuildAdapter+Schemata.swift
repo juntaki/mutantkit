@@ -102,7 +102,8 @@ extension XcodeBuildAdapter: SchemataTestable {
         } catch let error as SimulatorPoolError {
             return TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
-                diagnosis: "No simulator could be leased for this schemata token run: \(error.description)"
+                diagnosis: "No simulator could be leased for this schemata token run: \(error.description)",
+                cleanupVerified: true
             )
         }
     }
@@ -178,7 +179,8 @@ extension XcodeBuildAdapter: SchemataTestable {
         guard let baseXCTestRun = artifact.xctestrunPath else {
             return TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
-                diagnosis: "The build produced no .xctestrun, so there is nothing for test-without-building to run."
+                diagnosis: "The build produced no .xctestrun, so there is nothing for test-without-building to run.",
+                cleanupVerified: true
             )
         }
 
@@ -189,7 +191,8 @@ extension XcodeBuildAdapter: SchemataTestable {
         } catch {
             return TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: artifact.command, resultArtifactPath: nil,
-                diagnosis: "Could not write a schemata .xctestrun variant: \(error)"
+                diagnosis: "Could not write a schemata .xctestrun variant: \(error)",
+                cleanupVerified: true
             )
         }
         await GateTimingRecorder.shared.record("token.xctestrunVariant", start: variantStart)

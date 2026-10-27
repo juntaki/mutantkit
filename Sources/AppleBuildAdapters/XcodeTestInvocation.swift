@@ -68,6 +68,22 @@ struct XCTestInvocationService: Sendable {
     /// stored state beyond its own fixed `xcresulttool` timeout.
     let resultReader: XCResultAdapter
 
+    /// How `xcodebuild` is launched. Always `ProcessSupervisor.run` in
+    /// production (the memberwise default); a test substitutes a launcher
+    /// returning a chosen `ProcessResult` to pin how each branch below
+    /// carries `cleanupVerified` forward.
+    var launch: @Sendable (
+        _ arguments: [String], _ workspace: URL, _ timeoutSeconds: Double, _ terminationGracePeriodSeconds: Double
+    ) async throws -> ProcessResult = { arguments, workspace, timeoutSeconds, terminationGracePeriodSeconds in
+        try await ProcessSupervisor.run(
+            executable: ToolPaths.xcodebuild,
+            arguments: arguments,
+            workingDirectory: workspace,
+            timeoutSeconds: timeoutSeconds,
+            terminationGracePeriodSeconds: terminationGracePeriodSeconds
+        )
+    }
+
     /// Runs one already-built `xcodebuild test-without-building` invocation
     /// (`arguments`, built by the caller via
     /// `XcodeBuildAdapter.testWithoutBuildingArguments` — kept a caller-side
@@ -101,13 +117,7 @@ struct XCTestInvocationService: Sendable {
 
         let result: ProcessResult
         do {
-            result = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcodebuild,
-                arguments: arguments,
-                workingDirectory: workspace,
-                timeoutSeconds: timeoutSeconds,
-                terminationGracePeriodSeconds: terminationGracePeriodSeconds
-            )
+            result = try await launch(arguments, workspace, timeoutSeconds, terminationGracePeriodSeconds)
         } catch {
             return TestRunResult(
                 status: .infrastructureFailure,
@@ -119,7 +129,9 @@ struct XCTestInvocationService: Sendable {
                     result: nil
                 ),
                 resultArtifactPath: nil,
-                diagnosis: "Could not launch xcodebuild: \(error)"
+                diagnosis: "Could not launch xcodebuild: \(error)",
+                // No process was launched, so none can have escaped.
+                cleanupVerified: true
             )
         }
 
@@ -139,7 +151,8 @@ struct XCTestInvocationService: Sendable {
                 command: command,
                 resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path)
                     ? resultBundle : nil,
-                diagnosis: timeoutDiagnosis
+                diagnosis: timeoutDiagnosis,
+                cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
             )
         }
 
@@ -155,7 +168,8 @@ struct XCTestInvocationService: Sendable {
             command: command,
             resultArtifactPath: FileManager.default.fileExists(atPath: resultBundle.path)
                 ? resultBundle : nil,
-            diagnosis: outcome.diagnosis
+            diagnosis: outcome.diagnosis,
+            cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
         )
     }
 
@@ -181,13 +195,7 @@ struct XCTestInvocationService: Sendable {
     ) async -> [String: TestRunResult] {
         let result: ProcessResult
         do {
-            result = try await ProcessSupervisor.run(
-                executable: ToolPaths.xcodebuild,
-                arguments: arguments,
-                workingDirectory: workspace,
-                timeoutSeconds: timeoutSeconds,
-                terminationGracePeriodSeconds: terminationGracePeriodSeconds
-            )
+            result = try await launch(arguments, workspace, timeoutSeconds, terminationGracePeriodSeconds)
         } catch {
             let failure = TestRunResult(
                 status: .infrastructureFailure, summary: nil,
@@ -195,7 +203,8 @@ struct XCTestInvocationService: Sendable {
                     executable: ToolPaths.xcodebuild, arguments: arguments, workingDirectory: workspace, result: nil
                 ),
                 resultArtifactPath: nil,
-                diagnosis: "Could not launch xcodebuild for the batch: \(error)"
+                diagnosis: "Could not launch xcodebuild for the batch: \(error)",
+                cleanupVerified: true
             )
             return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
         }
@@ -226,7 +235,8 @@ struct XCTestInvocationService: Sendable {
                 The batch exceeded its \(String(format: "%.0f", timeoutSeconds))s limit and was \
                 terminated before every configuration in it could be confirmed to finish.
                 """,
-                isBatchAttributedTimeout: configurationTestIdentifiers.count > 1
+                isBatchAttributedTimeout: configurationTestIdentifiers.count > 1,
+                cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
             )
             return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
         }
@@ -262,7 +272,8 @@ struct XCTestInvocationService: Sendable {
         return outcomes.mapValues { outcome in
             TestRunResult(
                 status: outcome.status, summary: outcome.summary, command: command,
-                resultArtifactPath: bundleExists ? resultBundle : nil, diagnosis: outcome.diagnosis
+                resultArtifactPath: bundleExists ? resultBundle : nil, diagnosis: outcome.diagnosis,
+                cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
             )
         }
     }

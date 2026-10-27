@@ -139,7 +139,8 @@ public struct PrioritizingTestAdapter: TestSelecting, TestAdapterWrapping, Senda
                     summary: nil,
                     command: lastResult.command,
                     resultArtifactPath: lastResult.resultArtifactPath,
-                    diagnosis: "Selected-test execution exhausted the mutant timeout before all covering tests ran."
+                    diagnosis: "Selected-test execution exhausted the mutant timeout before all covering tests ran.",
+                    cleanupVerified: lastResult.cleanupVerified, cleanupDiagnosis: lastResult.cleanupDiagnosis
                 )
             }
 
@@ -151,6 +152,10 @@ public struct PrioritizingTestAdapter: TestSelecting, TestAdapterWrapping, Senda
                 selectedTests: [test]
             )
             lastResult = result
+            // An unverified cleanup ends the sequence here and is returned
+            // as-is, never folded into an aggregate that could read as a
+            // clean pass.
+            if !result.cleanupVerified { return result }
 
             if let summary = result.summary { accumulated.add(summary) }
 
@@ -182,7 +187,8 @@ public struct PrioritizingTestAdapter: TestSelecting, TestAdapterWrapping, Senda
             summary: accumulated.summary,
             command: lastResult.command,
             resultArtifactPath: lastResult.resultArtifactPath,
-            diagnosis: "All \(ordered.count) covering test(s) passed; selected tests were executed in historical kill-priority order with early abort enabled."
+            diagnosis: "All \(ordered.count) covering test(s) passed; selected tests were executed in historical kill-priority order with early abort enabled.",
+            cleanupVerified: lastResult.cleanupVerified, cleanupDiagnosis: lastResult.cleanupDiagnosis
         )
     }
 }

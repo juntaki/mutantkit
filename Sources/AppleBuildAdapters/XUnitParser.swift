@@ -101,6 +101,20 @@ enum XUnitParser {
         return report.total - report.skipped
     }
 
+    /// How many selected Swift Testing tests the report accounts for: every `testcase` it records,
+    /// whether the test ran or was recorded as skipped. A skipped test is explained in the report
+    /// itself (a `skipped` child), so it is not the silent shortfall the narrowed-selection check
+    /// exists to catch, whereas a selected test with no record at all is.
+    ///
+    /// The suite's `tests` attribute is not used when `testcase` elements exist: SwiftPM leaves
+    /// skipped tests out of it (`tests="3" skipped="1"` for four test cases), so subtracting
+    /// `skipped` from it counts a skipped test twice. A report with suite attributes only falls back
+    /// to `total - skipped`.
+    static func swiftTestingAccountedCount(forRequestedOutput requested: URL) -> Int? {
+        guard let report = parse(contentsOf: swiftTestingSiblingPath(for: requested)) else { return nil }
+        return report.testcaseCount > 0 ? report.testcaseCount : report.total - report.skipped
+    }
+
     /// How many tests the Swift Testing report records as skipped. A skipped test is reported as a
     /// `testcase` with a `skipped` child under a suite that counts `tests="0"`, which is why the
     /// merged summary of such a run is empty; this reads the count the report states.
@@ -112,6 +126,8 @@ enum XUnitParser {
         var total = 0
         var failed = 0
         var skipped = 0
+        /// `testcase` elements, skipped ones included.
+        var testcaseCount = 0
         var duration: Double = 0
         var failingTests: [String] = []
     }
@@ -159,6 +175,7 @@ enum XUnitParser {
                 let name = attributes["name"] ?? "?"
                 currentTest = "\(suite)/\(name)"
                 currentTestFailed = false
+                report.testcaseCount += 1
 
             case "failure", "error":
                 // Derived from the elements rather than the suite's `failures`

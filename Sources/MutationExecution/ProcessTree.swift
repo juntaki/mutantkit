@@ -113,8 +113,9 @@ enum ProcessTree {
     /// own doc comment can achieve — never traded away for a simpler
     /// bare-PID kill here, and never claimed as a stronger, kernel-enforced
     /// atomic guarantee it cannot actually be (see that doc comment for why).
-    static func reap(_ identities: some Sequence<ProcessIdentity>) {
-        signal(identities, SIGKILL)
+    @discardableResult
+    static func reap(_ identities: some Sequence<ProcessIdentity>, readTable: TableReader = readProcessTable) -> Bool {
+        signal(identities, SIGKILL, readTable: readTable)
     }
 
     /// `reap(_:)`, generalized to any signal — the same provenance
@@ -132,8 +133,8 @@ enum ProcessTree {
     /// the snapshot backing a `kill` call late in the loop could already be
     /// meaningfully stale by the time that iteration runs, widening the
     /// window in which a verified PID exits and gets recycled before this
-    /// function actually signals it. Re-reading fresh per identity (via
-    /// `isAlive(_:)`, itself one `processTable()` call) narrows that window,
+    /// function actually signals it. Re-reading fresh per identity (one
+    /// `readTableRetrying` call) narrows that window,
     /// for the direct kill, to "one `sysctl` call, immediately followed by
     /// one `kill` call" — the practical minimum achievable in userspace,
     /// since macOS has no `pidfd`-equivalent primitive that would let a
@@ -150,14 +151,45 @@ enum ProcessTree {
     /// "best-effort, not a hard kernel guarantee" character
     /// `ProcessSupervisor`'s own existing process-group signalling already
     /// has, not silently assumed to be atomic.
-    static func signal(_ identities: some Sequence<ProcessIdentity>, _ signalNumber: Int32) {
+    ///
+    /// Returns whether every identity's provenance could be checked. When
+    /// the process table cannot be read even after `tableReadAttempts`
+    /// tries, that identity is **not** signalled — an unverified PID may
+    /// already belong to an unrelated process, so the PID-reuse invariant
+    /// above is never traded away — and the result is `false`, so the
+    /// caller can report the cleanup as unverified instead of treating the
+    /// skipped kill as success.
+    @discardableResult
+    static func signal(
+        _ identities: some Sequence<ProcessIdentity>, _ signalNumber: Int32, readTable: TableReader = readProcessTable
+    ) -> Bool {
+        var allVerified = true
         for identity in identities {
-            guard isAlive(identity) else { continue }
+            guard let table = readTableRetrying(readTable) else {
+                allVerified = false
+                continue
+            }
+            guard table.contains(where: { $0.identity == identity }) else { continue }
             kill(identity.pid, signalNumber)
             if getpgid(identity.pid) == identity.pid {
                 kill(-identity.pid, signalNumber)
             }
         }
+        return allVerified
+    }
+
+    /// Bounded retry for a transient `sysctl` failure (the table growing
+    /// between the size and fill calls). A few attempts make an unreadable
+    /// table rarer; they never make it impossible, which is why callers
+    /// must still handle `nil`.
+    static let tableReadAttempts = 3
+
+    static func readTableRetrying(_ readTable: TableReader) -> [Entry]? {
+        for attempt in 0 ..< tableReadAttempts {
+            if let table = readTable() { return table }
+            if attempt + 1 < tableReadAttempts { usleep(1000) }
+        }
+        return nil
     }
 
     /// True when the process exists and we may signal it. For tests and diagnosis.
@@ -180,7 +212,8 @@ enum ProcessTree {
         processTable().contains { $0.identity == identity }
     }
 
-    /// `true` only when `identity` is genuinely still running — a zombie
+    /// `true` when `identity` is genuinely still running, or when the
+    /// process table could not be read to rule that out — a zombie
     /// (exited, signalled, but not yet reaped) reports `false` here, unlike
     /// `isAlive(_:)` above.
     ///
@@ -198,7 +231,16 @@ enum ProcessTree {
     /// or observe faster by polling `isAlive(_:)` harder, and must not
     /// wait on to decide whether escalation is still needed.
     static func isRunning(_ identity: ProcessIdentity) -> Bool {
-        processTable().contains { $0.identity == identity && !$0.isZombie }
+        isRunning(identity, in: readProcessTable())
+    }
+
+    /// `isRunning(_:)` against an already-read snapshot. Fails closed: a
+    /// `nil` snapshot (the table could not be read) proves nothing stopped,
+    /// so it reports `true` — otherwise a transient `sysctl` failure during
+    /// `closeOutOwnedGroup`'s grace would skip its SIGKILL escalation.
+    static func isRunning(_ identity: ProcessIdentity, in table: [Entry]?) -> Bool {
+        guard let table else { return true }
+        return table.contains { $0.identity == identity && !$0.isZombie }
     }
 
     /// `true` only when a process with this PID is genuinely still running: a zombie reports `false`, as in
@@ -209,11 +251,26 @@ enum ProcessTree {
         processTable().contains { $0.identity.pid == pid && !$0.isZombie }
     }
 
+    /// Every member of process group `pgid` other than `excluding` that is
+    /// still running (not a zombie) in `table`. Close-out uses this after a
+    /// group SIGKILL to confirm the group really emptied, including members
+    /// descendant polling never observed.
+    static func runningGroupMembers(_ pgid: pid_t, excluding: pid_t, in table: [Entry]) -> [Entry] {
+        table.filter { $0.pgid == pgid && $0.pid != excluding && !$0.isZombie }
+    }
+
     // MARK: - Kernel process table
 
-    private struct Entry {
+    /// How close-out reads the process table. Production always uses
+    /// `readProcessTable`; a test substitutes a reader that fails on demand
+    /// (for example from the SIGKILL lifecycle event onward) to prove that
+    /// an unreadable table is reported, never treated as a clean kill.
+    typealias TableReader = @Sendable () -> [Entry]?
+
+    struct Entry {
         let pid: pid_t
         let ppid: pid_t
+        let pgid: pid_t
         let startTimeSeconds: Int
         let startTimeMicroseconds: Int32
         let isZombie: Bool
@@ -224,14 +281,20 @@ enum ProcessTree {
     }
 
     private static func processTable() -> [Entry] {
+        readProcessTable() ?? []
+    }
+
+    /// The kernel process table, or `nil` when it could not be read — never
+    /// an empty table standing in for a failed read.
+    static func readProcessTable() -> [Entry]? {
         var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
 
         // Two calls: one to size the buffer, one to fill it. The table can grow
-        // between them, so the second is allowed to fail and we simply report
-        // nothing rather than read a short buffer.
+        // between them, so the second is allowed to fail; that is reported as
+        // `nil` (unreadable), never as a short buffer or an empty table.
         var length = 0
         guard sysctl(&name, UInt32(name.count), nil, &length, nil, 0) == 0, length > 0 else {
-            return []
+            return nil
         }
 
         let stride = MemoryLayout<kinfo_proc>.stride
@@ -241,7 +304,7 @@ enum ProcessTree {
             var size = length
             return sysctl(&name, UInt32(name.count), raw.baseAddress, &size, nil, 0)
         }
-        guard result == 0 else { return [] }
+        guard result == 0 else { return nil }
 
         // `p_stat == SZOMB` (5, `<sys/proc.h>` — not imported into Swift by
         // the Darwin module, so the raw value is used directly, the same
@@ -251,7 +314,7 @@ enum ProcessTree {
         let zombieState: Int8 = 5
         return buffer.prefix(length / stride).map {
             Entry(
-                pid: $0.kp_proc.p_pid, ppid: $0.kp_eproc.e_ppid,
+                pid: $0.kp_proc.p_pid, ppid: $0.kp_eproc.e_ppid, pgid: $0.kp_eproc.e_pgid,
                 startTimeSeconds: $0.kp_proc.p_starttime.tv_sec, startTimeMicroseconds: Int32($0.kp_proc.p_starttime.tv_usec),
                 isZombie: $0.kp_proc.p_stat == zombieState
             )

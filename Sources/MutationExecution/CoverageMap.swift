@@ -19,9 +19,25 @@ public struct CoverageMap: Sendable, Hashable {
     /// Where the claim came from, so a wrong one can be traced back to its source.
     public let source: String
 
-    public init(executedLines: [String: Set<Int>], source: String) {
+    /// 1-based lines the measurement has any coverage information for, per repository-relative path:
+    /// some coverage region covers them, with a count of zero or more. A line outside this set that
+    /// is also outside `executedLines` was never measured (the compiler emitted no counter for it,
+    /// as for a literal default argument), which is not the same as measured and never run.
+    ///
+    /// A file that is absent here has no such information (a reader that does not provide it), and
+    /// its lines are judged by `executedLines` alone, as before.
+    public let mappedLines: [String: Set<Int>]
+
+    public init(executedLines: [String: Set<Int>], source: String, mappedLines: [String: Set<Int>] = [:]) {
         self.executedLines = executedLines
         self.source = source
+        self.mappedLines = mappedLines
+    }
+
+    /// Whether this map knows `line` of `file` to have no coverage information at all.
+    func isUnmeasured(file: String, line: Int) -> Bool {
+        guard let mapped = mappedLines[file] else { return false }
+        return !mapped.contains(line)
     }
 
     public var isEmpty: Bool { executedLines.isEmpty }
@@ -41,11 +57,13 @@ public struct CoverageMap: Sendable, Hashable {
     ///   mutation is on code the suite never reached. `noCoverage` is the only
     ///   honest verdict, and the runner can establish it without building or
     ///   testing the mutant.
+    /// - The line is one the measurement has no coverage information for → no claim either, for the
+    ///   same reason: it is unmeasured, not unreached.
     /// - The file does not appear at all → the map has no claim to make. The
     ///   classifier is called with `nil`, exactly as in a no-coverage run, so
     ///   nothing is reported as uncovered on the basis of missing data.
     public func observation(forFile file: String, line: Int) -> CoverageObservation? {
-        guard let lines = executedLines[file] else { return nil }
+        guard let lines = executedLines[file], !isUnmeasured(file: file, line: line) else { return nil }
         return CoverageObservation(
             mutatedLineWasExecuted: lines.contains(line),
             source: source
@@ -56,7 +74,7 @@ public struct CoverageMap: Sendable, Hashable {
     /// the file or line is absent from the map. Used by the runner to decide
     /// whether a mutant can be classified without building it.
     public func isKnownUncovered(_ point: MutationPoint) -> Bool {
-        guard let lines = executedLines[point.file] else { return false }
+        guard let lines = executedLines[point.file], !isUnmeasured(file: point.file, line: point.line) else { return false }
         return !lines.contains(point.line)
     }
 }

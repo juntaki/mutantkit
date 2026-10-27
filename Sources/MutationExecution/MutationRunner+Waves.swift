@@ -210,7 +210,10 @@ extension MutationRunner {
                     status: .passed, summary: lastRun?.summary,
                     command: lastRun?.command ?? survivor.prepared.artifact.command,
                     resultArtifactPath: lastRun?.resultArtifactPath,
-                    diagnosis: "All \(survivor.prepared.selectedTests?.count ?? 0) covering test(s) passed across every wave."
+                    diagnosis: "All \(survivor.prepared.selectedTests?.count ?? 0) covering test(s) passed across every wave.",
+                    // Restates the last real wave's run, so it carries that
+                    // run's own cleanup verification forward.
+                    cleanupVerified: lastRun?.cleanupVerified ?? true, cleanupDiagnosis: lastRun?.cleanupDiagnosis
                 ),
                 attribution: .batch,
                 testDurationSeconds: survivor.cumulativeTestSeconds,
@@ -309,6 +312,9 @@ extension MutationRunner {
         baseline: BaselineContext, store: TestPriorityStore, batchable: any BatchTestable
     ) async -> WaveChunkOutcome {
         do {
+            // No batch once the run is aborting on an unverified cleanup; no
+            // survivor advances either.
+            try RunContainmentMonitor.current?.throwIfAborted()
             let batchSandbox = try await workspaces.createSandbox(id: id)
             let items = chunk.map { survivor in
                 BatchMutantItem(
@@ -360,10 +366,10 @@ extension MutationRunner {
                 return allowance >= 60 ? allowance : nil
             }()
             let batchStarted = monotonicNow()
-            let runs = await batchable.runBatch(
+            let runs = await Self.observingCleanup(batchable.runBatch(
                 items, in: batchSandbox.workspaceRoot, timeoutSeconds: batchTimeout,
                 nativeTimeoutAllowanceSeconds: nativeTimeoutAllowanceSeconds
-            )
+            ))
             let duration = monotonicNow() - batchStarted
             // What THIS mutant's own budget is charged for its share of the
             // batch — configurations in a shared invocation run
@@ -401,7 +407,8 @@ extension MutationRunner {
                     survivor.prepared, baseline: baseline,
                     run: TestRunResult(
                         status: .infrastructureFailure, summary: nil, command: survivor.prepared.artifact.command,
-                        resultArtifactPath: nil, diagnosis: "No wave sandbox could be created: \(error)"
+                        resultArtifactPath: nil, diagnosis: "No wave sandbox could be created: \(error)",
+                        cleanupVerified: true
                     ),
                     attribution: .standalone,
                     testDurationSeconds: survivor.cumulativeTestSeconds
@@ -428,7 +435,8 @@ extension MutationRunner {
         let test = survivor.remainingTests[0]
         var run = batch.runs[survivor.prepared.point.id] ?? TestRunResult(
             status: .infrastructureFailure, summary: nil, command: survivor.prepared.artifact.command,
-            resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its wave batch."
+            resultArtifactPath: nil, diagnosis: "This mutant's outcome was not reported back from its wave batch.",
+            cleanupVerified: true
         )
         // Real, individually-timed duration for THIS mutant, once
         // ground-truth verification below has actually measured one —
@@ -587,7 +595,8 @@ extension MutationRunner {
         return (
             run ?? TestRunResult(
                 status: .infrastructureFailure, summary: nil, command: prepared.artifact.command,
-                resultArtifactPath: nil, diagnosis: "The mutant's standalone verification test could not be run."
+                resultArtifactPath: nil, diagnosis: "The mutant's standalone verification test could not be run.",
+                cleanupVerified: true
             ),
             duration
         )
