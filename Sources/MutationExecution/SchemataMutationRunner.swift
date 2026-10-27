@@ -238,8 +238,27 @@ public struct SchemataMutationRunner: Sendable {
         )
     }
 
+    /// Runs inside a `RunContainmentMonitor` scope (reusing the hybrid
+    /// engine's when there is one) and throws `RunAbortedError`, never an
+    /// `Outcome`, once any process's post-SIGKILL cleanup could not be
+    /// verified.
     public func run() async throws -> Outcome {
-        let established = try await establishBaseline()
+        try await RunContainmentMonitor.withRunScope { monitor in
+            try await runWithinContainmentScope(monitor)
+        }
+    }
+
+    private func runWithinContainmentScope(_ monitor: RunContainmentMonitor) async throws -> Outcome {
+        try monitor.throwIfAborted() // a trip before the engine started builds nothing
+        let established: BaselineEstablishment
+        do {
+            established = try await establishBaseline()
+        } catch {
+            // An unverified cleanup outranks the baseline's own failure.
+            try monitor.throwIfAborted()
+            throw error
+        }
+        try monitor.throwIfAborted()
         let baseline = established.record
         let perTestCoverage = established.perTestCoverage
         let coverage = established.coverage
@@ -365,8 +384,18 @@ public struct SchemataMutationRunner: Sendable {
         // is dropped before grouping. Never merge a schemata result for
         // one target with an isolated-fallback result for another; that
         // would double-ledger the same MutationID across two backends.
+        //
+        // The one exception is a verified kill: a mutation caught in any placement is killed whatever its
+        // other placements did, so that MutationID is scored from its verified placements and its
+        // placement-level fallbacks are dropped instead. Nothing is double-ledgered: the MutationID is
+        // recorded by schemata alone, and a fallback can never let a survived placement stand, because the
+        // aggregate of a set containing a kill is always that kill.
+        var killedMutationIDs = Set<MutationID>()
+        for case let .verified(record) in entryOutcomes where MultiTargetVerdict.isKillLike(record.record.outcome) {
+            killedMutationIDs.insert(record.record.mutationRef.mutationID)
+        }
         var dynamicFallbackReasons: [MutationID: SchemataFallbackReason] = [:]
-        for case let .isolatedFallback(mutationID, reason) in entryOutcomes {
+        for case let .isolatedFallback(mutationID, reason) in entryOutcomes where !killedMutationIDs.contains(mutationID) {
             dynamicFallbackReasons[mutationID] = reason
         }
         let perTarget: [TargetRecord] = entryOutcomes.compactMap {
@@ -381,7 +410,7 @@ public struct SchemataMutationRunner: Sendable {
         // first-appearance-in-`perTarget` order would otherwise leak that
         // nondeterminism into `results`/`multiTargetVerdicts` — sorted here
         // for the same reason `isolatedFallbacks` below already is.
-        let grouped = try Self.groupByMutation(perTarget)
+        let grouped = try Self.divertUnscorableMultiTarget(Self.groupByMutation(perTarget), into: &dynamicFallbackReasons)
             .sorted { $0.verdict.mutationRef.mutationID.rawValue < $1.verdict.mutationRef.mutationID.rawValue }
         let verdicts = grouped.map { $0.verdict }
         let results = try grouped.map {

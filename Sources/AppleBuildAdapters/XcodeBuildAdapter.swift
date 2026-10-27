@@ -567,7 +567,8 @@ extension XcodeBuildAdapter: TestAdapter {
                 summary: nil,
                 command: artifact.command,
                 resultArtifactPath: nil,
-                diagnosis: "No simulator could be leased for this mutant: \(error.description)"
+                diagnosis: "No simulator could be leased for this mutant: \(error.description)",
+                cleanupVerified: true
             )
         }
     }
@@ -747,7 +748,10 @@ extension XcodeBuildAdapter: TestAdapter {
     static func uninstallFailureResult(bundleID: String, udid: String, detail: String, command: CommandRecord) -> TestRunResult {
         TestRunResult(
             status: .infrastructureFailure, summary: nil, command: command, resultArtifactPath: nil,
-            diagnosis: uninstallFailureWarning(bundleID: bundleID, udid: udid, detail: detail).trimmingCharacters(in: .newlines)
+            diagnosis: uninstallFailureWarning(bundleID: bundleID, udid: udid, detail: detail).trimmingCharacters(in: .newlines),
+            // No test process was launched; the uninstall's own process is
+            // covered by `RunContainmentMonitor` through `ProcessSupervisor`.
+            cleanupVerified: true
         )
     }
 
@@ -787,7 +791,8 @@ extension XcodeBuildAdapter: TestAdapter {
                 diagnosis: """
                 The build produced no .xctestrun, so there is nothing for \
                 test-without-building to run.
-                """
+                """,
+                cleanupVerified: true
             )
         }
 

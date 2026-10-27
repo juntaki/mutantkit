@@ -169,11 +169,18 @@ extension SchemataMutationRunner {
         _ artifact: BuildArtifact, in sandbox: URL, invocation: SchemataTokenInvocation,
         timeoutSeconds: Double, selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
-        try await test.runSchemataToken(
+        // Nothing new is launched once the run is aborting on an unverified
+        // cleanup.
+        try RunContainmentMonitor.current?.throwIfAborted()
+        let run = try await test.runSchemataToken(
             artifact, in: sandbox, timeoutSeconds: timeoutSeconds,
             environment: invocation.environment,
             selectedTests: selectedTests
         )
+        // Every individual primary, recovery and confirmation token run
+        // passes through here.
+        RunContainmentMonitor.current?.observe(run)
+        return run
     }
 
     /// What identifies one schemata process launch: the token it selects,
@@ -303,7 +310,7 @@ extension SchemataMutationRunner {
         TestRunResult(
             status: .infrastructureFailure, summary: nil,
             command: CommandRecord(executable: "", arguments: [], workingDirectory: ""),
-            resultArtifactPath: nil, diagnosis: diagnosis
+            resultArtifactPath: nil, diagnosis: diagnosis, cleanupVerified: true
         )
     }
 }

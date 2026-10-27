@@ -13,6 +13,21 @@ extension SchemataMutationRunner {
     enum PrimaryOutcome {
         case settled(EntryRunOutcome, primaryTimedOut: Bool)
         case needsConfirmation(ConfirmationHandoff)
+
+        var primaryTimedOut: Bool {
+            switch self {
+            case let .settled(_, primaryTimedOut): primaryTimedOut
+            case let .needsConfirmation(handoff): handoff.primaryTimedOut
+            }
+        }
+    }
+
+    /// `prepareBatchedPrimaries`' result. `containmentPending` is `true` once any batched (or
+    /// ambiguity-recovery) run reported a forced timeout-kill: the shared sandbox is then uncontained until
+    /// `runEntries` rebuilds it.
+    struct BatchedPrimaries {
+        var outcomes: [MutationID: PrimaryOutcome] = [:]
+        var containmentPending = false
     }
 
     /// Everything `runEntries` needs to gather and finalize a confirmation
@@ -155,7 +170,7 @@ extension SchemataMutationRunner {
         // inside the adapter, mirroring `MutationRunner`'s own lookup at its
         // equivalent call site exactly.
         let selectedTests = perTestCoverage
-            .flatMap { $0.testsCovering(file: point.file, line: point.line) }
+            .flatMap { $0.selection(for: point, originalSource: originalSources[point.file]) }
             .flatMap { $0.isEmpty ? nil : $0 }
 
         // Selected-test-clamped when this entry has a known, non-empty
@@ -387,36 +402,24 @@ extension SchemataMutationRunner {
     /// untouched and falls through to `runEntries`' existing individual
     /// `runPrimary` call, exactly as before batching existed.
     ///
-    /// Never revisited once returned: entries covered here have their
-    /// *final* primary result before the schemata timeout-isolation design's Trigger 1/2 rebuild logic
-    /// runs for anything in this chunk. A later rebuild — triggered by some
-    /// *other* entry's own timeout, individual or (once containment fires)
-    /// native — never needs to touch these: each one's own evidence chain
-    /// (`compilationUnitID`/`runID`/`sourceEmbeddingID`/token matching,
-    /// enforced identically for a batched or unbatched primary) already
-    /// proves its own result independently of whatever a sibling
-    /// configuration in the same batch did. Confirmed directly, not
-    /// assumed: real acceptance evidence is a batch where a sibling
-    /// configuration's hang did not affect another configuration's
-    /// already-passing result, an unrelated `xcodebuild` invocation from
-    /// this runner's perspective in every way that matters here. Trigger
-    /// 1/2's actual purpose — protecting a *future, not-yet-run* individual
-    /// spawn from a shared sandbox a forced kill may have left unverified —
-    /// is simply moot for an entry whose primary already ran as part of
-    /// this same batch; it still fires, unweakened, for that entry's own
-    /// *confirmation* (always an individual, never-batched run — batching
-    /// never touches confirmation dispatch at all) and for any entry in a
-    /// later, not-yet-dispatched batch group.
+    /// Never crosses a timeout boundary (containment before the next spawn against the shared image). Batch
+    /// groups run one at a time, and the first forced timeout-kill ends batching for the chunk
+    /// (`BatchedPrimaries.containmentPending`): no later group is dispatched, and no ambiguity-recovery run is
+    /// spawned after it. The STARTUP/HIT chain proves a configuration's activation, not that it ran
+    /// uncontaminated, and nothing orders one configuration before another inside a single invocation, so
+    /// every other member of a group that reported a timeout is discarded, not scored, and reruns
+    /// individually after `runEntries`' containment rebuild. Only a group with no timeout at all keeps its
+    /// members' results, and those need no later revisiting: they ran before any kill in this chunk.
     func prepareBatchedPrimaries(
         _ embeddedEntries: [SchemataPlanEntry], state: ChunkExecutionState, timeoutController: TimeoutController,
         perTestCoverage: PerTestCoverageMap?, coverage: CoverageMap?
-    ) async -> [MutationID: PrimaryOutcome] {
+    ) async -> BatchedPrimaries {
         // `<= 1` (the default): batching disabled outright, the same
         // opt-in-by-default-value convention `workers` uses. Adapter
         // conformance is optional, mirroring `BatchTestable`: one that does
         // not conform simply never gets asked, and every entry runs the
         // unbatched way exactly as it always has.
-        guard schemataTokenBatchSize > 1, let batchable = batchableTest else { return [:] }
+        guard schemataTokenBatchSize > 1, let batchable = batchableTest else { return BatchedPrimaries() }
 
         var dispatchesByMutationID: [MutationID: PrimaryDispatch] = [:]
         for entry in embeddedEntries {
@@ -458,7 +461,7 @@ extension SchemataMutationRunner {
             for dispatch in dispatchesByMutationID.values {
                 try? FileManager.default.removeItem(at: dispatch.evidenceDirectory)
             }
-            return [:]
+            return BatchedPrimaries()
         }
 
         // Every eligible entry resolves to the identical limit today
@@ -473,7 +476,7 @@ extension SchemataMutationRunner {
             for dispatch in dispatchesByMutationID.values {
                 try? FileManager.default.removeItem(at: dispatch.evidenceDirectory)
             }
-            return [:]
+            return BatchedPrimaries()
         }
         // An empirically-validated floor — the only value ever actually
         // exercised against a real hang — mirroring
@@ -482,9 +485,17 @@ extension SchemataMutationRunner {
 
         let entriesByMutationID = Dictionary(uniqueKeysWithValues: embeddedEntries.map { ($0.mutationID, $0) })
         let dispatchGroups = dispatchesByMutationID.map { ($0.key, $0.value) }
-        var outcomes: [MutationID: PrimaryOutcome] = [:]
+        var batched = BatchedPrimaries()
 
         for chunkStart in stride(from: 0, to: dispatchGroups.count, by: schemataTokenBatchSize) {
+            // An aborting run dispatches no further group, exactly like a
+            // pending containment rebuild.
+            guard !batched.containmentPending, RunContainmentMonitor.current?.isAborted != true else {
+                for (_, dispatch) in dispatchGroups[chunkStart...] {
+                    try? FileManager.default.removeItem(at: dispatch.evidenceDirectory)
+                }
+                break
+            }
             let group = Array(dispatchGroups[chunkStart ..< min(chunkStart + schemataTokenBatchSize, dispatchGroups.count)])
             let items = group.map { mutationID, dispatch in
                 SchemataBatchTokenItem(
@@ -509,28 +520,51 @@ extension SchemataMutationRunner {
             await GateTimingRecorder.shared.record(
                 "token.batch.total", chunkID: state.chunkLabel, start: tokenSpanStart
             )
+            // Observed before any member is kept, discarded or recovered, so
+            // a discarded member's unverified cleanup still aborts the run.
+            for run in runs.values {
+                RunContainmentMonitor.current?.observe(run)
+            }
 
-            for (mutationID, dispatch) in group {
-                guard let entry = entriesByMutationID[mutationID] else { continue }
-                let run = runs[mutationID] ?? TestRunResult(
-                    status: .infrastructureFailure, summary: nil, command: state.artifact.command, resultArtifactPath: nil,
-                    diagnosis: "This token's outcome went unreported by the batch classifier."
+            await collectBatchGroup(group, runs: runs, entriesByMutationID: entriesByMutationID, state: state, into: &batched)
+        }
+        return batched
+    }
+
+    /// Turns one returned batch group into primary outcomes, without ever scoring across a timeout (see
+    /// `prepareBatchedPrimaries`): a `.timedOut` member keeps its own observation and marks containment
+    /// pending; every other member of that group is discarded for an individual rerun after the rebuild; and
+    /// an ambiguous member is only recovered individually while no kill is pending.
+    private func collectBatchGroup(
+        _ group: [(MutationID, PrimaryDispatch)], runs: [MutationID: TestRunResult],
+        entriesByMutationID: [MutationID: SchemataPlanEntry], state: ChunkExecutionState, into batched: inout BatchedPrimaries
+    ) async {
+        let groupTimedOut = group.contains { runs[$0.0]?.status == .timedOut }
+        for (mutationID, dispatch) in group {
+            guard let entry = entriesByMutationID[mutationID] else { continue }
+            let run = runs[mutationID] ?? TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: state.artifact.command, resultArtifactPath: nil,
+                diagnosis: "This token's outcome went unreported by the batch classifier.", cleanupVerified: true
+            )
+            if run.status == .timedOut {
+                batched.outcomes[mutationID] = await processPrimaryObservation(
+                    entry, dispatch: dispatch, run: run, attribution: .batch, state: state
                 )
-                // `.infrastructureFailure` from a shared batch call —
-                // whether `classifyBatch` itself produced it (no
-                // per-configuration evidence in the result bundle) or it
-                // was synthesized just above (missing from `runs` entirely)
-                // — means the *shared invocation's* attribution failed for
-                // this one mutant, not that the mutant is unprovable. Every
-                // other status a batch can produce (`.passed`/`.failed`/
-                // `.crashed`/`.timedOut`) is an independently usable
-                // observation about this configuration specifically and is
-                // never retried here.
-                outcomes[mutationID] = run.status == .infrastructureFailure
-                    ? await recoverAmbiguousBatchedPrimary(entry, dispatch: dispatch, state: state)
-                    : await processPrimaryObservation(entry, dispatch: dispatch, run: run, attribution: .batch, state: state)
+                batched.containmentPending = true
+            } else if groupTimedOut || (run.status == .infrastructureFailure && batched.containmentPending) {
+                try? FileManager.default.removeItem(at: dispatch.evidenceDirectory)
+            } else if run.status == .infrastructureFailure {
+                // The *shared invocation's* attribution failed for this one mutant, not proof the mutant is
+                // unprovable: recovered by one fresh individual run. Every other status a batch can produce is
+                // an independently usable observation about this configuration specifically.
+                let outcome = await recoverAmbiguousBatchedPrimary(entry, dispatch: dispatch, state: state)
+                batched.outcomes[mutationID] = outcome
+                if outcome.primaryTimedOut { batched.containmentPending = true }
+            } else {
+                batched.outcomes[mutationID] = await processPrimaryObservation(
+                    entry, dispatch: dispatch, run: run, attribution: .batch, state: state
+                )
             }
         }
-        return outcomes
     }
 }

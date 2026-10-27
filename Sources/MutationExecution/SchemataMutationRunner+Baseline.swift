@@ -60,6 +60,7 @@ extension SchemataMutationRunner {
         let baselineBuildSpanStart = GateTimingRecorder.shared.now()
         let artifact = try await build.buildBaseline(in: sandbox)
         await GateTimingRecorder.shared.record("schemata.baseline.build", start: baselineBuildSpanStart)
+        try RunContainmentMonitor.current?.throwIfAborted() // no baseline test after an unverified build
         let testStarted = Date()
         let baselineTestSpanStart = GateTimingRecorder.shared.now()
         // The baseline's own limit, unchanged: this run compiles nothing
@@ -68,7 +69,11 @@ extension SchemataMutationRunner {
         let run = try await test.runBaseline(
             artifact, in: sandbox, timeoutSeconds: TimeoutController(settings: timeouts).baselineLimitSeconds
         )
+        RunContainmentMonitor.current?.observe(run)
         await GateTimingRecorder.shared.record("schemata.baseline.test", start: baselineTestSpanStart)
+        // Nothing more is launched once the baseline has tripped the monitor,
+        // including the coverage pass below.
+        try RunContainmentMonitor.current?.throwIfAborted()
         let testDurationSeconds = Date().timeIntervalSince(testStarted)
 
         let record = BaselineRecord(
@@ -121,7 +126,7 @@ extension SchemataMutationRunner {
                     artifact: artifact, in: sandbox, timeoutSeconds: TimeoutController(settings: timeouts).baselineLimitSeconds
                 )
                 if let measured = perTestCoverage, let key = session.coverageCacheKey {
-                    await session.coverageCache?.store(measured, for: key)
+                    await session.coverageCache?.storeUnlessRunAborted(measured, for: key)
                 }
                 await GateTimingRecorder.shared.record("schemata.coverage.measured", start: coverageSpanStart)
             }

@@ -47,6 +47,7 @@ public enum PerTestCoverageAttribution {
     ) async -> PerTestCoverageMap? {
         var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
         var unattributedTests: Set<TestIdentifier> = []
+        var mappedLines: [String: Set<Int>] = [:]
 
         for test in tests {
             var measured: CoverageMap?
@@ -55,6 +56,7 @@ public enum PerTestCoverageAttribution {
                 if measured != nil { break }
             }
             if let measured {
+                for (file, lines) in measured.mappedLines { mappedLines[file, default: []].formUnion(lines) }
                 for (file, lines) in measured.executedLines {
                     // Kept even when empty, so `aggregate()` can say "never reached" for the file.
                     if lines.isEmpty { coveringTests[file, default: [:]] = coveringTests[file] ?? [:] }
@@ -74,8 +76,137 @@ public enum PerTestCoverageAttribution {
 
         guard coveringTests.values.contains(where: { !$0.isEmpty }) else { return nil }
         return PerTestCoverageMap(
-            coveringTests: coveringTests, source: source, unattributedTests: unattributedTests
+            coveringTests: coveringTests, source: source, unattributedTests: unattributedTests, mappedLines: mappedLines
         )
+    }
+
+    /// `attribute`, with up to `workers` tests being measured at once.
+    ///
+    /// The policy is `attribute`'s, unchanged: each test gets `attempts` tries and one that cannot be
+    /// measured is carried as unattributed. What this adds is only scheduling, so the result is the
+    /// same map whatever the interleaving (the merge is order-independent).
+    ///
+    /// Tests are scheduled by `groupKey`: every test of a group runs one after another on the same
+    /// slot, so a group that shares one measurement (a suite measured once for all its tests) is never
+    /// measured twice at the same time.
+    ///
+    /// The first group runs alone on slot 0 before anything else. The first measurement is the one
+    /// that builds what every later one reuses, so only after it can the other slots be set up.
+    /// `prepareSlot` is then called once per slot `1..<workers`, with nothing else running, and
+    /// answers whether that slot can take part; a slot it declines is simply not used, and when none
+    /// is available the rest runs on slot 0 alone, exactly as `attribute` would.
+    public static func attributeConcurrently(
+        tests: [TestIdentifier],
+        source: String,
+        attempts: Int = 2,
+        workers: Int,
+        progress: MutationModel.ProgressReporter? = nil,
+        groupKey: @Sendable (TestIdentifier) -> String,
+        prepareSlot: @Sendable (Int) async -> Bool,
+        attempt: @Sendable @escaping (TestIdentifier, Int, Int) async -> CoverageMap?
+    ) async -> PerTestCoverageMap? {
+        let groups = grouped(tests, by: groupKey)
+
+        let measure: @Sendable ([TestIdentifier], Int) async -> [(TestIdentifier, CoverageMap?)] = { group, slot in
+            var results: [(TestIdentifier, CoverageMap?)] = []
+            for test in group {
+                var measured: CoverageMap?
+                for attemptNumber in 1 ... attempts {
+                    measured = await attempt(test, attemptNumber, slot)
+                    if measured != nil { break }
+                }
+                results.append((test, measured))
+                await progress?.recordCompletion()
+            }
+            return results
+        }
+
+        var results: [(TestIdentifier, CoverageMap?)] = []
+        if let first = groups.first {
+            results += await measure(first, 0)
+        }
+        let rest = Array(groups.dropFirst())
+        var slots = [0]
+        if workers > 1, !rest.isEmpty {
+            for slot in 1 ..< workers where await prepareSlot(slot) { slots.append(slot) }
+        }
+
+        if slots.count == 1 {
+            for group in rest { results += await measure(group, 0) }
+        } else {
+            let queue = GroupQueue(count: rest.count)
+            await withTaskGroup(of: [(TestIdentifier, CoverageMap?)].self) { taskGroup in
+                for slot in slots {
+                    taskGroup.addTask {
+                        var local: [(TestIdentifier, CoverageMap?)] = []
+                        while let index = await queue.next() {
+                            local += await measure(rest[index], slot)
+                        }
+                        return local
+                    }
+                }
+                for await local in taskGroup { results += local }
+            }
+        }
+
+        return merge(results, source: source)
+    }
+
+    /// `tests` split into groups by `key`, in order of first appearance.
+    private static func grouped(_ tests: [TestIdentifier], by key: (TestIdentifier) -> String) -> [[TestIdentifier]] {
+        var groups: [[TestIdentifier]] = []
+        var index: [String: Int] = [:]
+        for test in tests {
+            let groupKey = key(test)
+            if let existing = index[groupKey] {
+                groups[existing].append(test)
+            } else {
+                index[groupKey] = groups.count
+                groups.append([test])
+            }
+        }
+        return groups
+    }
+
+    /// Inverts what each test's measurement reported into `file -> line -> tests`, carrying a test
+    /// that could not be measured as unattributed. Order-independent.
+    private static func merge(_ results: [(TestIdentifier, CoverageMap?)], source: String) -> PerTestCoverageMap? {
+        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
+        var unattributedTests: Set<TestIdentifier> = []
+        var mappedLines: [String: Set<Int>] = [:]
+        for (test, measured) in results {
+            guard let measured else {
+                unattributedTests.insert(test)
+                continue
+            }
+            for (file, lines) in measured.mappedLines { mappedLines[file, default: []].formUnion(lines) }
+            for (file, lines) in measured.executedLines {
+                // Kept even when empty, so `aggregate()` can say "never reached" for the file.
+                if lines.isEmpty { coveringTests[file, default: [:]] = coveringTests[file] ?? [:] }
+                for line in lines {
+                    coveringTests[file, default: [:]][line, default: []].insert(test)
+                }
+            }
+        }
+
+        guard coveringTests.values.contains(where: { !$0.isEmpty }) else { return nil }
+        return PerTestCoverageMap(
+            coveringTests: coveringTests, source: source, unattributedTests: unattributedTests, mappedLines: mappedLines
+        )
+    }
+
+    /// Hands out group indices, each exactly once, to whichever slot asks next.
+    private actor GroupQueue {
+        private var cursor = 0
+        private let count: Int
+
+        init(count: Int) { self.count = count }
+
+        func next() -> Int? {
+            guard cursor < count else { return nil }
+            defer { cursor += 1 }
+            return cursor
+        }
     }
 
     /// Reports a pass that finished without being able to prove every test,

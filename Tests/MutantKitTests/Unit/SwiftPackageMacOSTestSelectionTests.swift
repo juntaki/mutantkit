@@ -411,3 +411,29 @@ struct SwiftPackageMacOSTestBuildFlagTests {
         )
     }
 }
+
+/// `swiftTestParallelismFlags`: which runs ask SwiftPM for parallel mode, and
+/// so for the XCTest half of the xunit report.
+@Suite("SwiftPM test parallelism flags")
+struct SwiftPackageMacOSTestParallelismFlagTests {
+    @Test("An ordinary run asks for one XCTest worker, so the XCTest report is written")
+    func ordinaryRunRequestsSingleWorkerParallelMode() {
+        #expect(
+            SwiftPackageMacOSAdapter.swiftTestParallelismFlags(parallel: false, enableCoverage: false)
+                == ["--parallel", "--num-workers", "1"]
+        )
+        #expect(SwiftPackageMacOSAdapter.requestsXCTestReport(parallel: false, enableCoverage: false))
+    }
+
+    @Test("A coverage run gets no parallelism flag and no XCTest report")
+    func coverageRunHasNoParallelismFlag() {
+        #expect(SwiftPackageMacOSAdapter.swiftTestParallelismFlags(parallel: false, enableCoverage: true).isEmpty)
+        #expect(!SwiftPackageMacOSAdapter.requestsXCTestReport(parallel: false, enableCoverage: true))
+    }
+
+    @Test("tests.parallel keeps plain --parallel, with or without coverage")
+    func parallelSettingIsUnchanged() {
+        #expect(SwiftPackageMacOSAdapter.swiftTestParallelismFlags(parallel: true, enableCoverage: false) == ["--parallel"])
+        #expect(SwiftPackageMacOSAdapter.swiftTestParallelismFlags(parallel: true, enableCoverage: true) == ["--parallel"])
+    }
+}

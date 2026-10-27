@@ -125,9 +125,12 @@ public extension SimulatorPool {
         // succeed against an already-booted device directly, but shutting
         // down first is the documented-safe order and costs nothing when
         // the device is already shut down (a no-op, exit code ignored).
-        _ = try? await runProcess(ToolPaths.xcrun, ["simctl", "shutdown", udid], workingDirectory, timeoutSeconds)
-
-        let result = try await runProcess(ToolPaths.xcrun, ["simctl", "delete", udid], workingDirectory, timeoutSeconds)
+        // Teardown of a clone this pool created: it still runs after a
+        // run-level abort on an unverified cleanup, so no clone is left behind.
+        let result = try await RunContainmentMonitor.permittingTeardownLaunches {
+            _ = try? await runProcess(ToolPaths.xcrun, ["simctl", "shutdown", udid], workingDirectory, timeoutSeconds)
+            return try await runProcess(ToolPaths.xcrun, ["simctl", "delete", udid], workingDirectory, timeoutSeconds)
+        }
         guard result.succeeded else {
             throw SimulatorPoolError.simctlFailed(
                 detail: "could not delete \(udid): "

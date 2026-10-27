@@ -159,4 +159,113 @@ struct SchemataMutationRunnerHangBudgetOverflowTests {
         #expect(fallback.reason == .hangBudgetExceeded)
         #expect(!result.results.contains { $0.id == x.id })
     }
+
+    @Test("""
+    A chunk's hang-budget overflow never discards a cross-program MutationID whose placement in that chunk already \
+    killed it: the kill settles the MutationID and no fallback is recorded for it
+    """)
+    func overflowKeepsCrossProgramMutationIDThatAlreadyKilled() async throws {
+        let (x, y) = try points()
+        let xTargetA = "App"
+        let xTargetB = "Widget"
+
+        let entryXA = entry(mutationID: x.id, target: xTargetA, chunkID: "chunk-A", namespace: 1)
+        let entryXB = entry(mutationID: x.id, target: xTargetB, chunkID: "chunk-B", namespace: 2)
+        let entryY = entry(mutationID: y.id, target: xTargetB, chunkID: "chunk-B", namespace: 3)
+
+        let adapter = FakeSchemataAdapter()
+        adapter.scripts[SchemataSelectorToken(namespace: 1, localIndex: 1)] = .init(
+            compilationUnitID: compilationUnitID(target: xTargetA, point: x), sourceEmbeddingID: Self.sourceEmbeddingID, includeHit: true
+        )
+        // X's Widget placement crashes: a kill, settled before Y's hang.
+        adapter.scripts[SchemataSelectorToken(namespace: 2, localIndex: 1)] = .init(
+            compilationUnitID: compilationUnitID(target: xTargetB, point: x), sourceEmbeddingID: Self.sourceEmbeddingID,
+            behaviors: [.crashed]
+        )
+        adapter.scripts[SchemataSelectorToken(namespace: 3, localIndex: 1)] = .init(
+            compilationUnitID: compilationUnitID(target: xTargetB, point: y), sourceEmbeddingID: Self.sourceEmbeddingID,
+            behaviors: [.timedOut, .timedOut]
+        )
+
+        let result = try await run(
+            [program(chunkID: "chunk-B", entries: [entryXB, entryY]), program(chunkID: "chunk-A", entries: [entryXA])],
+            points: [x.id: x, y.id: y], adapter: adapter, maxVerifiedTimeoutsPerChunk: 0
+        )
+
+        #expect(result.isolatedFallbacks.isEmpty, "a proven kill must not be sent to isolated mode")
+        #expect(result.results.first { $0.id == x.id }?.outcome == .killedByCrash)
+        #expect(result.results.first { $0.id == y.id }?.outcome == .verifiedTimeout)
+        let xVerdict = try #require(result.multiTargetVerdicts.first { $0.mutationRef.mutationID == x.id })
+        #expect(xVerdict.aggregateOutcome == .killedByCrash)
+    }
+
+    // MARK: - The entries after the overflowing one
+
+    /// The overflow fires on the chunk's FIRST entry, so the remaining-entries
+    /// half of `hangBudgetOverflowClosure` and the early return after it are
+    /// both exercised: every later entry falls back as `.hangBudgetExceeded`,
+    /// none is dispatched or rebuilt for, and with batching on (size 3) the
+    /// later entries' prefetched batch outcomes are discarded, never scored.
+    @Test(
+        "An overflow on a chunk's first entry falls every later entry back, unrun and unscored",
+        arguments: [1, 3]
+    )
+    func overflowFallsEveryLaterEntryBack(schemataTokenBatchSize: Int) async throws {
+        let source = "func flagA() -> Bool { true }\nfunc flagB() -> Bool { true }\nfunc flagC() -> Bool { true }\n"
+        let embeddingID = SHA256Digest.of(Data(source.utf8))
+        let points = try CoreOperatorExpansionTestSupport.discover(
+            source, operatorID: BoolLiteralInversionOperator.descriptor.id, relativePath: Self.relativePath
+        ).sorted { $0.utf8Range.start < $1.utf8Range.start }
+        try #require(points.count == 3)
+        let tokens = (1 ... 3).map { SchemataSelectorToken(namespace: UInt64($0), localIndex: 1) }
+        let entries = zip(points, tokens).map { point, token in
+            SchemataPlanEntry(
+                mutationID: point.id,
+                placement: .embedded(placements: [SchemataEmbeddedPlacement(
+                    chunkID: "chunk-A", selectorToken: token, sourceEmbeddingID: embeddingID.rawValue, lowererID: Self.lowererID,
+                    lowererVersion: Self.lowererVersion, projectIdentity: Self.projectIdentity, target: "App", module: "App",
+                    product: "App.app", expectedImages: []
+                )]),
+                conflictGroup: nil, projectIdentity: Self.projectIdentity, target: "App", module: "App", product: "App.app"
+            )
+        }
+        let adapter = FakeSchemataAdapter()
+        var coveringTests: [String: [Int: Set<TestIdentifier>]] = [:]
+        for (index, point) in points.enumerated() {
+            adapter.scripts[tokens[index]] = .init(
+                compilationUnitID: compilationUnitID(target: "App", point: point), sourceEmbeddingID: embeddingID,
+                behaviors: index == 0 ? [.timedOut, .timedOut] : [.passed(includeHit: true)]
+            )
+            coveringTests[point.file, default: [:]][point.line] = [TestIdentifier(target: "AppTests", qualifiedName: "T/test\(index)")]
+        }
+        adapter.perTestCoverageToReturn = PerTestCoverageMap(coveringTests: coveringTests, source: "test")
+
+        let result = try await SchemataMutationRunner(
+            planID: "plan-1", workUnitID: "wu-1",
+            programs: [SchemataProgram(
+                chunkID: "chunk-A", sourceEmbeddingID: embeddingID.rawValue,
+                loweredSources: [SchemataSourceFile(relativePath: Self.relativePath, contents: source)], entries: entries
+            )],
+            points: Dictionary(uniqueKeysWithValues: points.map { ($0.id, $0) }),
+            originalSources: [Self.relativePath: Data(source.utf8)], build: adapter, test: adapter,
+            workspaces: try WorkspaceManager(
+                projectRoot: Self.makeTempDir(prefix: "mutantkit-overflow-first-project"),
+                scratchRoot: Self.makeTempDir(prefix: "mutantkit-overflow-first-scratch")
+            ),
+            timeouts: TimeoutSettings(baselineSeconds: 30), toolchainHash: "toolchain", buildArgumentsHash: "args",
+            policy: Self.confirmsTimeoutsOnly, maxVerifiedTimeoutsPerChunk: 0, selectCoveringTests: true,
+            schemataTokenBatchSize: schemataTokenBatchSize
+        ).run()
+
+        #expect(result.results.map(\.id) == [points[0].id], "only the overflowing entry keeps a schemata verdict")
+        #expect(result.results.first?.outcome == .verifiedTimeout)
+        #expect(Set(result.isolatedFallbacks.map(\.mutationID)) == [points[1].id, points[2].id])
+        #expect(result.isolatedFallbacks.allSatisfy { $0.reason == .hangBudgetExceeded })
+        // The initial build and the rebuild before the confirmation (batched:
+        // plus the rebuild after the killed batch), and none after the overflow.
+        #expect(adapter.buildCallCount == (schemataTokenBatchSize == 1 ? 2 : 3))
+        if schemataTokenBatchSize == 1 {
+            #expect(adapter.runIDsSeenByToken[tokens[1]] == nil && adapter.runIDsSeenByToken[tokens[2]] == nil)
+        }
+    }
 }

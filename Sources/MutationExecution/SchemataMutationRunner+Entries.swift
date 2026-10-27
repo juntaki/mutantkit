@@ -42,20 +42,12 @@ extension SchemataMutationRunner {
         // count against this budget (see items 1/6's own tests).
         var hangBudgetCount = 0
 
-        // Resolve as many entries' primary observations as possible via one
-        // shared batched invocation, before the sequential scheduler below
-        // ever starts. Every entry with a value here has *already* run —
-        // the loop substitutes it directly instead of calling `runPrimary`.
-        // Every entry *without* one (batching unsupported, ineligible, or
-        // disabled) falls through to the existing per-entry call,
-        // completely unchanged. Fetched once, against `initialState`:
-        // entries covered here already have their final primary result
-        // before the schemata timeout-isolation design's Trigger 1/2 rebuild logic ever runs for this
-        // chunk, so a later rebuild (triggered by some *other* entry's own
-        // timeout) never needs to touch, invalidate, or re-fetch them —
-        // see `prepareBatchedPrimaries`'s own doc comment for why their
-        // results remain valid regardless.
-        let batchedPrimaries = await prepareBatchedPrimaries(
+        // Resolve as many entries' primary observations as possible via shared batched invocations, before the
+        // sequential scheduler below ever starts. Every entry with a value here has *already* run: the loop
+        // substitutes it directly instead of calling `runPrimary`. Every entry *without* one (batching
+        // unsupported, ineligible, disabled, or dropped at a timeout boundary) falls through to the existing
+        // per-entry call. Batching never crosses a timeout: see `prepareBatchedPrimaries`'s own doc comment.
+        let batched = await prepareBatchedPrimaries(
             embeddedEntries, state: initialState, timeoutController: context.timeoutController,
             perTestCoverage: context.perTestCoverage, coverage: context.coverage
         )
@@ -84,13 +76,18 @@ extension SchemataMutationRunner {
             }
         }
 
+        // A batched member's forced timeout-kill left the shared sandbox uncontained, so nothing else (an
+        // individual primary, a discarded sibling's rerun, or any confirmation) may spawn against it before
+        // this rebuild.
+        if batched.containmentPending, await !rebuild(protecting: embeddedEntries) { return currentResult() }
+
         var index = 0
         while index < embeddedEntries.count {
             let entry = embeddedEntries[index]
             let rawTimedOut: Bool
 
             let primaryOutcome = await primaryOutcomeOrPrefetched(
-                batchedPrimaries[entry.mutationID], entry: entry, state: state, timeoutController: context.timeoutController,
+                batched.outcomes[entry.mutationID], entry: entry, state: state, timeoutController: context.timeoutController,
                 perTestCoverage: context.perTestCoverage, coverage: context.coverage
             )
 

@@ -82,8 +82,11 @@ public enum MutationVerdictVerifier {
     /// `method(value:)`, so the identical `MutationObservations` whose failing test
     /// was that very test, which used to classify as `.infrastructureFailure`
     /// (outside the selection), now classify as `.killedByAssertion`; a pre-bump
-    /// cached verdict must never be reused as-is.
-    public static let currentVersion = 19
+    /// cached verdict must never be reused as-is. Bumped to 20: any observed run
+    /// (the primary or a confirmation) whose post-SIGKILL descendant cleanup could
+    /// not be verified now makes the whole mutation `.infrastructureFailure`, where
+    /// the same observations previously classified from the run's status.
+    public static let currentVersion = 20
 
     /// `verify(_:)` alone cannot tell a primary kill/crash that skipped its
     /// confirmation because the run's own configuration never enabled one
@@ -239,6 +242,26 @@ public enum MutationVerdictVerifier {
     private static func deriveProof(
         _ obs: MutationObservations, ref: PlannedMutationRef, policy: VerdictVerificationPolicy
     ) -> VerdictProof {
+        // Checked before anything else. If any run — the primary or a
+        // confirmation — could not verify that its descendants were gone
+        // after SIGKILL, the harness's isolation is unproven, not the
+        // mutant's behavior. Never scored, and never flaky or
+        // confirmation-failed; the runner also aborts the run.
+        if let unverified = obs.firstUnverifiedCleanupRun {
+            let appliedEvidence: MutationEvidence? = if case let .applied(evidence)? = obs.sourceApplication {
+                evidence.strippingVerifierAuthoredRecords()
+            } else {
+                nil
+            }
+            return excluded(
+                ref, outcome: .infrastructureFailure,
+                diagnosis: """
+                A test run's descendant cleanup could not be verified after SIGKILL, so a stray process may have \
+                affected this observation: \(unverified.cleanupDiagnosis ?? "no further detail")
+                """,
+                evidence: appliedEvidence
+            )
+        }
         guard let sourceApplication = obs.sourceApplication else {
             return excluded(
                 ref, outcome: .infrastructureFailure,

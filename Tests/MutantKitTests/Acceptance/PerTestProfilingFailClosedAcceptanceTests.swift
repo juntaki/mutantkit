@@ -50,12 +50,12 @@ struct PerTestProfilingFailClosedAcceptanceTests {
         // discovered, so a `nil` result below is fail-closed on a genuine
         // partial failure, not on a fixture that produced no tests at all.
         let discovered = await SwiftPackageMacOSAdapter.enumerateTestIdentifiers(
-            in: workspace, timeoutSeconds: 60, terminationGracePeriodSeconds: 5
+            in: workspace, timeoutSeconds: Self.isolatedRunTimeoutSeconds, terminationGracePeriodSeconds: 5
         )
         #expect(discovered.count == 2, "fixture drifted: expected exactly widgetANeverFails + widgetBNeverProfiles")
 
         let map = try #require(
-            await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: 60),
+            await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: Self.isolatedRunTimeoutSeconds),
             "the per-test pass should keep the measurable test's attribution and carry the unmeasurable one explicitly"
         )
 
@@ -79,5 +79,35 @@ struct PerTestProfilingFailClosedAcceptanceTests {
         }
         let unseen = try #require(map.testsCovering(file: "Sources/NoSuchFile.swift", line: 1))
         #expect(unseen.isSuperset(of: unmeasurable), "a line no test was attributed must still select the unmeasurable test")
+
+        try await Self.expectNoCoverageClaimAndReportedDegradation(map, unmeasurable: unmeasurable)
     }
+
+    /// A partial map must never back a `.noCoverage` claim (`aggregate()` is
+    /// `nil`), and the degradation is reported once, naming the unmeasurable
+    /// test: the same call `BaselineCoverageMeasurement` makes on the map it
+    /// measures. Shared with the Xcode suite.
+    static func expectNoCoverageClaimAndReportedDegradation(
+        _ map: PerTestCoverageMap, unmeasurable: Set<TestIdentifier>,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws {
+        #expect(map.aggregate() == nil, "a partial map must not yield an aggregate coverage map", sourceLocation: sourceLocation)
+        let test = try #require(unmeasurable.first, sourceLocation: sourceLocation)
+        let log = OperationalIssueLog()
+        await PerTestCoverageAttribution.report(map, to: log)
+        let issues = await log.snapshot()
+        #expect(
+            issues.count == 1 && issues.first?.kind == .perTestCoverageIncomplete
+                && issues.first?.diagnosis.contains(test.onlyTestingArgument) == true,
+            "expected one perTestCoverageIncomplete issue naming \(test.onlyTestingArgument). Got: \(issues)",
+            sourceLocation: sourceLocation
+        )
+    }
+
+    /// Per isolated test run. The first run also pays the one-shot coverage
+    /// rebuild inside this budget, and under a heavily loaded full parallel
+    /// run that alone was observed to take minutes: at 60 s both attempts for
+    /// the always-passing test timed out and nothing was attributed.
+    /// Generous on purpose; the fixture's own runs take seconds when idle.
+    private static let isolatedRunTimeoutSeconds: Double = 600
 }

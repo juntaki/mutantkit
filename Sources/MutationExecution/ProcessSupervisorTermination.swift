@@ -229,10 +229,20 @@ extension ProcessSupervisor {
     /// ... /dev/null` that never touches the supervised pipe) exists to
     /// pin, and the reason this must never be reduced to "only signal
     /// what `observed` already contains."
+    ///
+    /// Every exit sends a group SIGKILL, and is only reported verified if a
+    /// bounded re-check afterwards reads the process table and finds the
+    /// root exited, no tracked descendant running and no other member of
+    /// the root's process group running. An unreadable table, or a survivor
+    /// at the end of `postKillVerificationSeconds`, returns
+    /// `verified == false` — never a silent success. `allDead()` before the
+    /// kill is not enough on its own: it sees only the root and `observed`,
+    /// and with nothing observed it never reads the table.
     static func closeOutOwnedGroup(
         pid: pid_t, observed: inout Set<ProcessTree.ProcessIdentity>, policy: SupervisionPolicy,
         pollIntervalMicroseconds: inout useconds_t
-    ) {
+    ) -> CleanupVerification {
+        let readTable = policy.processTableReader
         // `ProcessTree.isRunning`, not `isAlive`: a descendant this process
         // is not the real OS parent of (a grandchild, reparented to
         // launchd once its own direct parent also exits) only ever gets
@@ -241,10 +251,27 @@ extension ProcessSupervisor {
         // kept this grace loop waiting out its *entire* configured period
         // on every call, even for a descendant SIGTERM had already and
         // successfully killed seconds earlier. See `ProcessTree.isRunning`'s
-        // own doc comment.
+        // own doc comment. An unreadable process table reads as "still
+        // running", so a failed `sysctl` escalates to SIGKILL, never skips it.
         func allDead() -> Bool {
-            guard hasExited(pid) else { return false }
-            return !observed.contains { ProcessTree.isRunning($0) }
+            guard policy.rootExitProbe(pid) else { return false }
+            let table = readTable()
+            return !observed.contains { ProcessTree.isRunning($0, in: table) }
+        }
+        // `allDead()` sees only the root and `observed`, so a close-out it
+        // ends before SIGKILL still sends the group SIGKILL: a same-group
+        // descendant polling never observed, and that ignores SIGTERM, would
+        // otherwise outlive a close-out reported verified. The same re-check
+        // as the escalation path then confirms the group really emptied.
+        // Safe for the same reason as every signal here: `pid` is still
+        // unreaped.
+        func groupKillThenVerify() -> CleanupVerification {
+            kill(-pid, SIGKILL)
+            policy.lifecycleEventHook?(.groupSignal(pid: pid, signal: SIGKILL))
+            return verifyAfterKill(
+                pid: pid, observed: observed, everyIdentityChecked: true, readTable: readTable,
+                rootExitProbe: policy.rootExitProbe
+            )
         }
 
         // Politely first, to the group and to anything that left it —
@@ -253,28 +280,120 @@ extension ProcessSupervisor {
         // the SIGKILL below.
         kill(-pid, SIGTERM)
         policy.lifecycleEventHook?(.groupSignal(pid: pid, signal: SIGTERM))
-        ProcessTree.signal(observed, SIGTERM)
+        ProcessTree.signal(observed, SIGTERM, readTable: readTable)
 
-        if !allDead() {
-            let graceDeadline = Date().addingTimeInterval(policy.terminationGracePeriodSeconds)
-            while Date() < graceDeadline, !allDead() {
-                pollDescendants(of: pid, observed: &observed, pollIntervalMicroseconds: &pollIntervalMicroseconds)
-                if allDead() { break }
-                // F3 zero-base review Finding 3: a cancellation arriving
-                // mid-grace must not sit out the remainder of
-                // `terminationGracePeriodSeconds` when it is *this same
-                // escalation* already in flight — escalate to KILL
-                // immediately rather than waiting out a SIGTERM grace that
-                // cancellation itself has already decided not to honor.
-                if policy.cancellationFlag.isCancelled { break }
-                usleep(pollIntervalMicroseconds)
-            }
-            if !allDead() {
-                kill(-pid, SIGKILL)
-                policy.lifecycleEventHook?(.groupSignal(pid: pid, signal: SIGKILL))
-                ProcessTree.reap(observed)
-            }
+        guard !allDead() else { return groupKillThenVerify() }
+        let graceDeadline = Date().addingTimeInterval(policy.terminationGracePeriodSeconds)
+        while Date() < graceDeadline, !allDead() {
+            pollDescendants(of: pid, observed: &observed, pollIntervalMicroseconds: &pollIntervalMicroseconds)
+            if allDead() { break }
+            // F3 zero-base review Finding 3: a cancellation arriving
+            // mid-grace must not sit out the remainder of
+            // `terminationGracePeriodSeconds` when it is *this same
+            // escalation* already in flight — escalate to KILL
+            // immediately rather than waiting out a SIGTERM grace that
+            // cancellation itself has already decided not to honor.
+            if policy.cancellationFlag.isCancelled { break }
+            usleep(pollIntervalMicroseconds)
         }
+        guard !allDead() else { return groupKillThenVerify() }
+
+        kill(-pid, SIGKILL)
+        policy.lifecycleEventHook?(.groupSignal(pid: pid, signal: SIGKILL))
+        let everyIdentityChecked = ProcessTree.reap(observed, readTable: readTable)
+        return verifyAfterKill(
+            pid: pid, observed: observed, everyIdentityChecked: everyIdentityChecked, readTable: readTable,
+            rootExitProbe: policy.rootExitProbe
+        )
+    }
+
+    /// Reaps the root after close-out and returns its wait status.
+    ///
+    /// When close-out could not be verified because the root still had not
+    /// exited after SIGKILL, it may never exit (for example, stuck in an
+    /// uninterruptible sleep). A blocking `waitpid` here would then keep
+    /// the unverified result, and with it the run's abort, from ever
+    /// reaching the caller. So in that case the reap moves to a detached
+    /// thread, and the status reads as killed by SIGKILL. Until that reap
+    /// completes the pid stays unreaped, so it still cannot be reused.
+    static func reapRoot(pid: pid_t, cleanup: CleanupVerification, policy: SupervisionPolicy) -> Int32 {
+        let hook = policy.lifecycleEventHook
+        guard cleanup.verified || policy.rootExitProbe(pid) else {
+            Thread.detachNewThread {
+                var status: Int32 = 0
+                waitpid(pid, &status, 0)
+                hook?(.finalReap(pid: pid))
+            }
+            return SIGKILL
+        }
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
+        hook?(.finalReap(pid: pid))
+        return status
+    }
+
+    /// Whether close-out proved containment. See `closeOutOwnedGroup`.
+    struct CleanupVerification {
+        let verified: Bool
+        let diagnosis: String?
+
+        static let verified = CleanupVerification(verified: true, diagnosis: nil)
+    }
+
+    /// How long the post-SIGKILL re-check waits for the kernel to finish
+    /// tearing down killed processes. SIGKILL cannot be caught, so a
+    /// healthy kill settles well inside this; the bound only exists so an
+    /// unreadable table cannot stall close-out.
+    static let postKillVerificationSeconds: Double = 5
+
+    /// The bounded re-check after SIGKILL. `everyIdentityChecked == false`
+    /// means `reap` had to skip at least one identity because it could not
+    /// read the table; that identity may still be running unsignalled, so
+    /// it is reported even if a later read succeeds and shows nothing.
+    ///
+    /// Besides `observed`, this lists the root's process group by PGID, so
+    /// a same-group member polling never saw is caught too. A member forked
+    /// while the group SIGKILL was being delivered can escape it, so a
+    /// running member found here gets the group SIGKILL again before the
+    /// next read. That is safe because `pid` is still unreaped, so no
+    /// unrelated process can lead a group with that ID.
+    private static func verifyAfterKill(
+        pid: pid_t, observed: Set<ProcessTree.ProcessIdentity>, everyIdentityChecked: Bool,
+        readTable: ProcessTree.TableReader, rootExitProbe: (pid_t) -> Bool
+    ) -> CleanupVerification {
+        let deadline = Date().addingTimeInterval(postKillVerificationSeconds)
+        var lastProblem = "the process table could not be read"
+        while true {
+            if let table = readTable() {
+                let groupSurvivors = ProcessTree.runningGroupMembers(pid, excluding: pid, in: table)
+                let survivors = Set(observed.filter { ProcessTree.isRunning($0, in: table) }.map(\.pid))
+                    .union(groupSurvivors.map(\.pid))
+                if survivors.isEmpty, rootExitProbe(pid) {
+                    if everyIdentityChecked { return .verified }
+                    return CleanupVerification(
+                        verified: false,
+                        diagnosis: """
+                        SIGKILL escalation skipped at least one tracked descendant of pid \(pid) because the process table \
+                        could not be read to verify its identity, so its termination is unproven
+                        """
+                    )
+                }
+                if !groupSurvivors.isEmpty { kill(-pid, SIGKILL) }
+                let survivorPIDs = survivors.sorted().map(String.init).joined(separator: ", ")
+                lastProblem = survivors.isEmpty ? "root pid \(pid) had not exited" : "still running: \(survivorPIDs)"
+            } else {
+                lastProblem = "the process table could not be read"
+            }
+            if Date() >= deadline { break }
+            usleep(10000)
+        }
+        return CleanupVerification(
+            verified: false,
+            diagnosis: """
+            descendant cleanup of pid \(pid) could not be verified \(String(format: "%.0f", postKillVerificationSeconds))s \
+            after SIGKILL (\(lastProblem))
+            """
+        )
     }
 
     /// Waits for `drainGroup`, bounded by `timeoutSeconds`, but polled in

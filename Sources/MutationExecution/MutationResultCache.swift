@@ -47,6 +47,9 @@ public actor MutationResultCache {
 
     private let root: URL
     private let fileManager = FileManager.default
+    /// Every key `store` wrote through this instance. See
+    /// `discardEntriesStoredThisSession`.
+    private var storedThisSession: Set<Key> = []
     /// The confirmation policy every reverify (`load`) and initial verify
     /// (`store`) uses — the same `Configuration.execution.retestKilledMutants`/
     /// `confirmCrashKills` flags the run storing an entry was actually
@@ -181,7 +184,30 @@ public actor MutationResultCache {
             testDurationSeconds: testDurationSeconds, confirmationDurationSeconds: confirmationDurationSeconds
         )
         guard let data = try? JSONEncoder().encode(cacheRecord) else { return }
+        // Tracked before the write: an entry that may exist on disk must be
+        // one `discardEntriesStoredThisSession` removes.
+        storedThisSession.insert(key)
         try? data.write(to: root.appendingPathComponent(key.storageName), options: .atomic)
+    }
+
+    /// Removes every entry this cache instance stored. Called when the run
+    /// aborts on an unverified cleanup, because those verdicts were observed
+    /// while a stray process may have been alive, and the next run would
+    /// otherwise reuse them. A removed entry that an earlier run had also
+    /// stored only costs re-evaluating that mutant.
+    public func discardEntriesStoredThisSession() {
+        for key in storedThisSession {
+            let url = root.appendingPathComponent(key.storageName)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            do {
+                try fileManager.removeItem(at: url)
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "warning: could not discard a result-cache entry from an aborted run at \(url.path): \(error)\n".utf8
+                ))
+            }
+        }
+        storedThisSession = []
     }
 
     public func removeAll() {

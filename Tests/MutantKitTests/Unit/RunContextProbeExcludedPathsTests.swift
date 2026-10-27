@@ -49,3 +49,39 @@ final class RunContextProbeExcludedPathsTests: XCTestCase {
         XCTAssertNotEqual(before, afterNestedSameName, "a same-named file deeper in the project is content, not the config")
     }
 }
+
+/// The plan the run executes is written into the project root by `mutantkit plan`. A re-plan changes
+/// its bytes, and it must not move the digest of a coverage map the plan cannot affect.
+final class RunContextProbePlanFileTests: XCTestCase {
+    func testPlanProjectRelativePath() {
+        let root = URL(fileURLWithPath: "/tmp/proj-root")
+        XCTAssertEqual(RunCommand.projectRelativePath(of: URL(fileURLWithPath: "/tmp/proj-root/plan.json"), in: root), "plan.json")
+        XCTAssertEqual(RunCommand.projectRelativePath(of: URL(fileURLWithPath: "/tmp/proj-root/a/../b/plan.json"), in: root), "b/plan.json")
+        XCTAssertNil(RunCommand.projectRelativePath(of: URL(fileURLWithPath: "/tmp/elsewhere/plan.json"), in: root))
+        XCTAssertNil(RunCommand.projectRelativePath(of: URL(fileURLWithPath: "/tmp/proj-root-sibling/plan.json"), in: root))
+    }
+
+    func testReplanningDoesNotMoveTheDigestButEditingSourceDoes() async throws {
+        let repo = try GitFixture.makeRepository()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try GitFixture.write("let x = 1\n", at: repo.appendingPathComponent("Sources/App/Foo.swift"))
+        try GitFixture.run(["add", "."], in: repo)
+        try GitFixture.run(["commit", "-m", "baseline"], in: repo)
+        try GitFixture.write("{\"planID\":\"a\"}\n", at: repo.appendingPathComponent("plan.json"))
+        let plan: Set = ["plan.json"]
+
+        let before = try await RunContextProbe.worktreeContentState(in: repo, excludingProjectRelativePaths: plan)
+        try GitFixture.write("{\"planID\":\"b\"}\n", at: repo.appendingPathComponent("plan.json"))
+        try GitFixture.write("{}\n", at: repo.appendingPathComponent("plan-other.json"))
+        let afterReplan = try await RunContextProbe.worktreeContentState(in: repo, excludingProjectRelativePaths: plan)
+        XCTAssertNotEqual(before, afterReplan, "another untracked file is still content")
+
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("plan-other.json"))
+        let afterPlanOnly = try await RunContextProbe.worktreeContentState(in: repo, excludingProjectRelativePaths: plan)
+        XCTAssertEqual(before, afterPlanOnly, "rewriting the excluded plan file must not move the digest")
+
+        try GitFixture.write("let x = 2\n", at: repo.appendingPathComponent("Sources/App/Foo.swift"))
+        let afterSource = try await RunContextProbe.worktreeContentState(in: repo, excludingProjectRelativePaths: plan)
+        XCTAssertNotEqual(before, afterSource)
+    }
+}

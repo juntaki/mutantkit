@@ -48,14 +48,18 @@ public enum SourceCoverageReader {
         guard !files.isEmpty else { return nil }
 
         var executed: [String: Set<Int>] = [:]
+        var mapped: [String: Set<Int>] = [:]
         for file in files {
             guard let data = try? Data(contentsOf: file) else { return nil }
-            switch parseOutcome(data, projectRoot: projectRoot) {
+            switch parseDetailedOutcome(data, projectRoot: projectRoot) {
             case .malformed:
                 return nil
-            case let .parsed(parsed):
-                for (path, lines) in parsed {
+            case let .parsed(parsedExecuted, parsedMapped):
+                for (path, lines) in parsedExecuted {
                     executed[path, default: []].formUnion(lines)
+                }
+                for (path, lines) in parsedMapped {
+                    mapped[path, default: []].formUnion(lines)
                 }
             }
         }
@@ -63,7 +67,7 @@ public enum SourceCoverageReader {
         // A map in which nothing at all ran is no coverage information (a test run that never
         // started looks the same), however many files it names.
         guard executed.values.contains(where: { !$0.isEmpty }) else { return nil }
-        return CoverageMap(executedLines: executed, source: "swift-package-codecov")
+        return CoverageMap(executedLines: executed, source: "swift-package-codecov", mappedLines: mapped)
     }
 
     /// Parses a single JSON document. Exposed for tests so a fixture file can
@@ -133,12 +137,26 @@ public enum SourceCoverageReader {
     /// contributing no regions, not corrupted data — and, like a file
     /// outside `projectRoot`, is skipped rather than failing the document.
     static func parseOutcome(_ data: Data, projectRoot: URL) -> ParseOutcome {
+        switch parseDetailedOutcome(data, projectRoot: projectRoot) {
+        case .malformed: .malformed
+        case let .parsed(executed, _): .parsed(executed)
+        }
+    }
+
+    /// `ParseOutcome`, with the lines each file has coverage information for.
+    enum DetailedParseOutcome {
+        case malformed
+        case parsed(executed: [String: Set<Int>], mapped: [String: Set<Int>])
+    }
+
+    static func parseDetailedOutcome(_ data: Data, projectRoot: URL) -> DetailedParseOutcome {
         guard let document = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               document["type"] as? String == "llvm.coverage.json.export",
               let export = document["data"] as? [[String: Any]] else { return .malformed }
 
         let rootPath = projectRoot.standardizedFileURL.path
         var executed: [String: Set<Int>] = [:]
+        var mapped: [String: Set<Int>] = [:]
 
         for module in export {
             // A well-formed llvm-cov export always has a `files` array for
@@ -163,17 +181,18 @@ public enum SourceCoverageReader {
                 // `segments` here (unlike a merely-empty `[]`) is malformed.
                 guard let segments = file["segments"] as? [[Any]] else { return .malformed }
 
-                guard let lines = Self.executedLines(from: segments) else { return .malformed }
+                guard let lines = Self.coverageLines(from: segments) else { return .malformed }
                 // A file with mapped regions of which none ran is recorded with an empty set: that is
                 // a claim ("the suite never reached this file"), and dropping it made every mutant in
                 // a never-executed file run the whole suite as if the map had nothing to say. A file
                 // with no regions at all (`segments` empty) still has no claim.
                 guard !segments.isEmpty else { continue }
-                executed[relativePath, default: []].formUnion(lines)
+                executed[relativePath, default: []].formUnion(lines.executed)
+                mapped[relativePath, default: []].formUnion(lines.mapped)
             }
         }
 
-        return .parsed(executed)
+        return .parsed(executed: executed, mapped: mapped)
     }
 
     /// One `[line, column, count, hasCount, isRegionEntry, isGapRegion]`
@@ -219,6 +238,17 @@ public enum SourceCoverageReader {
     ///   genuinely malformed data, distinct from an empty `segments` array
     ///   (which is a legitimate "nothing here" and yields `[]`, not `nil`).
     static func executedLines(from segments: [[Any]]) -> Set<Int>? {
+        coverageLines(from: segments)?.executed
+    }
+
+    /// `executedLines(from:)`, and the lines the export has any coverage information for at all.
+    ///
+    /// A line is *mapped* when LLVM's own per-line statistics call it so: some region covers it, with
+    /// a count (zero included). A line with no region is not "never executed", it is a line the
+    /// compiler emitted no counter for, such as the literal in `isBuiltInDefault: Bool = false`.
+    /// Both leave a line out of the executed set, which is why the two have to be told apart
+    /// before the absence is read as "no test reaches this".
+    static func coverageLines(from segments: [[Any]]) -> (executed: Set<Int>, mapped: Set<Int>)? {
         var records: [CoverageSegmentRecord] = []
         records.reserveCapacity(segments.count)
         for segment in segments {
@@ -254,9 +284,10 @@ public enum SourceCoverageReader {
                 isRegionEntry: isRegionEntry, isGapRegion: isGapRegion
             ))
         }
-        guard let firstLine = records.first?.line, let lastLine = records.last?.line else { return [] }
+        guard let firstLine = records.first?.line, let lastLine = records.last?.line else { return ([], []) }
 
         var executed = Set<Int>()
+        var mapped = Set<Int>()
         var wrapped: CoverageSegmentRecord?
         var index = 0
         var line = firstLine
@@ -268,6 +299,7 @@ public enum SourceCoverageReader {
             }
 
             let stats = Self.lineCoverageStats(lineSegments: lineSegments, wrapped: wrapped)
+            if stats.mapped { mapped.insert(line) }
             if stats.mapped, stats.executionCount > 0 {
                 executed.insert(line)
             }
@@ -278,7 +310,7 @@ public enum SourceCoverageReader {
             line += 1
         }
 
-        return executed
+        return (executed, mapped)
     }
 
     /// `!isGapRegion && hasCount && isRegionEntry` — LLVM's own

@@ -48,9 +48,24 @@ public struct ProcessResult: Sendable {
     /// `ProcessResult` must check this field and fail closed when it is
     /// `false`, never treat partial bytes as if they were the whole story.
     public let outputComplete: Bool
+    /// `false` when close-out could not verify, after its group SIGKILL,
+    /// that every tracked descendant and every other member of the root's
+    /// process group was gone (the process table stayed unreadable, or a
+    /// process was still running when the bounded re-check ran out). An
+    /// escaped process may then outlive this observation and interfere with
+    /// later ones anywhere in the run, so this is a run-level
+    /// infrastructure failure, not a fact about this one process. Every
+    /// consumer carries it forward explicitly (see
+    /// `TestRunResult.cleanupVerified`); `ProcessSupervisor.run` also
+    /// records it in the run's `RunContainmentMonitor`.
+    public let cleanupVerified: Bool
+    /// Why `cleanupVerified` is `false`; `nil` when it is `true`.
+    public let cleanupDiagnosis: String?
 
     public var succeeded: Bool { exitCode == 0 && !timedOut && terminatingSignal == nil }
 
+    /// `cleanupVerified` has no default on purpose: a new call site must
+    /// state it, so a wrapper cannot silently report success.
     public init(
         exitCode: Int32,
         standardOutput: Data,
@@ -59,8 +74,12 @@ public struct ProcessResult: Sendable {
         timedOut: Bool,
         terminatingSignal: Int32?,
         stalled: Bool = false,
-        outputComplete: Bool
+        outputComplete: Bool,
+        cleanupVerified: Bool,
+        cleanupDiagnosis: String? = nil
     ) {
+        self.cleanupVerified = cleanupVerified
+        self.cleanupDiagnosis = cleanupDiagnosis
         self.exitCode = exitCode
         self.standardOutput = standardOutput
         self.standardError = standardError
@@ -339,9 +358,20 @@ public enum ProcessSupervisor {
         terminationGracePeriodSeconds: Double = 5,
         stallDetection: StallDetection? = nil,
         lifecycleEventHook: (@Sendable (LifecycleEvent) -> Void)?,
-        drainGracePeriodSeconds: Double = defaultDrainGracePeriodSeconds
+        drainGracePeriodSeconds: Double = defaultDrainGracePeriodSeconds,
+        processTableReader: @escaping ProcessTree.TableReader = ProcessTree.readProcessTable,
+        rootExitProbe: @escaping @Sendable (pid_t) -> Bool = { ProcessSupervisor.hasExited($0) }
     ) async throws -> ProcessResult {
+        // Once the run has aborted on an unverified cleanup, nothing new is
+        // built or tested, whichever path reaches this launch.
+        try RunContainmentMonitor.refuseLaunchIfAborted()
         let cancellationFlag = CancellationFlag()
+        // Read here, in the async context: the blocking thread below does
+        // not inherit task-local values.
+        let teardown = RunContainmentMonitor.teardownLaunchPermitted
+        // Teardown (removing what the run created) produces no evidence, so an unverified cleanup there
+        // cannot taint a result and must not retroactively abort a run whose report is already written.
+        let monitor = teardown ? nil : RunContainmentMonitor.current
         return try await withTaskCancellationHandler(
             operation: {
                 try await withCheckedThrowingContinuation { continuation in
@@ -349,6 +379,11 @@ public enum ProcessSupervisor {
                     // occupy a cooperative-pool thread while a build runs for minutes.
                     let thread = Thread {
                         do {
+                            // The gate above ran before this thread existed; another worker may have tripped the
+                            // monitor since. Checked again at the spawn boundary.
+                            if !teardown, let diagnosis = monitor?.abortDiagnosis {
+                                throw RunAbortedError(diagnosis: diagnosis)
+                            }
                             let result = try runBlocking(
                                 executable: executable,
                                 arguments: arguments,
@@ -360,9 +395,19 @@ public enum ProcessSupervisor {
                                     stallDetection: stallDetection,
                                     cancellationFlag: cancellationFlag,
                                     lifecycleEventHook: lifecycleEventHook,
-                                    drainGracePeriodSeconds: drainGracePeriodSeconds
+                                    drainGracePeriodSeconds: drainGracePeriodSeconds,
+                                    processTableReader: processTableReader,
+                                    rootExitProbe: rootExitProbe
                                 )
                             )
+                            // Recorded before the cancellation check: an
+                            // unverified cleanup taints the run even when
+                            // the caller no longer wants this result.
+                            if !result.cleanupVerified {
+                                monitor?.recordUnverifiedCleanup(
+                                    "\(executable): \(result.cleanupDiagnosis ?? "descendant cleanup could not be verified")"
+                                )
+                            }
                             if cancellationFlag.isCancelled {
                                 continuation.resume(throwing: CancellationError())
                             } else {
@@ -423,6 +468,13 @@ public enum ProcessSupervisor {
         /// How long to keep reading output after the process is gone; see `defaultDrainGracePeriodSeconds`.
         /// Only a test going through the `internal` `run(...)` overload shortens it.
         let drainGracePeriodSeconds: Double
+        /// How close-out reads the process table — `ProcessTree
+        /// .readProcessTable` for every ordinary caller; a test injects a
+        /// reader that fails on demand (see `ProcessTree.TableReader`).
+        let processTableReader: ProcessTree.TableReader
+        /// Whether the root has exited, for close-out only. `hasExited` for
+        /// every ordinary caller; a test injects a root that never exits.
+        let rootExitProbe: @Sendable (pid_t) -> Bool
     }
 
     private static func runBlocking(
@@ -641,13 +693,11 @@ public enum ProcessSupervisor {
         // drain's own outcome instead. Safe regardless of *when* it runs
         // relative to the drain above because `pid` has still not been
         // reaped either way — see this function's own comment above.
-        closeOutOwnedGroup(pid: pid, observed: &observed, policy: policy, pollIntervalMicroseconds: &pollIntervalMicroseconds)
+        let cleanup = closeOutOwnedGroup(pid: pid, observed: &observed, policy: policy, pollIntervalMicroseconds: &pollIntervalMicroseconds)
 
         // Only now — strictly after every signal above — does root's pid
         // become reusable.
-        var status: Int32 = 0
-        waitpid(pid, &status, 0)
-        policy.lifecycleEventHook?(.finalReap(pid: pid))
+        let status = reapRoot(pid: pid, cleanup: cleanup, policy: policy)
 
         let timedOut = !detected.rootExitedOnItsOwn
         let stalled = detected.stalled
@@ -680,9 +730,9 @@ public enum ProcessSupervisor {
             standardError: errBox.value,
             durationSeconds: Date().timeIntervalSince(started),
             timedOut: timedOut,
-            terminatingSignal: terminatingSignal,
-            stalled: stalled,
-            outputComplete: drainOutcome == .success && outBox.reachedEOF && errBox.reachedEOF
+            terminatingSignal: terminatingSignal, stalled: stalled,
+            outputComplete: drainOutcome == .success && outBox.reachedEOF && errBox.reachedEOF,
+            cleanupVerified: cleanup.verified, cleanupDiagnosis: cleanup.diagnosis
         )
     }
 

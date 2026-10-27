@@ -125,12 +125,22 @@ struct MutationConfirmationCoordinator: Sendable {
         timeoutSeconds: Double,
         selectedTests: Set<TestIdentifier>?
     ) async throws -> TestRunResult {
-        if let selecting = selectingTest {
-            return try await selecting.runMutant(
+        // Nothing new is launched once the run is aborting on an unverified
+        // cleanup; the caller records this as a launch failure, which is
+        // never persisted or reported.
+        try RunContainmentMonitor.current?.throwIfAborted()
+        let run: TestRunResult = if let selecting = selectingTest {
+            try await selecting.runMutant(
                 point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
             )
+        } else {
+            try await test.runMutant(point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds)
         }
-        return try await test.runMutant(point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds)
+        // Every isolated primary and confirmation run passes through here,
+        // so an unverified cleanup trips the run-level abort before
+        // anything is decided from this result.
+        RunContainmentMonitor.current?.observe(run)
+        return run
     }
 
     /// Retries a failed mutant's own test in its independent
@@ -188,7 +198,7 @@ struct MutationConfirmationCoordinator: Sendable {
         TestRunResult(
             status: .infrastructureFailure, summary: nil,
             command: CommandRecord(executable: "", arguments: [], workingDirectory: ""),
-            resultArtifactPath: nil, diagnosis: diagnosis
+            resultArtifactPath: nil, diagnosis: diagnosis, cleanupVerified: true
         )
     }
 
@@ -225,10 +235,12 @@ struct MutationConfirmationCoordinator: Sendable {
             // routed to its own dedicated method instead of the ordinary
             // `runMutant` path every other adapter still uses unchanged.
             if let manifestDependent = manifestDependentTest {
+                try RunContainmentMonitor.current?.throwIfAborted()
                 confirmingRun = try await manifestDependent.runConfirmationRetest(
                     point, packageRoot: projectRoot, productsScratchRoot: sandbox,
                     timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
                 )
+                RunContainmentMonitor.current?.observe(confirmingRun)
             } else {
                 confirmingRun = try await runMutantTests(
                     point, artifact: artifact, in: sandbox, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
@@ -282,6 +294,10 @@ struct MutationConfirmationCoordinator: Sendable {
 
         let sandbox: Sandbox
         do {
+            // An unverified primary has already tripped the monitor in
+            // `runMutantTests`; no rebuild may start next to a possible
+            // stray. Checked again right before the build below.
+            try RunContainmentMonitor.current?.throwIfAborted()
             sandbox = try await acquireConfirmationSandbox(point, label: "crash-confirm")
         } catch {
             return unconfirmed("No confirmation sandbox could be created: \(error)")
@@ -305,6 +321,7 @@ struct MutationConfirmationCoordinator: Sendable {
 
         let artifact: BuildArtifact
         do {
+            try RunContainmentMonitor.current?.throwIfAborted()
             artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
         } catch {
             await disposeConfirmationSandbox(sandbox, for: point)
@@ -556,6 +573,10 @@ extension MutationConfirmationCoordinator {
     ) async -> Result<TimeoutConfirmationRebuild, TimeoutConfirmationRebuildFailure> {
         let sandbox: Sandbox
         do {
+            // An unverified primary has already tripped the monitor in
+            // `runMutantTests`; no rebuild may start next to a possible
+            // stray. Checked again right before the build below.
+            try RunContainmentMonitor.current?.throwIfAborted()
             sandbox = try await acquireConfirmationSandbox(point, label: "timeout-confirm")
         } catch {
             return .failure(.init(diagnosis: "No confirmation sandbox could be created: \(error)"))
@@ -578,6 +599,7 @@ extension MutationConfirmationCoordinator {
         }
 
         do {
+            try RunContainmentMonitor.current?.throwIfAborted()
             let artifact = try await build.buildMutant(applied, in: sandbox.workspaceRoot)
             return .success(TimeoutConfirmationRebuild(sandbox: sandbox, artifact: artifact))
         } catch {

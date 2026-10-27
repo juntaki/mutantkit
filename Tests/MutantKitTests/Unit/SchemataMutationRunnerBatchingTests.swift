@@ -129,13 +129,11 @@ struct SchemataMutationRunnerBatchingTests: SchemataBatchingTestHarness {
 
         // All three primaries came from the one shared batch call...
         #expect(adapter.schemataBatchCallCount == 1)
-        // ...and exactly one individual dispatch happened afterward: entry
-        // 1's own confirmation. If a sibling's already-obtained result were
-        // ever incorrectly re-dispatched (e.g. as a side effect of Trigger
-        // 2's rebuild before... nothing, since this is the last entry —
-        // but a regression here would still show up as extra individual
-        // calls), this would read higher than 1.
-        #expect(adapter.individualRunSchemataTokenCallCount == 1)
+        // ...but entries 0 and 2 shared that invocation with entry 1's
+        // timeout, so they are never scored from it: each reruns
+        // individually after containment ,
+        // plus entry 1's own confirmation.
+        #expect(adapter.individualRunSchemataTokenCallCount == 3)
 
         // The confirmation got its own fresh RunID, distinct from the
         // batched primary's — never reused.
@@ -175,10 +173,78 @@ struct SchemataMutationRunnerBatchingTests: SchemataBatchingTestHarness {
         // than being individually rerun against the rebuilt state.
         #expect(try outcome(for: fixture.sortedPoints[2].id, in: result).outcome == .survived)
         #expect(adapter.schemataBatchCallCount == 1)
-        #expect(adapter.individualRunSchemataTokenCallCount == 1, "only entry 1's own confirmation should ever dispatch individually")
-        // Trigger 1 still rebuilds once, for entry 1's own confirmation —
-        // The schemata timeout-isolation design's rebuild mechanics are completely unmodified by batching.
-        #expect(adapter.buildCallCount == 2)
+        // Entries 0 and 2 shared entry 1's timed-out invocation, so each
+        // reruns individually : entry 0 after
+        // a containment rebuild, entry 2 after entry 1's Trigger-1 rebuild.
+        #expect(adapter.individualRunSchemataTokenCallCount == 3)
+        #expect(adapter.buildCallCount == 3)
+    }
+
+    // MARK: - No batched result is taken across a timeout boundary
+
+    @Test("""
+    A sibling configuration that shared a batch invocation with a timed-out one is rerun individually after containment, \
+    never scored from that contaminated invocation
+    """)
+    func siblingsOfATimedOutBatchMemberRerunAfterContainment() async throws {
+        let fixture = try ChunkFixture.make(entryCount: 3)
+        let adapter = FakeSchemataAdapter()
+        adapter.timedOutRunsLeaveResidue = true
+        for index in [0, 2] {
+            adapter.scripts[fixture.token(at: index)] = .init(
+                compilationUnitID: fixture.compilationUnitID(at: index), sourceEmbeddingID: fixture.sourceEmbeddingID, includeHit: true
+            )
+        }
+        adapter.scripts[fixture.token(at: 1)] = .init(
+            compilationUnitID: fixture.compilationUnitID(at: 1), sourceEmbeddingID: fixture.sourceEmbeddingID,
+            behaviors: [.timedOut, .passed(includeHit: true)]
+        )
+
+        let result = try await run(fixture, adapter: adapter, schemataTokenBatchSize: 3)
+
+        #expect(adapter.individualRunsThatSawResidue.isEmpty, "no rerun may spawn before the containment rebuild")
+        // The fake runs the timed-out configuration first, so both siblings
+        // ran contaminated inside the batch — scoring either of those runs
+        // would read killedByCrash here.
+        #expect(try outcome(for: fixture.sortedPoints[0].id, in: result).outcome == .survived)
+        #expect(try outcome(for: fixture.sortedPoints[1].id, in: result).outcome == .flaky)
+        #expect(try outcome(for: fixture.sortedPoints[2].id, in: result).outcome == .survived)
+        #expect(adapter.schemataBatchCallCount == 1)
+        // Entries 0 and 2 rerun individually, plus entry 1's confirmation.
+        #expect(adapter.individualRunSchemataTokenCallCount == 3)
+    }
+
+    @Test("""
+    A batch group containing a timeout stops further batch groups: nothing else is dispatched against that sandbox before \
+    the containment rebuild
+    """)
+    func noLaterBatchGroupLaunchesBeforeContainment() async throws {
+        let fixture = try ChunkFixture.make(entryCount: 3)
+        let adapter = FakeSchemataAdapter()
+        adapter.timedOutRunsLeaveResidue = true
+        // Two of three entries hang, so with a batch size of 2 whichever
+        // group runs first holds a timeout, whatever order the groups form in.
+        for index in [0, 1] {
+            adapter.scripts[fixture.token(at: index)] = .init(
+                compilationUnitID: fixture.compilationUnitID(at: index), sourceEmbeddingID: fixture.sourceEmbeddingID,
+                behaviors: [.timedOut, .passed(includeHit: true)]
+            )
+        }
+        adapter.scripts[fixture.token(at: 2)] = .init(
+            compilationUnitID: fixture.compilationUnitID(at: 2), sourceEmbeddingID: fixture.sourceEmbeddingID, includeHit: true
+        )
+
+        let result = try await run(fixture, adapter: adapter, schemataTokenBatchSize: 2)
+
+        #expect(adapter.schemataBatchCallCount == 1, "no second batch group may be dispatched once a group reports a timeout")
+        #expect(adapter.individualRunsThatSawResidue.isEmpty, "no rerun may spawn before the containment rebuild")
+        // Which hang runs first inside the group depends on how the groups
+        // form, and a contaminated in-batch run still consumes its scripted
+        // behavior, so a hang entry may end flaky or survived — but no
+        // contaminated run (killedByCrash here) may ever be scored.
+        #expect(result.results.count == 3)
+        #expect(result.results.allSatisfy { $0.outcome != .killedByCrash })
+        #expect(try outcome(for: fixture.sortedPoints[2].id, in: result).outcome == .survived)
     }
 
     // MARK: - Hang budget is unaffected by batching
@@ -339,10 +405,11 @@ struct SchemataMutationRunnerBatchingTests: SchemataBatchingTestHarness {
         #expect(try outcome(for: fixture.sortedPoints[1].id, in: result).outcome == .survived)
         // Both single-test entries still share one batch call (Phase
         // H12.3's narrowing only excludes multi-test selections, not
-        // single-test ones), and the timed-out entry's own confirmation is
-        // the only individual dispatch — the exact the schemata timeout-isolation design path Phase H5
-        // already proved unmodified, still true after Phase H12.3.
+        // single-test ones). The timed-out entry's confirmation dispatches
+        // individually, and its sibling reruns individually after
+        // containment rather than being scored from the timed-out
+        // invocation .
         #expect(adapter.schemataBatchCallCount == 1)
-        #expect(adapter.individualRunSchemataTokenCallCount == 1)
+        #expect(adapter.individualRunSchemataTokenCallCount == 2)
     }
 }

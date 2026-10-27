@@ -105,7 +105,25 @@ public struct TestRunResult: Codable, Sendable {
     /// crash. It is an observation, never a verdict: a crash that carries it must be independently
     /// confirmed (`MutationVerdictVerifier`), and without that confirmation it is not a kill.
     public let crashProvenance: CrashProvenance?
+    /// The supervising `ProcessResult.cleanupVerified` of the process that
+    /// produced this run, carried forward explicitly by every adapter.
+    /// `false` means a descendant may have outlived the run after SIGKILL.
+    /// The run is then never scored (`MutationVerdictVerifier` classifies
+    /// it as an infrastructure failure, never flaky or confirmation-failed)
+    /// and the whole mutation run aborts (`RunContainmentMonitor`).
+    /// `status` is left as the adapter classified it, so `.timedOut` still
+    /// maps 1:1 to `ProcessResult.timedOut`.
+    public let cleanupVerified: Bool
+    /// Why `cleanupVerified` is `false`; `nil` when it is `true`.
+    public let cleanupDiagnosis: String?
 
+    /// `cleanupVerified` has no default on purpose: every construction must
+    /// say where its value came from, so an adapter or wrapper that forgets
+    /// to carry a `ProcessResult`'s value forward fails to compile instead
+    /// of reporting success. A result synthesized without launching a
+    /// process passes `true`; one derived from another result copies it.
+    /// Decoding also requires the key, so a record written before this
+    /// field existed is rejected, never read as verified.
     public init(
         status: TestRunStatus,
         summary: TestOutcomeSummary?,
@@ -113,8 +131,12 @@ public struct TestRunResult: Codable, Sendable {
         resultArtifactPath: URL?,
         diagnosis: String,
         isBatchAttributedTimeout: Bool = false,
-        crashProvenance: CrashProvenance? = nil
+        crashProvenance: CrashProvenance? = nil,
+        cleanupVerified: Bool,
+        cleanupDiagnosis: String? = nil
     ) {
+        self.cleanupVerified = cleanupVerified
+        self.cleanupDiagnosis = cleanupDiagnosis
         self.crashProvenance = crashProvenance
         self.status = status
         self.summary = summary

@@ -76,7 +76,15 @@ public enum SharedBaselineEstablisher {
         let testStarted = Date()
         let run: TestRunResult
         do {
+            // No baseline test after a build that tripped the run-level abort.
+            try RunContainmentMonitor.current?.throwIfAborted()
             run = try await test.runBaseline(artifact, in: sandbox, timeoutSeconds: timeouts.baselineLimitSeconds)
+            // Nothing more is launched once the baseline has tripped the
+            // monitor, including the coverage pass below; the engine checks
+            // the monitor right after this returns and aborts the run before
+            // either portion.
+            RunContainmentMonitor.current?.observe(run)
+            try RunContainmentMonitor.current?.throwIfAborted()
         } catch {
             await control?.teardown()
             return .failed(

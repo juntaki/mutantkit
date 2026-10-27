@@ -117,7 +117,9 @@ unknown become `survived`.
 For Xcode, verdict evidence comes from `.xcresult`. For SwiftPM/macOS,
 MutantKit uses `swift test`'s exit status as the contract for the verdict,
 plus `--xunit-output`'s structured xUnit report for counts and failing-test
-names. Either way, it does not infer verdicts by regex-matching console
+names. SwiftPM writes the XCTest half of that report only in parallel mode,
+so ordinary runs ask for it with a single XCTest worker; an exit 1 that leaves
+no report naming any test is an infrastructure failure, not a kill. Either way, it does not infer verdicts by regex-matching console
 output, which lies whenever a test framework's own console formatting
 changes.
 

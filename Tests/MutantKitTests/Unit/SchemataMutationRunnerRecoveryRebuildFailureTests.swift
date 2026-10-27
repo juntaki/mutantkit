@@ -161,6 +161,64 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
         #expect(result.sharedChunkBuildFailureEvents.isEmpty, "only a typed BuildFailure reports an observability event")
     }
 
+    // MARK: - Sub-case 1b: destroying the timed-out sandbox itself fails
+
+    /// The rebuild must start from a destroyed-then-fresh
+    /// sandbox. `createSandbox` reuses the same deterministic directory for
+    /// the same chunk ID and never empties it, so if destruction fails the
+    /// timed-out process's residue would still be there. Destruction
+    /// failure must therefore fail closed exactly like recreation failure:
+    /// no rebuild, no further execution, every protected entry
+    /// `.infrastructureFailure`.
+    @Test("A recovery rebuild whose timed-out sandbox cannot be destroyed never rebuilds and fails every protected entry closed")
+    func sandboxDestructionFailureRoutesToInfrastructureFailureWithoutRebuild() async throws {
+        let fixture = try ChunkFixture.make()
+        let adapter = FakeSchemataAdapter()
+        scriptEntry0TimesOut(fixture, adapter: adapter)
+
+        // Plant residue the "timed-out process" left behind inside a
+        // directory `removeItem` cannot empty, so `destroySandbox` throws
+        // while leaving the sandbox directory in place.
+        let lockedDirectories = LockedDirectories()
+        adapter.beforeNextRun[fixture.token(at: 0)] = { [scratchRoot = fixture.scratchRoot] in
+            let sandboxes = (try? FileManager.default.contentsOfDirectory(
+                at: scratchRoot, includingPropertiesForKeys: nil
+            )) ?? []
+            for sandbox in sandboxes {
+                let residue = sandbox.appendingPathComponent("timed-out-residue", isDirectory: true)
+                try? FileManager.default.createDirectory(at: residue, withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: residue.appendingPathComponent("stale").path, contents: Data())
+                try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: residue.path)
+                lockedDirectories.append(residue)
+            }
+        }
+        defer { lockedDirectories.unlockAll() }
+
+        let result = try await run(fixture, adapter: adapter)
+
+        #expect(!lockedDirectories.isEmpty, "the fixture must actually have planted undeletable residue")
+        #expect(adapter.buildCallCount == 1, "no recovery rebuild may run inside a sandbox whose destruction failed")
+        #expect(result.isolatedFallbacks.isEmpty)
+        #expect(result.results.count == 2)
+        #expect(try outcome(for: fixture.sortedPoints[0].id, in: result).outcome == .infrastructureFailure)
+        #expect(try outcome(for: fixture.sortedPoints[1].id, in: result).outcome == .infrastructureFailure)
+    }
+
+    private final class LockedDirectories: @unchecked Sendable {
+        private let lock = NSLock()
+        private var urls: [URL] = []
+
+        var isEmpty: Bool { lock.withLock { urls.isEmpty } }
+
+        func append(_ url: URL) { lock.withLock { urls.append(url) } }
+
+        func unlockAll() {
+            for url in lock.withLock({ urls }) {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            }
+        }
+    }
+
     // MARK: - Sub-case 2: untyped build error during the rebuild
 
     @Test("A recovery rebuild whose build throws an untyped error routes every protected entry to infrastructureFailure")

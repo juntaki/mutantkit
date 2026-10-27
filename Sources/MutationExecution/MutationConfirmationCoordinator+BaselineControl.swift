@@ -48,10 +48,12 @@ extension MutationConfirmationCoordinator {
         let run: TestRunResult
         do {
             if let manifestDependent = manifestDependentTest {
+                try RunContainmentMonitor.current?.throwIfAborted()
                 run = try await manifestDependent.runConfirmationRetest(
                     point, packageRoot: projectRoot, productsScratchRoot: clone,
                     timeoutSeconds: timeoutSeconds, selectedTests: selectedTests
                 )
+                RunContainmentMonitor.current?.observe(run)
             } else {
                 run = try await runMutantTests(
                     point, artifact: relocated, in: clone, timeoutSeconds: timeoutSeconds, selectedTests: selectedTests

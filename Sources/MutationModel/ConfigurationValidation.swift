@@ -606,7 +606,8 @@ public enum ConfigurationJSONSchema {
             "sharedModuleCache": { "type": "boolean" },
             "cleanSubtreeCloning": { "type": "boolean" },
             "profileCoverageSkip": { "type": "boolean" },
-            "coverageGranularity": { "enum": ["test", "suite"] }
+            "coverageGranularity": { "enum": ["test", "suite"] },
+            "coverageWorkers": { "type": ["integer", "null"], "minimum": 1 }
           }
         },
         "timeouts": {

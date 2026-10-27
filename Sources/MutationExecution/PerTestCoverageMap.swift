@@ -140,19 +140,26 @@ public struct PerTestCoverageMap: Sendable, Hashable, Codable {
     public let unattributedTests: Set<TestIdentifier>
     /// Where the claim came from, so a wrong one can be traced back to its source.
     public let source: String
+    /// Repository-relative file → the 1-based lines the measurement has any coverage information
+    /// for (see `CoverageMap.mappedLines`), whatever test ran them. A line outside this set was not
+    /// measured, which says nothing about whether any test reaches it, so `testsCovering` makes no
+    /// claim about it. A file absent here has no such information, and is judged as it always was.
+    public let mappedLines: [String: Set<Int>]
 
     public init(
         coveringTests: [String: [Int: Set<TestIdentifier>]],
         source: String,
-        unattributedTests: Set<TestIdentifier> = []
+        unattributedTests: Set<TestIdentifier> = [],
+        mappedLines: [String: Set<Int>] = [:]
     ) {
         self.coveringTests = coveringTests
         self.unattributedTests = unattributedTests
         self.source = source
+        self.mappedLines = mappedLines
     }
 
     private enum CodingKeys: String, CodingKey {
-        case coveringTests, source, unattributedTests, tests
+        case coveringTests, source, unattributedTests, tests, mappedLines
     }
 
     public init(from decoder: Decoder) throws {
@@ -175,6 +182,8 @@ public struct PerTestCoverageMap: Sendable, Hashable, Codable {
         let encoded = try container.decode([String: [Int: [Int]]].self, forKey: .coveringTests)
         coveringTests = try encoded.mapValues { try $0.mapValues(resolve) }
         unattributedTests = try resolve(container.decodeIfPresent([Int].self, forKey: .unattributedTests) ?? [])
+        mappedLines = try (container.decodeIfPresent([String: [Int]].self, forKey: .mappedLines) ?? [:])
+            .mapValues(Set.init)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -199,6 +208,9 @@ public struct PerTestCoverageMap: Sendable, Hashable, Codable {
         if !unattributedTests.isEmpty {
             try container.encode(unattributedTests.map { index[$0]! }.sorted(), forKey: .unattributedTests)
         }
+        if !mappedLines.isEmpty {
+            try container.encode(mappedLines.mapValues { $0.sorted() }, forKey: .mappedLines)
+        }
     }
 
     public var isEmpty: Bool { coveringTests.isEmpty }
@@ -218,9 +230,30 @@ public struct PerTestCoverageMap: Sendable, Hashable, Codable {
     /// `.noCoverage` fast path already classifies before a mutant reaches
     /// test selection.
     public func testsCovering(file: String, line: Int) -> Set<TestIdentifier>? {
+        // A line nothing was measured on is not a line no test reaches. Narrowing it to the tests
+        // that happen to be in the map (none, or only the unattributed ones) would let a test that
+        // does reach it go unrun, and the mutant survive; the caller runs everything instead.
+        if let mapped = mappedLines[file], !mapped.contains(line) { return nil }
         let attributed = coveringTests[file]?[line]
         guard !unattributedTests.isEmpty else { return attributed }
         return (attributed ?? []).union(unattributedTests)
+    }
+
+    /// Whether the map measured the file but has no coverage region for `line` — a line it can say
+    /// nothing about, as opposed to one it saw no test reach.
+    public func isUnmeasured(file: String, line: Int) -> Bool {
+        guard let mapped = mappedLines[file] else { return false }
+        return !mapped.contains(line)
+    }
+
+    /// The tests that ran any line in `lines` of `file`, with the unattributed ones, or `nil` when no
+    /// attributed test ran any of them — nothing then anchors a narrower selection than everything.
+    public func testsCovering(file: String, lines: ClosedRange<Int>) -> Set<TestIdentifier>? {
+        guard let byLine = coveringTests[file] else { return nil }
+        var selected: Set<TestIdentifier> = []
+        for (line, tests) in byLine where lines.contains(line) { selected.formUnion(tests) }
+        guard !selected.isEmpty else { return nil }
+        return selected.union(unattributedTests)
     }
 
     /// The union of every line any test covered — the same fact a
@@ -246,6 +279,6 @@ public struct PerTestCoverageMap: Sendable, Hashable, Codable {
         for (file, lines) in coveringTests {
             executedLines[file] = Set(lines.keys)
         }
-        return CoverageMap(executedLines: executedLines, source: source)
+        return CoverageMap(executedLines: executedLines, source: source, mappedLines: mappedLines)
     }
 }

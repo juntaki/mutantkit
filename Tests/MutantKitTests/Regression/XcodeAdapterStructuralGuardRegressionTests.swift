@@ -209,8 +209,15 @@ struct ProcessInvocationSeamSeparationRegressionTests {
             !testInvocation.contains("let processRunner: ProcessRunner"),
             "XCTestInvocationService must not gain a stored injectable processRunner — it would lose grace-period control if used"
         )
+        // The `launch` test seam's production default is the one direct
+        // call, and both `runSingle` and `runBatch` still launch through it
+        // with the grace period.
         let testInvocationCalls = Support.allSpans(in: testInvocation, startMarker: "ProcessSupervisor.run(", untilLineEquals: ")")
-        #expect(testInvocationCalls.count == 2, "expected exactly 2 direct ProcessSupervisor.run(...) calls in XcodeTestInvocation.swift")
+        #expect(testInvocationCalls.count == 1, "expected exactly 1 direct ProcessSupervisor.run(...) call (the `launch` default)")
+        let launchCall = "try await launch(arguments, workspace, timeoutSeconds, terminationGracePeriodSeconds)"
+        #expect(
+            testInvocation.components(separatedBy: launchCall).count - 1 == 2, "runSingle and runBatch must both launch through `launch`"
+        )
         for call in testInvocationCalls {
             #expect(call.contains("terminationGracePeriodSeconds:"), "a direct ProcessSupervisor.run call lost its explicit grace period: \(call)")
         }

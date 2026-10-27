@@ -55,7 +55,9 @@ struct SwiftPackageMacOSAcceptanceTests {
         let run = try self.run()
 
         #expect(run.report.baseline.passed)
-        #expect(run.report.baseline.testSummary?.total == 4)
+        // 4 Swift Testing tests in PricingTests plus the XCTest case in
+        // PricingXCTestTests, which the xunit report now records too.
+        #expect(run.report.baseline.testSummary?.total == 5)
 
         let integrity = run.report.integrity
         #expect(integrity.violations.isEmpty, "\(integrity.violations.map(\.detail))")

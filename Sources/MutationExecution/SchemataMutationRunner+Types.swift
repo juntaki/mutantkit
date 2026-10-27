@@ -139,6 +139,12 @@ extension SchemataMutationRunner {
         /// genuine compile failure, applied here to a different
         /// infrastructure failure with the identical consequence.
         case buildReceiptUnavailable
+        /// Every placement of a multi-target MutationID verified, none killed, and at least one is not
+        /// scorable (`MultiTargetVerdict.requiresIsolatedFallback`). Decided after every chunk has returned,
+        /// from the verified per-placement verdicts themselves: a survived placement must not stand in for a
+        /// sibling whose own verdict cannot be trusted, so the whole MutationID is re-run once in isolated
+        /// mode instead.
+        case multiTargetUnscorablePlacement
     }
 
     /// One mutation this run could not prove activation for from schemata
