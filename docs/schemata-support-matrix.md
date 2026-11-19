@@ -71,6 +71,21 @@ Proof: `SchemataMultiTestTargetAcceptanceTests` runs
 with `execution.strategy: schemata` and requires mutations to run on the shared
 build with no `buildReceiptUnavailable` fallback.
 
+## SwiftPM targets with main-actor default isolation
+
+A target declaring `swiftSettings: [.defaultIsolation(MainActor.self)]`
+(Swift 6.2+) makes every unannotated top-level declaration in it main-actor
+isolated, including the runtime declarations schemata prepends into its
+sources. Those declarations are `nonisolated`, so the generated descriptor
+initializer and mutated call sites in `nonisolated` code can still call them,
+and the target runs on the shared schemata build like any other.
+
+Proof: `SchemataMainActorDefaultIsolationAcceptanceTests` runs
+`Fixtures/MainActorDefaultPackage` (one candidate in main-actor code, two in a
+`nonisolated` function) with `execution.strategy: schemata` and requires every
+planned mutation to run in schemata mode with zero fallback, naming the exact
+mutants expected to live and die.
+
 ## Why the two unsupported rows are unsupported
 
 **`swiftPackageApple` + iOS Simulator.** This project kind resolves its
