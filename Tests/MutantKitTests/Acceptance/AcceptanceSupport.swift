@@ -197,8 +197,9 @@ enum Acceptance {
         return device.destination
     }
 
-    /// Seconds a `simctl list` probe may take, read and exit together.
-    private static let simctlProbeTimeoutSeconds = 30.0
+    /// Seconds a `simctl list` probe may take, read and exit together: the same
+    /// budget `SimulatorPool` gives the identical call in production.
+    private static let simctlProbeTimeoutSeconds = 60.0
 
     /// Runs `xcrun <arguments>` and returns its stdout, with the *whole* run bounded.
     ///
