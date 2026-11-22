@@ -11,12 +11,12 @@ import Testing
 /// than throwing.
 @Suite("RunManifest simulator preparation")
 struct RunManifestSimulatorPreparationTests {
-    private func makeManifest(preparation: SimulatorPreparationRecord?) -> RunManifest {
+    private func makeManifest(preparation: SimulatorPreparationRecord?, resolvedDestination: ResolvedDestination? = nil) -> RunManifest {
         RunManifest(
             planID: "plan",
             workUnitID: "wu",
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
-            resolvedDestination: nil,
+            resolvedDestination: resolvedDestination,
             scheme: nil,
             testTargets: [],
             extraTestArguments: [],
@@ -71,5 +71,21 @@ struct RunManifestSimulatorPreparationTests {
     func defaultsToNil() throws {
         let manifest = makeManifest(preparation: nil)
         #expect(manifest.simulatorPreparation == nil)
+    }
+
+    @Test("A freshly written manifest encodes the device with main's four keys")
+    func deviceEncodingIsUnchanged() throws {
+        let device = SimulatorDevice(udid: "U", name: "N", runtimeIdentifier: "opaque", state: "Shutdown")
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("run-manifest-test-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try makeManifest(
+            preparation: nil,
+            resolvedDestination: ResolvedDestination(requested: "platform=iOS Simulator,name=N", device: device, platform: "iOS")
+        ).write(to: url)
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let destination = try #require(object["resolvedDestination"] as? [String: Any])
+        let encoded = try #require(destination["device"] as? [String: Any])
+        #expect(Set(encoded.keys) == ["udid", "name", "runtimeIdentifier", "state"])
     }
 }

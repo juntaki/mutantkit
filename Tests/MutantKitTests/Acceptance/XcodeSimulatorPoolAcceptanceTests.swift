@@ -242,7 +242,7 @@ struct XcodeSimulatorPoolAcceptanceTests {
         shortLived.waitUntilExit()
 
         let alivePID = ProcessInfo.processInfo.processIdentifier
-        let baseDevice = SimulatorDevice(udid: baseUDID, name: "base", runtimeIdentifier: "unused", state: "Shutdown")
+        let baseDevice = SimctlFixtures.device("base", udid: baseUDID, identifier: "unused").device
         let pool = SimulatorPool(workingDirectory: Acceptance.packageRoot)
 
         let deadOwnerClone = try await pool.cloneDevice(from: baseDevice, label: "\(deadPID)-real-dead-owner-test")
@@ -267,11 +267,12 @@ struct XcodeSimulatorPoolAcceptanceTests {
         #expect(after.contains { $0.udid == liveOwnerClone.udid }, "a clone owned by this live test process's own PID must NOT be swept")
     }
 
-    /// `iPhoneDestination()` returns a `name=`-qualified destination, never
-    /// `id=` -- resolve it to a UDID the same way `DestinationResolver`
-    /// would, for the one test above that needs a concrete UDID to clone
-    /// from directly.
+    /// `iPhoneDestination()` returns an `id=`-qualified destination; the
+    /// `name=` branch below keeps this helper working for a name-qualified
+    /// one, resolving it to a UDID for the one test above that needs a
+    /// concrete UDID to clone from directly.
     private static func resolveNamedDeviceUDID(_ destination: String) throws -> String? {
+        if let udid = DestinationResolver.field(named: "id", inDestination: destination) { return udid }
         guard let name = AppleAdapterFactoryTestHelpers.deviceName(inDestination: destination) else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")

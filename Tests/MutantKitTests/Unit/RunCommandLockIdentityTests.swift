@@ -1,4 +1,4 @@
-import AppleBuildAdapters
+@testable import AppleBuildAdapters
 @testable import CLI
 import Foundation
 import MutationExecution
@@ -21,7 +21,7 @@ import Testing
 @Suite("RunCommand: lock identity keyed on resolved destination")
 struct RunCommandLockIdentityTests {
     private func device(udid: String, name: String = "iPhone 17 Pro") -> SimulatorDevice {
-        SimulatorDevice(udid: udid, name: name, runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-2", state: "Shutdown")
+        SimctlFixtures.device(name, udid: udid, identifier: SimctlFixtures.prefix + "iOS-18-2", version: "18.2").device
     }
 
     private func xcodeAdapter(resolvedDestination: ResolvedDestination?) -> XcodeBuildProjectAdapter {
@@ -38,10 +38,12 @@ struct RunCommandLockIdentityTests {
     func sameDeviceDifferentRawStringsProduceSameKey() {
         let sameDevice = device(udid: "AAAA-BBBB")
 
-        let unset = xcodeAdapter(resolvedDestination: ResolvedDestination(requested: "auto", device: sameDevice))
+        let unset = xcodeAdapter(resolvedDestination: ResolvedDestination(
+            requested: "auto", device: sameDevice, platform: "iOS"
+        ))
         let explicit = xcodeAdapter(
             resolvedDestination: ResolvedDestination(
-                requested: "platform=iOS Simulator,name=iPhone 17 Pro", device: sameDevice
+                requested: "platform=iOS Simulator,name=iPhone 17 Pro", device: sameDevice, platform: "iOS"
             )
         )
 
@@ -51,7 +53,7 @@ struct RunCommandLockIdentityTests {
         )
 
         #expect(unsetKey == explicitKey, "both resolve to the same device and must collide on one lock key")
-        #expect(unsetKey == sameDevice.destination, "the key should be the resolved device's own destination argument")
+        #expect(unsetKey == "platform=iOS Simulator,id=\(sameDevice.udid)", "the key should be the resolved device's own destination argument")
     }
 
     @Test("A name and a UDID for the same device produce the same lock identity")
@@ -60,12 +62,12 @@ struct RunCommandLockIdentityTests {
 
         let byName = xcodeAdapter(
             resolvedDestination: ResolvedDestination(
-                requested: "platform=iOS Simulator,name=iPhone 17 Pro", device: sameDevice
+                requested: "platform=iOS Simulator,name=iPhone 17 Pro", device: sameDevice, platform: "iOS"
             )
         )
         let byUDID = xcodeAdapter(
             resolvedDestination: ResolvedDestination(
-                requested: "platform=iOS Simulator,id=CCCC-DDDD", device: sameDevice
+                requested: "platform=iOS Simulator,id=CCCC-DDDD", device: sameDevice, platform: "iOS"
             )
         )
 
@@ -100,5 +102,17 @@ struct RunCommandLockIdentityTests {
 
         #expect(RunCommand.lockIdentity(for: swiftPackage, configuredDestination: nil) == "auto")
         #expect(RunCommand.lockIdentity(for: swiftPackage, configuredDestination: "platform=macOS") == "platform=macOS")
+    }
+
+    @Test("A stale platform label in the configured destination does not change the lock identity of the same UDID")
+    func stalePlatformLabelSharesTheLock() throws {
+        let ios = SimctlFixtures.device("iPhone 17 Pro", udid: "UDID-IOS", version: "18.2")
+        let keys = try ["platform=iOS Simulator,id=UDID-IOS", "platform=tvOS Simulator,id=UDID-IOS"].map { requested in
+            let resolved = try DestinationResolver.resolve(requested, against: [ios])
+            #expect(resolved.destinationArgument == "platform=iOS Simulator,id=UDID-IOS", "\(requested)")
+            return RunCommand.lockIdentity(for: xcodeAdapter(resolvedDestination: resolved), configuredDestination: requested)
+        }
+        #expect(keys[0] == keys[1], "one simulator, one lock")
+        #expect(keys[0] == "platform=iOS Simulator,id=UDID-IOS")
     }
 }

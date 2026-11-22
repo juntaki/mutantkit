@@ -218,7 +218,7 @@ public enum XcodeConfigDetector {
     /// this codebase uses (`InitCommand.defaultDestination`'s own
     /// hardcoded fallback, the pre-C13 behavior this replaces), since a
     /// generated `mutantkit.yml` is meant to be human-read and -edited;
-    /// `SimulatorDevice.destination`'s own UDID-addressed form exists for
+    /// `CatalogDevice.destination`'s own UDID-addressed form exists for
     /// precise per-worker lease addressing during a real run, a different
     /// concern from what belongs in a hand-editable config file. The
     /// platform label is safe to hardcode here specifically *because*
@@ -248,7 +248,7 @@ public enum XcodeConfigDetector {
     /// abstraction over `SimulatorPool`'s full surface, just the one method
     /// this file needs.
     protocol AvailableDevicesProviding: Sendable {
-        func availableDevices() async throws -> [SimulatorDevice]
+        func catalogDevices() async throws -> [CatalogDevice]
     }
 
     /// Real, typed destination discovery: distinguishes "asked and got a
@@ -262,7 +262,7 @@ public enum XcodeConfigDetector {
         poolFactory: (URL) -> any AvailableDevicesProviding = { SimulatorPool(workingDirectory: $0) }
     ) async -> SimulatorDestinationDiscovery {
         do {
-            let devices = try await poolFactory(projectRoot).availableDevices()
+            let devices = try await poolFactory(projectRoot).catalogDevices()
             guard let destination = selectDestination(from: devices) else { return .unavailable }
             return .detected(destination)
         } catch {
@@ -288,28 +288,24 @@ public enum XcodeConfigDetector {
     /// than only through a real, machine-dependent `simctl` call — the two
     /// real bugs this fixes (below) are both about *which* device gets
     /// chosen, not about talking to `simctl` at all.
-    static func selectDestination(from devices: [SimulatorDevice]) -> String? {
-        let iOSDevices = devices.filter { $0.runtimeIdentifier.localizedCaseInsensitiveContains("SimRuntime.iOS") }
+    static func selectDestination(from devices: [CatalogDevice]) -> String? {
+        let iOSDevices = devices.filter { $0.platform == "iOS" }
         guard !iOSDevices.isEmpty else { return nil }
 
         let iPhones = iOSDevices.filter { $0.name.hasPrefix("iPhone") }
         let candidates = iPhones.isEmpty ? iOSDevices : iPhones
-        guard let chosen = candidates.max(by: {
-            iOSVersionComponents(of: $0.runtimeIdentifier).lexicographicallyPrecedes(iOSVersionComponents(of: $1.runtimeIdentifier))
+        // Highest runtime version (from the runtime's `version` field), then a
+        // stable tiebreak on name, runtime identifier and UDID.
+        guard let chosen = candidates.min(by: {
+            ($1.runtimeVersion, $0.name, $0.runtimeIdentifier, $0.udid) < ($0.runtimeVersion, $1.name, $1.runtimeIdentifier, $1.udid)
         }) else { return nil }
+        // Name-only (`OS:latest`) is what a hand-edited config should say, and it
+        // is unambiguous unless the same name also exists under another runtime
+        // of the same version (a generic runtime beside a device-specific one) —
+        // then `xcodebuild` would have two matches, so address this one by UDID.
+        let sameNameSameVersion = iOSDevices.filter { $0.name == chosen.name && $0.runtimeVersion == chosen.runtimeVersion }
+        if sameNameSameVersion.count > 1 { return chosen.destination }
         return "platform=iOS Simulator,name=\(chosen.name)"
-    }
-
-    /// `com.apple.CoreSimulator.SimRuntime.iOS-26-3-1` → `[26, 3, 1]`.
-    /// Only ever called on identifiers already confirmed to contain
-    /// `SimRuntime.iOS` by `selectDestination`'s own filter above, so an
-    /// empty result here should not occur in practice — compared via
-    /// `lexicographicallyPrecedes`, which treats a shorter-but-matching
-    /// prefix as older, matching `XcodeBuildAdapter.runtimeIsOlder`'s own
-    /// semantics.
-    static func iOSVersionComponents(of runtimeIdentifier: String) -> [Int] {
-        guard let range = runtimeIdentifier.range(of: "iOS-", options: .caseInsensitive) else { return [] }
-        return runtimeIdentifier[range.upperBound...].split(separator: "-").compactMap { Int($0) }
     }
 }
 

@@ -38,7 +38,7 @@ struct XcodeBuildAdapterSimulatorPreparationTests {
                 if arguments.contains("list") {
                     return ProcessResult(
                         exitCode: 0,
-                        standardOutput: Data(deviceJSON.utf8),
+                        standardOutput: Data((arguments.contains("runtimes") ? SimctlFixtures.iOS18RuntimesJSON : deviceJSON).utf8),
                         standardError: Data(),
                         durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true
                     )
@@ -48,7 +48,7 @@ struct XcodeBuildAdapterSimulatorPreparationTests {
         )
         let destination = ResolvedDestination(
             requested: "platform=iOS Simulator,name=iPhone 16",
-            device: device
+            device: device, platform: "iOS"
         )
         return XcodeBuildAdapter(
             configuration: Configuration(),
@@ -71,8 +71,7 @@ struct XcodeBuildAdapterSimulatorPreparationTests {
     }
 
     private var device: SimulatorDevice {
-        SimulatorDevice(udid: Self.udid, name: "iPhone 16",
-                        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-0", state: "Shutdown")
+        SimctlFixtures.device("iPhone 16", udid: Self.udid).device
     }
 
     @Test("A nil destination yields notApplicable")
