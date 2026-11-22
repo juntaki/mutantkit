@@ -84,10 +84,7 @@ struct XcodeBuildAdapterUninstallSmokeTests {
                 xctestrunPath: xctestrun,
                 command: CommandRecord(executable: "xcodebuild", arguments: [], workingDirectory: "/tmp")
             ),
-            from: SimulatorLease(device: SimulatorDevice(
-                udid: Self.bogusUDID, name: "Bogus",
-                runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-0", state: "Shutdown"
-            )),
+            from: SimctlFixtures.lease(SimctlFixtures.device("Bogus", udid: Self.bogusUDID)),
             report: { reported.append($0) }
         )
 

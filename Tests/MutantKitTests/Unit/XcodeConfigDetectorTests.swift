@@ -195,8 +195,10 @@ struct XcodeConfigDetectorTests {
     // deterministic unit tests, and belong in a suite CI explicitly
     // declares a simulator dependency for).
 
-    private static func device(_ name: String, runtime: String, state: String = "Shutdown") -> SimulatorDevice {
-        SimulatorDevice(udid: UUID().uuidString, name: name, runtimeIdentifier: runtime, state: state)
+    private static func device(
+        _ name: String, runtime: String, version: String = "18.0", platform: String = "iOS", state: String = "Shutdown"
+    ) -> CatalogDevice {
+        SimctlFixtures.device(name, udid: UUID().uuidString, identifier: runtime, platform: platform, version: version, state: state)
     }
 
     /// Regression test for a real bug caught by Codex review before this
@@ -207,9 +209,9 @@ struct XcodeConfigDetectorTests {
     @Test("selectDestination compares iOS runtime versions numerically, not lexicographically")
     func selectsNumericallyLatestRuntime() {
         let devices = [
-            Self.device("iPhone 15", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-9-0"),
-            Self.device("iPhone 16", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-9"),
-            Self.device("iPhone 17", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-10")
+            Self.device("iPhone 15", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-9-0", version: "9.0"),
+            Self.device("iPhone 16", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-9", version: "26.9"),
+            Self.device("iPhone 17", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-10", version: "26.10")
         ]
         #expect(XcodeConfigDetector.selectDestination(from: devices) == "platform=iOS Simulator,name=iPhone 17")
     }
@@ -222,8 +224,10 @@ struct XcodeConfigDetectorTests {
     @Test("selectDestination never picks a non-iOS device, even as a fallback")
     func neverSelectsNonIOSDevice() {
         let devices = [
-            Self.device("Apple TV 4K", runtime: "com.apple.CoreSimulator.SimRuntime.tvOS-17-0"),
-            Self.device("Apple Watch Series 9", runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-10-0")
+            Self.device("Apple TV 4K", runtime: "com.apple.CoreSimulator.SimRuntime.tvOS-17-0", version: "17.0", platform: "tvOS"),
+            Self.device(
+                "Apple Watch Series 9", runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-10-0", version: "10.0", platform: "watchOS"
+            )
         ]
         #expect(XcodeConfigDetector.selectDestination(from: devices) == nil)
     }
@@ -231,8 +235,8 @@ struct XcodeConfigDetectorTests {
     @Test("selectDestination falls back to a non-iPhone iOS device when no iPhone is installed")
     func fallsBackToNonIPhoneIOSDevice() {
         let devices = [
-            Self.device("iPad Pro", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-0"),
-            Self.device("Apple TV 4K", runtime: "com.apple.CoreSimulator.SimRuntime.tvOS-17-0")
+            Self.device("iPad Pro", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-0", version: "18.0"),
+            Self.device("Apple TV 4K", runtime: "com.apple.CoreSimulator.SimRuntime.tvOS-17-0", version: "17.0", platform: "tvOS")
         ]
         #expect(XcodeConfigDetector.selectDestination(from: devices) == "platform=iOS Simulator,name=iPad Pro")
     }
@@ -271,15 +275,15 @@ struct XcodeConfigDetectorTests {
     // XcodeConfigDetectorAcceptanceTests.swift.
 
     private struct FakeDevicesProvider: XcodeConfigDetector.AvailableDevicesProviding {
-        let result: Result<[SimulatorDevice], Error>
-        func availableDevices() async throws -> [SimulatorDevice] { try result.get() }
+        let result: Result<[CatalogDevice], Error>
+        func catalogDevices() async throws -> [CatalogDevice] { try result.get() }
     }
 
     private struct FakeDiscoveryFailure: Error {}
 
     @Test("A known device list resolves to the correct .detected destination")
     func knownDeviceListResolvesToDetected() async {
-        let devices = [Self.device("iPhone 16", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-0")]
+        let devices = [Self.device("iPhone 16", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-0", version: "18.0")]
         let outcome = await XcodeConfigDetector.detectDestinationOutcome(
             projectRoot: Acceptance.packageRoot,
             poolFactory: { _ in FakeDevicesProvider(result: .success(devices)) }
@@ -289,7 +293,9 @@ struct XcodeConfigDetectorTests {
 
     @Test("No iOS device in a successfully-fetched list resolves to .unavailable, not .discoveryFailed")
     func noIOSDeviceResolvesToUnavailable() async {
-        let devices = [Self.device("Apple TV 4K", runtime: "com.apple.CoreSimulator.SimRuntime.tvOS-17-0")]
+        let devices = [
+            Self.device("Apple TV 4K", runtime: "com.apple.CoreSimulator.SimRuntime.tvOS-17-0", version: "17.0", platform: "tvOS")
+        ]
         let outcome = await XcodeConfigDetector.detectDestinationOutcome(
             projectRoot: Acceptance.packageRoot,
             poolFactory: { _ in FakeDevicesProvider(result: .success(devices)) }

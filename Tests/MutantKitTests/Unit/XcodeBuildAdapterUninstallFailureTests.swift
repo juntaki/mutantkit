@@ -116,9 +116,7 @@ struct XcodeBuildAdapterUninstallFailureTests {
     }
 
     private func lease(udid: String) -> SimulatorLease {
-        SimulatorLease(device: SimulatorDevice(
-            udid: udid, name: "Bogus", runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-0", state: "Shutdown"
-        ))
+        SimctlFixtures.lease(SimctlFixtures.device("Bogus", udid: udid))
     }
 
     // MARK: - Message formatting (pure)

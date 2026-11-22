@@ -84,6 +84,8 @@ public extension SimulatorPool {
                 ToolPaths.xcrun, ["simctl", "clone", source.udid, name],
                 workingDirectory, timeoutSeconds
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw SimulatorCloneError.cloneFailed(source: source.udid, detail: "\(error)")
         }
@@ -101,13 +103,39 @@ public extension SimulatorPool {
 
         // Force a fresh `simctl list` — the clone did not exist at the
         // last load, and a stale cache would report it missing forever.
-        loaded = false
-        try await loadIfNeeded()
+        //
+        // The clone exists on disk from here on, but no caller has its UDID yet
+        // (the worker-pool rollback only knows clones this method returned). So
+        // any failure below deletes it before rethrowing, or it would leak.
+        invalidate()
+        do {
+            try await loadIfNeeded()
+        } catch {
+            await deleteUncancelled(udid: newUDID)
+            throw error
+        }
 
         guard let device = devices.first(where: { $0.udid == newUDID }) else {
+            await deleteUncancelled(udid: newUDID)
             throw SimulatorCloneError.cloneNotFound(udid: newUDID)
         }
         return device
+    }
+
+    /// Boots `udid` again (up to three attempts) without consulting the catalog.
+    func restoreBase(udid: String) async {
+        for attempt in 0 ..< 3 {
+            if attempt > 0 { try? await Task.sleep(for: .seconds(2)) }
+            if (try? await attemptBoot(udid: udid, bootTimeoutSeconds: 90)) != nil { return }
+        }
+    }
+
+    /// Rollback delete that still runs when the calling task is cancelled: the
+    /// work is an unstructured `Task` (it does not inherit the cancellation), so
+    /// the process supervisor does not kill `simctl delete` on arrival and leak
+    /// the device. Failures are ignored — this only ever runs on an error path.
+    func deleteUncancelled(udid: String) async {
+        await Task { try? await self.deleteDevice(udid: udid) }.value
     }
 
     /// Deletes a device via `simctl delete`. The caller is responsible for
@@ -119,6 +147,14 @@ public extension SimulatorPool {
     func deleteDevice(udid: String) async throws {
         guard !leased.contains(udid) else {
             throw SimulatorPoolError.deviceIsLeased(udid: udid)
+        }
+        // Reserve before the first suspension: `shutdown`/`delete` below await, and
+        // a lease granted in between would be deleted out from under its holder.
+        guard deleting.insert(udid).inserted else { return }
+        defer {
+            deleting.remove(udid)
+            for waiter in waiters { waiter.resume() }
+            waiters.removeAll()
         }
 
         // Best-effort shutdown first: `simctl delete` has been observed to
@@ -138,7 +174,9 @@ public extension SimulatorPool {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
-        devices.removeAll { $0.udid == udid }
+        catalog = catalog.removing(udid: udid)
+        // A load already in flight may still list the device; discard it.
+        generation += 1
     }
 
     /// Provisions `count` devices for worker-affinity assignment: index 0
@@ -193,16 +231,21 @@ public extension SimulatorPool {
         // against the caller's-copy check and only passed once this was
         // switched to a fresh, forced re-list. Never skip the shutdown
         // step on a state field that might be lying.
-        loaded = false
+        invalidate()
         try await loadIfNeeded()
         let wasBaseBooted = devices.first(where: { $0.udid == base.udid })?.isBooted ?? base.isBooted
-        if wasBaseBooted {
-            _ = try? await runProcess(ToolPaths.xcrun, ["simctl", "shutdown", base.udid], workingDirectory, timeoutSeconds)
-        }
-
         var provisioned: [SimulatorDevice] = [base]
 
         do {
+            if wasBaseBooted {
+                do {
+                    _ = try await runProcess(ToolPaths.xcrun, ["simctl", "shutdown", base.udid], workingDirectory, timeoutSeconds)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Best effort: a failed shutdown surfaces as the clone's own failure.
+                }
+            }
             for index in 1 ..< count {
                 let clone = try await cloneDevice(from: base, label: Self.ownedCloneLabel("worker\(index)-\(UUID().uuidString.prefix(8))"))
                 // Recorded *before* `prepare`, not after: a boot failure
@@ -218,15 +261,19 @@ public extension SimulatorPool {
                 try await prepare(udid: device.udid)
             }
         } catch {
+            // The rollback runs uncancelled (see `deleteUncancelled`): a cancelled
+            // provision must still reboot `base` and delete its clones.
             if wasBaseBooted {
-                _ = try? await prepare(udid: base.udid)
+                // By UDID, with no catalog reload: if `simctl list` is what failed,
+                // `prepare` would fail the same way and leave `base` shut down.
+                await Task { await self.restoreBase(udid: base.udid) }.value
             }
             // Roll back every clone this call itself created — never
             // `base`, and never a clone some other, unrelated call created
             // (provisioned only ever contains this call's own additions
             // past index 0).
             for created in provisioned.dropFirst() {
-                _ = try? await deleteDevice(udid: created.udid)
+                await deleteUncancelled(udid: created.udid)
             }
             throw error
         }
@@ -292,7 +339,7 @@ public extension SimulatorPool {
     /// a risk this type tries to eliminate further.
     @discardableResult
     func cleanupOrphanClones() async -> [String] {
-        loaded = false
+        invalidate()
         try? await loadIfNeeded()
 
         let candidates = devices.filter { $0.name.hasPrefix(Self.clonePrefix) }

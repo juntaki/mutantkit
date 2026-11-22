@@ -1,3 +1,4 @@
+@testable import AppleBuildAdapters
 import Darwin
 import Foundation
 import MutationModel
@@ -134,92 +135,103 @@ enum Acceptance {
         try Data(lines.joined(separator: "\n").utf8).write(to: configurationURL, options: .atomic)
     }
 
+    /// A suggested iOS Simulator destination: `name=iPhone…`, or the documented
+    /// `id=<UDID>` form the detector emits when the same name exists under two
+    /// runtimes of one version (see `XcodeConfigDetector.selectDestination`).
+    static func isDetectedIOSSimulatorDestination(_ destination: String) -> Bool {
+        destination.hasPrefix("platform=iOS Simulator,name=iPhone") || hasNonEmptyUDID(destination, after: "platform=iOS Simulator,id=")
+    }
+
+    /// `destination` starts with `prefix` and a non-empty UDID follows it.
+    private static func hasNonEmptyUDID(_ destination: String, after prefix: String) -> Bool {
+        guard destination.hasPrefix(prefix) else { return false }
+        guard let first = destination.dropFirst(prefix.count).first else { return false }
+        return first != "," && !first.isWhitespace
+    }
+
+    /// Whether `text` contains `prefix` followed by a detected iOS Simulator destination.
+    static func containsDetectedDestination(_ prefix: String, in text: String) -> Bool {
+        if text.contains(prefix + "platform=iOS Simulator,name=iPhone") { return true }
+        let marker = prefix + "platform=iOS Simulator,id="
+        var searchFrom = text.startIndex
+        while let range = text.range(of: marker, range: searchFrom ..< text.endIndex) {
+            if let first = text[range.upperBound...].first, first != ",", !first.isWhitespace, first != "\n" { return true }
+            searchFrom = range.upperBound
+        }
+        return false
+    }
+
     /// A simulator destination this machine can actually satisfy.
     ///
     /// Discovered rather than pinned. A fixture naming `iPhone 17 Pro` only runs
     /// where that model exists, so it would fail on a CI runner with an older
     /// Xcode — and fail as an infrastructure error, which looks exactly like the
     /// tool being broken. Any iPhone exercises the same code path.
-    ///
-    /// Deliberately scoped to the **latest installed iOS runtime
-    /// specifically**, not "any iPhone-named device under any runtime" — a
-    /// runner image that ships several iOS Simulator runtimes side by side
-    /// (the v0.8 macos-26 image does: iOS 26.2/26.4.1/26.5 simultaneously)
-    /// can easily have a device provisioned under an older runtime but not
-    /// the newest one. Naming that device with no explicit `OS=` then
-    /// collides with `xcodebuild`'s own "no OS means latest" resolution: it
-    /// looks for that name under the *latest* runtime, finds nothing, and
-    /// refuses to guess (this tool's own destination resolver does the
-    /// identical fail-closed refusal for the identical reason, on the real
-    /// config path — see `Sources/AppleBuildAdapters/XcodeConfigDetector.swift`'s
-    /// destination resolution).
-    ///
-    /// The returned destination names the resolved OS version explicitly
-    /// (`OS=26.5`, not just `name=iPhone 17`): a bare device name is still
-    /// ambiguous whenever more than one runtime happens to provision a
-    /// device under that same model name, and an explicit `OS=` is the only
-    /// way to guarantee this helper's own choice — "the device under the
-    /// latest runtime" — is the same one `xcodebuild` resolves, rather than
-    /// two fail-closed refusals independently agreeing to disagree.
     static func iPhoneDestination() throws -> String {
+        try iPhoneDestination(
+            runtimesJSON: simctlJSON(SimulatorRuntimeCatalog.runtimesArguments),
+            devicesJSON: simctlJSON(SimulatorRuntimeCatalog.devicesArguments)
+        )
+    }
+
+    /// The pure selection behind `iPhoneDestination()`, over the two `simctl` payloads.
+    ///
+    /// Built from `SimulatorRuntimeCatalog`: the OS version and platform come from
+    /// each runtime's own `version`/`platform` fields, never from its identifier
+    /// (`iOS-27-2-iPhone19-4` is OS 27.2). Scoped to the **latest iOS version that
+    /// has an available iPhone** — a runner may ship several runtimes side by
+    /// side, and a device provisioned only under an older one would collide with
+    /// `xcodebuild`'s "no OS means latest" resolution. When several runtimes share
+    /// that version, the first iPhone by name under the smallest runtime
+    /// identifier is taken. The result addresses it by UDID (`id=`): internal to
+    /// the acceptance suites, and unambiguous however many runtimes share the version.
+    static func iPhoneDestination(runtimesJSON: Data, devicesJSON: Data) throws -> String {
+        let catalog = try SimulatorRuntimeCatalog.build(runtimesJSON: runtimesJSON, devicesJSON: devicesJSON)
+        let candidates = catalog.runtimes.filter { $0.platform == "iOS" && $0.devices.contains { $0.name.hasPrefix("iPhone") } }
+        guard let latest = candidates.map(\.version).max() else { throw AcceptanceError.noSimulator }
+        let runtimes = candidates.filter { $0.version == latest }
+        let names = Set(runtimes.flatMap(\.devices).map(\.name).filter { $0.hasPrefix("iPhone") })
+        guard let name = names.sorted().first, let device = SimulatorRuntimeCatalog.device(named: name, in: runtimes) else {
+            throw AcceptanceError.noSimulator
+        }
+        return device.destination
+    }
+
+    /// Seconds a `simctl list` probe may take, read and exit together.
+    private static let simctlProbeTimeoutSeconds = 30.0
+
+    /// Runs `xcrun <arguments>` and returns its stdout, with the *whole* run bounded.
+    ///
+    /// Output goes to a file, not a pipe: reading a pipe to EOF blocks until the
+    /// child closes it, which a stalled `simctl` never does, so the timeout would
+    /// never start. Waiting is bounded by `BoundedProcessWait`, which kills a
+    /// stuck process; the file is read only after it is gone.
+    private static func simctlJSON(_ arguments: [String]) throws -> Data {
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("simctl-probe-\(UUID().uuidString).json")
+        FileManager.default.createFile(atPath: output.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: output) }
+        let handle = try FileHandle(forWritingTo: output)
+        defer { try? handle.close() }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "list", "devices", "available", "--json"]
-
-        let pipe = cloexecPipe()
-        process.standardOutput = pipe
+        process.arguments = arguments
+        process.standardOutput = handle
+        process.standardError = FileHandle.nullDevice
         try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        BoundedProcessWait.wait(process)
-
-        struct Listing: Decodable {
-            struct Device: Decodable {
-                let name: String
-                let isAvailable: Bool?
-            }
-
-            let devices: [String: [Device]]
+        guard BoundedProcessWait.wait(process, timeoutSeconds: simctlProbeTimeoutSeconds) else {
+            throw AcceptanceError.commandFailed(
+                command: "xcrun \(arguments.joined(separator: " "))", exitCode: -1,
+                output: "timed out after \(Int(simctlProbeTimeoutSeconds))s"
+            )
         }
-
-        let listing = try JSONDecoder().decode(Listing.self, from: data)
-        // Runtime identifiers look like
-        // "com.apple.CoreSimulator.SimRuntime.iOS-26-5" — extracting the
-        // dot-separated version suffix and comparing numerically (not
-        // lexically: "iOS-26-10" must sort after "iOS-26-9") finds the
-        // actual latest installed iOS runtime, the same one an unqualified
-        // `OS:latest` destination resolves to.
-        func iOSVersion(fromRuntimeKey key: String) -> [Int]? {
-            guard let range = key.range(of: "SimRuntime.iOS-") else { return nil }
-            let versionPart = key[range.upperBound...]
-            let components = versionPart.split(separator: "-").compactMap { Int($0) }
-            return components.isEmpty ? nil : components
+        guard process.terminationStatus == 0 else {
+            throw AcceptanceError.commandFailed(
+                command: "xcrun \(arguments.joined(separator: " "))", exitCode: process.terminationStatus,
+                output: "simctl exited non-zero"
+            )
         }
-
-        guard let (latestRuntimeKey, latestVersion) = listing.devices.keys
-            .compactMap({ key in iOSVersion(fromRuntimeKey: key).map { (key, $0) } })
-            .max(by: { $0.1.lexicographicallyPrecedes($1.1) })
-        else {
-            throw AcceptanceError.noSimulator
-        }
-
-        // Sorted for determinism: two runs on one machine must choose the same
-        // device, or a flake becomes impossible to reproduce.
-        let iPhones = (listing.devices[latestRuntimeKey] ?? [])
-            .filter { ($0.isAvailable ?? true) && $0.name.hasPrefix("iPhone") }
-            .map(\.name)
-            .sorted()
-
-        guard let device = iPhones.first else {
-            throw AcceptanceError.noSimulator
-        }
-        // Dot-joined: `xcodebuild`'s own standard `-destination` syntax
-        // (`OS=17.4`) — some acceptance suites hand this string straight to
-        // `xcodebuild` (e.g. a direct `build-for-testing` invocation), not
-        // only through `DestinationResolver`'s own UDID-substituting
-        // resolution, so it must be valid on its own as a real destination,
-        // not just as `DestinationResolver`'s internal matching input.
-        let osVersion = latestVersion.map(String.init).joined(separator: ".")
-        return "platform=iOS Simulator,name=\(device),OS=\(osVersion)"
+        return try Data(contentsOf: output)
     }
 
     /// - Parameter binary: which `mutantkit` executable to run — defaults to the

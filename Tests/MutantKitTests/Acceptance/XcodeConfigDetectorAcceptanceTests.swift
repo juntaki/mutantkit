@@ -23,7 +23,7 @@ struct XcodeConfigDetectorAcceptanceTests {
     func detectsRealDestination() async throws {
         let destination = await XcodeConfigDetector.detectDestination(projectRoot: Acceptance.packageRoot)
         let resolved = try #require(destination, "expected at least one real iOS Simulator on this machine")
-        #expect(resolved.hasPrefix("platform=iOS Simulator,name=iPhone"))
+        #expect(Acceptance.isDetectedIOSSimulatorDestination(resolved), "\(resolved)")
     }
 
     /// Regression test for a real bug caught by manual end-to-end testing,
@@ -48,7 +48,7 @@ struct XcodeConfigDetectorAcceptanceTests {
         #expect(detection.schemeCandidates.count > 1, "expected this fixture to still have more than one scheme")
         #expect(detection.testTargets.isEmpty, "test targets genuinely cannot be resolved without knowing which scheme")
         #expect(
-            detection.destination?.hasPrefix("platform=iOS Simulator,name=") == true,
+            detection.destination.map(Acceptance.isDetectedIOSSimulatorDestination) == true,
             "a destination must still be found despite the scheme ambiguity"
         )
         #expect(

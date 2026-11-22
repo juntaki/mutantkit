@@ -55,7 +55,7 @@ struct SimulatorPoolLifecycleTests {
             if arguments.contains("list") {
                 return ProcessResult(
                     exitCode: 0,
-                    standardOutput: Data(deviceJSON.utf8),
+                    standardOutput: Data((arguments.contains("runtimes") ? SimctlFixtures.iOS18RuntimesJSON : deviceJSON).utf8),
                     standardError: Data(),
                     durationSeconds: 0.01,
                     timedOut: false,
@@ -349,6 +349,7 @@ extension SimulatorPoolLifecycleTests {
     @Test("Cancellation during the retry delay aborts prepare without a second boot attempt")
     func cancellationDuringRetryDelayAbortsWithoutRetrying() async throws {
         let bootAttempts = Counter()
+        let failedStatuses = Counter()
         let pool = SimulatorPool(
             workingDirectory: Self.workingDirectory,
             processRunner: Self.runner { _, arguments in
@@ -357,6 +358,7 @@ extension SimulatorPoolLifecycleTests {
                     return Self.success()
                 }
                 if arguments.contains("bootstatus") {
+                    await failedStatuses.increment()
                     return Self.failure(exitCode: 1, "Device never became ready")
                 }
                 return Self.success()
@@ -366,10 +368,14 @@ extension SimulatorPoolLifecycleTests {
         let task = Task {
             try await pool.prepare(udid: Self.udid, bootstatusRetries: 2, retryDelaySeconds: 30)
         }
-        // Long enough for the first attempt's real bootstatus failure to be
-        // scripted and observed, short enough to land well inside the 30s
-        // retry delay rather than racing it.
-        try await Task.sleep(for: .milliseconds(200))
+        // Wait until the first attempt has actually run (discovery now takes two
+        // `simctl` listings, and a loaded machine can stretch that past any fixed
+        // sleep), then cancel well inside the 30s retry delay rather than racing it.
+        for _ in 0 ..< 500 where await failedStatuses.count == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // The first `bootstatus` has failed, so `prepare` is at (or entering) its 30s delay.
+        for _ in 0 ..< 5 { await Task.yield() }
         task.cancel()
 
         let result = await task.result
@@ -387,10 +393,12 @@ extension SimulatorPoolLifecycleTests {
     @Test("Cancellation while boot is running prevents bootstatus from ever launching")
     func cancellationDuringBootPreventsBootstatusLaunch() async throws {
         let bootstatusAttempts = Counter()
+        let bootStarted = Counter()
         let pool = SimulatorPool(
             workingDirectory: Self.workingDirectory,
             processRunner: Self.runner { _, arguments in
                 if arguments.contains("boot"), !arguments.contains("bootstatus") {
+                    await bootStarted.increment()
                     // Long enough that the test below can cancel while this
                     // is still in flight, short enough not to slow the
                     // suite down noticeably.
@@ -408,11 +416,16 @@ extension SimulatorPoolLifecycleTests {
         let task = Task {
             try await pool.prepare(udid: Self.udid)
         }
-        try await Task.sleep(for: .milliseconds(100))
+        // Cancel only once `boot` is really in flight (discovery takes two listings
+        // and may be slow on a loaded host), so the test always covers the gap.
+        for _ in 0 ..< 500 where await bootStarted.count == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         task.cancel()
 
         let result = await task.result
         #expect(throws: (any Error).self) { try result.get() }
+        #expect(await bootStarted.count == 1, "boot was really in flight when the cancellation landed")
         #expect(await bootstatusAttempts.count == 0, "cancellation during boot must prevent bootstatus from ever launching")
     }
 
