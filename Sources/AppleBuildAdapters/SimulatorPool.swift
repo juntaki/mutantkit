@@ -2,10 +2,15 @@ import Foundation
 import MutationExecution
 
 /// One simulator, as `simctl` describes it.
+///
+/// This is the shape encoded into run manifests (via `ResolvedDestination`), so
+/// it must stay `{udid, name, runtimeIdentifier, state}`: the runtime's platform
+/// and version are catalog-side facts (`CatalogDevice`), and the identifier is
+/// an opaque key that is never parsed.
 public struct SimulatorDevice: Codable, Sendable, Hashable {
     public let udid: String
     public let name: String
-    /// e.g. `com.apple.CoreSimulator.SimRuntime.iOS-18-2`.
+    /// Opaque runtime key, e.g. `com.apple.CoreSimulator.SimRuntime.iOS-18-2`.
     public let runtimeIdentifier: String
     public let state: String
 
@@ -14,59 +19,6 @@ public struct SimulatorDevice: Codable, Sendable, Hashable {
         self.name = name
         self.runtimeIdentifier = runtimeIdentifier
         self.state = state
-    }
-
-    /// The `-destination` argument that addresses this exact device.
-    ///
-    /// By UDID, never by name: names are not unique — a machine can carry several
-    /// "iPhone 16" devices across runtimes — and `xcodebuild` resolves a duplicate
-    /// name to whichever it finds first, which is how two workers end up on one
-    /// simulator.
-    ///
-    /// The `platform=` value is derived from `runtimeIdentifier`, not
-    /// hardcoded to iOS Simulator — this was previously wrong
-    /// unconditionally: `SimulatorPool.parse` groups devices by whatever
-    /// runtime `simctl list devices` itself reports, with no iOS filter at
-    /// all, so a machine with tvOS/watchOS/visionOS runtimes installed
-    /// already has those devices flowing through this same type — and
-    /// every one of them was getting labeled `platform=iOS Simulator`
-    /// regardless. A UDID is unambiguous on its own, so `xcodebuild` may
-    /// well have tolerated the mismatched label in practice, but shipping a
-    /// destination string that misdescribes the device's own platform is
-    /// wrong independently of whether `xcodebuild` happens to forgive it —
-    /// and `DestinationResolver`'s own doc comment already treats "which
-    /// runtime did this actually run against" as a question that must have
-    /// one honest answer, not a guess.
-    public var destination: String { "platform=\(Self.platformLabel(forRuntimeIdentifier: runtimeIdentifier)),id=\(udid)" }
-
-    /// Maps a `simctl`-reported runtime identifier
-    /// (`com.apple.CoreSimulator.SimRuntime.<Platform>-<Major>-<Minor>`, e.g.
-    /// `...SimRuntime.tvOS-17-0`) to the platform name `xcodebuild
-    /// -destination`'s own `platform=` key expects. Covers every
-    /// simulator-capable Apple platform `simctl` reports today; visionOS's
-    /// own runtime identifier segment is `xrOS`, not `visionOS` — confirmed
-    /// against Apple's own `SimRuntime` naming — but `-destination` still
-    /// expects `platform=visionOS Simulator`, so that mapping is deliberate,
-    /// not a typo.
-    ///
-    /// An identifier this cannot classify is real `simctl` data this type
-    /// has never observed — rather than silently mislabeling it as iOS (the
-    /// exact bug this method exists to fix), the raw runtime identifier is
-    /// used as the platform label verbatim, which reliably produces a clear
-    /// "no such platform" `xcodebuild` error instead of a silently-wrong,
-    /// misleadingly-plausible one.
-    private static func platformLabel(forRuntimeIdentifier runtimeIdentifier: String) -> String {
-        if runtimeIdentifier.localizedCaseInsensitiveContains("SimRuntime.tvOS") {
-            "tvOS Simulator"
-        } else if runtimeIdentifier.localizedCaseInsensitiveContains("SimRuntime.watchOS") {
-            "watchOS Simulator"
-        } else if runtimeIdentifier.localizedCaseInsensitiveContains("SimRuntime.xrOS") {
-            "visionOS Simulator"
-        } else if runtimeIdentifier.localizedCaseInsensitiveContains("SimRuntime.iOS") {
-            "iOS Simulator"
-        } else {
-            runtimeIdentifier
-        }
     }
 
     public var isBooted: Bool { state == "Booted" }
@@ -91,7 +43,14 @@ public enum BootOutcome: Sendable {
 /// cannot install to the same simulator and read each other's results.
 public struct SimulatorLease: Sendable {
     public let device: SimulatorDevice
-    public var destination: String { device.destination }
+    /// The `-destination` addressing this device by UDID, with the platform
+    /// label taken from its runtime's `platform` field.
+    public let destination: String
+
+    public init(device: SimulatorDevice, destination: String) {
+        self.device = device
+        self.destination = destination
+    }
 }
 
 public enum SimulatorPoolError: Error, CustomStringConvertible {
@@ -159,11 +118,19 @@ public actor SimulatorPool {
         _ timeoutSeconds: Double
     ) async throws -> ProcessResult
 
-    var devices: [SimulatorDevice] = []
+    /// The one source of truth for discovered devices; `devices` is a view of it.
+    var catalog = SimulatorRuntimeCatalog(runtimes: [])
+    var devices: [SimulatorDevice] { catalog.devices.map(\.device) }
     var leased: Set<String> = []
+    /// UDIDs a `deleteDevice` is in the middle of removing: reserved from before its
+    /// first `await`, so no lease can be granted on a device that is being deleted.
+    var deleting: Set<String> = []
     /// Callers waiting for a device to come back.
     var waiters: [CheckedContinuation<Void, Never>] = []
     var loaded = false
+    /// Bumped by every `invalidate()` and `deleteDevice`; a load started under an
+    /// older generation is stale and its result is never committed.
+    var generation = 0
     let timeoutSeconds: Double
     let workingDirectory: URL
     let runProcess: ProcessRunner
@@ -190,6 +157,18 @@ public actor SimulatorPool {
             workingDirectory: workingDirectory,
             timeoutSeconds: timeoutSeconds
         )
+    }
+
+    /// The runtime catalog, discovering it once per pool.
+    public func runtimeCatalog() async throws -> SimulatorRuntimeCatalog {
+        try await loadIfNeeded()
+        return catalog
+    }
+
+    /// Every available device with its runtime's platform and version.
+    public func catalogDevices() async throws -> [CatalogDevice] {
+        try await loadIfNeeded()
+        return catalog.devices
     }
 
     /// Every available device, discovering them once per pool.
@@ -309,7 +288,7 @@ public actor SimulatorPool {
     /// `runProcess` itself throws is rethrown as-is (never folded into
     /// `.fatalInvocation`), so it keeps propagating as cancellation rather
     /// than becoming an ordinary, retryable-looking failure.
-    private func attemptBoot(udid: String, bootTimeoutSeconds: Double) async throws {
+    func attemptBoot(udid: String, bootTimeoutSeconds: Double) async throws {
         try Task.checkCancellation()
 
         // Best-effort boot: the exit code is intentionally not checked.
@@ -363,17 +342,16 @@ public actor SimulatorPool {
     /// `nil` accepts any available device.
     ///
     /// Ambiguous by construction when a name matches devices under more than
-    /// one runtime: `candidates` keeps every match, and whichever sorts
-    /// first in `devices` (by `(runtimeIdentifier, name)`, so lexicographic
-    /// on the runtime string — the *older* runtime, not necessarily the
-    /// latest) wins if both happen to be free. Callers that already know
-    /// exactly which device a run resolved to — see `DestinationResolver` —
-    /// should use `lease(udid:)` instead, which has no such ambiguity to
-    /// resolve.
+    /// one runtime: `candidates` keeps every match in catalog order (runtime
+    /// version ascending, then runtime identifier, then name, then UDID), so the
+    /// *oldest* matching runtime's device wins if several are free — not
+    /// necessarily the latest. Callers that already know exactly which device a
+    /// run resolved to — see `DestinationResolver` — should use `lease(udid:)`
+    /// instead, which has no such ambiguity to resolve.
     public func lease(matching runtimeHint: String? = nil) async throws -> SimulatorLease {
         try await loadIfNeeded()
 
-        let candidates = devices.filter { device in
+        let candidates = catalog.devices.filter { device in
             guard let runtimeHint else { return true }
             return device.runtimeIdentifier.localizedCaseInsensitiveContains(runtimeHint)
                 || device.name.localizedCaseInsensitiveContains(runtimeHint)
@@ -394,18 +372,23 @@ public actor SimulatorPool {
     public func lease(udid: String) async throws -> SimulatorLease {
         try await loadIfNeeded()
 
-        guard let device = devices.first(where: { $0.udid == udid }) else {
+        guard !deleting.contains(udid), let device = catalog.devices.first(where: { $0.udid == udid }) else {
             throw SimulatorPoolError.noneAvailable(runtimeHint: udid)
         }
 
         return try await waitForLease(among: [device], hint: udid)
     }
 
-    private func waitForLease(among candidates: [SimulatorDevice], hint: String?) async throws -> SimulatorLease {
+    private func waitForLease(among candidates: [CatalogDevice], hint: String?) async throws -> SimulatorLease {
         while true {
-            if let free = candidates.first(where: { !leased.contains($0.udid) }) {
+            // Also after waking from a release: a cancelled waiter must not take it.
+            try Task.checkCancellation()
+            // A candidate deleted while we waited is gone for good: don't wait for it.
+            let present = candidates.filter { candidate in catalog.devices.contains { $0.udid == candidate.udid } }
+            if present.isEmpty { throw SimulatorPoolError.noneAvailable(runtimeHint: hint) }
+            if let free = present.first(where: { !leased.contains($0.udid) && !deleting.contains($0.udid) }) {
                 leased.insert(free.udid)
-                return SimulatorLease(device: free)
+                return SimulatorLease(device: free.device, destination: free.destination)
             }
             // Every match is busy. Suspend until a release wakes us; the actor
             // serialises this, so no two callers can claim the same device.
@@ -448,71 +431,72 @@ public actor SimulatorPool {
 
     // MARK: - Discovery
 
-    func loadIfNeeded() async throws {
-        guard !loaded else { return }
+    /// Forces the next `loadIfNeeded` to list again. A load already running in
+    /// another caller started before this call is stale and is never committed.
+    func invalidate() {
+        loaded = false
+        generation += 1
+    }
 
-        let arguments = ["simctl", "list", "devices", "available", "--json"]
-        let result: ProcessResult
+    /// Loads the catalog if it is not loaded: each caller lists in its own task
+    /// (structured, so its cancellation is its own; concurrent cold callers may
+    /// list twice, as they always did).
+    ///
+    /// A result is committed only if no `invalidate()`/`deleteDevice` happened
+    /// while it was being read and nobody else committed meanwhile. A stale
+    /// result — or a failure of a stale load — is dropped and the loop re-reads,
+    /// so it can neither overwrite newer state nor fail a caller whose own,
+    /// newer state is fine.
+    func loadIfNeeded() async throws {
+        while !loaded {
+            try Task.checkCancellation()
+            let startedAt = generation
+            let built: SimulatorRuntimeCatalog
+            do {
+                built = try await fetchCatalog()
+            } catch {
+                if error is CancellationError { throw error }
+                if startedAt != generation || loaded { continue }
+                throw error
+            }
+            try Task.checkCancellation()
+            guard startedAt == generation, !loaded else { continue }
+            catalog = built
+            loaded = true
+        }
+        // A warm pool, or a loop left by a stale failure, never saw the caller's
+        // cancellation: a cancelled caller must not proceed to lease or boot.
+        try Task.checkCancellation()
+    }
+
+    private func fetchCatalog() async throws -> SimulatorRuntimeCatalog {
+        try Task.checkCancellation()
+        let runtimesJSON = try await runSimctlList(SimulatorRuntimeCatalog.runtimesArguments)
+        try Task.checkCancellation()
+        let devicesJSON = try await runSimctlList(SimulatorRuntimeCatalog.devicesArguments)
+        try Task.checkCancellation()
         do {
-            result = try await runProcess(
-                ToolPaths.xcrun, arguments,
-                workingDirectory, timeoutSeconds
-            )
+            return try SimulatorRuntimeCatalog.build(runtimesJSON: runtimesJSON, devicesJSON: devicesJSON)
         } catch {
             throw SimulatorPoolError.simctlFailed(detail: "\(error)")
         }
+    }
 
+    private func runSimctlList(_ arguments: [String]) async throws -> Data {
+        let result: ProcessResult
+        do {
+            result = try await runProcess(ToolPaths.xcrun, arguments, workingDirectory, timeoutSeconds)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw SimulatorPoolError.simctlFailed(detail: "\(error)")
+        }
         guard result.succeeded else {
             throw SimulatorPoolError.simctlFailed(
                 detail: OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
-
-        devices = try Self.parse(result.standardOutput)
-        loaded = true
-    }
-
-    /// Parses `simctl list devices available --json`.
-    ///
-    /// The payload keys devices by runtime identifier, so the runtime is carried
-    /// down onto each device rather than being lost with the grouping.
-    static func parse(_ data: Data) throws -> [SimulatorDevice] {
-        struct Payload: Decodable {
-            struct Device: Decodable {
-                let udid: String
-                let name: String
-                let state: String
-                /// `available` is already implied by the query, but a device can
-                /// still report itself unusable.
-                let isAvailable: Bool?
-            }
-
-            let devices: [String: [Device]]
-        }
-
-        let payload: Payload
-        do {
-            payload = try JSONDecoder().decode(Payload.self, from: data)
-        } catch {
-            throw SimulatorPoolError.simctlFailed(detail: "simctl emitted unreadable JSON: \(error)")
-        }
-
-        return payload.devices
-            .flatMap { runtime, devices in
-                devices
-                    .filter { $0.isAvailable ?? true }
-                    .map {
-                        SimulatorDevice(
-                            udid: $0.udid,
-                            name: $0.name,
-                            runtimeIdentifier: runtime,
-                            state: $0.state
-                        )
-                    }
-            }
-            // Sorted so that a given machine leases devices in a repeatable order
-            // and a failing run can be reproduced against the same simulator.
-            .sorted { ($0.runtimeIdentifier, $0.name) < ($1.runtimeIdentifier, $1.name) }
+        return result.standardOutput
     }
 }

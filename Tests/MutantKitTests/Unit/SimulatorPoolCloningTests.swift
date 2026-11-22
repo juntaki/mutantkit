@@ -47,6 +47,10 @@ struct SimulatorPoolCloningTests {
         /// provisioning several devices.
         var succeedCloneCountRemaining: Int?
         var failBootFor: Set<String> = []
+        /// When set, `simctl list runtimes` starts failing once a clone has
+        /// succeeded — models the post-clone refresh failing.
+        var failRuntimesListAfterClone = false
+        private(set) var runtimesListFails = false
         private(set) var bootedUDIDs: Set<String>
         private(set) var cloneCallCount = 0
         private(set) var deletedUDIDs: [String] = []
@@ -84,6 +88,7 @@ struct SimulatorPoolCloningTests {
             nextCloneUDID += 1
             let udid = "CLONE\(String(format: "%03d", nextCloneUDID))-0000-0000-0000-000000000000"
             devices.append((udid: udid, name: name))
+            if failRuntimesListAfterClone { runtimesListFails = true }
             return .succeeded(udid: udid)
         }
 
@@ -102,6 +107,10 @@ struct SimulatorPoolCloningTests {
 
         func shutdown(udid: String) {
             bootedUDIDs.remove(udid)
+        }
+
+        func setFailRuntimesListAfterClone() {
+            failRuntimesListAfterClone = true
         }
 
         func setFailCloneWithError() {
@@ -125,6 +134,10 @@ struct SimulatorPoolCloningTests {
     }
 
     private static func respond(to arguments: [String], simctl: FakeSimctl) async -> ProcessResult {
+        if arguments.contains("runtimes") {
+            if await simctl.runtimesListFails { return failure("list runtimes timed out") }
+            return success(SimctlFixtures.iOS18RuntimesJSON)
+        }
         if arguments.contains("list") {
             return success(await simctl.listJSON())
         }
@@ -181,7 +194,7 @@ struct SimulatorPoolCloningTests {
     }
 
     private static var baseDevice: SimulatorDevice {
-        SimulatorDevice(udid: baseUDID, name: baseName, runtimeIdentifier: runtime, state: "Shutdown")
+        SimctlFixtures.device(baseName, udid: baseUDID, identifier: runtime).device
     }
 
     // MARK: - cloneDevice
@@ -196,6 +209,22 @@ struct SimulatorPoolCloningTests {
         #expect(clone.udid != Self.baseUDID)
         #expect(clone.name == "\(SimulatorPool.clonePrefix)test-1")
         #expect(clone.runtimeIdentifier == Self.runtime)
+    }
+
+    @Test("A clone whose post-clone refresh fails is deleted, not leaked")
+    func cloneDeviceDeletesCloneWhenRefreshFails() async throws {
+        let simctl = FakeSimctl(devices: [(Self.baseUDID, Self.baseName)])
+        await simctl.setFailRuntimesListAfterClone()
+        let pool = Self.pool(simctl)
+        _ = try await pool.availableDevices()
+
+        await #expect(throws: SimulatorPoolError.self) {
+            _ = try await pool.cloneDevice(from: Self.baseDevice, label: "test-1")
+        }
+
+        let remaining = await simctl.devices.map(\.udid)
+        #expect(remaining == [Self.baseUDID], "the clone must not survive the failed refresh")
+        #expect(await simctl.deletedUDIDs.count == 1)
     }
 
     @Test("cloneDevice throws when simctl clone itself fails")

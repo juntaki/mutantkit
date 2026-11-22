@@ -15,9 +15,11 @@ struct SimulatorPoolLeaseMatchingTests {
     private func pool() -> SimulatorPool {
         SimulatorPool(
             workingDirectory: FileManager.default.temporaryDirectory,
-            processRunner: { _, _, _, _ in
+            processRunner: { _, arguments, _, _ in
                 ProcessResult(
-                    exitCode: 0, standardOutput: Data(Self.list.utf8), standardError: Data(),
+                    exitCode: 0,
+                    standardOutput: Data((arguments.contains("runtimes") ? SimctlFixtures.iOS18RuntimesJSON : Self.list).utf8),
+                    standardError: Data(),
                     durationSeconds: 0.01, timedOut: false, terminatingSignal: nil, outputComplete: true
                 )
             }

@@ -23,15 +23,32 @@ public struct ResolvedDestination: Codable, Sendable, Hashable {
     /// pick a real device for at test time.
     public let device: SimulatorDevice?
 
-    public init(requested: String, device: SimulatorDevice?) {
+    /// The runtime `platform` (`iOS`, `tvOS`, …) of the selected device, from the
+    /// catalog at resolve time. `nil` only for a record written before this field
+    /// existed (an older run manifest) — `DestinationResolver.completingForReplay`
+    /// fills it from the live catalog before such a record is used.
+    public let platform: String?
+
+    public init(requested: String, device: SimulatorDevice?, platform: String? = nil) {
         self.requested = requested
         self.device = device
+        self.platform = platform
     }
 
     /// The `-destination` argument to actually pass to `xcodebuild`: the
     /// resolved device by UDID when there is one, the original specifier
     /// otherwise.
-    public var destinationArgument: String { device?.destination ?? requested }
+    ///
+    /// The `platform=` label comes from the selected device's own runtime
+    /// platform, never from the user's `requested` string — so a stale
+    /// `platform=tvOS Simulator,id=<iOS device>` and a correct
+    /// `platform=iOS Simulator,id=<same>` yield one argument and therefore one
+    /// run-lock key, exactly as on main.
+    public var destinationArgument: String {
+        guard let device else { return requested }
+        guard let platform else { return "id=\(device.udid)" }
+        return "platform=\(SimulatorRuntimeCatalog.destinationPlatform(forPlatform: platform)),id=\(device.udid)"
+    }
 }
 
 public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable {
@@ -55,6 +72,11 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
     /// this machine has.
     case unknownUDID(String)
     case simulatorPoolFailure(String)
+    /// A replayed run recorded a simulator that this machine no longer has.
+    case recordedDeviceMissing(String)
+    /// The requested device was listed by `simctl`, but under a runtime
+    /// `list runtimes` does not report, so it cannot be used or classified.
+    case deviceSkipped(String)
 
     public var description: String {
         switch self {
@@ -82,6 +104,14 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
             """
         case let .unknownUDID(udid):
             "No simulator with UDID \(udid) is available on this machine."
+        case let .recordedDeviceMissing(udid):
+            """
+            The recorded run used simulator \(udid), which is not available on this machine, so its \
+            exact conditions cannot be replayed. Use --run to build and test against the current \
+            environment instead.
+            """
+        case let .deviceSkipped(detail):
+            "The requested simulator cannot be used: \(detail)"
         case let .simulatorPoolFailure(detail):
             "Could not resolve the destination: \(detail)"
         }
@@ -98,21 +128,15 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
 public enum DestinationResolver {
     /// Every `platform=` value `xcodebuild -destination` accepts that names a
     /// simulator, as opposed to macOS or a physical device, paired with the
-    /// token its `SimRuntime` identifier uses for the same platform (e.g. a
-    /// `platform=visionOS Simulator` destination's devices report a runtime
-    /// identifier containing `SimRuntime.xrOS-...`, not `visionOS` — real
-    /// Apple naming, not a typo). This list used to be `"iOS Simulator"`
-    /// alone, which meant a `platform=tvOS Simulator,name=X`/`watchOS
-    /// Simulator`/`visionOS Simulator` destination silently skipped this
-    /// whole type's name/UDID pinning entirely — reintroducing, for those
-    /// three platforms only, the exact "OS:latest resolves differently per
-    /// invocation" bug this type exists to fix for iOS (see this type's own
-    /// doc comment).
-    static let simulatorPlatforms: [(name: String, runtimeToken: String)] = [
+    /// runtime `platform` field (`simctl list runtimes --json`) it corresponds
+    /// to. A destination naming any of these gets this type's name/UDID
+    /// pinning, so the "OS:latest resolves differently per invocation" bug is
+    /// closed for every simulator platform, not just iOS.
+    static let simulatorPlatforms: [(name: String, platform: String)] = [
         ("iOS Simulator", "iOS"),
         ("tvOS Simulator", "tvOS"),
         ("watchOS Simulator", "watchOS"),
-        ("visionOS Simulator", "xrOS")
+        ("visionOS Simulator", "visionOS")
     ]
 
     /// Module-internal, not `private`: `XcodeBuildAdapter
@@ -126,17 +150,16 @@ public enum DestinationResolver {
         simulatorPlatforms.contains { requested.localizedCaseInsensitiveContains($0.name) }
     }
 
-    /// The `SimRuntime` token for the platform `requested` names (`nil` for
+    /// The runtime platform for the destination `requested` names (`nil` for
     /// a non-simulator destination) — used to scope "latest installed
-    /// runtime" to runtimes of the *same platform* as what was actually
-    /// requested, never across all installed simulator platforms at once.
-    /// Without this, a machine with both iOS and tvOS runtimes installed
-    /// resolving an unqualified tvOS destination could in principle compute
-    /// "latest" from an iOS runtime identifier that happens to sort higher —
-    /// wrong for exactly the same reason mixing runtimes together was
-    /// already understood to be wrong for iOS alone.
-    private static func runtimeToken(forRequestedDestination requested: String) -> String? {
-        simulatorPlatforms.first { requested.localizedCaseInsensitiveContains($0.name) }?.runtimeToken
+    /// runtime" to runtimes of the *same platform* as what was requested.
+    ///
+    /// Read from the destination's own `platform=` field, not by searching the
+    /// whole string: `platform=watchOS Simulator,name=iOS Simulator Lab` is a
+    /// watchOS destination whatever the device is called.
+    private static func runtimePlatform(forRequestedDestination requested: String) -> String? {
+        guard let value = field(named: "platform", inDestination: requested) else { return nil }
+        return simulatorPlatforms.first { $0.name.caseInsensitiveCompare(value) == .orderedSame }?.platform
     }
 
     /// Resolves against a live pool — the production entry point. Devices
@@ -152,14 +175,36 @@ public enum DestinationResolver {
             return ResolvedDestination(requested: requested, device: nil)
         }
 
-        let devices: [SimulatorDevice]
+        let catalog: SimulatorRuntimeCatalog
         do {
-            devices = try await pool.availableDevices()
+            catalog = try await pool.runtimeCatalog()
         } catch let error as SimulatorPoolError {
             throw DestinationResolutionError.simulatorPoolFailure(error.description)
         }
 
-        return try resolve(requested, against: devices, isBuiltInDefault: isBuiltInDefault)
+        return try resolve(requested, against: catalog.devices, skipped: catalog.skipped, isBuiltInDefault: isBuiltInDefault)
+    }
+
+    /// Completes a record decoded from a run manifest for replay. The recorded
+    /// UDID is always looked up in the live catalog — fails closed if the device
+    /// is gone or the catalog cannot be read, for a record of either format —
+    /// and the `platform` is filled from it only when the record has none
+    /// (a main-format manifest).
+    public static func completingForReplay(
+        _ recorded: ResolvedDestination,
+        using pool: SimulatorPool
+    ) async throws -> ResolvedDestination {
+        guard let device = recorded.device else { return recorded }
+        let catalog: SimulatorRuntimeCatalog
+        do {
+            catalog = try await pool.runtimeCatalog()
+        } catch let error as SimulatorPoolError {
+            throw DestinationResolutionError.simulatorPoolFailure(error.description)
+        }
+        guard let live = catalog.devices.first(where: { $0.udid == device.udid }) else {
+            throw DestinationResolutionError.recordedDeviceMissing(device.udid)
+        }
+        return ResolvedDestination(requested: recorded.requested, device: device, platform: recorded.platform ?? live.platform)
     }
 
     /// The pure decision, given the device list already in hand — separated
@@ -168,7 +213,8 @@ public enum DestinationResolver {
     /// simulator or a `simctl` call to do it.
     static func resolve(
         _ requested: String,
-        against devices: [SimulatorDevice],
+        against devices: [CatalogDevice],
+        skipped: [SkippedDevice] = [],
         isBuiltInDefault: Bool = false
     ) throws -> ResolvedDestination {
         guard isSimulatorDestination(requested) else {
@@ -179,9 +225,12 @@ public enum DestinationResolver {
 
         if let udid = udid(inDestination: requested) {
             guard let match = devices.first(where: { $0.udid == udid }) else {
+                if let skippedDevice = skipped.first(where: { $0.udid == udid }) {
+                    throw DestinationResolutionError.deviceSkipped("\(udid) (\(skippedDevice.name)): \(skippedDevice.reason)")
+                }
                 throw DestinationResolutionError.unknownUDID(udid)
             }
-            return ResolvedDestination(requested: requested, device: match)
+            return ResolvedDestination(requested: requested, device: match.device, platform: match.platform)
         }
 
         guard let name = Self.deviceName(inDestination: requested) else {
@@ -193,6 +242,11 @@ public enum DestinationResolver {
 
         let matches = devices.filter { $0.name == name }
         guard !matches.isEmpty else {
+            if let skippedDevice = skipped.first(where: { $0.name == name }) {
+                throw DestinationResolutionError.deviceSkipped(
+                    "\"\(name)\" (\(skippedDevice.udid)): \(skippedDevice.reason)"
+                )
+            }
             let knownNames = Array(Set(devices.map(\.name))).sorted()
             if isBuiltInDefault {
                 throw DestinationResolutionError.defaultDestinationNotFound(name: name, knownNames: knownNames)
@@ -200,49 +254,57 @@ public enum DestinationResolver {
             throw DestinationResolutionError.notFound(name: name, knownNames: knownNames)
         }
 
+        let platform = Self.runtimePlatform(forRequestedDestination: requested)
+        let platformDevices = platform.map { platform in devices.filter { $0.platform == platform } } ?? devices
+
         if let explicitOS = Self.explicitOS(inDestination: requested) {
-            // `xcodebuild`'s own `-destination` syntax dot-separates an OS
-            // version (`OS=17.4`); a `SimRuntime` identifier hyphen-separates
-            // the same version (`iOS-17-4`). Normalizing to hyphens before
-            // matching accepts both — an explicit OS written the standard
-            // xcodebuild way must resolve exactly like one written in the
-            // internal identifier's own separator, never fail only because
-            // it used the separator any real `-destination` string uses.
-            let normalizedOS = explicitOS.replacingOccurrences(of: ".", with: "-")
-            guard let match = matches.first(where: { $0.runtimeIdentifier.localizedCaseInsensitiveContains(normalizedOS) })
-            else {
+            // Compared as numeric versions against each runtime's own
+            // `version` field: `OS=27.2` matches version 27.2 whatever the
+            // runtime's identifier looks like. The configured value is user
+            // input, and older configs spell it with hyphens (`OS=26-3-1`), so
+            // `-` is read as `.` here — config parsing, not identifier parsing.
+            // Equality is exact and numeric: `26.3` equals `26.3.0` but no
+            // longer matches 26.3.1 (it used to, as a substring of the identifier).
+            let wanted = RuntimeVersion(explicitOS.replacingOccurrences(of: "-", with: "."))
+            let sameVersion = platformDevices.filter { $0.runtimeVersion == wanted }
+            guard let match = Self.pick(named: name, from: sameVersion) else {
                 throw DestinationResolutionError.notFound(
                     name: "\(name) (OS \(explicitOS))",
-                    knownNames: matches.map { "\($0.name) (\($0.runtimeIdentifier))" }
+                    knownNames: matches.map { "\($0.name) (OS \($0.runtimeVersion), \($0.runtimeIdentifier))" }
                 )
             }
-            return ResolvedDestination(requested: requested, device: match)
+            return ResolvedDestination(requested: requested, device: match.device, platform: match.platform)
         }
 
         // No explicit OS: this is exactly the implicit `OS:latest` case.
-        // "Latest" is the highest-version runtime installed on the machine
-        // at all — not just among this name's matches — because that is
-        // what xcodebuild's own unqualified resolution means, and the
-        // property a resolution must not silently deviate from. Scoped to
-        // runtimes of the *requested platform* (`platformDevices`), not
-        // every installed simulator platform at once — see
-        // `runtimeToken(forRequestedDestination:)`'s own doc comment.
-        let requestedRuntimeToken = Self.runtimeToken(forRequestedDestination: requested)
-        let platformDevices = requestedRuntimeToken.map { token in
-            devices.filter { $0.runtimeIdentifier.localizedCaseInsensitiveContains("SimRuntime.\(token)-") }
-        } ?? devices
-        guard let latestRuntime = platformDevices.map(\.runtimeIdentifier).max(by: Self.runtimeIsOlder) else {
+        // "Latest" is the highest-version runtime of the requested platform
+        // installed on the machine at all — not just among this name's
+        // matches — because that is what xcodebuild's own unqualified
+        // resolution means. Several runtimes can share that version (a
+        // generic 27.2 beside a device-specific one); the name is then
+        // looked up under all of them, ties broken by `pick`.
+        guard let latest = platformDevices.map(\.runtimeVersion).max() else {
             throw DestinationResolutionError.notFound(name: name, knownNames: [])
         }
-
-        guard let match = matches.first(where: { $0.runtimeIdentifier == latestRuntime }) else {
+        guard let match = Self.pick(named: name, from: platformDevices.filter { $0.runtimeVersion == latest }) else {
             throw DestinationResolutionError.ambiguousAcrossRuntimes(
                 name: name,
-                expectedRuntime: latestRuntime,
-                foundUnder: Array(Set(matches.map(\.runtimeIdentifier))).sorted()
+                expectedRuntime: "\(platform ?? "simulator") \(latest)",
+                foundUnder: Array(Set(matches.map { "\($0.runtimeIdentifier) (OS \($0.runtimeVersion))" })).sorted()
             )
         }
-        return ResolvedDestination(requested: requested, device: match)
+        return ResolvedDestination(requested: requested, device: match.device, platform: match.platform)
+    }
+
+    /// The device named `name` among `candidates` (all one platform and version).
+    /// When more than one runtime of that version has such a device, the one under
+    /// the smallest runtime identifier wins — an arbitrary but stable tiebreak,
+    /// since identifiers are opaque. The result is addressed by UDID
+    /// (`ResolvedDestination.destinationArgument`), so `xcodebuild` never has to
+    /// resolve the duplicate name itself.
+    private static func pick(named name: String, from candidates: [CatalogDevice]) -> CatalogDevice? {
+        candidates.filter { $0.name == name }
+            .min { ($0.runtimeIdentifier, $0.udid) < ($1.runtimeIdentifier, $1.udid) }
     }
 
     // MARK: - Destination string parsing
@@ -271,41 +333,6 @@ public enum DestinationResolver {
     static func explicitOS(inDestination destination: String) -> String? {
         guard let value = field(named: "OS", inDestination: destination), value != "latest" else { return nil }
         return value
-    }
-
-    // MARK: - Runtime version comparison
-
-    /// `com.apple.CoreSimulator.SimRuntime.iOS-26-3-1` → `[26, 3, 1]`, or
-    /// `...SimRuntime.tvOS-17-0` → `[17, 0]`, and likewise for `watchOS-`/
-    /// `xrOS-`.
-    ///
-    /// Compared component-wise as integers, not as strings: a lexicographic
-    /// comparison of the identifiers puts `iOS-26-10` before `iOS-26-9`
-    /// (`'1' < '9'`), which is simply wrong once any component reaches two
-    /// digits.
-    ///
-    /// Generalized from a hardcoded `"iOS-"` search to every known platform
-    /// token. Before this, a tvOS/watchOS/visionOS runtime identifier
-    /// always produced an empty `[]` here regardless of its real version —
-    /// harmless while `resolve` only ever reached this function for iOS
-    /// destinations (an empty array always sorts as "oldest", so a real iOS
-    /// runtime always won `max(by:)` against any non-iOS one), but would
-    /// have made `runtimeIsOlder` unable to tell two different *tvOS*
-    /// runtime versions apart from each other at all once tvOS/watchOS/
-    /// visionOS destinations started reaching this same "OS:latest" logic.
-    private static func versionComponents(of runtimeIdentifier: String) -> [Int] {
-        for (_, token) in simulatorPlatforms {
-            guard let range = runtimeIdentifier.range(of: "\(token)-") else { continue }
-            return runtimeIdentifier[range.upperBound...].split(separator: "-").compactMap { Int($0) }
-        }
-        return []
-    }
-
-    private static func runtimeIsOlder(_ lhs: String, _ rhs: String) -> Bool {
-        let left = versionComponents(of: lhs)
-        let right = versionComponents(of: rhs)
-        for (a, b) in zip(left, right) where a != b { return a < b }
-        return left.count < right.count
     }
 
     /// The destination guessed for an `xcodebuild`-based kind with no

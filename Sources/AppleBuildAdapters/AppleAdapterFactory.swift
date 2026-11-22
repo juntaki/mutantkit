@@ -63,19 +63,23 @@ public enum AppleAdapterFactory {
     /// the original run recorded, not whatever `DestinationResolver` would
     /// answer *now*, which can differ if the machine's simulator inventory
     /// changed since. `resolve(configuration:in:)`'s own resolution is
-    /// skipped entirely, not merely overridden after the fact — this
-    /// guarantees no `simctl` call happens that could throw or return a
-    /// different answer.
+    /// skipped entirely, not merely overridden after the fact. The one `simctl`
+    /// read left is for a main-format manifest that recorded no platform: the
+    /// recorded UDID is looked up in the live catalog for its platform, and
+    /// replay fails closed if that device is gone.
     public static func resolve(
         configuration: Configuration,
         in directory: URL,
         replaying resolvedDestination: ResolvedDestination
     ) async throws -> Resolution {
         let detection = try await detect(configuration: configuration, in: directory, manifestDumps: nil)
+        let completed = try await DestinationResolver.completingForReplay(
+            resolvedDestination, using: SimulatorPool(workingDirectory: directory)
+        )
         return Resolution(
             adapter: adapter(
                 for: detection, configuration: configuration, projectRoot: directory,
-                resolvedDestination: resolvedDestination
+                resolvedDestination: completed
             ),
             detection: detection
         )
