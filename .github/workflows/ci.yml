@@ -537,7 +537,10 @@ jobs:
     # Generous: real xcodebuild/simulator work, legitimately slower than
     # `unit`'s own plain unit suite — but still bounded, per the same
     # "nothing runs unbounded" reasoning as `unit`'s own ceiling above.
-    timeout-minutes: 30
+    # xcode-project-schemata and xcode-wave-early-kill each run one long
+    # shared mutantkit run; on a loaded runner their Acceptance step alone
+    # took 21-23 minutes (2026-11-23), so 30 left them no headroom.
+    timeout-minutes: ${{ (matrix.fixture == 'xcode-project-schemata' || matrix.fixture == 'xcode-wave-early-kill') && 45 || 30 }}
     strategy:
       # Never cancel siblings: which fixtures fail together is a diagnosis.
       fail-fast: false
