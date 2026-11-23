@@ -24,10 +24,17 @@ enum GitDiff {
     /// Uses `--unified=0` so each hunk covers only changed lines: with the
     /// default context, a hunk would claim three untouched lines either side and
     /// a PR-scoped run would mutate code the change never touched.
+    ///
+    /// Uses `--relative` so paths come back relative to `root`, which is how the
+    /// planner names files. Without it git prints paths relative to the
+    /// repository root, so a project in a subdirectory of its repository
+    /// (`repo/Packages/MyPackage`) gets keys like `Packages/MyPackage/Sources/…`
+    /// that match nothing, and the plan is silently empty. When `root` is the
+    /// repository root it changes nothing.
     static func changedLines(since base: String, in root: URL) async throws -> DiffScope {
         let result = try await ProcessSupervisor.run(
             executable: "/usr/bin/git",
-            arguments: ["diff", "--unified=0", "--no-color", "--no-ext-diff", base, "--", "*.swift"],
+            arguments: ["diff", "--relative", "--unified=0", "--no-color", "--no-ext-diff", base, "--", "*.swift"],
             workingDirectory: root,
             timeoutSeconds: 120
         )
