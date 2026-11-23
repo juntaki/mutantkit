@@ -144,17 +144,40 @@ public struct BoolLiteralSchemataLowerer: SchemataLowerer {
     /// every chunk of the same target, since `SchemataChunkPlanner` always
     /// passes the *full* target file set to `lower(_:sources:)`, not just
     /// the subset a given chunk happens to touch.
+    ///
+    /// `nonisolated` on both functions: a target built with
+    /// `swiftSettings: [.defaultIsolation(MainActor.self)]` (Swift 6.2+)
+    /// makes every unannotated top-level declaration in it main-actor
+    /// isolated — these two included, since they are prepended into that
+    /// target's own sources. Both are then unreachable from exactly the
+    /// places they must be called from: `descriptorPreamble`'s
+    /// `nonisolated(unsafe)` initializer ("main actor-isolated default value
+    /// in a nonisolated(unsafe) context") and any mutated call site inside a
+    /// `nonisolated` function, an actor, or other code off the main actor
+    /// ("call to main actor-isolated global function in a synchronous
+    /// nonisolated context"). Either error fails the whole chunk's build, so
+    /// every mutant in it falls back to isolated mode — the run's verdicts
+    /// stay correct, but schemata never activates for that target at all.
+    /// Neither function touches any Swift state (each is a direct call into
+    /// the C runtime, which is already safe to call from any thread through
+    /// `pthread_once` and atomics — see `mutantkit_protocol_v3.c`), so
+    /// declaring them `nonisolated` states what is already true rather than
+    /// hiding a real race. Where default isolation is `nonisolated` (every
+    /// target that does not opt in) the modifier changes nothing. Swift 6.2
+    /// (SE-0466), the oldest toolchain this project supports
+    /// (`docs/apple-support-matrix.md`, Xcode 26.6), accepts `nonisolated` on
+    /// a global function, so it needs no version gate.
     public static let sharedDeclarationPreamble = """
     @_silgen_name("mutantkit_register_unit_v3")
     @usableFromInline
-    func __mutantkitRegisterUnitV3(
+    nonisolated func __mutantkitRegisterUnitV3(
         _ sourceEmbeddingHex: UnsafePointer<CChar>,
         _ compilationUnitHex: UnsafePointer<CChar>
     ) -> OpaquePointer?
 
     @_silgen_name("mutantkit_is_active_v3")
     @usableFromInline
-    func __mutantkitIsActiveV3(
+    nonisolated func __mutantkitIsActiveV3(
         _ descriptor: OpaquePointer?,
         _ namespaceValue: UInt64,
         _ localIndex: UInt32
