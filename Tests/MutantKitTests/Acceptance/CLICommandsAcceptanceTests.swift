@@ -400,10 +400,10 @@ struct CLICommandsAcceptanceTests {
         let result = try Acceptance.run(["init"], in: dir)
         #expect(result.exitCode == 0)
         #expect(result.output.contains("Multiple schemes found"))
-        #expect(result.output.contains("Detected destination: platform=iOS Simulator,name=iPhone"))
+        #expect(Acceptance.containsDetectedDestination("Detected destination: ", in: result.output))
 
         let generated = try String(contentsOf: dir.appendingPathComponent("mutantkit.yml"), encoding: .utf8)
-        #expect(generated.contains("platform=iOS Simulator,name=iPhone"))
+        #expect(Acceptance.containsDetectedDestination("", in: generated))
     }
 
     // MARK: - doctor
@@ -453,7 +453,7 @@ struct CLICommandsAcceptanceTests {
         #expect(result.exitCode != 0)
         #expect(result.output.contains("Detected scheme: BatchUIDemo"))
         #expect(result.output.contains("set `project.scheme: BatchUIDemo`"))
-        #expect(result.output.contains("Detected a real available destination: platform=iOS Simulator,name=iPhone"))
+        #expect(Acceptance.containsDetectedDestination("Detected a real available destination: ", in: result.output))
     }
 
     /// Phase C13 item ④: a real 4-way local benchmark against a real large

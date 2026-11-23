@@ -33,7 +33,7 @@ struct ToolchainProbeTests {
     }
 
     private func simulator(udid: String, runtimeIdentifier: String = "com.apple.CoreSimulator.SimRuntime.iOS-26-5") -> SimulatorDevice {
-        SimulatorDevice(udid: udid, name: "iPhone 16e", runtimeIdentifier: runtimeIdentifier, state: "Booted")
+        SimctlFixtures.device("iPhone 16e", udid: udid, identifier: runtimeIdentifier, version: "26.5", state: "Booted").device
     }
 
     /// Adversarial test C: two clones under the *identical* runtime, only
