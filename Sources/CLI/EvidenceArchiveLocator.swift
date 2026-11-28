@@ -42,7 +42,7 @@ enum EvidenceArchiveLocator {
     ) -> MutationVerdictVerifier.VerdictVerificationPolicy? {
         guard let plan,
               let configuration = try? ConfigurationLoader.load(explicitPath: configPath, projectRoot: root),
-              configuration.configurationHash == plan.configurationHash
+              (try? configuration.configurationHash) == plan.configurationHash
         else { return nil }
         return MutationVerdictVerifier.VerdictVerificationPolicy(configuration.execution)
     }

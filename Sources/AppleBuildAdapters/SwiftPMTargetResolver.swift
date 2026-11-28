@@ -92,8 +92,8 @@ public enum SwiftPMTargetResolver {
         } catch {
             throw ResolutionError.describeFailed(diagnosis: "\(error)")
         }
-        guard result.succeeded else {
-            throw ResolutionError.describeFailed(diagnosis: String(decoding: result.standardError, as: UTF8.self))
+        guard result.succeededWithCompleteOutput else {
+            throw ResolutionError.describeFailed(diagnosis: result.failureDiagnosis)
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase

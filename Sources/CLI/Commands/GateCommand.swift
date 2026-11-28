@@ -60,12 +60,7 @@ struct GateCommand: ParsableCommand {
         let baselineReport = try baseline.map { try decode(reportPath: $0, role: "baseline report") }
         if let baselineReport { Self.warnIfBaselineReferencesUnknownOperators(baselineReport) }
 
-        var thresholds = try loadConfiguredThresholds()
-        if let minimumTested { thresholds.minimumTested = minimumTested / 100 }
-        if let minimumEffective { thresholds.minimumEffective = minimumEffective / 100 }
-        if let maximumSurvivors { thresholds.maximumSurvivors = maximumSurvivors }
-        if let regressionMaximumDrop { thresholds.regressionMaximumDrop = regressionMaximumDrop / 100 }
-        if let newSurvivorsMaximum { thresholds.newSurvivorsMaximum = newSurvivorsMaximum }
+        let thresholds = try resolveThresholds()
 
         let result = QualityGate.evaluate(report: runReport, thresholds: thresholds, baseline: baselineReport)
 
@@ -133,18 +128,46 @@ struct GateCommand: ParsableCommand {
         """.utf8))
     }
 
+    /// Config thresholds (base) merged with CLI flags (winning), then
+    /// validated as a whole. A policy that cannot be resolved is an
+    /// operational error — never an empty policy that lets a report pass.
+    private func resolveThresholds() throws -> QualityGateThresholds {
+        do {
+            var thresholds = try loadConfiguredThresholds()
+            if let minimumTested { thresholds.minimumTested = minimumTested / 100 }
+            if let minimumEffective { thresholds.minimumEffective = minimumEffective / 100 }
+            if let maximumSurvivors { thresholds.maximumSurvivors = maximumSurvivors }
+            if let regressionMaximumDrop { thresholds.regressionMaximumDrop = regressionMaximumDrop / 100 }
+            if let newSurvivorsMaximum { thresholds.newSurvivorsMaximum = newSurvivorsMaximum }
+            try thresholds.validate()
+            return thresholds
+        } catch {
+            guard json else {
+                return try MutantKitExit.onFailure { throw error }
+            }
+            try JSONOutput.emitError(
+                code: (error is QualityGateThresholdError || error is QualityGateSettingsError)
+                    ? "thresholdInvalid" : "policyUnavailable",
+                message: "Could not resolve the quality-gate policy: \(error)",
+                remedy: "Fix the --config path, the mutantkit.yml qualityGate section or the threshold flags. "
+                    + "Flag-only use needs no --config and no mutantkit.yml in the project root."
+            )
+            throw ExitCode(MutantKitExit.operationalError)
+        }
+    }
+
     /// `gate` tolerates having no `mutantkit.yml` at all (CLI flags alone are
-    /// enough to run it standalone against a report), but if a config file
-    /// *is* found, its `qualityGate` section is the base that CLI flags
-    /// then override.
+    /// enough to run it standalone against a report). Only that case — no
+    /// `--config` and no default file — yields an empty policy. An explicit
+    /// `--config` that is missing, or any found config that is unreadable or
+    /// invalid, fails: a typo must not silently drop the quality policy.
     private func loadConfiguredThresholds() throws -> QualityGateThresholds {
-        guard let url = try? ConfigurationLoader.locate(
-            explicitPath: common.configPath, projectRoot: common.resolvedProjectRoot
-        ) else {
-            return QualityGateThresholds()
+        if common.configPath == nil {
+            let defaultFile = common.resolvedProjectRoot.appendingPathComponent(ConfigurationLoader.fileName)
+            guard FileManager.default.fileExists(atPath: defaultFile.path) else { return QualityGateThresholds() }
         }
         let configuration = try ConfigurationLoader.load(
-            explicitPath: url.path, projectRoot: common.resolvedProjectRoot
+            explicitPath: common.configPath, projectRoot: common.resolvedProjectRoot
         )
         return try configuration.qualityGate.resolvedThresholds()
     }

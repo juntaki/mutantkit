@@ -40,7 +40,7 @@ struct SourceFileWalkerTests {
         try SourceFileWalker(
             root: root,
             settings: SourceSettings(include: include, exclude: exclude)
-        ).walk()
+        ).discover().requireComplete()
     }
 
     @Test("Finds nested Swift files, sorted and relative")
@@ -90,9 +90,9 @@ struct SourceFileWalkerTests {
 
         #expect(try walk(exclude: []) == ["Sources/Lib/Real.swift"])
 
-        let walker = SourceFileWalker(root: root, settings: SourceSettings(include: ["Sources/**"], exclude: []))
-        #expect(walker.admits(relativePath: "Sources/Lib/Real.swift"))
-        #expect(!walker.admits(relativePath: "Sources/Lib/Documentation.docc/Tutorials/Step-01.swift"))
+        let policy = SourceEligibilityPolicy(settings: SourceSettings(include: ["Sources/**"], exclude: []))
+        #expect(policy.fileVerdict(relativePath: "Sources/Lib/Real.swift").isAdmitted)
+        #expect(!policy.fileVerdict(relativePath: "Sources/Lib/Documentation.docc/Tutorials/Step-01.swift").isAdmitted)
     }
 
     /// A symlink that points at an ancestor would loop the walker forever. The
@@ -161,7 +161,7 @@ struct SourceFileWalkerTests {
             .appendingPathComponent("mutantkit-missing-\(UUID().uuidString)")
 
         #expect(throws: PlannerError.self) {
-            try SourceFileWalker(root: missing, settings: SourceSettings()).walk()
+            try SourceFileWalker(root: missing, settings: SourceSettings()).discover().requireComplete()
         }
     }
 
@@ -178,14 +178,13 @@ struct SourceFileWalkerTests {
 
     @Test("admits exposes the include/exclude decision without touching disk")
     func admitsMatchesConfiguredRules() {
-        let walker = SourceFileWalker(
-            root: root,
+        let policy = SourceEligibilityPolicy(
             settings: SourceSettings(include: ["Sources/**"], exclude: ["Sources/Generated/**"])
         )
 
-        #expect(walker.admits(relativePath: "Sources/Foo.swift"))
-        #expect(!walker.admits(relativePath: "Sources/Generated/Foo.swift"))
-        #expect(!walker.admits(relativePath: "Tests/Foo.swift"))
+        #expect(policy.fileVerdict(relativePath: "Sources/Foo.swift").isAdmitted)
+        #expect(!policy.fileVerdict(relativePath: "Sources/Generated/Foo.swift").isAdmitted)
+        #expect(!policy.fileVerdict(relativePath: "Tests/Foo.swift").isAdmitted)
     }
 
     /// `PackageManifestConfirmationRetesting` (the isolated SwiftPM
@@ -232,13 +231,141 @@ struct SourceFileWalkerTests {
 
     @Test("admits refuses Package.swift and version-specific manifests by name")
     func admitsRefusesPackageManifests() {
-        let walker = SourceFileWalker(
-            root: root,
-            settings: SourceSettings(include: ["**/*.swift"], exclude: [])
-        )
+        let policy = SourceEligibilityPolicy(settings: SourceSettings(include: ["**/*.swift"], exclude: []))
 
-        #expect(!walker.admits(relativePath: "Package.swift"))
-        #expect(!walker.admits(relativePath: "Package@swift-5.9.swift"))
-        #expect(walker.admits(relativePath: "Sources/Foo.swift"))
+        #expect(!policy.fileVerdict(relativePath: "Package.swift").isAdmitted)
+        #expect(!policy.fileVerdict(relativePath: "Package@swift-5.9.swift").isAdmitted)
+        #expect(policy.fileVerdict(relativePath: "Sources/Foo.swift").isAdmitted)
+    }
+
+    /// The walk and prospective membership used to be two predicates; a file
+    /// under `.build/` or `Pods/` was "admitted" by one and never walked by the
+    /// other. Both now come from `SourceEligibilityPolicy`, so for every Swift
+    /// file on disk the walk lists it exactly when the policy admits it.
+    @Test("walk and policy agree on every file, including mandatory-pruned ancestors")
+    func walkAndPolicyAgree() throws {
+        let paths = [
+            "Sources/A.swift", "Sources/.build/Gen.swift", "Sources/Pods/P/Q.swift",
+            "Sources/Lib/Doc.docc/T.swift", "Sources/Generated/G.swift", "Sources/Deep/DerivedData/D.swift",
+            "Sources/Carthage/C.swift", "Sources/.git/hooks.swift", "Sources/Lib/Real.swift",
+            "Sources/Package.swift", "Sources/notes.txt"
+        ]
+        for path in paths { try write(path) }
+        let settings = SourceSettings(include: ["Sources/**"], exclude: ["**/Generated/**"])
+        let walked = Set(try SourceFileWalker(root: root, settings: settings).discover().requireComplete())
+        let policy = SourceEligibilityPolicy(settings: settings)
+
+        for path in paths {
+            #expect(walked.contains(path) == policy.fileVerdict(relativePath: path).isAdmitted, "\(path)")
+        }
+        #expect(walked == ["Sources/A.swift", "Sources/Lib/Real.swift"])
+    }
+
+    @Test("Verdicts name the reason a path is not eligible")
+    func verdictsNameReasons() {
+        let policy = SourceEligibilityPolicy(settings: SourceSettings(include: ["Sources/**"], exclude: ["**/Gen/**"]))
+        #expect(policy.fileVerdict(relativePath: "Sources/.build/X.swift") == .prunedBuildOrVendorDirectory(".build"))
+        #expect(policy.fileVerdict(relativePath: "Sources/D.docc/X.swift") == .prunedDocumentationCatalog("D.docc"))
+        #expect(policy.fileVerdict(relativePath: "Sources/readme.md") == .notSwiftSource)
+        #expect(policy.fileVerdict(relativePath: "Package.swift") == .packageManifest)
+        #expect(policy.fileVerdict(relativePath: "Tests/X.swift") == .notIncludedByUser)
+        #expect(policy.fileVerdict(relativePath: "Sources/Gen/X.swift") == .excludedByUser)
+    }
+
+    /// An unreadable nested directory used to be skipped with `continue`, so a
+    /// permissions problem produced a green, smaller plan. It is now an
+    /// explicit gap, and `requireComplete()` refuses it.
+    @Test("An unreadable nested directory is a reported gap, not a smaller success")
+    func unreadableNestedDirectoryIsAGap() throws {
+        struct Boom: Error {}
+        let fileSystem = SourceWalkerFileSystem { url in
+            switch url.lastPathComponent {
+            case root.lastPathComponent:
+                [.init(name: "Sources", kind: .success(.directory))]
+            case "Sources":
+                [
+                    .init(name: "Ok.swift", kind: .success(.file)),
+                    .init(name: "Locked", kind: .success(.directory)),
+                    .init(name: "Odd.swift", kind: .failure(Boom()))
+                ]
+            default:
+                throw Boom()
+            }
+        }
+        let walker = SourceFileWalker(root: root, settings: SourceSettings(), fileSystem: fileSystem)
+
+        let discovery = try walker.discover()
+
+        #expect(discovery.files == ["Sources/Ok.swift"])
+        #expect(!discovery.isComplete)
+        #expect(discovery.gaps.map(\.relativePath) == ["Sources/Locked", "Sources/Odd.swift"])
+        #expect(discovery.gaps.map(\.kind) == [.directoryUnreadable, .metadataUnreadable])
+        #expect(throws: PlannerError.self) { try discovery.requireComplete() }
+    }
+
+    @Test("Pruned directories are never listed, so they cannot become gaps")
+    func prunedDirectoriesAreNotGaps() throws {
+        struct Boom: Error {}
+        let fileSystem = SourceWalkerFileSystem { url in
+            if url.lastPathComponent == ".build" { throw Boom() }
+            return url.lastPathComponent == root.lastPathComponent
+                ? [.init(name: ".build", kind: .success(.directory)), .init(name: "link", kind: .success(.symbolicLink))]
+                : []
+        }
+        let discovery = try SourceFileWalker(root: root, settings: SourceSettings(), fileSystem: fileSystem).discover()
+        #expect(discovery.isComplete)
+        #expect(discovery.files.isEmpty)
+    }
+
+    /// A directory no include pattern can reach (e.g. a root-owned data
+    /// volume) cannot hide an eligible file, so failing to list it must not
+    /// fail the plan.
+    @Test("An unreadable directory outside every include is not a gap")
+    func unreadableDirectoryOutsideIncludeIsNotAGap() throws {
+        struct Boom: Error {}
+        let fileSystem = SourceWalkerFileSystem { url in
+            switch url.lastPathComponent {
+            case root.lastPathComponent:
+                [.init(name: "Sources", kind: .success(.directory)), .init(name: "data", kind: .success(.directory))]
+            case "Sources":
+                [.init(name: "A.swift", kind: .success(.file))]
+            default:
+                throw Boom()
+            }
+        }
+        let settings = SourceSettings(include: ["Sources/**"], exclude: [])
+        let discovery = try SourceFileWalker(root: root, settings: settings, fileSystem: fileSystem).discover()
+        #expect(discovery.isComplete)
+        #expect(discovery.files == ["Sources/A.swift"])
+
+        // Exact-file includes (live SwiftPM resolution) reach only their own directories.
+        let exact = SourceSettings(include: ["Sources/A.swift"], exclude: [])
+        #expect(try SourceFileWalker(root: root, settings: exact, fileSystem: fileSystem).discover().isComplete)
+    }
+
+    @Test("Unreadable metadata of an entry policy rejects by name is not a gap")
+    func unreadableMetadataOfPrunedNameIsNotAGap() throws {
+        struct Boom: Error {}
+        let fileSystem = SourceWalkerFileSystem { url in
+            url.lastPathComponent == root.lastPathComponent
+                ? [
+                    .init(name: ".git", kind: .failure(Boom())),
+                    .init(name: "Doc.docc", kind: .failure(Boom())),
+                    .init(name: "Sources", kind: .success(.directory))
+                ]
+                : []
+        }
+        let discovery = try SourceFileWalker(root: root, settings: SourceSettings(), fileSystem: fileSystem).discover()
+        #expect(discovery.isComplete)
+    }
+
+    @Test("canMatchBeneath: prefix-compatible patterns reach a directory, others do not")
+    func canMatchBeneath() {
+        #expect(Glob.canMatchBeneath(pattern: "Sources/**", directory: "Sources/A/B"))
+        #expect(Glob.canMatchBeneath(pattern: "Sources/A/B.swift", directory: "Sources/A"))
+        #expect(Glob.canMatchBeneath(pattern: "Sources/A", directory: "Sources/A/B"))
+        #expect(Glob.canMatchBeneath(pattern: "**/*.swift", directory: "anything/at/all"))
+        #expect(!Glob.canMatchBeneath(pattern: "Sources/**", directory: "data"))
+        #expect(!Glob.canMatchBeneath(pattern: "Sources/A/B.swift", directory: "Sources/C"))
     }
 }

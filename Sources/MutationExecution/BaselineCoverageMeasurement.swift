@@ -93,9 +93,11 @@ public struct BaselineCoverageMeasurement: Sendable {
                     // mutant against the whole suite) but expensive, and
                     // impossible to notice from the outside — the cache
                     // directory is simply never created.
-                    Self.note(
-                        "warning: per-test coverage could not be attributed for any test. Every mutant will run " +
-                            "the full configured test list, and nothing was cached, so the next run measures again."
+                    let diagnosis = "per-test coverage could not be attributed for any test. Every mutant will run " +
+                        "the full configured test list, and nothing was cached, so the next run measures again."
+                    Self.note("warning: \(diagnosis)")
+                    await operationalIssues?.append(
+                        OperationalIssue(severity: .warning, kind: .perTestCoverageIncomplete, mutationID: nil, diagnosis: diagnosis)
                     )
                 }
                 // `flatMap`, not `?.`: `aggregate()` is optional in its own

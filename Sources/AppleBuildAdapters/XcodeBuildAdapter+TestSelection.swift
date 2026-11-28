@@ -117,8 +117,11 @@ extension XcodeBuildAdapter: TestSelecting {
         timeoutSeconds: Double
     ) async -> PerTestCoverageMap? {
         let baselineBundle = resultBundlePath(in: workspace, label: "baseline")
-        let tests = await Self.enumerateTestIdentifiers(inBundle: baselineBundle)
-        guard !tests.isEmpty else { return nil }
+        let inventory = await Self.enumerateTestIdentifiers(inBundle: baselineBundle)
+            .reconciled(withConfiguredTargets: configuration.tests.targets)
+        // An unproven inventory is no attribution at all (whole-suite fallback), never a narrower one.
+        guard let proven = inventory.tests else { return nil }
+        let tests = proven.sorted { ($0.target, $0.qualifiedName) < ($1.target, $1.qualifiedName) }
 
         guard let coverageArtifact = try? await build(in: workspace, enableCoverage: true) else { return nil }
 
@@ -155,16 +158,23 @@ extension XcodeBuildAdapter: TestSelecting {
     /// Case` node's own `nodeIdentifier` is already shaped `Class/method()`
     /// (confirmed against a real bundle), so no separate class-name
     /// tracking is needed; only the trailing `()` is stripped.
-    static func enumerateTestIdentifiers(inBundle bundle: URL) async -> [TestIdentifier] {
-        guard FileManager.default.fileExists(atPath: bundle.path) else { return [] }
+    static func enumerateTestIdentifiers(inBundle bundle: URL) async -> TestInventory {
+        guard FileManager.default.fileExists(atPath: bundle.path) else {
+            return .unknown(.enumerationFailed("baseline result bundle is missing"))
+        }
 
-        let result = try? await ProcessSupervisor.run(
-            executable: ToolPaths.xcrun,
-            arguments: ["xcresulttool", "get", "test-results", "tests", "--path", bundle.path, "--compact"],
-            workingDirectory: bundle.deletingLastPathComponent(),
-            timeoutSeconds: 120
-        )
-        guard let result, result.succeeded else { return [] }
+        let result: ProcessResult
+        do {
+            result = try await ProcessSupervisor.run(
+                executable: ToolPaths.xcrun,
+                arguments: ["xcresulttool", "get", "test-results", "tests", "--path", bundle.path, "--compact"],
+                workingDirectory: bundle.deletingLastPathComponent(),
+                timeoutSeconds: 120
+            )
+        } catch {
+            return .unknown(.enumerationFailed("\(error)"))
+        }
+        if let reason = TestInventory.gate(result) { return .unknown(reason) }
         return parseTestIdentifiers(result.standardOutput)
     }
 
@@ -191,12 +201,15 @@ extension XcodeBuildAdapter: TestSelecting {
     /// would suggest. See `TestIdentifier.onlyTestingArgument`'s own doc
     /// comment for the full account, including why this was previously
     /// silently broken (missing `()`, not this target-doubling shape).
-    static func parseTestIdentifiers(_ data: Data) -> [TestIdentifier] {
+    static func parseTestIdentifiers(_ data: Data) -> TestInventory {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let testNodes = root["testNodes"] as? [[String: Any]]
-        else { return [] }
+        else { return .unknown(.malformedDocument) }
 
         var found: [TestIdentifier] = []
+        // A `Test Case` node that cannot become an identifier (no identifier, or no enclosing test
+        // bundle) is a test the enumeration cannot name, which makes the inventory unknown, never smaller.
+        var unrecognized: [String] = []
         func walk(_ node: [String: Any], target: String?) {
             let nodeType = node["nodeType"] as? String
             // `xcresulttool` names a UI test target's own bundle node "UI
@@ -212,10 +225,13 @@ extension XcodeBuildAdapter: TestSelecting {
             // test's own identifiers, even though the test genuinely ran.
             let currentTarget = isTestBundleNode(nodeType) ? (node["name"] as? String) : target
 
-            if nodeType == "Test Case", let currentTarget,
-               let identifier = node["nodeIdentifier"] as? String {
-                let qualifiedName = identifier.hasSuffix("()") ? String(identifier.dropLast(2)) : identifier
-                found.append(TestIdentifier(target: currentTarget, qualifiedName: qualifiedName))
+            if nodeType == "Test Case" {
+                if let currentTarget, let identifier = node["nodeIdentifier"] as? String, !identifier.isEmpty {
+                    let qualifiedName = identifier.hasSuffix("()") ? String(identifier.dropLast(2)) : identifier
+                    found.append(TestIdentifier(target: currentTarget, qualifiedName: qualifiedName))
+                } else {
+                    unrecognized.append((node["name"] as? String) ?? "<unnamed Test Case>")
+                }
             }
 
             for child in (node["children"] as? [[String: Any]]) ?? [] {
@@ -223,7 +239,7 @@ extension XcodeBuildAdapter: TestSelecting {
             }
         }
         for node in testNodes { walk(node, target: nil) }
-        return found
+        return .make(recognized: found, unrecognized: unrecognized)
     }
 
     /// Whether an `xcresulttool` `nodeType` names a test-bundle-level node —

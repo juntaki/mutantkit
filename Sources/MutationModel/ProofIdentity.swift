@@ -132,7 +132,7 @@ public struct CompilationUnitID: HexIdentity {
 
     /// Derives a `CompilationUnitID` from every input that determines which
     /// compilation unit a generated call site belongs to. An explicit,
-    /// ordered, delimited string (mirroring `MutationID.compute`'s own
+    /// ordered, delimited string (mirroring `MutationIdentityVersion.deriveID`'s own
     /// reasoning) keeps the hash inputs auditable: a reader can reconstruct
     /// the preimage by hand rather than trust an opaque combination.
     public static func derive(

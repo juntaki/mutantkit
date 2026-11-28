@@ -22,16 +22,31 @@ extension ProcessSupervisor {
     /// what that cadence now actually costs. Shared by `detectRootExit` and
     /// `closeOutOwnedGroup`, the two places that poll descendants.
     static func pollDescendants(
-        of pid: pid_t, observed: inout Set<ProcessTree.ProcessIdentity>, pollIntervalMicroseconds: inout useconds_t
+        of pid: pid_t, observed: inout DescendantObservation, readTable: ProcessTree.TableReader,
+        pollIntervalMicroseconds: inout useconds_t
     ) {
         let pollStarted = Date()
-        observed.formUnion(ProcessTree.descendantIdentities(of: pid))
+        if let found = ProcessTree.descendantIdentities(of: pid, readTable: readTable) {
+            observed.identities.formUnion(found)
+        } else {
+            observed.samplingGaps += 1
+        }
         let pollDurationMicroseconds = Date().timeIntervalSince(pollStarted) * 1_000_000
         if pollDurationMicroseconds > Double(pollIntervalMicroseconds) {
             pollIntervalMicroseconds = min(pollIntervalMicroseconds * 2, maxPollIntervalMicroseconds)
         } else if pollIntervalMicroseconds > baselinePollIntervalMicroseconds {
             pollIntervalMicroseconds = max(pollIntervalMicroseconds / 2, baselinePollIntervalMicroseconds)
         }
+    }
+
+    /// What continuous ancestry polling has learned. `samplingGaps` counts
+    /// polls whose process-table read failed: a descendant that escaped and
+    /// was reparented during such a poll is unrecoverable afterwards, so any
+    /// gap means containment of escaped descendants cannot be proven (the
+    /// group-based cleanup still runs).
+    struct DescendantObservation {
+        var identities: Set<ProcessTree.ProcessIdentity> = []
+        var samplingGaps = 0
     }
 
     /// Non-reaping peek: `true` once `pid` has exited, without ever
@@ -52,11 +67,20 @@ extension ProcessSupervisor {
     /// pid peeked this way survives a 500-process rapid spawn/reap burst
     /// completely unreused, and only becomes reusable once a real,
     /// consuming `waitpid`/`waitid` call finally reaps it.
+    ///
+    /// `EINTR` is retried. Any other `waitid` failure (`ECHILD`: the child is
+    /// no longer ours to wait for) means the root is not running under our
+    /// ownership, so it reads as exited and the checked reap (`reap`) then
+    /// reports the unavailable status rather than this probe inventing one.
     static func hasExited(_ pid: pid_t) -> Bool {
-        var info = siginfo_t()
-        info.si_pid = 0
-        let rc = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
-        return rc == 0 && info.si_pid == pid
+        while true {
+            var info = siginfo_t()
+            info.si_pid = 0
+            let rc = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+            if rc == 0 { return info.si_pid == pid }
+            if errno == EINTR { continue }
+            return true
+        }
     }
 
     /// `detectRootExit`'s own result — see that function's doc comment for
@@ -69,7 +93,7 @@ extension ProcessSupervisor {
         /// those fired while `pid` was still running.
         let rootExitedOnItsOwn: Bool
         let stalled: Bool
-        let observed: Set<ProcessTree.ProcessIdentity>
+        let observed: DescendantObservation
     }
 
     /// Polls continuously for two things at once, neither ever consuming
@@ -135,7 +159,7 @@ extension ProcessSupervisor {
         let stallDetection = policy.stallDetection
         let cancellationFlag = policy.cancellationFlag
         let deadline = Date().addingTimeInterval(policy.timeoutSeconds)
-        var observed: Set<ProcessTree.ProcessIdentity> = []
+        var observed = DescendantObservation()
 
         // Tracks `stallDetection.progressFilePath`'s own
         // size — deliberately just a byte count, not any understanding of
@@ -172,7 +196,10 @@ extension ProcessSupervisor {
         }
 
         while true {
-            pollDescendants(of: pid, observed: &observed, pollIntervalMicroseconds: &pollIntervalMicroseconds)
+            pollDescendants(
+                of: pid, observed: &observed, readTable: policy.processTableReader,
+                pollIntervalMicroseconds: &pollIntervalMicroseconds
+            )
             if hasExited(pid) {
                 // An on-time, non-timeout exit — the path a single
                 // at-deadline snapshot could never reach at all. `pid`
@@ -239,7 +266,27 @@ extension ProcessSupervisor {
     /// kill is not enough on its own: it sees only the root and `observed`,
     /// and with nothing observed it never reads the table.
     static func closeOutOwnedGroup(
-        pid: pid_t, observed: inout Set<ProcessTree.ProcessIdentity>, policy: SupervisionPolicy,
+        pid: pid_t, observed: inout DescendantObservation, policy: SupervisionPolicy,
+        pollIntervalMicroseconds: inout useconds_t
+    ) -> CleanupVerification {
+        let verification = closeOutAndVerify(
+            pid: pid, observed: &observed, policy: policy, pollIntervalMicroseconds: &pollIntervalMicroseconds
+        )
+        // A failed ancestry sample is a hole no later check can fill, so a
+        // clean final sample must not claim universal containment.
+        guard observed.samplingGaps > 0, verification.verified else { return verification }
+        return CleanupVerification(
+            verified: false,
+            diagnosis: """
+            \(observed.samplingGaps) process-table sample(s) failed while tracking the descendants of pid \(pid); a \
+            descendant that escaped its process group during a missed sample cannot be found afterwards, so \
+            containment is unproven (the process group itself is verified empty)
+            """
+        )
+    }
+
+    private static func closeOutAndVerify(
+        pid: pid_t, observed: inout DescendantObservation, policy: SupervisionPolicy,
         pollIntervalMicroseconds: inout useconds_t
     ) -> CleanupVerification {
         let readTable = policy.processTableReader
@@ -256,7 +303,7 @@ extension ProcessSupervisor {
         func allDead() -> Bool {
             guard policy.rootExitProbe(pid) else { return false }
             let table = readTable()
-            return !observed.contains { ProcessTree.isRunning($0, in: table) }
+            return !observed.identities.contains { ProcessTree.isRunning($0, in: table) }
         }
         // `allDead()` sees only the root and `observed`, so a close-out it
         // ends before SIGKILL still sends the group SIGKILL: a same-group
@@ -269,7 +316,7 @@ extension ProcessSupervisor {
             kill(-pid, SIGKILL)
             policy.lifecycleEventHook?(.groupSignal(pid: pid, signal: SIGKILL))
             return verifyAfterKill(
-                pid: pid, observed: observed, everyIdentityChecked: true, readTable: readTable,
+                pid: pid, observed: observed.identities, everyIdentityChecked: true, readTable: readTable,
                 rootExitProbe: policy.rootExitProbe
             )
         }
@@ -280,12 +327,14 @@ extension ProcessSupervisor {
         // the SIGKILL below.
         kill(-pid, SIGTERM)
         policy.lifecycleEventHook?(.groupSignal(pid: pid, signal: SIGTERM))
-        ProcessTree.signal(observed, SIGTERM, readTable: readTable)
+        ProcessTree.signal(observed.identities, SIGTERM, readTable: readTable)
 
         guard !allDead() else { return groupKillThenVerify() }
         let graceDeadline = Date().addingTimeInterval(policy.terminationGracePeriodSeconds)
         while Date() < graceDeadline, !allDead() {
-            pollDescendants(of: pid, observed: &observed, pollIntervalMicroseconds: &pollIntervalMicroseconds)
+            pollDescendants(
+                of: pid, observed: &observed, readTable: readTable, pollIntervalMicroseconds: &pollIntervalMicroseconds
+            )
             if allDead() { break }
             // F3 zero-base review Finding 3: a cancellation arriving
             // mid-grace must not sit out the remainder of
@@ -300,36 +349,75 @@ extension ProcessSupervisor {
 
         kill(-pid, SIGKILL)
         policy.lifecycleEventHook?(.groupSignal(pid: pid, signal: SIGKILL))
-        let everyIdentityChecked = ProcessTree.reap(observed, readTable: readTable)
+        let everyIdentityChecked = ProcessTree.reap(observed.identities, readTable: readTable)
         return verifyAfterKill(
-            pid: pid, observed: observed, everyIdentityChecked: everyIdentityChecked, readTable: readTable,
+            pid: pid, observed: observed.identities, everyIdentityChecked: everyIdentityChecked, readTable: readTable,
             rootExitProbe: policy.rootExitProbe
         )
     }
 
-    /// Reaps the root after close-out and returns its wait status.
+    /// How the root ended, or why that cannot be known. Never a synthesized
+    /// exit: `unavailable` is reported as such and never read as success or
+    /// as a crash.
+    enum ProcessExitObservation: Equatable {
+        case exited(code: Int32)
+        case signaled(signal: Int32)
+        case unavailable(String)
+
+        /// The shell-style exit code (128 + signal for a signalled process);
+        /// `nil` when unavailable.
+        var shellExitCode: Int32? {
+            switch self {
+            case let .exited(code): code
+            case let .signaled(signal): 128 + signal
+            case .unavailable: nil
+            }
+        }
+    }
+
+    /// `waitpid(2)` as `reap` calls it; a test substitutes a fake to inject
+    /// `EINTR`, `ECHILD` and success.
+    typealias WaitPID = @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t
+
+    /// The one checked, consuming reap. `EINTR` is retried; any other failure
+    /// (or a different pid) means the status was never observed.
+    static func reap(_ pid: pid_t, waitpid wait: WaitPID = { Darwin.waitpid($0, $1, $2) }) -> ProcessExitObservation {
+        var status: Int32 = 0
+        while true {
+            let rc = wait(pid, &status, 0)
+            if rc == pid { break }
+            if rc < 0, errno == EINTR { continue }
+            let code = errno
+            let detail = rc < 0 ? " (\(String(cString: strerror(code))), errno \(code))" : ""
+            return .unavailable("waitpid(\(pid)) returned \(rc)\(detail)")
+        }
+        if status & 0x7F == 0 { return .exited(code: (status >> 8) & 0xFF) }
+        return .signaled(signal: status & 0x7F)
+    }
+
+    /// Reaps the root after close-out and returns how it ended.
     ///
     /// When close-out could not be verified because the root still had not
     /// exited after SIGKILL, it may never exit (for example, stuck in an
     /// uninterruptible sleep). A blocking `waitpid` here would then keep
     /// the unverified result, and with it the run's abort, from ever
     /// reaching the caller. So in that case the reap moves to a detached
-    /// thread, and the status reads as killed by SIGKILL. Until that reap
+    /// thread and the exit is reported unavailable. Until that reap
     /// completes the pid stays unreaped, so it still cannot be reused.
-    static func reapRoot(pid: pid_t, cleanup: CleanupVerification, policy: SupervisionPolicy) -> Int32 {
+    static func reapRoot(pid: pid_t, cleanup: CleanupVerification, policy: SupervisionPolicy) -> ProcessExitObservation {
         let hook = policy.lifecycleEventHook
+        let wait = policy.waitpid
         guard cleanup.verified || policy.rootExitProbe(pid) else {
             Thread.detachNewThread {
-                var status: Int32 = 0
-                waitpid(pid, &status, 0)
+                if case .unavailable = reap(pid, waitpid: wait) { return }
                 hook?(.finalReap(pid: pid))
             }
-            return SIGKILL
+            return .unavailable("root pid \(pid) had not exited after SIGKILL; its reap was handed to a detached thread")
         }
-        var status: Int32 = 0
-        waitpid(pid, &status, 0)
-        hook?(.finalReap(pid: pid))
-        return status
+        let observation = reap(pid, waitpid: wait)
+        // Only a completed reap frees the pid; a failed one did not.
+        if case .unavailable = observation {} else { hook?(.finalReap(pid: pid)) }
+        return observation
     }
 
     /// Whether close-out proved containment. See `closeOutOwnedGroup`.

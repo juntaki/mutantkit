@@ -71,6 +71,73 @@ struct QualityGateTests {
         #expect(result.violations.contains { $0.kind == .scoreRegression && $0.detail.contains("Effective") })
     }
 
+    @Test("regression-only policy fails when the current report has no tested denominator")
+    func regressionOnlyMissingCurrentDenominatorFails() {
+        let baseline = report(outcomes: [.killedByAssertion, .survived])
+        let current = report(outcomes: [.noCoverage, .noCoverage])
+        let result = QualityGate.evaluate(
+            report: current, thresholds: QualityGateThresholds(regressionMaximumDrop: 0.10), baseline: baseline
+        )
+        #expect(!result.passed)
+        #expect(result.violations.contains { $0.kind.rawValue == "regressionUnavailable" && $0.detail.contains("Tested") })
+    }
+
+    @Test("regression-only policy fails when the baseline has no tested denominator")
+    func regressionOnlyMissingBaselineDenominatorFails() {
+        let baseline = report(outcomes: [.noCoverage])
+        let current = report(outcomes: [.killedByAssertion, .survived])
+        let result = QualityGate.evaluate(
+            report: current, thresholds: QualityGateThresholds(regressionMaximumDrop: 0.10), baseline: baseline
+        )
+        #expect(!result.passed)
+        #expect(result.violations.contains { $0.kind.rawValue == "regressionUnavailable" })
+    }
+
+    @Test("a baseline that mutated no file in common is incompatible, not a pass")
+    func disjointScopeIsIncompatible() {
+        let baseline = reportFromPoints([(point("A.swift", 1), .killedByAssertion), (point("A.swift", 2), .survived)])
+        let current = reportFromPoints([(point("B.swift", 1), .killedByAssertion), (point("B.swift", 2), .survived)])
+        let result = QualityGate.evaluate(
+            report: current, thresholds: QualityGateThresholds(regressionMaximumDrop: 0.10), baseline: baseline
+        )
+        #expect(!result.passed)
+        #expect(result.violations.contains { $0.kind.rawValue == "baselineIncompatible" })
+    }
+
+    @Test("shared-scope comparison works across plan IDs; a new weak file is not hidden")
+    func sharedScopeComparesAcrossCommits() {
+        let baseline = reportFromPoints([
+            (point("A.swift", 1), .killedByAssertion), (point("A.swift", 2), .killedByAssertion),
+            (point("B.swift", 1), .survived), (point("B.swift", 2), .survived)
+        ], planID: "plan_baseline")
+        // B is gone from the current run, a new file C was added: same A, different plan.
+        let sameQuality = reportFromPoints([
+            (point("A.swift", 1), .killedByAssertion), (point("A.swift", 2), .killedByAssertion),
+            (point("C.swift", 1), .killedByAssertion)
+        ], planID: "plan_current")
+        #expect(QualityGate.evaluate(
+            report: sameQuality, thresholds: QualityGateThresholds(regressionMaximumDrop: 0.05), baseline: baseline
+        ).passed)
+
+        let newWeakFile = reportFromPoints([
+            (point("A.swift", 1), .killedByAssertion), (point("A.swift", 2), .killedByAssertion),
+            (point("C.swift", 1), .survived), (point("C.swift", 2), .survived)
+        ], planID: "plan_current")
+        let weak = QualityGate.evaluate(
+            report: newWeakFile, thresholds: QualityGateThresholds(regressionMaximumDrop: 0.05), baseline: baseline
+        )
+        #expect(!weak.passed)
+        #expect(weak.violations.contains { $0.kind == .scoreRegression })
+
+        let regressed = reportFromPoints([
+            (point("A.swift", 1), .killedByAssertion), (point("A.swift", 2), .survived)
+        ], planID: "plan_current")
+        let failing = QualityGate.evaluate(
+            report: regressed, thresholds: QualityGateThresholds(regressionMaximumDrop: 0.05), baseline: baseline
+        )
+        #expect(failing.violations.contains { $0.kind == .scoreRegression })
+    }
+
     @Test("a stable backlog of pre-existing survivors does not fail newSurvivorsMaximum")
     func preExistingSurvivorsAreNotNew() {
         let survivorA = point("A.swift", 1)
@@ -124,11 +191,14 @@ struct QualityGateTests {
         )
     }
 
-    private func report(outcomes: [MutationOutcome]) -> RunReport {
+    func report(outcomes: [MutationOutcome]) -> RunReport {
         reportFromPoints(outcomes.enumerated().map { (point("F.swift", $0.offset), $0.element) })
     }
 
-    private func reportFromPoints(_ pointsAndOutcomes: [(MutationPoint, MutationOutcome)]) -> RunReport {
+    private func reportFromPoints(
+        _ pointsAndOutcomes: [(MutationPoint, MutationOutcome)],
+        planID: String = "plan_gate_fixture"
+    ) -> RunReport {
         var ledger = ResultLedger<MutationResult>()
         for (index, entry) in pointsAndOutcomes.enumerated() {
             let result = makeResult(point: entry.0, outcome: entry.1, planID: "plan_gate_fixture\(index)")
@@ -136,7 +206,7 @@ struct QualityGateTests {
         }
         let violations: [IntegrityViolation] = []
         return RunReport(
-            planID: "plan_gate_fixture",
+            planID: planID,
             startedAt: Date(timeIntervalSince1970: 0),
             finishedAt: Date(timeIntervalSince1970: 1),
             projectRoot: "/tmp/fixture",
@@ -158,7 +228,7 @@ struct QualityGateTests {
         )
     }
 
-    private func emptyReport(integrityPassed: Bool) -> RunReport {
+    func emptyReport(integrityPassed: Bool) -> RunReport {
         let violations = integrityPassed
             ? []
             : [IntegrityViolation(kind: .countMismatch, detail: "fixture")]

@@ -41,7 +41,7 @@ enum SwiftPMManifestDump {
         guard result.outputComplete else {
             throw ProjectDetectionError.manifestUnreadable(
                 directory: directory.path,
-                detail: "swift package dump-package exited (status \(result.exitCode)) but its output could not be " +
+                detail: "swift package dump-package exited (status \(result.exitStatusDescription)) but its output could not be " +
                     "fully captured before the subprocess ended, even after one retry"
             )
         }

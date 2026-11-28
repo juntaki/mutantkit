@@ -7,6 +7,10 @@ enum ConfigurationError: Error, CustomStringConvertible {
     case unreadable(path: String, underlying: String)
     case malformed(path: String, underlying: String)
     case unsupportedVersion(path: String, found: Int, expected: Int)
+    /// A key the published schema does not declare (a typo, a removed setting,
+    /// or a misplaced section). Ignoring it would silently run with a default
+    /// in place of what the user meant to write.
+    case unknownKey(path: String, key: String, allowed: [String])
     /// v1 contract: an environment variable in `ConfigurationLoader`'s own
     /// namespace, once set, must be interpretable or the run must refuse to
     /// guess. Falling back to a default when `MUTANTKIT_WORKERS=abc` or an
@@ -30,6 +34,8 @@ enum ConfigurationError: Error, CustomStringConvertible {
             "\(path) is not valid configuration: \(underlying)"
         case let .unsupportedVersion(path, found, expected):
             "\(path) declares version \(found); this tool understands version \(expected)."
+        case let .unknownKey(path, key, allowed):
+            "\(path) has unknown key '\(key)'. Allowed here: \(allowed.joined(separator: ", "))."
         case let .invalidEnvironmentValue(variable, value, reason):
             "\(variable)=\(value) is not valid: \(reason)"
         }
@@ -120,7 +126,41 @@ enum ConfigurationLoader {
             )
         }
 
+        try validateKeys(data, sourceDescription: sourceDescription)
         return configuration
+    }
+
+    /// Runs after the typed decode and version check so a legacy-key message or
+    /// an unsupported version is reported in preference to a key complaint.
+    private static func validateKeys(_ data: Data, sourceDescription: String) throws {
+        let root: Node
+        do {
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw ConfigurationError.malformed(path: sourceDescription, underlying: "not valid UTF-8")
+            }
+            // An empty document legitimately has no keys to check.
+            guard let composed = try Yams.compose(yaml: text) else { return }
+            root = composed
+        } catch let error as ConfigurationError {
+            throw error
+        } catch {
+            throw ConfigurationError.malformed(path: sourceDescription, underlying: "\(error)")
+        }
+        do {
+            try ConfigurationKeyValidator.validate(root)
+        } catch let ConfigurationKeyError.unknown(parent, key, allowed) {
+            throw ConfigurationError.unknownKey(
+                path: location(sourceDescription, parent), key: key, allowed: allowed
+            )
+        } catch let ConfigurationKeyError.schemaUnavailable(reason) {
+            throw ConfigurationError.malformed(
+                path: sourceDescription, underlying: "the embedded configuration schema is unusable (\(reason))"
+            )
+        }
+    }
+
+    private static func location(_ source: String, _ parent: String) -> String {
+        parent.isEmpty ? source : "\(source) (\(parent))"
     }
 
     /// Environment sits *below* the config file, so it only fills gaps the file

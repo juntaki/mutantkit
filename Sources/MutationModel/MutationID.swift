@@ -1,3 +1,46 @@
+/// The scheme a plan's `MutationID`s were derived under.
+///
+/// An ID is a claim about how it was computed. Changing any input (declaration
+/// granularity, replacement variant, ...) would silently re-map every
+/// historical ID, so such a change is a new case here, never an edit to an
+/// existing one. A plan records its version; a reader that does not implement
+/// that version refuses the plan (`PlanError.unsupportedIdentityVersion`)
+/// instead of recomputing IDs under a different scheme.
+public enum MutationIdentityVersion: Int, Codable, Sendable, Comparable {
+    /// The original scheme; also what a plan with no recorded version means.
+    case v1 = 1
+
+    /// The scheme this build derives new IDs under.
+    public static let current: MutationIdentityVersion = .v1
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    /// Deriving the ID from an explicit, ordered, delimited string keeps the
+    /// hash inputs auditable — a reader can reconstruct the preimage by hand.
+    /// The `\u{1F}` (unit separator) delimiter cannot appear in any component.
+    public func deriveID(
+        filePath: String,
+        declaration: DeclarationIdentity,
+        operatorID: String,
+        operatorVersion: Int,
+        originalTokenFingerprint: String,
+        occurrenceIndex: Int
+    ) -> MutationID {
+        let separator = "\u{1F}"
+        let preimage = [
+            "v\(rawValue)",
+            filePath,
+            declaration.description,
+            operatorID,
+            String(operatorVersion),
+            originalTokenFingerprint,
+            String(occurrenceIndex)
+        ].joined(separator: separator)
+
+        return MutationID(rawValue: "mut_" + ContentHash.shortDigest(of: preimage))
+    }
+}
+
 /// A content-derived identifier for a single mutation.
 ///
 /// The ID is a hash of *what the mutation is*, never of *when we found it*. It
@@ -35,31 +78,6 @@ public struct MutationID: Hashable, Sendable, CustomStringConvertible {
 
     public init(rawValue: String) {
         self.rawValue = rawValue
-    }
-
-    /// Deriving the ID from an explicit, ordered, delimited string keeps the
-    /// hash inputs auditable — a reader can reconstruct the preimage by hand.
-    /// The `\u{1F}` (unit separator) delimiter cannot appear in any component.
-    public static func compute(
-        filePath: String,
-        declaration: DeclarationIdentity,
-        operatorID: String,
-        operatorVersion: Int,
-        originalTokenFingerprint: String,
-        occurrenceIndex: Int
-    ) -> MutationID {
-        let separator = "\u{1F}"
-        let preimage = [
-            "v1",
-            filePath,
-            declaration.description,
-            operatorID,
-            String(operatorVersion),
-            originalTokenFingerprint,
-            String(occurrenceIndex)
-        ].joined(separator: separator)
-
-        return MutationID(rawValue: "mut_" + ContentHash.shortDigest(of: preimage))
     }
 
     public var description: String { rawValue }

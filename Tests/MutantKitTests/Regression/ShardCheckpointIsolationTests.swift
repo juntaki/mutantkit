@@ -52,7 +52,7 @@ struct ShardCheckpointIsolationTests {
 
     private static func point(index: Int) -> MutationPoint {
         let declaration = DeclarationIdentity(path: ["Fixture", "value()"])
-        let id = MutationID.compute(
+        let id = MutationIdentityVersion.current.deriveID(
             filePath: "Sources/Fixture.swift",
             declaration: declaration,
             operatorID: "swift.core.bool-literal-inversion",

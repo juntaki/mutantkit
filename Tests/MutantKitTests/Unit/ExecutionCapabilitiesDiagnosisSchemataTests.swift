@@ -128,7 +128,11 @@ struct ExecutionCapabilitiesDiagnosisSchemataTests {
     private func makeResolution(kind: ProjectKind, test: any TestAdapter) -> AppleAdapterFactory.Resolution {
         AppleAdapterFactory.Resolution(
             adapter: FakeProjectAdapter(kind: kind, build: FakeBuildAdapter(), test: test),
-            detection: ProjectDetection(kind: kind, reason: "test fixture", projectFile: nil)
+            context: ResolvedInvocationContext(
+                projectRoot: URL(fileURLWithPath: "/"), projectPath: nil,
+                detection: ProjectDetection(kind: kind, reason: "test fixture", projectFile: nil),
+                scheme: nil, resolvedDestination: nil
+            )
         )
     }
 }

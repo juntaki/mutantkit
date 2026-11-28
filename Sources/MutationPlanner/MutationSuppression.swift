@@ -1,5 +1,6 @@
 import Foundation
 import MutationModel
+import SwiftFrontend
 
 /// One explicit reason to exclude a concrete mutation from execution.
 ///
@@ -109,19 +110,19 @@ public struct MutationSuppressionSet: Sendable, Hashable {
         rules.first { $0.matches(point) }
     }
 
-    /// Returns a new plan with suppressed mutations moved to the explicit skipped
-    /// ledger. The source/operator metadata remains unchanged; only the work set
-    /// and plan identity change.
-    public func applying(to plan: MutationPlan) -> MutationPlan {
-        guard !rules.isEmpty else { return plan }
+    /// The suppression gate: moves every point a rule matches to the explicit
+    /// skipped ledger (`.userRequested`, naming the rule) and returns the rest.
+    /// Pure and order-preserving; the caller sorts and derives plan identity.
+    public func apply(
+        to points: [MutationPoint],
+        _ skipped: [SkippedMutation]
+    ) -> ([MutationPoint], [SkippedMutation]) {
+        guard !rules.isEmpty else { return (points, skipped) }
 
         var kept: [MutationPoint] = []
-        var skipped = plan.skipped
-        var suppressedIDs: [String] = []
-
-        for point in plan.mutations {
+        var skipped = skipped
+        for point in points {
             if let rule = matchingRule(for: point) {
-                suppressedIDs.append(point.id.rawValue)
                 skipped.append(SkippedMutation(
                     id: point.id,
                     file: point.file,
@@ -134,32 +135,45 @@ public struct MutationSuppressionSet: Sendable, Hashable {
                 kept.append(point)
             }
         }
+        return (kept, skipped)
+    }
+}
 
-        skipped.sort { lhs, rhs in
-            lhs.id == rhs.id ? lhs.reason.rawValue < rhs.reason.rawValue : lhs.id < rhs.id
+extension MutationSuppressionSet {
+    /// Turns each file's inline directives into suppression rules, in path
+    /// order. Malformed comments and unknown operator IDs throw.
+    static func inlineRules(
+        _ scans: [String: InlineSuppressionScan],
+        registry: MutationRegistry
+    ) throws -> [MutationSuppressionRule] {
+        let knownIDs = Set(registry.allDescriptors.map(\.id))
+        var rules: [MutationSuppressionRule] = []
+        for file in scans.keys.sorted() {
+            let scan = scans[file]!
+            if let bad = scan.malformed.first {
+                throw PlannerError.invalidSuppressionDirective(
+                    file: file, line: bad.commentLine,
+                    detail: "`\(bad.text)` is not `mutantkit:disable-next-line` or `mutantkit:disable-line` "
+                        + "optionally followed by comma-separated operator IDs."
+                )
+            }
+            for directive in scan.directives {
+                if let unknown = directive.operatorIDs.first(where: { !knownIDs.contains($0) }) {
+                    throw PlannerError.invalidSuppressionDirective(
+                        file: file, line: directive.commentLine,
+                        detail: "unknown operator ID `\(unknown)`."
+                    )
+                }
+                if directive.operatorIDs.isEmpty {
+                    rules.append(.fileLine(file: file, line: directive.targetLine))
+                } else {
+                    rules += directive.operatorIDs.map {
+                        .fileLineOperator(file: file, line: directive.targetLine, operatorID: $0)
+                    }
+                }
+            }
         }
-        let identity = ([plan.planID] + suppressedIDs.sorted()).joined(separator: "\u{1F}")
-
-        // A suppressed mutant is no longer selected, so its inclusion reason
-        // (if any) would be orphaned — dropped here to keep
-        // `budgetInclusionReasons` exactly one-per-`mutations`-entry, the
-        // same invariant `PlanSharding.shard` preserves for its own subset.
-        let keptIDs = Set(kept.map(\.id))
-        let inclusionReasons = plan.budgetInclusionReasons.filter { keptIDs.contains($0.mutationID) }
-
-        return MutationPlan(
-            planID: "plan_" + ContentHash.shortDigest(of: identity),
-            createdAt: plan.createdAt,
-            projectRoot: plan.projectRoot,
-            toolchain: plan.toolchain,
-            configurationHash: plan.configurationHash,
-            sourceFileHashes: plan.sourceFileHashes,
-            mutations: kept,
-            skipped: skipped,
-            operators: plan.operators,
-            budgetInclusionReasons: inclusionReasons,
-            planningHash: plan.planningHash
-        )
+        return rules
     }
 }
 

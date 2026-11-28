@@ -38,7 +38,7 @@ struct ReproduceCommand: AsyncParsableCommand {
         var settings = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
         try overrides.apply(to: &settings)
 
-        try ConfigurationPreflight.run(settings)
+        try ConfigurationPreflight.run(settings, projectRoot: root)
 
         let loadedPlan = try loadPlan()
         let id = MutationID(rawValue: mutationID)
@@ -49,9 +49,11 @@ struct ReproduceCommand: AsyncParsableCommand {
             throw ExitCode(MutantKitExit.operationalError)
         }
 
-        let (sandbox, layout) = try await prepareFreshSandbox(root: root, settings: settings, mutationID: point.id.rawValue)
+        let reproduction = try await prepareFreshSandbox(root: root, settings: settings, mutationID: point.id.rawValue)
 
-        let target = sandbox.workspaceRoot.appendingPathComponent(point.file)
+        let sandbox = reproduction.sandbox
+        let layout = reproduction.layout
+        let target = try resolveMutationTarget(point, in: sandbox, workspaces: reproduction.workspaces)
         let applied = try applyAndReportMutation(point, fileAt: target)
 
         guard run || replay else {

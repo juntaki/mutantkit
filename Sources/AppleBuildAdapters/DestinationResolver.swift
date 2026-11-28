@@ -77,6 +77,11 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
     /// The requested device was listed by `simctl`, but under a runtime
     /// `list runtimes` does not report, so it cannot be used or classified.
     case deviceSkipped(String)
+    /// The requested device exists, but the scheme's available destinations
+    /// (`xcodebuild -showdestinations`) do not include it — or any device the
+    /// request names. There is no silent fallback to a device the scheme
+    /// cannot use.
+    case notSupportedByScheme(scheme: String, requested: String, supported: [String], unsupported: [String])
 
     public var description: String {
         switch self {
@@ -112,6 +117,21 @@ public enum DestinationResolutionError: Error, CustomStringConvertible, Sendable
             """
         case let .deviceSkipped(detail):
             "The requested simulator cannot be used: \(detail)"
+        case let .notSupportedByScheme(scheme, requested, supported, unsupported):
+            if supported.isEmpty {
+                """
+                Scheme "\(scheme)" cannot run on the requested destination "\(requested)": none of \
+                its matching simulators (\(unsupported.joined(separator: ", "))) is among the \
+                scheme's available destinations (`xcodebuild -showdestinations -scheme "\(scheme)"`). \
+                Choose a destination the scheme lists, or install the runtime it needs.
+                """
+            } else {
+                """
+                Scheme "\(scheme)" supports \(supported.joined(separator: ", ")) but not the \
+                simulator "\(requested)" asks for (not supported: \(unsupported.joined(separator: ", "))). \
+                Name one of the supported simulators, or an OS the scheme lists.
+                """
+            }
         case let .simulatorPoolFailure(detail):
             "Could not resolve the destination: \(detail)"
         }
@@ -169,6 +189,7 @@ public enum DestinationResolver {
     public static func resolve(
         _ requested: String,
         using pool: SimulatorPool,
+        schemeDestinations: SchemeDestinations? = nil,
         isBuiltInDefault: Bool = false
     ) async throws -> ResolvedDestination {
         guard isSimulatorDestination(requested) else {
@@ -182,7 +203,10 @@ public enum DestinationResolver {
             throw DestinationResolutionError.simulatorPoolFailure(error.description)
         }
 
-        return try resolve(requested, against: catalog.devices, skipped: catalog.skipped, isBuiltInDefault: isBuiltInDefault)
+        return try resolve(
+            requested, against: catalog.devices, skipped: catalog.skipped,
+            schemeDestinations: schemeDestinations, isBuiltInDefault: isBuiltInDefault
+        )
     }
 
     /// Completes a record decoded from a run manifest for replay. The recorded
@@ -215,6 +239,7 @@ public enum DestinationResolver {
         _ requested: String,
         against devices: [CatalogDevice],
         skipped: [SkippedDevice] = [],
+        schemeDestinations: SchemeDestinations? = nil,
         isBuiltInDefault: Bool = false
     ) throws -> ResolvedDestination {
         guard isSimulatorDestination(requested) else {
@@ -230,6 +255,7 @@ public enum DestinationResolver {
                 }
                 throw DestinationResolutionError.unknownUDID(udid)
             }
+            try requireSchemeSupport(of: [match], requested: requested, scheme: schemeDestinations)
             return ResolvedDestination(requested: requested, device: match.device, platform: match.platform)
         }
 
@@ -254,6 +280,34 @@ public enum DestinationResolver {
             throw DestinationResolutionError.notFound(name: name, knownNames: knownNames)
         }
 
+        // Only devices the scheme can use are candidates: the newest runtime and
+        // the same-version tie are both decided among them. A request that
+        // resolves on the full catalog but not on the usable devices fails as
+        // "not supported by the scheme", never as a misleading not-found.
+        guard let scheme = schemeDestinations else {
+            return try select(name: name, requested: requested, from: devices, matches: matches)
+        }
+        try requireSchemeSupport(of: matches, requested: requested, scheme: scheme)
+        do {
+            return try select(
+                name: name, requested: requested,
+                from: devices.filter { scheme.supports(udid: $0.udid) }, matches: matches
+            )
+        } catch let error as DestinationResolutionError {
+            guard (try? select(name: name, requested: requested, from: devices, matches: matches)) != nil else { throw error }
+            throw DestinationResolutionError.notSupportedByScheme(
+                scheme: scheme.scheme, requested: requested,
+                supported: matches.filter { scheme.supports(udid: $0.udid) }.map(Self.describe).sorted(),
+                unsupported: matches.filter { !scheme.supports(udid: $0.udid) }.map(Self.describe).sorted()
+            )
+        }
+    }
+
+    /// The device `name` resolves to among `devices`; `matches` are all devices
+    /// of that name (for diagnostics).
+    private static func select(
+        name: String, requested: String, from devices: [CatalogDevice], matches: [CatalogDevice]
+    ) throws -> ResolvedDestination {
         let platform = Self.runtimePlatform(forRequestedDestination: requested)
         let platformDevices = platform.map { platform in devices.filter { $0.platform == platform } } ?? devices
 
@@ -294,6 +348,22 @@ public enum DestinationResolver {
             )
         }
         return ResolvedDestination(requested: requested, device: match.device, platform: match.platform)
+    }
+
+    /// Fails when a scheme's destinations are known and none of `candidates`
+    /// (the devices the request names) is among them.
+    private static func requireSchemeSupport(
+        of candidates: [CatalogDevice], requested: String, scheme: SchemeDestinations?
+    ) throws {
+        guard let scheme, !candidates.contains(where: { scheme.supports(udid: $0.udid) }) else { return }
+        throw DestinationResolutionError.notSupportedByScheme(
+            scheme: scheme.scheme, requested: requested,
+            supported: [], unsupported: candidates.map(Self.describe).sorted()
+        )
+    }
+
+    private static func describe(_ device: CatalogDevice) -> String {
+        "\(device.name) \(device.udid) (\(device.runtimeIdentifier))"
     }
 
     /// The device named `name` among `candidates` (all one platform and version).

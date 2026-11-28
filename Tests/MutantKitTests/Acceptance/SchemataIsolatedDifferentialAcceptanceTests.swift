@@ -99,7 +99,7 @@ struct SchemataIsolatedDifferentialAcceptanceTests {
                 toolVersion: "0.0.0", toolCommitSHA: String(repeating: "0", count: 40), swiftVersion: "6.0", swiftSyntaxVersion: "600.0.0",
                 xcodeVersion: nil
             ),
-            configurationHash: configuration.configurationHash,
+            configurationHash: try configuration.configurationHash,
             sourceFileHashes: [Self.relativePath: ContentHash.of(Self.librarySource)],
             mutations: points, skipped: [], operators: [BoolLiteralInversionOperator.descriptor]
         )

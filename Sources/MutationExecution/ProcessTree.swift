@@ -35,8 +35,11 @@ enum ProcessTree {
     ///
     /// Must be called while `root` is still alive. Once it exits, its children are
     /// reparented to launchd and nothing remains to identify them as ours.
-    static func descendants(of root: pid_t) -> [pid_t] {
-        descendantIdentities(of: root).map(\.pid)
+    ///
+    /// `nil` means the process table could not be sampled: that is a gap in the
+    /// observation, never "no descendants".
+    static func descendants(of root: pid_t, readTable: TableReader = readProcessTable) -> [pid_t]? {
+        descendantIdentities(of: root, readTable: readTable)?.map(\.pid)
     }
 
     /// Same walk as `descendants(of:)`, but keeping each descendant's start
@@ -45,9 +48,13 @@ enum ProcessTree {
     /// ancestry chain itself. See that function and `ProcessIdentity` for why
     /// the plain PID this returns is not enough on its own once any real time
     /// has passed since this call.
-    static func descendantIdentities(of root: pid_t) -> [ProcessIdentity] {
-        let table = processTable()
-        guard !table.isEmpty else { return [] }
+    ///
+    /// `nil` when the table could not be sampled (after `tableReadAttempts`
+    /// tries); a successful sample with no descendants returns `[]`. The two
+    /// must never be conflated: a missed sample while an escaping child is
+    /// reparented cannot be reconstructed afterwards.
+    static func descendantIdentities(of root: pid_t, readTable: TableReader = readProcessTable) -> [ProcessIdentity]? {
+        guard let table = readTableRetrying(readTable) else { return nil }
 
         var childrenByParent: [pid_t: [Entry]] = [:]
         for entry in table {
@@ -209,7 +216,7 @@ enum ProcessTree {
     /// For tests and diagnosis, and (unlike `isRunning(_:)` below) safe to
     /// use as a general-purpose "does this still occupy its slot" check.
     static func isAlive(_ identity: ProcessIdentity) -> Bool {
-        processTable().contains { $0.identity == identity }
+        (readProcessTable() ?? []).contains { $0.identity == identity }
     }
 
     /// `true` when `identity` is genuinely still running, or when the
@@ -248,7 +255,8 @@ enum ProcessTree {
     /// which under load can be seconds after the process was killed. For a caller that only has a PID (a
     /// test asserting that a torn-down child is no longer running).
     static func isRunning(pid: pid_t) -> Bool {
-        processTable().contains { $0.identity.pid == pid && !$0.isZombie }
+        guard let table = readProcessTable() else { return true }
+        return table.contains { $0.identity.pid == pid && !$0.isZombie }
     }
 
     /// Every member of process group `pgid` other than `excluding` that is
@@ -280,39 +288,47 @@ enum ProcessTree {
         }
     }
 
-    private static func processTable() -> [Entry] {
-        readProcessTable() ?? []
-    }
+    /// `sysctl(3)` as `readProcessTable` calls it; a test substitutes a fake
+    /// to exercise a table that shrinks or grows between the size and fill
+    /// calls, or a short/torn fill.
+    typealias SysctlCall = (
+        _ name: UnsafeMutablePointer<Int32>, _ nameLength: UInt32, _ old: UnsafeMutableRawPointer?,
+        _ oldLength: UnsafeMutablePointer<Int>, _ new: UnsafeMutableRawPointer?, _ newLength: Int
+    ) -> Int32
+
+    /// Headroom added to the sized buffer so a table that grows a little
+    /// between the size and fill calls still fits.
+    static let tableHeadroomEntries = 32
 
     /// The kernel process table, or `nil` when it could not be read — never
-    /// an empty table standing in for a failed read.
+    /// an empty table standing in for a failed read. Only the bytes the
+    /// fill call actually returned are parsed: a table that shrank between
+    /// the two calls yields fewer entries, never zero-filled ones, and a
+    /// returned length that is not a whole number of records is unreadable.
     static func readProcessTable() -> [Entry]? {
+        readProcessTable(sysctl: { Darwin.sysctl($0, $1, $2, $3, $4, $5) })
+    }
+
+    static func readProcessTable(sysctl call: SysctlCall) -> [Entry]? {
         var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-
-        // Two calls: one to size the buffer, one to fill it. The table can grow
-        // between them, so the second is allowed to fail; that is reported as
-        // `nil` (unreadable), never as a short buffer or an empty table.
-        var length = 0
-        guard sysctl(&name, UInt32(name.count), nil, &length, nil, 0) == 0, length > 0 else {
-            return nil
-        }
-
         let stride = MemoryLayout<kinfo_proc>.stride
-        var buffer = [kinfo_proc](repeating: kinfo_proc(), count: length / stride + 1)
 
-        let result = buffer.withUnsafeMutableBytes { raw -> Int32 in
-            var size = length
-            return sysctl(&name, UInt32(name.count), raw.baseAddress, &size, nil, 0)
+        var length = 0
+        guard call(&name, UInt32(name.count), nil, &length, nil, 0) == 0, length > 0 else { return nil }
+
+        let capacity = length / stride + tableHeadroomEntries
+        var buffer = [kinfo_proc](repeating: kinfo_proc(), count: capacity)
+        var filled = capacity * stride
+        let result = buffer.withUnsafeMutableBytes { raw in
+            call(&name, UInt32(name.count), raw.baseAddress, &filled, nil, 0)
         }
-        guard result == 0 else { return nil }
+        guard result == 0, filled > 0, filled <= capacity * stride, filled % stride == 0 else { return nil }
 
-        // `p_stat == SZOMB` (5, `<sys/proc.h>` — not imported into Swift by
-        // the Darwin module, so the raw value is used directly, the same
-        // way this file already uses raw signal numbers elsewhere) is the
-        // kernel's own zombie marker: exited and signalled, occupying its
-        // table entry only until reaped.
+        // `p_stat == SZOMB` (5, `<sys/proc.h>`, not imported into Swift by
+        // the Darwin module) is the kernel's zombie marker: exited, occupying
+        // its table entry only until reaped.
         let zombieState: Int8 = 5
-        return buffer.prefix(length / stride).map {
+        return buffer.prefix(filled / stride).map {
             Entry(
                 pid: $0.kp_proc.p_pid, ppid: $0.kp_eproc.e_ppid, pgid: $0.kp_eproc.e_pgid,
                 startTimeSeconds: $0.kp_proc.p_starttime.tv_sec, startTimeMicroseconds: Int32($0.kp_proc.p_starttime.tv_usec),

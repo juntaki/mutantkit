@@ -15,8 +15,19 @@ extension SwiftPackageMacOSAdapter {
             resultArtifactPath: nil,
             diagnosis: """
             The test run's output could not be confirmed complete (a process outside the supervisor's control \
-            may still hold its pipes), so its exit status \(result.exitCode) is not scored.
+            may still hold its pipes), so its exit status \(result.exitStatusDescription) is not scored.
             """,
+            cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
+        )
+    }
+
+    /// The root's exit was never observed, so `exitCode` is a placeholder: nothing may read it, and the run
+    /// is neither a kill nor a survivor.
+    private static func unobservedExitResult(result: ProcessResult, command: CommandRecord) -> TestRunResult? {
+        guard !result.exitStatusAvailable else { return nil }
+        return TestRunResult(
+            status: .infrastructureFailure, summary: nil, command: command, resultArtifactPath: nil,
+            diagnosis: "The test run's exit status could not be observed: \(result.cleanupDiagnosis ?? "the process could not be reaped").",
             cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
         )
     }
@@ -79,6 +90,8 @@ extension SwiftPackageMacOSAdapter {
                 cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
             )
         }
+
+        if let unobserved = unobservedExitResult(result: result, command: command) { return unobserved }
 
         if let incomplete = incompleteOutputResult(result: result, command: command) { return incomplete }
 

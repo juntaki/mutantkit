@@ -263,13 +263,21 @@ enum CommandRecording {
             executable: executable,
             arguments: arguments,
             workingDirectory: workingDirectory.path,
-            exitCode: result?.exitCode,
+            exitCode: result.flatMap { $0.exitStatusAvailable ? $0.exitCode : nil },
             durationSeconds: result?.durationSeconds
         )
     }
 }
 
 extension ProcessResult {
+    /// stderr as a failure diagnosis, or the plain statement that it cannot
+    /// be trusted when the capture was incomplete.
+    var failureDiagnosis: String {
+        outputComplete
+            ? String(decoding: standardError, as: UTF8.self)
+            : "the process's output could not be fully captured"
+    }
+
     /// Redacted stdout and stderr together, in the order a reader expects.
     var combinedOutput: String {
         let out = String(decoding: standardOutput, as: UTF8.self)

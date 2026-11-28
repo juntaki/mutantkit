@@ -27,7 +27,7 @@ struct XccovCoverageReaderTests {
 
         let parsed = try #require(XccovCoverageReader.parse(json, projectRoot: projectRoot))
 
-        #expect(parsed["Sources/Foo.swift"] == [1])
+        #expect(parsed.executed["Sources/Foo.swift"] == [1])
     }
 
     @Test("A non-executable line (no executionCount key) is never covered")
@@ -59,8 +59,8 @@ struct XccovCoverageReaderTests {
 
         let parsed = try #require(XccovCoverageReader.parse(json, projectRoot: projectRoot))
 
-        #expect(parsed["Sources/Inside.swift"] == [1])
-        #expect(parsed["Sources/Outside.swift"] == nil)
+        #expect(parsed.executed["Sources/Inside.swift"] == [1])
+        #expect(parsed.executed["Sources/Outside.swift"] == nil)
     }
 
     @Test("Malformed JSON yields nil rather than throwing")
@@ -148,7 +148,7 @@ struct XccovCoverageReaderTests {
         """.utf8)
 
         let parsed = try #require(XccovCoverageReader.parse(json, projectRoot: projectRoot))
-        #expect(parsed["Sources/Foo.swift"] == [1])
+        #expect(parsed.executed["Sources/Foo.swift"] == [1])
     }
 
     @Test("One valid covered line alongside one malformed executable line yields nil, not a partial map")
@@ -194,5 +194,50 @@ struct XccovCoverageReaderTests {
             map == nil,
             "even a well-formed, fully-covered document must be discarded when outputComplete is false"
         )
+    }
+
+    // MARK: - Mapped-line domain
+
+    private let gappedDocument = Data("""
+    {
+      "/Users/demo/project/Sources/Foo.swift": [
+        {"line": 1, "isExecutable": true, "executionCount": 3},
+        {"line": 2, "isExecutable": true, "executionCount": 0},
+        {"line": 3, "isExecutable": false},
+        {"line": 4, "isExecutable": false}
+      ]
+    }
+    """.utf8)
+
+    @Test("Executable lines are mapped whatever their count; non-executable lines are unmeasured")
+    func mappedLinesAreTheExecutableOnes() throws {
+        let parsed = try #require(XccovCoverageReader.parse(gappedDocument, projectRoot: projectRoot))
+
+        #expect(parsed.executed["Sources/Foo.swift"] == [1])
+        #expect(parsed.mapped["Sources/Foo.swift"] == [1, 2])
+    }
+
+    @Test("read keeps the mapped domain: an unmeasured line is neither covered nor known uncovered")
+    func readCarriesMappedDomainIntoCoverageMap() async throws {
+        let bundle = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mutantkit-xccov-\(UUID().uuidString).xcresult")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let document = gappedDocument
+
+        let map = try #require(await XccovCoverageReader.read(
+            archive: bundle, projectRoot: projectRoot,
+            processRunner: { _, _, _, _ in
+                ProcessResult(
+                    exitCode: 0, standardOutput: document, standardError: Data(), durationSeconds: 0.1,
+                    timedOut: false, terminatingSignal: nil, outputComplete: true
+                )
+            }
+        ))
+
+        let file = "Sources/Foo.swift"
+        #expect(map.observation(forFile: file, line: 2)?.mutatedLineWasExecuted == false, "mapped, count zero: measured and never run")
+        #expect(map.observation(forFile: file, line: 1)?.mutatedLineWasExecuted == true)
+        #expect(map.observation(forFile: file, line: 3) == nil, "no counter for this line: no claim, so the mutant is run")
     }
 }

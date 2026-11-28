@@ -210,18 +210,12 @@ struct WorkspaceManagerCleanSubtreeCloningTests {
 
         let secondSandbox = try await workspaces.createSandbox(id: "mut_reuse_b").workspaceRoot
 
-        // This is the documented, accepted trade-off `ExecutionSettings
-        // .cleanSubtreeCloning`'s own doc comment names as the reason this
-        // flag stays opt-in: a cached "clean" classification does not
-        // notice content that starts existing after it was recorded, so
-        // the whole-directory clone brings the new file along. If this
-        // assertion ever starts failing because the index began rebuilding
-        // itself per sandbox, that is a *performance* regression to fix,
-        // not a correctness bug to "fix" by making this assertion pass the
-        // other way -- see this test's own name and the flag's doc comment.
+        // The cached "clean" classification is still reused (the whole-directory
+        // clone brings the live file along), but the sandbox is built from the
+        // captured input closure: an entry that is not in it is pruned.
         #expect(
-            FileManager.default.fileExists(atPath: secondSandbox.appendingPathComponent("Sources/Extra/late.log").path),
-            "expected the cached (now-stale) clean classification to be reused, bringing the new file along"
+            !FileManager.default.fileExists(atPath: secondSandbox.appendingPathComponent("Sources/Extra/late.log").path),
+            "content added after the closure was captured must not reach the sandbox"
         )
     }
 

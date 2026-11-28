@@ -24,14 +24,14 @@ struct ProcessTreeTests {
         // The grandchild needs a moment to exist before it can be found. Polled, not a fixed
         // sleep: under heavy host load the fork can take far longer than any short pause.
         let deadline = Date().addingTimeInterval(30)
-        while ProcessTree.descendants(of: process.processIdentifier).isEmpty, Date() < deadline {
+        while (ProcessTree.descendants(of: process.processIdentifier) ?? []).isEmpty, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.02)
         }
 
         return (
             process.processIdentifier,
             {
-                let survivors = ProcessTree.descendants(of: process.processIdentifier)
+                let survivors = (ProcessTree.descendants(of: process.processIdentifier) ?? [])
                 kill(process.processIdentifier, SIGKILL)
                 ProcessTree.forceKill(survivors)
                 // Bounded, not a bare `waitUntilExit()` -- see
@@ -49,7 +49,7 @@ struct ProcessTreeTests {
         let (parent, cleanup) = try spawnTree()
         defer { cleanup() }
 
-        let descendants = ProcessTree.descendants(of: parent)
+        let descendants = (ProcessTree.descendants(of: parent) ?? [])
         // `sh` forks one backgrounded `sleep` and execs into another, so the exact
         // shape is the shell's business — but there must be at least one.
         #expect(!descendants.isEmpty, "expected at least one descendant of \(parent)")
@@ -61,7 +61,7 @@ struct ProcessTreeTests {
         let (parent, cleanup) = try spawnTree()
         defer { cleanup() }
 
-        let descendants = ProcessTree.descendants(of: parent)
+        let descendants = (ProcessTree.descendants(of: parent) ?? [])
         try #require(!descendants.isEmpty)
 
         kill(parent, SIGKILL)
@@ -76,8 +76,7 @@ struct ProcessTreeTests {
     /// A process with no children must not report the whole machine.
     @Test("A leaf process has no descendants")
     func leafHasNoDescendants() {
-        #expect(ProcessTree.descendants(of: getpid()).isEmpty
-            || !ProcessTree.descendants(of: getpid()).contains(getpid()))
+        #expect(ProcessTree.descendants(of: getpid())?.contains(getpid()) == false)
     }
 
     /// A pid that does not exist is a normal thing to ask about — a process that
@@ -85,7 +84,7 @@ struct ProcessTreeTests {
     @Test("An unknown pid has no descendants")
     func unknownPIDIsEmpty() {
         // Above the pid range the kernel will hand out.
-        #expect(ProcessTree.descendants(of: 999_999).isEmpty)
+        #expect(ProcessTree.descendants(of: 999_999) == [])
     }
 
     /// Killing an empty list must be a no-op rather than a signal to something
@@ -103,8 +102,8 @@ struct ProcessTreeTests {
         let (parent, cleanup) = try spawnTree()
         defer { cleanup() }
 
-        let pids = Set(ProcessTree.descendants(of: parent))
-        let identities = ProcessTree.descendantIdentities(of: parent)
+        let pids = Set(ProcessTree.descendants(of: parent) ?? [])
+        let identities = ProcessTree.descendantIdentities(of: parent) ?? []
         #expect(Set(identities.map(\.pid)) == pids)
     }
 
@@ -113,7 +112,7 @@ struct ProcessTreeTests {
         let (parent, cleanup) = try spawnTree()
         defer { cleanup() }
 
-        let identities = ProcessTree.descendantIdentities(of: parent)
+        let identities = ProcessTree.descendantIdentities(of: parent) ?? []
         try #require(!identities.isEmpty)
         #expect(identities.allSatisfy { ProcessTree.isAlive($0) })
 
@@ -143,7 +142,7 @@ struct ProcessTreeTests {
         let (parent, cleanup) = try spawnTree()
         defer { cleanup() }
 
-        let real = try #require(ProcessTree.descendantIdentities(of: parent).first)
+        let real = try #require(ProcessTree.descendantIdentities(of: parent)?.first)
         let stale = ProcessTree.ProcessIdentity(pid: real.pid, startTimeSeconds: 1, startTimeMicroseconds: 0)
         #expect(!ProcessTree.isAlive(stale), "a fabricated start time must not match the real process")
 

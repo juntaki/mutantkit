@@ -13,14 +13,18 @@ public enum AppleAdapterFactory {
     /// The adapter, plus how the project was identified.
     public struct Resolution: Sendable {
         public let adapter: any ProjectAdapter
-        public let detection: ProjectDetection
         /// The layout `adapter` was built with, once one is resolved (see
         /// `withSandboxLayout(_:configuration:projectRoot:)`).
         public let sandboxLayout: SandboxLayout?
+        /// The invocation context `adapter` was built from; consumers read
+        /// root, package directory, container, scheme and destination here.
+        public let context: ResolvedInvocationContext
 
-        public init(adapter: any ProjectAdapter, detection: ProjectDetection, sandboxLayout: SandboxLayout? = nil) {
+        public var detection: ProjectDetection { context.detection }
+
+        public init(adapter: any ProjectAdapter, context: ResolvedInvocationContext, sandboxLayout: SandboxLayout? = nil) {
             self.adapter = adapter
-            self.detection = detection
+            self.context = context
             self.sandboxLayout = sandboxLayout
         }
     }
@@ -45,14 +49,17 @@ public enum AppleAdapterFactory {
     ) async throws -> Resolution {
         let detection = try await detect(configuration: configuration, in: directory, manifestDumps: manifestDumps)
         let resolvedDestination = try await resolveDestinationIfNeeded(
-            for: detection.kind, configuration: configuration, in: directory
+            for: detection, configuration: configuration, in: directory
         )
         return Resolution(
             adapter: adapter(
                 for: detection, configuration: configuration, projectRoot: directory,
                 resolvedDestination: resolvedDestination
             ),
-            detection: detection
+            context: ResolvedInvocationContext(
+                projectRoot: directory, projectPath: configuration.project.path, detection: detection,
+                scheme: configuration.project.scheme, resolvedDestination: resolvedDestination
+            )
         )
     }
 
@@ -81,7 +88,10 @@ public enum AppleAdapterFactory {
                 for: detection, configuration: configuration, projectRoot: directory,
                 resolvedDestination: completed
             ),
-            detection: detection
+            context: ResolvedInvocationContext(
+                projectRoot: directory, projectPath: configuration.project.path, detection: detection,
+                scheme: configuration.project.scheme, resolvedDestination: completed
+            )
         )
     }
 
@@ -133,10 +143,11 @@ public enum AppleAdapterFactory {
     /// derived on its own — resolution changes *when* the answer is
     /// computed and how many times, not what the answer is.
     private static func resolveDestinationIfNeeded(
-        for kind: ProjectKind,
+        for detection: ProjectDetection,
         configuration: Configuration,
         in directory: URL
     ) async throws -> ResolvedDestination? {
+        let kind = detection.kind
         switch kind {
         case .swiftPackageMacOS, .auto:
             return nil
@@ -144,7 +155,26 @@ public enum AppleAdapterFactory {
             let configured = configuration.project.destination
             let requested = configured ?? DestinationResolver.defaultDestination(for: kind)
             let pool = SimulatorPool(workingDirectory: directory)
-            return try await DestinationResolver.resolve(requested, using: pool, isBuiltInDefault: configured == nil)
+            // Only a configured scheme can be asked what it supports; an unresolved
+            // one leaves the destination unchecked against the scheme.
+            var schemeDestinations: SchemeDestinations?
+            if DestinationResolver.isSimulatorDestination(requested), let scheme = configuration.project.scheme {
+                schemeDestinations = await SchemeDestinations.load(
+                    scheme: scheme, projectArguments: projectArguments(for: detection), in: directory
+                )
+            }
+            return try await DestinationResolver.resolve(
+                requested, using: pool, schemeDestinations: schemeDestinations, isBuiltInDefault: configured == nil
+            )
+        }
+    }
+
+    private static func projectArguments(for detection: ProjectDetection) -> [String] {
+        guard let file = detection.projectFile else { return [] }
+        switch detection.kind {
+        case .xcodeWorkspace: return ["-workspace", file.path]
+        case .xcodeProject: return ["-project", file.path]
+        default: return []
         }
     }
 
@@ -163,7 +193,7 @@ public enum AppleAdapterFactory {
             return ProjectDetection(
                 kind: configuration.project.kind,
                 reason: "mutantkit.yml sets project.kind to \(configuration.project.kind.rawValue).",
-                projectFile: locateProjectFile(for: configuration.project.kind, in: directory)
+                projectFile: try locateProjectFile(for: configuration.project.kind, in: directory)
             )
         }
         return try await ProjectDetector.detect(in: directory, manifestDumps: manifestDumps)
@@ -171,17 +201,12 @@ public enum AppleAdapterFactory {
 
     /// Finds the file a configured kind implies, so an explicit kind still gets
     /// the `-workspace`/`-project` argument it needs.
-    private static func locateProjectFile(for kind: ProjectKind, in directory: URL) -> URL? {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        )) ?? []
-
+    private static func locateProjectFile(for kind: ProjectKind, in directory: URL) throws -> URL? {
         switch kind {
         case .xcodeWorkspace:
-            return contents.first { $0.pathExtension == "xcworkspace" }
+            return try ProjectContainerLocator.workspace(in: directory)
         case .xcodeProject:
-            return contents.first { $0.pathExtension == "xcodeproj" }
+            return try ProjectContainerLocator.project(in: directory)
         case .swiftPackageApple, .swiftPackageMacOS:
             let manifest = directory.appendingPathComponent("Package.swift")
             return FileManager.default.fileExists(atPath: manifest.path) ? manifest : nil
@@ -250,7 +275,7 @@ public extension AppleAdapterFactory {
                 resolvedDestination: (resolution.adapter as? XcodeBuildProjectAdapter)?.resolvedDestination,
                 sandboxLayout: layout
             ),
-            detection: resolution.detection,
+            context: resolution.context,
             sandboxLayout: layout
         )
     }

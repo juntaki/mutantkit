@@ -134,7 +134,7 @@ struct MutationPlanTests {
 
         #expect(violations.kinds == [.unstableMutationID])
         #expect(violations.first?.mutationID == tampered.id)
-        #expect(tampered.recomputedID != tampered.id)
+        #expect(tampered.recomputedID(under: .current) != tampered.id)
     }
 
     /// An ID that no longer matches its own components means the components were
@@ -218,5 +218,28 @@ struct MutationPlanTests {
 
         #expect(plan.discoveredCount == plan.mutations.count + plan.skipped.count)
         #expect(plan.skipped.count == 1)
+    }
+
+    @Test("A v1 plan carries no identityVersion key, so its bytes are unchanged")
+    func v1PlanOmitsIdentityVersion() throws {
+        let plan = try realisticPlan()
+        let json = try #require(String(data: plan.encoded(), encoding: .utf8))
+        #expect(!json.contains("identityVersion"))
+        #expect(try MutationPlan.decode(from: plan.encoded()).identityVersion == .v1)
+    }
+
+    @Test("A plan naming an unknown identity scheme is rejected explicitly, never reinterpreted")
+    func unknownIdentityVersionIsRejected() throws {
+        let data = try realisticPlan().encoded()
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["identityVersion"] = 99
+        let tampered = try JSONSerialization.data(withJSONObject: object)
+
+        #expect {
+            try MutationPlan.decode(from: tampered)
+        } throws: { error in
+            guard case PlanError.unsupportedIdentityVersion(found: 99, newestKnown: .v1) = error else { return false }
+            return true
+        }
     }
 }

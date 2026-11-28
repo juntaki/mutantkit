@@ -55,14 +55,14 @@ struct VerifyCommandCompatibilityTests {
     /// still never report `.match` — the identical bytes prove nothing was
     /// actually compared.
     @Test("An incomplete probe reports .unproven, never .match, even when the fingerprints are byte-identical")
-    func incompleteProbeReportsUnprovenEvenOnIdenticalFingerprints() {
+    func incompleteProbeReportsUnprovenEvenOnIdenticalFingerprints() throws {
         let identicalFingerprint = makeToolchain()
         let plan = MutationPlan(
             planID: "plan-0001",
             createdAt: Date(timeIntervalSince1970: 1_700_000_000),
             projectRoot: "/tmp/project",
             toolchain: identicalFingerprint,
-            configurationHash: Configuration().configurationHash,
+            configurationHash: try Configuration().configurationHash,
             sourceFileHashes: [:],
             mutations: [],
             skipped: [],

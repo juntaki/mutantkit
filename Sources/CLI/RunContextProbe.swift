@@ -115,7 +115,7 @@ enum RunContextProbe {
         let components = [
             "classificationRulesVersion=\(classificationRulesVersion)",
             "workUnitID=\(workUnitID)",
-            "configurationHash=\(configuration.configurationHash)",
+            "configurationHash=\(try configuration.configurationHash)",
             "toolVersion=\(toolchain.toolVersion)",
             "toolCommitSHA=\(toolchain.toolCommitSHA ?? "unknown")",
             "swiftVersion=\(toolchain.swiftVersion)",
@@ -329,7 +329,7 @@ enum RunContextProbe {
         let components = [
             "\(purpose)=v4"
         ] + [
-            "configurationHash=\(scopedConfiguration.configurationHash)"
+            "configurationHash=\(try scopedConfiguration.configurationHash)"
         ] + toolReleaseIdentity + identityScope.toolIdentityComponents + [
             "swiftVersion=\(toolchain.swiftVersion)",
             "swiftSyntaxVersion=\(toolchain.swiftSyntaxVersion)",
@@ -646,7 +646,7 @@ enum RunContextProbe {
         // already uses, rather than trusted just because the exit succeeded.
         guard result.outputComplete else {
             throw RunContextProbeError.gitUnavailable(
-                "git \(arguments.joined(separator: " ")) exited (status \(result.exitCode)) but its output could not be " +
+                "git \(arguments.joined(separator: " ")) exited (status \(result.exitStatusDescription)) but its output could not be " +
                     "fully captured before the subprocess ended"
             )
         }

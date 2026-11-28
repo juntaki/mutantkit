@@ -69,9 +69,13 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
                 loweredSources: [SchemataSourceFile(relativePath: relativePath, contents: source)],
                 entries: entries
             )
+            // A real file in the project: sandboxes are cloned from the manager's
+            // staging copy of it, which the recreation-failure case then removes.
+            let projectRoot = makeTempDir(prefix: "mutantkit-recovery-project")
+            try Data(source.utf8).write(to: projectRoot.appendingPathComponent(relativePath))
             return ChunkFixture(
                 source: source, relativePath: relativePath, sortedPoints: sortedPoints, program: program,
-                pointsByID: pointsByID, projectRoot: makeTempDir(prefix: "mutantkit-recovery-project"),
+                pointsByID: pointsByID, projectRoot: projectRoot,
                 scratchRoot: makeTempDir(prefix: "mutantkit-recovery-scratch")
             )
         }
@@ -141,13 +145,18 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
         let adapter = FakeSchemataAdapter()
         scriptEntry0TimesOut(fixture, adapter: adapter)
 
-        // Deletes the real WorkspaceManager's projectRoot the moment entry
-        // 0's primary run executes — by the time Trigger 1's rebuild calls
-        // `createSandbox` again, `populate` can no longer read it, so
-        // `createSandbox` itself throws (WorkspaceManager.swift:146, an
-        // uncaught `populate` error propagating out of `createSandbox`).
-        adapter.beforeNextRun[fixture.token(at: 0)] = { [projectRoot = fixture.projectRoot] in
-            try? FileManager.default.removeItem(at: projectRoot)
+        // Deletes the manager's verified staging copy of the project the moment
+        // entry 0's primary run executes. Every sandbox after the first clones
+        // from that staging (not from the live projectRoot), so by the time
+        // Trigger 1's rebuild calls `createSandbox` again, `populate` can no
+        // longer read its source and `createSandbox` itself throws.
+        adapter.beforeNextRun[fixture.token(at: 0)] = { [scratchRoot = fixture.scratchRoot] in
+            let entries = (try? FileManager.default.contentsOfDirectory(
+                at: scratchRoot, includingPropertiesForKeys: nil
+            )) ?? []
+            for entry in entries where entry.lastPathComponent.hasPrefix(".input-closure-") {
+                try? FileManager.default.removeItem(at: entry)
+            }
         }
 
         let result = try await run(fixture, adapter: adapter)
@@ -184,7 +193,7 @@ struct SchemataMutationRunnerRecoveryRebuildFailureTests {
             let sandboxes = (try? FileManager.default.contentsOfDirectory(
                 at: scratchRoot, includingPropertiesForKeys: nil
             )) ?? []
-            for sandbox in sandboxes {
+            for sandbox in sandboxes where sandbox.lastPathComponent.hasPrefix("sbx_") && sandbox.pathExtension.isEmpty {
                 let residue = sandbox.appendingPathComponent("timed-out-residue", isDirectory: true)
                 try? FileManager.default.createDirectory(at: residue, withIntermediateDirectories: true)
                 FileManager.default.createFile(atPath: residue.appendingPathComponent("stale").path, contents: Data())

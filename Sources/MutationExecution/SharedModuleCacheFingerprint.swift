@@ -355,8 +355,7 @@ public actor SharedModuleCacheNamespace {
     }
 
     /// Attempts to claim `path` for this process, reusing `RunIsolationLock`
-    /// -- the identical inter-process, PID-liveness-checked, stale-owner-
-    /// reclaiming primitive `RunCommand`/`DryRunCommand` already use to keep
+    /// -- the identical inter-process, OS-held (flock) primitive `RunCommand`/`DryRunCommand` already use to keep
     /// two whole mutation runs from colliding -- rather than inventing a
     /// second locking mechanism for what is the same underlying problem one
     /// level down: two processes, not two whole runs this time, contending

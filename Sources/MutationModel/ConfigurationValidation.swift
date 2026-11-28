@@ -76,16 +76,26 @@ public enum ConfigurationValidator {
             ))
         }
 
-        if let maxDuration = configuration.execution.budget.maxDurationSeconds, maxDuration <= 0 {
+        if let maxDuration = configuration.execution.budget.maxDurationSeconds,
+           !ConfigurationLimits.isPositiveDuration(maxDuration) {
             issues.append(ConfigurationIssue(
                 severity: .error,
                 path: "execution.budget.maxDurationSeconds",
-                message: "Must be greater than zero when present."
+                message: "Must be greater than zero and at most \(ConfigurationLimits.maximumDurationText) when present."
+            ))
+        }
+
+        if let coverageWorkers = configuration.execution.coverageWorkers, coverageWorkers < 1 {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "execution.coverageWorkers",
+                message: "Must be at least 1 when present."
             ))
         }
 
         issues += validateBudgetSampling(configuration.execution.budget) + validateEvidence(configuration.evidence)
         issues += validateTimeouts(configuration.timeouts)
+        issues += validateQualityGate(configuration.qualityGate)
         issues += validateExecutionDependencies(configuration.execution)
 
         // `.schemata` is now consumed — `RunCommand` dispatches to
@@ -98,48 +108,6 @@ public enum ConfigurationValidator {
 
         issues += validateDerivedDataPath(configuration.project.derivedDataPath, projectRoot: projectRoot)
         issues += validateXcodeTestTargets(configuration) + validateProfileCoverageSkip(configuration.execution)
-
-        return issues
-    }
-
-    private static func validateTimeouts(_ timeouts: TimeoutSettings) -> [ConfigurationIssue] {
-        var issues: [ConfigurationIssue] = []
-
-        if timeouts.baselineSeconds <= 0 {
-            issues.append(ConfigurationIssue(
-                severity: .error,
-                path: "timeouts.baseline",
-                message: "Must be greater than zero."
-            ))
-        }
-
-        let mutant = timeouts.mutant
-        if mutant.minimumSeconds <= 0 || mutant.maximumSeconds <= 0 {
-            issues.append(ConfigurationIssue(
-                severity: .error,
-                path: "timeouts.mutant",
-                message: "Minimum and maximum timeout values must be greater than zero."
-            ))
-        }
-        // Only meaningful for `.adaptive`: `.resolve(baselineDuration:)` never
-        // reads `minimumSeconds` under `.fixed` (it returns `maximumSeconds`
-        // outright), so a `.fixed` config that only sets `maximum` and leaves
-        // `minimum` at its default would otherwise be flagged for a
-        // relationship between two numbers that do not interact.
-        if mutant.strategy == .adaptive, mutant.minimumSeconds > mutant.maximumSeconds {
-            issues.append(ConfigurationIssue(
-                severity: .error,
-                path: "timeouts.mutant",
-                message: "minimum must not exceed maximum."
-            ))
-        }
-        if mutant.multiplier <= 0 {
-            issues.append(ConfigurationIssue(
-                severity: .error,
-                path: "timeouts.mutant.multiplier",
-                message: "Must be greater than zero."
-            ))
-        }
 
         return issues
     }
@@ -429,14 +397,10 @@ public enum ConfigurationValidator {
         // plain `execution.budget.selection: v2`, in v0.1.0 and v0.2.0. See
         // The budget-selection v2 spec for the specification and the current status.
         //
-        // Rejected here rather than deleted from `BudgetSettings`: this
-        // project's YAML decoding does not reject unknown keys
-        // (`ConfigurationLoader` decodes straight through, and the schema's
-        // `additionalProperties: false` is only ever advertised, never
-        // enforced at load), so removing the key would make an existing
-        // `selection: v2` config *silently* fall back to v1 sampling. A named
-        // error is the honest failure; a silent change of allocator is the
-        // exact class of surprise this codebase refuses everywhere else.
+        // Rejected here with a named, actionable message rather than deleted
+        // from `BudgetSettings`: deleting the key would turn an existing
+        // `selection: v2` config into the generic unknown-key error, which
+        // does not say why it went away.
         //
         // Nothing else is removed. The `.v2` planner dispatch,
         // `BudgetSelectorV2` itself, its test suite and `BudgetV2Eval` all
@@ -565,7 +529,12 @@ public enum ConfigurationJSONSchema {
           "properties": {
             "profile": { "enum": ["default", "stronger", "all", "conservative", "experimental"] },
             "disable": { "type": "array", "items": { "type": "string" } },
-            "enable": { "type": "array", "items": { "type": "string" } }
+            "enable": { "type": "array", "items": { "type": "string" } },
+            "sideEffectCallRemoval": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "properties": { "excludeCalls": { "type": "array", "items": { "type": "string" } } }
+            }
           }
         },
         "execution": {
@@ -574,13 +543,13 @@ public enum ConfigurationJSONSchema {
           "properties": {
             "profile": { "enum": ["reference", "optimized", "experimental"] },
             "strategy": { "enum": ["isolated", "schemata"] },
-            "workers": { "type": ["integer", "null"], "minimum": 1 },
+            "workers": { "anyOf": [{ "type": ["integer", "null"], "minimum": 1 }, { "const": "auto" }] },
             "budget": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
                 "maxMutants": { "type": ["integer", "null"], "minimum": 1 },
-                "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+                "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 31622400 },
                 "seed": { "type": ["integer", "null"] },
                 "stratifyBy": { "enum": ["subtype", "operatorSubtype", null] },
                 "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 },
@@ -614,19 +583,19 @@ public enum ConfigurationJSONSchema {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "baseline": { "type": ["number", "string"] },
+            "baseline": { "type": ["number", "string"], "description": "Seconds or a duration such as 90s; greater than 0, at most 366 days." },
             "mutant": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
                 "strategy": { "enum": ["fixed", "adaptive"] },
-                "multiplier": { "type": "number" },
+                "multiplier": { "type": "number", "exclusiveMinimum": 0 },
                 "minimum": { "type": ["number", "string"] },
                 "maximum": { "type": ["number", "string"] },
-                "overheadAllowance": { "type": ["number", "string"] }
+                "overheadAllowance": { "type": ["number", "string"], "description": "Seconds or a duration; 0 or more, at most 366 days." }
               }
             },
-            "terminationGracePeriod": { "type": ["number", "string"] }
+            "terminationGracePeriod": { "type": ["number", "string"], "description": "Seconds or a duration; 0 (SIGKILL immediately) or more, at most 366 days." }
           }
         },
         "reports": {
@@ -641,22 +610,22 @@ public enum ConfigurationJSONSchema {
             "testedScore": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "minimum": { "type": ["number", "null"] } }
+              "properties": { "minimum": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }
             },
             "effectiveScore": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "minimum": { "type": ["number", "null"] } }
+              "properties": { "minimum": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }
             },
             "regression": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "maximumDrop": { "type": ["number", "null"] } }
+              "properties": { "maximumDrop": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }
             },
             "survived": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "newMaximum": { "type": ["integer", "null"] } }
+              "properties": { "newMaximum": { "type": ["integer", "null"], "minimum": 0 } }
             },
             "integrityViolations": {
               "type": "object",
@@ -676,4 +645,98 @@ public enum ConfigurationJSONSchema {
       }
     }
     """#
+}
+
+extension ConfigurationValidator {
+    private static func validateQualityGate(_ gate: QualityGateSettings) -> [ConfigurationIssue] {
+        var issues: [ConfigurationIssue] = []
+        func percent(_ value: Double?, _ path: String) {
+            guard let value, !(value.isFinite && (0 ... 100).contains(value)) else { return }
+            issues.append(ConfigurationIssue(
+                severity: .error, path: path, message: "Must be a finite percentage between 0 and 100."
+            ))
+        }
+        percent(gate.testedScore?.minimum, "qualityGate.testedScore.minimum")
+        percent(gate.effectiveScore?.minimum, "qualityGate.effectiveScore.minimum")
+        percent(gate.regression?.maximumDrop, "qualityGate.regression.maximumDrop")
+        if let newMaximum = gate.survived?.newMaximum, newMaximum < 0 {
+            issues.append(ConfigurationIssue(
+                severity: .error, path: "qualityGate.survived.newMaximum", message: "Must be zero or more."
+            ))
+        }
+        return issues
+    }
+
+    private static func validateTimeouts(_ timeouts: TimeoutSettings) -> [ConfigurationIssue] {
+        var issues: [ConfigurationIssue] = []
+
+        if !ConfigurationLimits.isPositiveDuration(timeouts.baselineSeconds) {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "timeouts.baseline",
+                message: "Must be greater than zero and at most \(ConfigurationLimits.maximumDurationText)."
+            ))
+        }
+        if !ConfigurationLimits.isNonNegativeDuration(timeouts.terminationGracePeriodSeconds) {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "timeouts.terminationGracePeriod",
+                message: "Must be zero (SIGKILL immediately) or more, and at most \(ConfigurationLimits.maximumDurationText)."
+            ))
+        }
+
+        let mutant = timeouts.mutant
+        if !ConfigurationLimits.isPositiveDuration(mutant.minimumSeconds)
+            || !ConfigurationLimits.isPositiveDuration(mutant.maximumSeconds) {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "timeouts.mutant",
+                message: "Minimum and maximum timeout values must be greater than zero and at most "
+                    + "\(ConfigurationLimits.maximumDurationText)."
+            ))
+        }
+        if !ConfigurationLimits.isNonNegativeDuration(mutant.overheadAllowanceSeconds) {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "timeouts.mutant.overheadAllowance",
+                message: "Must be zero or more, and at most \(ConfigurationLimits.maximumDurationText)."
+            ))
+        }
+        // Only meaningful for `.adaptive`: `.resolve(baselineDuration:)` never
+        // reads `minimumSeconds` under `.fixed` (it returns `maximumSeconds`
+        // outright), so a `.fixed` config that only sets `maximum` and leaves
+        // `minimum` at its default would otherwise be flagged for a
+        // relationship between two numbers that do not interact.
+        if mutant.strategy == .adaptive, mutant.minimumSeconds > mutant.maximumSeconds {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "timeouts.mutant",
+                message: "minimum must not exceed maximum."
+            ))
+        }
+        if !(mutant.multiplier.isFinite && mutant.multiplier > 0) {
+            issues.append(ConfigurationIssue(
+                severity: .error,
+                path: "timeouts.mutant.multiplier",
+                message: "Must be a finite number greater than zero."
+            ))
+        }
+
+        return issues
+    }
+}
+
+/// Finite, meaningful ranges for numeric durations. The upper bound rejects
+/// values that only overflow later when converted to clock units.
+public enum ConfigurationLimits {
+    public static let maximumDurationSeconds: Double = 366 * 24 * 3600
+    static let maximumDurationText = "366 days"
+
+    static func isPositiveDuration(_ value: Double) -> Bool {
+        value.isFinite && value > 0 && value <= maximumDurationSeconds
+    }
+
+    static func isNonNegativeDuration(_ value: Double) -> Bool {
+        value.isFinite && value >= 0 && value <= maximumDurationSeconds
+    }
 }

@@ -130,7 +130,7 @@ public enum IntegrityChecker {
                 ))
             }
 
-            let recomputed = point.recomputedID
+            let recomputed = point.recomputedID(under: plan.identityVersion)
             if recomputed != point.id {
                 violations.append(IntegrityViolation(
                     kind: .unstableMutationID,

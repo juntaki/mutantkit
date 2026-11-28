@@ -52,7 +52,8 @@ struct PerTestProfilingFailClosedAcceptanceTests {
         let discovered = await SwiftPackageMacOSAdapter.enumerateTestIdentifiers(
             in: workspace, timeoutSeconds: Self.isolatedRunTimeoutSeconds, terminationGracePeriodSeconds: 5
         )
-        #expect(discovered.count == 2, "fixture drifted: expected exactly widgetANeverFails + widgetBNeverProfiles")
+        let tests = try #require(discovered.tests, "inventory unknown: \(String(describing: discovered.unknownReason))")
+        #expect(tests.count == 2, "fixture drifted: expected exactly widgetANeverFails + widgetBNeverProfiles")
 
         let map = try #require(
             await adapter.measurePerTestCoverage(artifact: artifact, in: workspace, timeoutSeconds: Self.isolatedRunTimeoutSeconds),

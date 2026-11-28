@@ -8,6 +8,9 @@ public enum PlannerError: Error, CustomStringConvertible {
     case operatorRequiresSymbolResolution(id: String)
     case unreadableDirectory(path: String, detail: String)
     case unreadableFile(path: String, detail: String)
+    /// The source walk could not see part of the tree, so the eligible set is
+    /// unknown. Planning stops rather than producing a smaller successful plan.
+    case incompleteSourceDiscovery([SourceDiscoveryGap])
     case invalidBudget(maxMutants: Int)
     case diffScopeMissing(base: String)
     case integrityViolations([IntegrityViolation])
@@ -16,6 +19,10 @@ public enum PlannerError: Error, CustomStringConvertible {
     /// `maxMutants`/candidate-count magnitude the overflow-safety bound
     /// disallows. See `BudgetSelectorV2Error`'s own description for detail.
     case budgetSelectionV2Failed(BudgetSelectorV2Error)
+    /// An inline `mutantkit:disable` comment that is malformed or names an
+    /// operator this build does not have. Planning stops: a typo must not turn
+    /// a requested suppression into an executed mutant.
+    case invalidSuppressionDirective(file: String, line: Int, detail: String)
 
     public var description: String {
         switch self {
@@ -32,6 +39,9 @@ public enum PlannerError: Error, CustomStringConvertible {
             "Could not read directory \(path): \(detail)"
         case let .unreadableFile(path, detail):
             "Could not read \(path): \(detail)"
+        case let .incompleteSourceDiscovery(gaps):
+            "Source discovery was incomplete; refusing to plan a possibly smaller source set:\n"
+                + gaps.map { "  - \($0)" }.joined(separator: "\n")
         case let .invalidBudget(maxMutants):
             "budget.maxMutants must be greater than zero, got \(maxMutants)."
         case let .diffScopeMissing(base):
@@ -47,7 +57,27 @@ public enum PlannerError: Error, CustomStringConvertible {
             """
         case let .budgetSelectionV2Failed(error):
             "budget.selection: v2 rejected its input: \(error)"
+        case let .invalidSuppressionDirective(file, line, detail):
+            "Invalid inline suppression at \(file):\(line): \(detail)"
         }
+    }
+}
+
+/// Inputs the caller resolves outside the planner and hands in typed.
+public struct PlanningExternalInputs: Sendable {
+    /// Used in place of `configuration.sources` for the actual file walk only —
+    /// `SwiftPMLiveSourceResolution`'s live-resolved scope for a SwiftPM
+    /// project, so the walk sees SwiftPM's real, current compiled set while the
+    /// recorded configuration hash still reflects the config file the user
+    /// actually wrote.
+    public var sourcesOverride: SourceSettings?
+    /// `.mutantkitignore` rules. Inline source comments are not passed here: the
+    /// planner reads them from the same snapshot it discovers from.
+    public var suppressions: MutationSuppressionSet
+
+    public init(sourcesOverride: SourceSettings? = nil, suppressions: MutationSuppressionSet = MutationSuppressionSet(rules: [])) {
+        self.sourcesOverride = sourcesOverride
+        self.suppressions = suppressions
     }
 }
 
@@ -75,25 +105,21 @@ public struct MutationPlanner: Sendable {
     ///     exactly as loaded. `configuration.configurationHash` (recorded
     ///     in the plan, and what `run`'s `PlanCompatibilityValidator` later
     ///     recomputes and compares against) is always derived from *this*
-    ///     value, never from `sourcesOverride`, so a config file that did
+    ///     value, never from `inputs.sourcesOverride`, so a config file that did
     ///     not change never reports a spurious compatibility mismatch just
     ///     because live SwiftPM resolution expanded its scope this time.
     ///   - projectRoot: the directory every path in the plan is relative to.
     ///   - toolchain: gathered by the caller; the planner runs no subprocesses.
     ///   - diffScope: required when `execution.diffBase` is set, ignored otherwise.
-    ///   - sourcesOverride: when present, used in place of
-    ///     `configuration.sources` for the actual file walk only —
-    ///     `SwiftPMLiveSourceResolution`'s live-resolved scope for a
-    ///     SwiftPM project, so the walk sees SwiftPM's real, current
-    ///     compiled set while the recorded configuration hash still
-    ///     reflects the config file the user actually wrote.
+    ///   - inputs: caller-supplied planning inputs (see `PlanningExternalInputs`):
+    ///     the live-resolved source scope and `.mutantkitignore`-style rules.
     ///   - createdAt: recorded in the plan; excluded from `planID`.
     public func makePlan(
         configuration: Configuration,
         projectRoot: URL,
         toolchain: ToolchainFingerprint,
         diffScope: DiffScope? = nil,
-        sourcesOverride: SourceSettings? = nil,
+        inputs: PlanningExternalInputs = PlanningExternalInputs(),
         createdAt: Date = Date()
     ) async throws -> MutationPlan {
         let resolution = try registry.resolve(configuration.operators)
@@ -103,10 +129,9 @@ public struct MutationPlanner: Sendable {
         }
 
         let root = projectRoot.standardizedFileURL
-        let files = try SourceFileWalker(root: root, settings: sourcesOverride ?? configuration.sources).walk()
+        let snapshot = try SourceSnapshot.load(root: root, settings: inputs.sourcesOverride ?? configuration.sources)
         let discovery = try await discoverConcurrently(
-            files: files,
-            root: root,
+            snapshot: snapshot,
             operators: resolution.enabledOperators,
             excludedCallNames: Set(configuration.operators.sideEffectCallRemoval?.excludeCalls ?? [])
         )
@@ -114,12 +139,22 @@ public struct MutationPlanner: Sendable {
         var surviving = discovery.points
         var skipped: [SkippedMutation] = []
 
-        // Gates run in a fixed order and each dropped mutation leaves at exactly
-        // one gate. That is what keeps `discovered == mutations + skipped`
-        // exact rather than approximately right.
+        // Gates run in a fixed order — confidence, diff, suppression, exact-edit
+        // deduplication, budget —
+        // and each dropped mutation leaves at exactly one gate. That is what
+        // keeps `discovered == mutations + skipped` exact rather than
+        // approximately right. Suppression precedes the budget so the budget
+        // is spent on the eligible pool only: suppressed mutants never take a
+        // slot and never appear in its allocation counts. Rules are
+        // `inputs.suppressions` first, then inline comments in path order; the
+        // first matching rule names the skip.
+        let inlineRules = try MutationSuppressionSet.inlineRules(discovery.suppressions, registry: registry)
+        let suppressions = MutationSuppressionSet(rules: inputs.suppressions.rules + inlineRules)
         var inclusionReasons: [InclusionReason] = []
         (surviving, skipped) = applyConfidenceGate(surviving, skipped, resolution: resolution)
         (surviving, skipped) = applyDiffGate(surviving, skipped, diffScope: diffScope)
+        (surviving, skipped) = suppressions.apply(to: surviving, skipped)
+        (surviving, skipped) = ExactEditDeduplication.apply(to: surviving, skipped)
         let budgetResult = try applyBudgetGate(surviving, skipped, budget: configuration.execution.budget)
         (surviving, skipped, inclusionReasons) = (
             budgetResult.points, budgetResult.skipped, budgetResult.inclusionReasons
@@ -133,7 +168,7 @@ public struct MutationPlanner: Sendable {
 
         let plan = MutationPlan(
             planID: Self.planID(
-                planningHash: configuration.planningHash,
+                planningHash: try configuration.planningHash,
                 sourceFileHashes: discovery.fileHashes,
                 mutations: surviving,
                 skipped: skipped
@@ -141,13 +176,14 @@ public struct MutationPlanner: Sendable {
             createdAt: createdAt,
             projectRoot: root.path,
             toolchain: toolchain,
-            configurationHash: configuration.configurationHash,
+            configurationHash: try configuration.configurationHash,
             sourceFileHashes: discovery.fileHashes,
             mutations: surviving,
             skipped: skipped,
             operators: resolution.descriptors,
             budgetInclusionReasons: inclusionReasons,
-            planningHash: configuration.planningHash
+            planningHash: try configuration.planningHash,
+            identityVersion: .current
         )
 
         // Checking here costs milliseconds. Checking after execution costs the
@@ -164,6 +200,7 @@ public struct MutationPlanner: Sendable {
         let relativePath: String
         let sourceFileHash: String
         let points: [MutationPoint]
+        let suppressions: InlineSuppressionScan
     }
 
     private struct DiscoveryOutcome {
@@ -171,6 +208,8 @@ public struct MutationPlanner: Sendable {
         /// has no order to get wrong, so completion order cannot leak in here.
         var fileHashes: [String: String] = [:]
         var points: [MutationPoint] = []
+        /// Inline `mutantkit:disable` comments by file, from the same parse.
+        var suppressions: [String: InlineSuppressionScan] = [:]
     }
 
     /// Parses files concurrently, bounded to the machine's core count.
@@ -179,11 +218,11 @@ public struct MutationPlanner: Sendable {
     /// stop thousands of pending tasks holding thousands of syntax trees alive
     /// at once — memory, not scheduling, is what caps this.
     private func discoverConcurrently(
-        files: [String],
-        root: URL,
+        snapshot: SourceSnapshot,
         operators: [any MutationOperator],
         excludedCallNames: Set<String>
     ) async throws -> DiscoveryOutcome {
+        let files = snapshot.files
         guard !files.isEmpty else { return DiscoveryOutcome() }
 
         let limit = min(files.count, max(1, ProcessInfo.processInfo.activeProcessorCount))
@@ -193,10 +232,10 @@ public struct MutationPlanner: Sendable {
             var next = 0
 
             while next < limit {
-                let relativePath = files[next]
+                let file = files[next]
                 group.addTask {
                     try Self.discover(
-                        operators: operators, root: root, relativePath: relativePath,
+                        operators: operators, file: file,
                         excludedCallNames: excludedCallNames
                     )
                 }
@@ -206,12 +245,13 @@ public struct MutationPlanner: Sendable {
             while let result = try await group.next() {
                 outcome.fileHashes[result.relativePath] = result.sourceFileHash
                 outcome.points.append(contentsOf: result.points)
+                outcome.suppressions[result.relativePath] = result.suppressions
 
                 if next < files.count {
-                    let relativePath = files[next]
+                    let file = files[next]
                     group.addTask {
                         try Self.discover(
-                            operators: operators, root: root, relativePath: relativePath,
+                            operators: operators, file: file,
                             excludedCallNames: excludedCallNames
                         )
                     }
@@ -229,25 +269,18 @@ public struct MutationPlanner: Sendable {
 
     private static func discover(
         operators: [any MutationOperator],
-        root: URL,
-        relativePath: String,
+        file: SourceSnapshot.File,
         excludedCallNames: Set<String>
     ) throws -> FileDiscovery {
-        let url = root.appendingPathComponent(relativePath)
-        let data: Data
-        do {
-            data = try Data(contentsOf: url)
-        } catch {
-            throw PlannerError.unreadableFile(path: relativePath, detail: error.localizedDescription)
-        }
-
         // Built per task: one discovery instance shared across tasks would be
         // shared mutable state for no gain — construction is free.
         let discovery = MutationDiscovery(operators: operators, excludedCallNames: excludedCallNames)
+        let analysis = try discovery.analyze(source: file.data, relativePath: file.relativePath)
         return FileDiscovery(
-            relativePath: relativePath,
-            sourceFileHash: ContentHash.of(data),
-            points: try discovery.discover(source: data, relativePath: relativePath)
+            relativePath: file.relativePath,
+            sourceFileHash: file.contentHash,
+            points: analysis.points,
+            suppressions: analysis.suppressions
         )
     }
 

@@ -602,3 +602,74 @@ struct XCResultAdapterBatchNativeTimeoutTests {
         #expect(outcomes["C"]?.status == .passed)
     }
 }
+
+/// `XCResultAdapter.classify(batch:tree:configurationTestIdentifiers:)`: the evidence must cover what the
+/// configuration was selected to run, and external JSON must not trap the tool.
+@Suite("XCResultAdapter: batch completeness")
+struct XCResultAdapterBatchCompletenessTests {
+    private static func summary(_ names: [String]) -> Data {
+        let records = names.map { name in
+            """
+            {"expectedFailures":0,"failedTests":0,"passedTests":1,"skippedTests":0,
+             "testPlanConfiguration":{"configurationId":"1","configurationName":"\(name)"}}
+            """
+        }
+        return Data("{\"devicesAndConfigurations\":[\(records.joined(separator: ","))]}".utf8)
+    }
+
+    /// Configuration `cfg` records only test A (passed) under bundle `AppTests`.
+    private static let treeWithOnlyA = Data("""
+    {"testNodes":[{"nodeType":"Test Plan","name":"P","children":[
+      {"nodeType":"Unit test bundle","name":"AppTests","children":[
+        {"nodeType":"Test Case","name":"testA()","nodeIdentifier":"Suite/testA()","children":[
+          {"nodeType":"Test Plan Configuration","name":"cfg","result":"Passed"}]}]}]}]}
+    """.utf8)
+
+    private func classify(summary: Data, expected: [String]) throws -> XCResultAdapter.Outcome? {
+        let batch = try JSONDecoder().decode(BatchTestSummaryJSON.self, from: summary)
+        let tree = try JSONDecoder().decode(BatchTestNodesJSON.self, from: Self.treeWithOnlyA)
+        return XCResultAdapter().classify(batch: batch, tree: tree, configurationTestIdentifiers: ["cfg": expected])["cfg"]
+    }
+
+    @Test("Expected A and B but only A recorded is incomplete evidence, not a pass")
+    func missingExpectedTestIsNotAPass() throws {
+        let outcome = try classify(
+            summary: Self.summary(["cfg"]), expected: ["AppTests/Suite/testA()", "AppTests/Suite/testB()"]
+        )
+        #expect(outcome?.status == .infrastructureFailure)
+        #expect(outcome?.diagnosis.contains("AppTests/Suite/testB") == true)
+    }
+
+    @Test("Every expected test recorded is a legitimate pass")
+    func fullSelectionPasses() throws {
+        #expect(try classify(summary: Self.summary(["cfg"]), expected: ["AppTests/Suite/testA()"])?.status == .passed)
+    }
+
+    @Test("A test of another bundle with the same name does not satisfy the expectation")
+    func wrongBundleDoesNotSatisfy() throws {
+        #expect(try classify(summary: Self.summary(["cfg"]), expected: ["OtherTests/Suite/testA()"])?.status
+            == .infrastructureFailure)
+    }
+
+    @Test("A configuration listed twice is ambiguous: infrastructureFailure, and no trap")
+    func duplicateConfigurationDoesNotTrap() throws {
+        #expect(try classify(summary: Self.summary(["cfg", "cfg"]), expected: ["AppTests/Suite/testA()"])?.status
+            == .infrastructureFailure)
+    }
+
+    @Test("A configuration node nested under an argument node still proves the test ran")
+    func nestedConfigurationCountsAsObserved() throws {
+        let tree = Data("""
+        {"testNodes":[{"nodeType":"Unit test bundle","name":"AppTests","children":[
+          {"nodeType":"Test Case","name":"testA()","nodeIdentifier":"Suite/testA()","children":[
+            {"nodeType":"Arguments","name":"1","children":[
+              {"nodeType":"Test Plan Configuration","name":"cfg","result":"Passed"}]}]}]}]}
+        """.utf8)
+        let batch = try JSONDecoder().decode(BatchTestSummaryJSON.self, from: Self.summary(["cfg"]))
+        let nodes = try JSONDecoder().decode(BatchTestNodesJSON.self, from: tree)
+        let outcome = XCResultAdapter().classify(
+            batch: batch, tree: nodes, configurationTestIdentifiers: ["cfg": ["AppTests/Suite/testA()"]]
+        )["cfg"]
+        #expect(outcome?.status == .passed)
+    }
+}

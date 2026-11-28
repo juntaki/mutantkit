@@ -58,7 +58,7 @@ struct CoreOperatorExpansionApplicationREDTests {
             #expect(first.count == 1, "\(testCase.operatorID) should emit exactly one candidate")
             #expect(second.count == 1, "\(testCase.operatorID) should emit exactly one candidate")
             #expect(first[0].id == second[0].id, "\(testCase.operatorID) emitted an unstable MutationID")
-            #expect(first[0].recomputedID == first[0].id)
+            #expect(first[0].recomputedID(under: .current) == first[0].id)
         }
     }
 

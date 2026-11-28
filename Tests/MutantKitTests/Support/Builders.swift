@@ -84,6 +84,32 @@ func makeBaseline(passed: Bool = true, coverageMeasured: Bool = false, coverageR
     )
 }
 
+/// Hand-built test plans are always under the current identity scheme.
+/// Production code has no such default: every plan copy must carry the
+/// source plan's `identityVersion` explicitly.
+extension MutationPlan {
+    init(
+        planID: String,
+        createdAt: Date,
+        projectRoot: String,
+        toolchain: ToolchainFingerprint,
+        configurationHash: String,
+        sourceFileHashes: [String: String],
+        mutations: [MutationPoint],
+        skipped: [SkippedMutation],
+        operators: [OperatorDescriptor],
+        budgetInclusionReasons: [InclusionReason] = [],
+        planningHash: String? = nil
+    ) {
+        self.init(
+            planID: planID, createdAt: createdAt, projectRoot: projectRoot, toolchain: toolchain,
+            configurationHash: configurationHash, sourceFileHashes: sourceFileHashes, mutations: mutations,
+            skipped: skipped, operators: operators, budgetInclusionReasons: budgetInclusionReasons,
+            planningHash: planningHash, identityVersion: .current
+        )
+    }
+}
+
 func makePlan(
     mutations: [MutationPoint],
     skipped: [SkippedMutation] = [],
@@ -94,7 +120,7 @@ func makePlan(
         createdAt: Date(timeIntervalSince1970: 1_700_000_000),
         projectRoot: "/tmp/project",
         toolchain: makeToolchain(),
-        configurationHash: Configuration().configurationHash,
+        configurationHash: defaultConfigurationIdentity.configuration,
         sourceFileHashes: sourceFileHashes,
         mutations: mutations,
         skipped: skipped,
@@ -108,7 +134,7 @@ func makePlan(
         // *configuration* hash, and every compatibility check against a
         // default configuration would report a mismatch that says nothing
         // about the test's own subject.
-        planningHash: Configuration().planningHash
+        planningHash: defaultConfigurationIdentity.planning
     )
 }
 
@@ -528,3 +554,12 @@ extension MutationPoint {
         )
     }
 }
+
+/// The default configuration always encodes; a failure here is a broken test fixture, not a test result.
+private let defaultConfigurationIdentity: (configuration: String, planning: String) = {
+    do {
+        return (try Configuration().configurationHash, try Configuration().planningHash)
+    } catch {
+        fatalError("default Configuration has no identity: \(error)")
+    }
+}()

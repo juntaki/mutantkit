@@ -9,7 +9,7 @@ import MutationModel
 /// this project's `file_length` threshold before this fix, independent of
 /// it) — same motive as `RunCommand.swift`'s own `--report`/`--also-report`
 /// extension, purely for size, not because this belongs to a different
-/// feature than `resolveTestAdapter`/`lockIdentity` there.
+/// feature than `resolveTestAdapter` there.
 extension RunCommand {
     /// An explicit, logged, once-per-run preflight that resolves `root`'s
     /// own package dependencies *before* any mutation testing begins, so a

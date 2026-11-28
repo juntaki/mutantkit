@@ -247,7 +247,7 @@ public enum HybridExecutionEngine {
             // — never one pre-resolved number standing in for both (see
             // `SchemataMutationRunner.timeouts`).
             timeouts: context.configuration.timeouts,
-            toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: context.configuration.buildIdentityHash,
+            toolchainHash: toolchainHash(context.toolchain), buildArgumentsHash: try context.configuration.buildIdentityHash,
             policy: inputs.policy,
             selectCoveringTests: context.configuration.execution.selectCoveringTests,
             // Same bound isolated mode's own worker pool already resolves
@@ -331,7 +331,8 @@ public enum HybridExecutionEngine {
             planID: plan.planID, createdAt: plan.createdAt, projectRoot: plan.projectRoot, toolchain: plan.toolchain,
             configurationHash: plan.configurationHash, sourceFileHashes: plan.sourceFileHashes,
             mutations: plan.mutations.filter { fallbackIDs.contains($0.id) }, skipped: plan.skipped,
-            operators: plan.operators, planningHash: plan.planningHash
+            operators: plan.operators, planningHash: plan.planningHash,
+            identityVersion: plan.identityVersion
         )
         return try await MutationRunner(
             plan: fallbackPlan, configuration: context.configuration, projectRoot: context.projectRoot,

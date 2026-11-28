@@ -41,10 +41,10 @@ struct MutationSuppressionTests {
     @Test("file: uses Glob's segment-bounded *, not fnmatch's slash-crossing *")
     func fileGlobUsesGlobNotFnmatchSegmentBoundary() {
         let nested = point(file: "Sources/A/B.swift", line: 1, operatorID: "swift.core.unary-not-removal")
-        let plan = makePlan(mutations: [nested])
+        let plan = [nested]
 
         let set = MutationSuppressionSet(rules: [.fileGlob("Sources/*.swift")])
-        let result = set.applying(to: plan)
+        let result = set.applied(to: plan)
 
         #expect(result.mutations.map(\.id) == [nested.id], "a single-segment * must not cross a path separator")
         #expect(result.skipped.isEmpty)
@@ -63,13 +63,13 @@ struct MutationSuppressionTests {
     @Test("file: naming a directory does not implicitly suppress its contents — Glob's grammar, not the ancestor convenience")
     func fileGlobHasNoAncestorConvenience() {
         let nested = point(file: "Sources/Generated/X.swift", line: 1, operatorID: "swift.core.unary-not-removal")
-        let plan = makePlan(mutations: [nested])
+        let plan = [nested]
 
         let bareDirectory = MutationSuppressionSet(rules: [.fileGlob("Sources/Generated")])
-        #expect(bareDirectory.applying(to: plan).mutations.map(\.id) == [nested.id])
+        #expect(bareDirectory.applied(to: plan).mutations.map(\.id) == [nested.id])
 
         let explicitDescendant = MutationSuppressionSet(rules: [.fileGlob("Sources/Generated/**")])
-        let suppressed = explicitDescendant.applying(to: plan)
+        let suppressed = explicitDescendant.applied(to: plan)
         #expect(suppressed.mutations.isEmpty)
         #expect(suppressed.skipped.map(\.id) == [nested.id])
     }
@@ -78,12 +78,12 @@ struct MutationSuppressionTests {
     func fileLineOperatorSuppressesOnlyItsOperator() {
         let relational = point(file: "F.swift", line: 3, operatorID: "swift.core.relational-operator-replacement")
         let unaryNot = point(file: "F.swift", line: 3, operatorID: "swift.core.unary-not-removal")
-        let plan = makePlan(mutations: [relational, unaryNot])
+        let plan = [relational, unaryNot]
 
         let set = MutationSuppressionSet(rules: [
             .fileLineOperator(file: "F.swift", line: 3, operatorID: "swift.core.relational-operator-replacement")
         ])
-        let result = set.applying(to: plan)
+        let result = set.applied(to: plan)
 
         #expect(result.mutations.map(\.id) == [unaryNot.id])
         #expect(result.skipped.map(\.id) == [relational.id])
@@ -109,5 +109,17 @@ struct MutationSuppressionTests {
             line: line,
             column: 1
         )
+    }
+}
+
+private struct Applied {
+    let mutations: [MutationPoint]
+    let skipped: [SkippedMutation]
+}
+
+private extension MutationSuppressionSet {
+    func applied(to points: [MutationPoint]) -> Applied {
+        let (kept, skipped) = apply(to: points, [])
+        return Applied(mutations: kept, skipped: skipped)
     }
 }

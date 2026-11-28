@@ -50,7 +50,14 @@ enum PlanCompatibilityValidator {
             ))
         }
 
-        if plan.planningHash != configuration.planningHash {
+        let currentPlanningHash: String?
+        do {
+            currentPlanningHash = try configuration.planningHash
+        } catch {
+            currentPlanningHash = nil
+            issues.append(ConfigurationIssue(severity: .error, path: "configuration", message: "\(error)"))
+        }
+        if let currentPlanningHash, plan.planningHash != currentPlanningHash {
             issues.append(ConfigurationIssue(
                 severity: .warning,
                 path: "plan.planningHash",

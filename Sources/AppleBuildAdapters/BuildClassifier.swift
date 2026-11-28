@@ -81,6 +81,21 @@ enum BuildClassifier {
             )
         }
 
+        // The supervisor never observed how the root ended (the checked reap
+        // failed), so `exitCode` is a placeholder and nothing below may read
+        // it. Not a compile error and not a verdict about the mutated source.
+        guard result.exitStatusAvailable else {
+            return BuildFailure(
+                kind: .infrastructure,
+                diagnosis: """
+                The build's exit status could not be observed (\(result.cleanupDiagnosis ?? "the process could not be reaped")). \
+                No mutant can be scored from this build.
+                """,
+                command: command,
+                output: redacted
+            )
+        }
+
         // Checked before any marker/diagnostic search below: those searches
         // treat "the marker is absent" as meaningful evidence ("not an
         // infrastructure failure", "not a compiler error"), which only holds

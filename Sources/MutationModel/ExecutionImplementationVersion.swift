@@ -24,7 +24,7 @@
 ///   cache miss — see `PlannedMutationRef.swift`'s own
 ///   `CanonicalPointContent`. An operator newly admitting or newly
 ///   excluding a candidate produces a `MutationID` that simply did not
-///   exist before (`operatorVersion` is one of `MutationID.compute`'s
+///   exist before (`operatorVersion` is one of `MutationIdentityVersion.deriveID`'s
 ///   own inputs), never a stale hit against an existing one.
 /// - Classification/verification rule changes (how a completed
 ///   `MutationObservations` gets judged): already `MutationVerdictVerifier
@@ -198,5 +198,17 @@ public enum ExecutionImplementationVersion {
     ///    Swift Testing report was written. Ordinary runs now request the XCTest report too, and a run that
     ///    recorded no test is not a kill. A kill cached under the old reading can be that unrecorded one, so it
     ///    is not reused.
-    public static let current = 7
+    /// 8. A test listing with an unparsed line, a truncated capture, or a configured target with no listed
+    ///    test still produced a per-test coverage map over the tests that did parse, and a batch configuration
+    ///    that recorded only part of its selection (or a single run next to a leftover result bundle) could
+    ///    pass. Such a map narrows selection and such a verdict can be a false survivor, so neither is reused.
+    /// 9. A test result (single or per batch configuration) whose counts contradicted each other, or whose tests were all skipped, or whose
+    ///    failure records disagreed with its failed count, could read as a pass or a kill. Such a verdict is
+    ///    now unknown/infrastructure, so one cached under the old reading is not reused.
+    /// 10. Xccov coverage dropped the lines the report has no counter for, so a line outside the executed
+    ///    set read as measured and never run, and a SwiftPM multi-bundle export that left a bundle out (or
+    ///    could not replace an older export) was still read as the coverage of every test. A per-test map
+    ///    built that way narrows selection and a verdict scored from it can be a false survivor or
+    ///    noCoverage, so neither is reused.
+    public static let current = 10
 }

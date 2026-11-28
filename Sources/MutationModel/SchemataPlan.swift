@@ -476,7 +476,7 @@ public struct SchemataPlan: Codable, Sendable {
     }
 
     /// An explicit, ordered, delimited preimage for everything *except* each
-    /// entry's own content — `MutationID.compute` and `MutationPlan
+    /// entry's own content — `MutationIdentityVersion.deriveID` and `MutationPlan
     /// .workUnitID`'s discipline. Each entry itself folds in via a
     /// canonical (`.sortedKeys`) JSON encoding rather than a hand-maintained
     /// field list: a manually-enumerated list is exactly how the first

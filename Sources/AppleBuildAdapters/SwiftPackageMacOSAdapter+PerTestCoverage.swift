@@ -52,8 +52,10 @@ extension SwiftPackageMacOSAdapter {
             timeoutSeconds: timeoutSeconds,
             terminationGracePeriodSeconds: configuration.timeouts.terminationGracePeriodSeconds
         )
-        let tests = Self.scope(enumerated, toConfiguredTargets: configuration.tests.targets)
-        guard !tests.isEmpty else { return nil }
+        // An unproven inventory is no attribution at all (whole-suite fallback), never a narrower one.
+        guard let proven = enumerated.reconciled(withConfiguredTargets: configuration.tests.targets).tests
+        else { return nil }
+        let tests = proven.sorted { ($0.target, $0.qualifiedName) < ($1.target, $1.qualifiedName) }
 
         // A static initializer has no coverage record of its own; wrapped, the build records it.
         let instrumentation = await instrumentStaticInitializers(in: workspace, timeoutSeconds: timeoutSeconds)
