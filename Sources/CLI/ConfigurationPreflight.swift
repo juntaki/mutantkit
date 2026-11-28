@@ -7,19 +7,13 @@ import MutationModel
 /// warnings are visible even when nothing is wrong enough to stop the
 /// command, and fail-closed on the first error.
 enum ConfigurationPreflight {
-    static func run(_ configuration: Configuration) throws {
-        // The current directory, not `configuration.project.path`: it is the
-        // tree `WorkspaceManager` actually clones into every worker's
-        // sandbox as the project copy (see `SandboxLayout.projectRoot`),
-        // symlinks and all, so it is what `ConfigurationValidator`'s
-        // symlink-escape check for `project.derivedDataPath` needs to be
-        // representative. This does not see a `--project-root` override —
-        // that flag is parsed by each command (`CommonOptions
-        // .resolvedProjectRoot`) and never reaches this shared preflight —
-        // so the symlink check is best-effort for that case. Widening it
-        // would mean threading the resolved root through every call site of
-        // `ConfigurationPreflight.run`, which is out of scope here.
-        let projectRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    /// - Parameter projectRoot: the root the command actually operates on
+    ///   (`CommonOptions.resolvedProjectRoot`, which honours `--project-root`).
+    ///   It is the tree `WorkspaceManager` clones into every worker's sandbox,
+    ///   so it is what `ConfigurationValidator`'s symlink-escape check for
+    ///   `project.derivedDataPath` must be evaluated against. There is no
+    ///   current-directory fallback.
+    static func run(_ configuration: Configuration, projectRoot: URL) throws {
         let issues = ConfigurationValidator.validate(configuration, projectRoot: projectRoot)
         // v0.5 Stable Contracts: diagnostics go to stderr, not stdout — this
         // gate is the first thing almost every command runs, on both the

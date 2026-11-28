@@ -108,12 +108,25 @@ struct XCTestInvocationService: Sendable {
         classify: @Sendable () async -> XCResultAdapter.Outcome
     ) async -> TestRunResult {
         // xcodebuild refuses to overwrite an existing bundle, and a retry must not
-        // fail for that reason alone.
-        try? FileManager.default.removeItem(at: resultBundle)
-        try? FileManager.default.createDirectory(
-            at: resultBundle.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        // fail for that reason alone. The bundle is classified as THIS invocation's
+        // result, so a previous one that could not be removed must stop the run
+        // here, not be read as its outcome.
+        if let failure = Self.prepareFreshResultBundle(resultBundle) {
+            return TestRunResult(
+                status: .infrastructureFailure,
+                summary: nil,
+                command: CommandRecording.record(
+                    executable: ToolPaths.xcodebuild,
+                    arguments: arguments,
+                    workingDirectory: workspace,
+                    result: nil
+                ),
+                resultArtifactPath: nil,
+                diagnosis: "Not launched: \(failure)",
+                // No process was launched, so none can have escaped.
+                cleanupVerified: true
+            )
+        }
 
         let result: ProcessResult
         do {
@@ -156,6 +169,16 @@ struct XCTestInvocationService: Sendable {
             )
         }
 
+        // No observed exit status means the supervisor lost the root, so a
+        // bundle cannot be attributed to this invocation with confidence.
+        guard result.exitStatusAvailable else {
+            return TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: command, resultArtifactPath: nil,
+                diagnosis: "xcodebuild's exit status could not be observed: \(result.cleanupDiagnosis ?? "the process could not be reaped").",
+                cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
+            )
+        }
+
         // Everything else comes from the bundle, including success. xcodebuild's
         // exit code is deliberately not consulted: it reports 65 both for a failing
         // test and for a runner that never started, and only the bundle can tell
@@ -171,6 +194,29 @@ struct XCTestInvocationService: Sendable {
             diagnosis: outcome.diagnosis,
             cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
         )
+    }
+
+    /// Makes `resultBundle` a path this invocation alone will write: removes whatever is there,
+    /// creates its parent, and checks that nothing remains. Returns the reason it could not, or `nil`.
+    /// Exit status is deliberately not how a result is attributed to a run (see `runSingle`), so
+    /// freshness of the artifact has to be established before launch.
+    static func prepareFreshResultBundle(_ resultBundle: URL, fileManager: FileManager = .default) -> String? {
+        if fileManager.fileExists(atPath: resultBundle.path) {
+            do { try fileManager.removeItem(at: resultBundle) } catch {
+                return "a previous result bundle at \(resultBundle.path) could not be removed (\(error))"
+            }
+        }
+        do {
+            try fileManager.createDirectory(
+                at: resultBundle.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+        } catch {
+            return "the result directory for \(resultBundle.path) could not be created (\(error))"
+        }
+        if fileManager.fileExists(atPath: resultBundle.path) {
+            return "a previous result bundle at \(resultBundle.path) is still present after removal"
+        }
+        return nil
     }
 
     /// Runs one already-built batch `xcodebuild test-without-building`
@@ -241,6 +287,15 @@ struct XCTestInvocationService: Sendable {
             return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
         }
 
+        guard result.exitStatusAvailable else {
+            let failure = TestRunResult(
+                status: .infrastructureFailure, summary: nil, command: command, resultArtifactPath: nil,
+                diagnosis: "xcodebuild's exit status could not be observed: \(result.cleanupDiagnosis ?? "the process could not be reaped").",
+                cleanupVerified: result.cleanupVerified, cleanupDiagnosis: result.cleanupDiagnosis
+            )
+            return Dictionary(uniqueKeysWithValues: configurationTestIdentifiers.keys.map { ($0, failure) })
+        }
+
         var outcomes = await resultReader.classifyBatch(
             resultBundle: resultBundle, workingDirectory: workspace,
             configurationTestIdentifiers: configurationTestIdentifiers
@@ -263,7 +318,7 @@ struct XCTestInvocationService: Sendable {
                 XCResultAdapter.Outcome(
                     status: .infrastructureFailure,
                     summary: $0.summary,
-                    diagnosis: "\($0.diagnosis) xcodebuild exited \(result.exitCode): \(detail)"
+                    diagnosis: "\($0.diagnosis) xcodebuild exited \(result.exitStatusDescription): \(detail)"
                 )
             }
         }

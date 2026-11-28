@@ -15,7 +15,7 @@ import Testing
 /// disk. Nothing about the run's own output or exit code would say so.
 ///
 /// `RunCommand.recordHistory(_:to:stderr:)` is the pulled-out piece of that
-/// call site (mirroring how `resolveTestAdapter`/`lockIdentity` are pulled
+/// call site (mirroring how `resolveTestAdapter` is pulled
 /// out elsewhere in this file for the same reason): it lets this surfacing
 /// behavior be tested directly, without standing up a real project/adapter
 /// the way a full `run()` invocation would need.

@@ -181,7 +181,7 @@ struct VerdictVerificationPolicyCanonicalFactoryRegressionTests {
         // the configuration is the one the plan was made under.
         let locator = try Support.read("CLI/EvidenceArchiveLocator.swift")
         #expect(locator.contains("VerdictVerificationPolicy(configuration.execution)"))
-        #expect(locator.contains("configuration.configurationHash == plan.configurationHash"))
+        #expect(locator.contains("(try? configuration.configurationHash) == plan.configurationHash"))
     }
 }
 

@@ -34,14 +34,14 @@ struct PlanCommand: AsyncParsableCommand {
         var settings = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
         try overrides.apply(to: &settings)
 
-        try ConfigurationPreflight.run(settings)
+        try ConfigurationPreflight.run(settings, projectRoot: root)
         // Resolved separately from `settings.sources`, never assigned back
         // into it: `settings.configurationHash` (recorded in the plan, and
         // what `run` later recomputes from its own freshly-loaded
         // `mutantkit.yml` to check compatibility) must keep reflecting the
         // config file exactly as written, not this run's live-expanded
         // scope — see `MutationPlanner.makePlan`'s own doc comment on
-        // `sourcesOverride`.
+        // `PlanningExternalInputs.sourcesOverride`.
         let liveSwiftPMSources = await SwiftPMLiveSourceResolution.resolve(configuration: settings, root: root)
 
         try Self.validateDiffBaseAndSince(diffBase: diffBase, since: since)
@@ -59,14 +59,6 @@ struct PlanCommand: AsyncParsableCommand {
             print("Diff scope against \(base): \(scope?.changedFiles.count ?? 0) changed file(s)")
         }
 
-        let discoveredPlan = try await MutationPlanner().makePlan(
-            configuration: settings,
-            projectRoot: root,
-            toolchain: toolchain,
-            diffScope: scope,
-            sourcesOverride: liveSwiftPMSources
-        )
-
         let defaultIgnore = root.appendingPathComponent(".mutantkitignore")
         let suppressionURL: URL? = if let ignoreFile {
             URL(fileURLWithPath: ignoreFile, relativeTo: root).standardizedFileURL
@@ -76,29 +68,28 @@ struct PlanCommand: AsyncParsableCommand {
             nil
         }
 
-        var suppressionRules: [MutationSuppressionRule] = []
+        var externalRules = MutationSuppressionSet(rules: [])
         if let suppressionURL {
             let contents = try String(contentsOf: suppressionURL, encoding: .utf8)
-            suppressionRules += try MutationSuppressionSet.parse(contents).rules
+            externalRules = try MutationSuppressionSet.parse(contents)
         }
 
-        // Only files that actually produced a candidate need scanning — an
-        // inline `mutantkit:disable` comment anywhere else has nothing to
-        // suppress and would just cost a read for no effect.
-        for file in Set(discoveredPlan.mutations.map(\.file)).sorted() {
-            let source = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
-            suppressionRules += InlineMutationSuppressionScanner.scan(source: source, file: file)
-        }
+        // Inline `mutantkit:disable` comments are read by the planner from the
+        // same source snapshot it discovers from, so CLI and programmatic
+        // callers get identical suppression and the budget sees only eligible
+        // mutants.
+        let plan = try await MutationPlanner().makePlan(
+            configuration: settings,
+            projectRoot: root,
+            toolchain: toolchain,
+            diffScope: scope,
+            inputs: PlanningExternalInputs(sourcesOverride: liveSwiftPMSources, suppressions: externalRules)
+        )
 
-        let plan: MutationPlan
-        if !suppressionRules.isEmpty {
-            let suppressions = MutationSuppressionSet(rules: suppressionRules)
-            plan = suppressions.applying(to: discoveredPlan)
-            let suppressed = plan.skipped.count - discoveredPlan.skipped.count
+        let suppressed = plan.skipped.filter { $0.reason == .userRequested }.count
+        if suppressed > 0 || suppressionURL != nil {
             print("Mutation suppressions: \(suppressed) mutation(s) skipped "
                 + "(\(suppressionURL.map { "\($0.path), " } ?? "")inline source comments)")
-        } else {
-            plan = discoveredPlan
         }
 
         let url = URL(fileURLWithPath: output)

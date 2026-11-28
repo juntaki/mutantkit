@@ -22,7 +22,7 @@ struct DryRunCommand: AsyncParsableCommand {
         var settings = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
         try overrides.apply(to: &settings)
 
-        try ConfigurationPreflight.run(settings)
+        try ConfigurationPreflight.run(settings, projectRoot: root)
 
         let scratch = root.appendingPathComponent(".mutantkit/dry-run")
         let manifestDumps = SwiftPMManifestDumps()
@@ -35,6 +35,14 @@ struct DryRunCommand: AsyncParsableCommand {
         // With local packages, the line is printed once the first sandbox has
         // been proven to carry them (see `LocalPackageLayout.workspaceManager`).
         if layout.externalRoots.isEmpty { print(LocalPackageLayout.summary(of: layout)) }
+
+        // Same lock, same key, same place as `run` (`DestinationLock`), taken
+        // before the simulator is touched: a dry run against a destination a
+        // real `mutantkit run` already owns is the same contention the lock
+        // exists to prevent, and the loser must not boot anything first.
+        let runDirectory = root.appendingPathComponent(".mutantkit")
+        let (runLock, lockRoot) = try DestinationLock.acquire(context: resolution.context, runDirectory: runDirectory)
+        defer { runLock.release() }
 
         // Same preflight `run` performs before its baseline, and for the same
         // reasons: a simulator that cannot pass `bootstatus` should fail here,
@@ -55,17 +63,6 @@ struct DryRunCommand: AsyncParsableCommand {
             throw ExitCode(MutantKitExit.operationalError)
         }
 
-        let runDirectory = root.appendingPathComponent(".mutantkit")
-        let lockRoot = runDirectory.appendingPathComponent("run-locks")
-        // Same lock namespace `run` uses: a dry run against a destination a
-        // real `mutantkit run` already owns is exactly the same resource
-        // contention the lock exists to prevent, not a different case.
-        let runLock = try RunIsolationLock.acquire(
-            projectRoot: root,
-            lockRoot: lockRoot,
-            destination: settings.project.destination ?? "auto"
-        )
-        defer { runLock.release() }
         let resourceSnapshot = ResourceSnapshot.capture(lockRoot: lockRoot)
         print("""
         \(resourceSnapshot.loadAverage1Minute.formatted(.number.precision(.fractionLength(2))))/\

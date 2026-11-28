@@ -57,7 +57,7 @@ struct QualityGateSettingsTests {
     }
 
     @Test("qualityGate does not affect configurationHash")
-    func configurationHashExcludesQualityGate() {
+    func configurationHashExcludesQualityGate() throws {
         var strict = Configuration()
         strict.qualityGate = QualityGateSettings(
             testedScore: .init(minimum: 95), regression: .init(maximumDrop: 0), survived: .init(newMaximum: 0)
@@ -65,15 +65,15 @@ struct QualityGateSettingsTests {
         var lenient = Configuration()
         lenient.qualityGate = QualityGateSettings()
 
-        #expect(strict.configurationHash == lenient.configurationHash)
+        #expect(try strict.configurationHash == lenient.configurationHash)
     }
 
     @Test("a non-qualityGate change still changes configurationHash")
-    func configurationHashStillReflectsRealChanges() {
+    func configurationHashStillReflectsRealChanges() throws {
         var a = Configuration()
         var b = Configuration()
         b.execution.workers = (a.execution.workers ?? 0) + 7
 
-        #expect(a.configurationHash != b.configurationHash)
+        #expect(try a.configurationHash != b.configurationHash)
     }
 }

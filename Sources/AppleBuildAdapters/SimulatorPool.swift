@@ -491,7 +491,7 @@ public actor SimulatorPool {
         } catch {
             throw SimulatorPoolError.simctlFailed(detail: "\(error)")
         }
-        guard result.succeeded else {
+        guard result.succeededWithCompleteOutput else {
             throw SimulatorPoolError.simctlFailed(
                 detail: OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
                     .trimmingCharacters(in: .whitespacesAndNewlines)

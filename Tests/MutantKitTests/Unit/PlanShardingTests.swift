@@ -175,7 +175,7 @@ struct PlanShardingTests {
         (0 ..< count).map { index in
             let base = point(id: "mut_placeholder", file: "Sources/File\(index).swift")
             return MutationPoint(
-                id: base.recomputedID,
+                id: base.recomputedID(under: .current),
                 file: base.file,
                 enclosingDeclaration: base.enclosingDeclaration,
                 operatorID: base.operatorID,

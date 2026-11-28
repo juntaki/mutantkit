@@ -70,13 +70,12 @@ public struct Configuration: Codable, Sendable, Hashable {
     /// otherwise-identical plan look different just because a threshold
     /// changed.
     public var configurationHash: String {
-        var hashed = self
-        hashed.qualityGate = QualityGateSettings()
-        hashed.evidence = nil
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
-        return ContentHash.of(data)
+        get throws {
+            var hashed = self
+            hashed.qualityGate = QualityGateSettings()
+            hashed.evidence = nil
+            return try ConfigurationIdentity.hash(hashed)
+        }
     }
 
     /// Hash of only the settings that can reach a build command — the
@@ -120,17 +119,16 @@ public struct Configuration: Codable, Sendable, Hashable {
     /// cost of one that turns out not to matter is a re-lowering, never a
     /// lowered plan accepted against build arguments it was not built with.
     public var buildIdentityHash: String {
-        var hashed = self
-        hashed.sources = SourceSettings()
-        hashed.operators = OperatorSettings()
-        hashed.timeouts = TimeoutSettings()
-        hashed.reports = []
-        hashed.qualityGate = QualityGateSettings()
-        hashed.evidence = nil
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
-        return ContentHash.of(data)
+        get throws {
+            var hashed = self
+            hashed.sources = SourceSettings()
+            hashed.operators = OperatorSettings()
+            hashed.timeouts = TimeoutSettings()
+            hashed.reports = []
+            hashed.qualityGate = QualityGateSettings()
+            hashed.evidence = nil
+            return try ConfigurationIdentity.hash(hashed)
+        }
     }
 
     /// Hash of only the settings that decide *what gets planned* — which
@@ -163,20 +161,19 @@ public struct Configuration: Codable, Sendable, Hashable {
     /// execution field added later that does change what gets planned must be
     /// preserved here too.
     public var planningHash: String {
-        var hashed = self
-        hashed.tests = TestSettings()
-        hashed.timeouts = TimeoutSettings()
-        hashed.reports = []
-        hashed.qualityGate = QualityGateSettings()
-        hashed.evidence = nil
-        let planningExecution = (budget: execution.budget, diffBase: execution.diffBase)
-        hashed.execution = ExecutionSettings()
-        hashed.execution.budget = planningExecution.budget
-        hashed.execution.diffBase = planningExecution.diffBase
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(hashed) else { return ContentHash.of("<unencodable>") }
-        return ContentHash.of(data)
+        get throws {
+            var hashed = self
+            hashed.tests = TestSettings()
+            hashed.timeouts = TimeoutSettings()
+            hashed.reports = []
+            hashed.qualityGate = QualityGateSettings()
+            hashed.evidence = nil
+            let planningExecution = (budget: execution.budget, diffBase: execution.diffBase)
+            hashed.execution = ExecutionSettings()
+            hashed.execution.budget = planningExecution.budget
+            hashed.execution.diffBase = planningExecution.diffBase
+            return try ConfigurationIdentity.hash(hashed)
+        }
     }
 }
 
@@ -564,6 +561,15 @@ public struct MutantTimeoutSettings: Codable, Sendable, Hashable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         strategy = try container.decodeIfPresent(TimeoutStrategy.self, forKey: .strategy) ?? .adaptive
+        if container.contains(.multiplier), try container.decodeNil(forKey: .multiplier) {
+            throw DecodingError.valueNotFound(
+                Double.self,
+                DecodingError.Context(
+                    codingPath: container.codingPath + [CodingKeys.multiplier],
+                    debugDescription: "multiplier must be a number, not null"
+                )
+            )
+        }
         multiplier = try container.decodeIfPresent(Double.self, forKey: .multiplier) ?? 3
         minimumSeconds = try DurationDecoding.seconds(container, .minimum) ?? 30
         maximumSeconds = try DurationDecoding.seconds(container, .maximum) ?? 300
@@ -622,9 +628,7 @@ public struct TimeoutSettings: Codable, Sendable, Hashable {
         baselineSeconds = try DurationDecoding.seconds(container, .baseline) ?? 600
         mutant = try container.decodeIfPresent(MutantTimeoutSettings.self, forKey: .mutant)
             ?? MutantTimeoutSettings()
-        terminationGracePeriodSeconds = try container.decodeIfPresent(
-            Double.self, forKey: .terminationGracePeriod
-        ) ?? 5
+        terminationGracePeriodSeconds = try DurationDecoding.seconds(container, .terminationGracePeriod) ?? 5
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -648,13 +652,35 @@ enum DurationDecoding {
         _ container: KeyedDecodingContainer<Key>,
         _ key: Key
     ) throws -> Double? {
+        // The schema says number|string: an explicit null is neither, and must
+        // not quietly become the default (an absent key still does).
+        if container.contains(key), try container.decodeNil(forKey: key) {
+            throw DecodingError.valueNotFound(
+                Double.self,
+                DecodingError.Context(
+                    codingPath: container.codingPath + [key],
+                    debugDescription: "\(key.stringValue) must be a number of seconds or a duration string, not null"
+                )
+            )
+        }
         // A numeric value decodes directly; a string one makes this throw, which
         // is the signal to try parsing it as a duration literal instead.
         if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
+            guard value.isFinite else { throw malformed(container, key, "\(value)") }
             return value
         }
         guard let text = try container.decodeIfPresent(String.self, forKey: key) else { return nil }
-        return DurationParser.seconds(from: text)
+        guard let seconds = DurationParser.seconds(from: text) else { throw malformed(container, key, text) }
+        return seconds
+    }
+
+    private static func malformed<Key: CodingKey>(
+        _ container: KeyedDecodingContainer<Key>, _ key: Key, _ text: String
+    ) -> DecodingError {
+        DecodingError.dataCorruptedError(
+            forKey: key, in: container,
+            debugDescription: "\"\(text)\" is not a finite number of seconds or a duration such as 90s, 10m or 1h30m"
+        )
     }
 }
 
@@ -662,7 +688,7 @@ enum DurationDecoding {
 public enum DurationParser {
     public static func seconds(from text: String) -> Double? {
         let trimmed = text.trimmingCharacters(in: .whitespaces).lowercased()
-        if let bare = Double(trimmed) { return bare }
+        if let bare = Double(trimmed) { return bare.isFinite ? bare : nil }
 
         var total: Double = 0
         var current = ""
@@ -686,7 +712,7 @@ public enum DurationParser {
             matched = true
         }
 
-        return matched && current.isEmpty ? total : nil
+        return matched && current.isEmpty && total.isFinite ? total : nil
     }
 }
 
@@ -793,6 +819,18 @@ public struct QualityGateSettings: Codable, Sendable, Hashable {
         if let maximum = integrityViolations?.maximum, maximum != 0 {
             throw QualityGateSettingsError.nonzeroIntegrityTolerance(maximum)
         }
+        for (path, value) in [
+            ("qualityGate.testedScore.minimum", testedScore?.minimum),
+            ("qualityGate.effectiveScore.minimum", effectiveScore?.minimum),
+            ("qualityGate.regression.maximumDrop", regression?.maximumDrop)
+        ] {
+            if let value, !(value.isFinite && (0 ... 100).contains(value)) {
+                throw QualityGateSettingsError.invalidPercentage(path: path, value: value)
+            }
+        }
+        if let newMaximum = survived?.newMaximum, newMaximum < 0 {
+            throw QualityGateSettingsError.negativeCount(path: "qualityGate.survived.newMaximum", value: newMaximum)
+        }
         return QualityGateThresholds(
             minimumTested: testedScore?.minimum.map { $0 / 100 },
             minimumEffective: effectiveScore?.minimum.map { $0 / 100 },
@@ -805,12 +843,41 @@ public struct QualityGateSettings: Codable, Sendable, Hashable {
 
 public enum QualityGateSettingsError: Error, CustomStringConvertible {
     case nonzeroIntegrityTolerance(Int)
+    case invalidPercentage(path: String, value: Double)
+    case negativeCount(path: String, value: Int)
 
     public var description: String {
         switch self {
+        case let .invalidPercentage(path, value):
+            "\(path) must be a finite percentage between 0 and 100 (found \(value))."
+        case let .negativeCount(path, value):
+            "\(path) must be zero or more (found \(value))."
         case let .nonzeroIntegrityTolerance(value):
             "qualityGate.integrityViolations.maximum must be 0 (found \(value)): MutantKit always "
                 + "fails closed on an integrity violation, and this cannot be configured to tolerate one."
+        }
+    }
+}
+
+/// The one canonical identity primitive for `Configuration`: sorted-key JSON,
+/// hashed. Encoding failure is an explicit error. It used to collapse to one
+/// shared digest of a fixed sentinel string, which made every distinct
+/// unencodable configuration look identical.
+public enum ConfigurationIdentity {
+    public struct EncodingFailure: Error, CustomStringConvertible {
+        public let underlying: String
+        public var description: String {
+            "The configuration cannot be encoded, so it has no identity: \(underlying)"
+        }
+    }
+
+    public static func hash(_ configuration: Configuration) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        do {
+            return ContentHash.of(try encoder.encode(configuration))
+        } catch {
+            throw EncodingFailure(underlying: "\(error)")
         }
     }
 }

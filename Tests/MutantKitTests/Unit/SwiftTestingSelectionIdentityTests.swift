@@ -21,7 +21,7 @@ struct SwiftTestingSelectionIdentityTests {
         CoreTests.ThresholdTests/belowBoundaryIsNotLarge()
         PricingTests.PricingXCTests/testSeniorRate
         """)
-        #expect(listed.map(\.onlyTestingArgument) == [
+        #expect(listed.tests?.map(\.onlyTestingArgument).sorted() == [
             "CoreTests/ThresholdTests/belowBoundaryIsNotLarge()",
             "PricingTests/PricingXCTests/testSeniorRate()"
         ])

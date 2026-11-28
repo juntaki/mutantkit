@@ -37,6 +37,43 @@ public struct QualityGateThresholds: Codable, Sendable, Hashable {
     }
 }
 
+public extension QualityGateThresholds {
+    /// Rejects threshold values that can never describe a real policy
+    /// (non-finite or out-of-range fractions, negative counts). Checked on the
+    /// final merged config + CLI values, so a typo like `--minimum-tested 800`
+    /// fails as a policy error instead of making every report fail (or, for a
+    /// negative count, behaving unpredictably).
+    func validate() throws {
+        func fraction(_ name: String, _ value: Double?) throws {
+            guard let value else { return }
+            guard value.isFinite, (0 ... 1).contains(value) else {
+                throw QualityGateThresholdError.invalid(name: name, detail: "must be a finite percentage from 0 to 100 (found \(value * 100))")
+            }
+        }
+        func count(_ name: String, _ value: Int?) throws {
+            guard let value else { return }
+            guard value >= 0 else {
+                throw QualityGateThresholdError.invalid(name: name, detail: "must be a non-negative count (found \(value))")
+            }
+        }
+        try fraction("minimum tested score", minimumTested)
+        try fraction("minimum effective score", minimumEffective)
+        try fraction("regression maximum drop", regressionMaximumDrop)
+        try count("maximum survivors", maximumSurvivors)
+        try count("new survivors maximum", newSurvivorsMaximum)
+    }
+}
+
+public enum QualityGateThresholdError: Error, CustomStringConvertible, Equatable {
+    case invalid(name: String, detail: String)
+
+    public var description: String {
+        switch self {
+        case let .invalid(name, detail): "Invalid quality-gate threshold: \(name) \(detail)."
+        }
+    }
+}
+
 public struct QualityGateViolation: Codable, Sendable, Hashable, CustomStringConvertible {
     public enum Kind: String, Codable, Sendable {
         case testedScore
@@ -46,6 +83,18 @@ public struct QualityGateViolation: Codable, Sendable, Hashable, CustomStringCon
         case scoreRegression
         case newSurvivors
         case baselineUnavailable
+        /// A configured regression axis could not be compared: one side has
+        /// no denominator for it.
+        case regressionUnavailable
+        /// The baseline and current reports mutated no file in common, so a
+        /// score comparison would compare unrelated populations.
+        case baselineIncompatible
+        /// The current report contradicts itself (stored score, integrity,
+        /// or duplicate results do not agree), so none of its
+        /// numbers can be used.
+        case reportInconsistent
+        /// As `reportInconsistent`, for the `--baseline` report.
+        case baselineInconsistent
     }
 
     public let kind: Kind
@@ -96,6 +145,10 @@ public enum QualityGate {
         thresholds: QualityGateThresholds,
         baseline: RunReport? = nil
     ) -> QualityGateResult {
+        let contradictions = contradictionViolations(report, kind: .reportInconsistent, role: "report")
+        guard contradictions.isEmpty else {
+            return QualityGateResult(passed: false, violations: contradictions)
+        }
         guard report.integrity.passed, let score = report.score else {
             return QualityGateResult(
                 passed: false,
@@ -116,13 +169,25 @@ public enum QualityGate {
         if thresholds.regressionMaximumDrop != nil || thresholds.newSurvivorsMaximum != nil {
             violations += baselineViolations(
                 report: report,
-                score: score,
                 baseline: baseline,
                 thresholds: thresholds
             )
         }
 
         return QualityGateResult(passed: violations.isEmpty, violations: violations)
+    }
+
+    // MARK: Report validation
+
+    /// One violation per failed report-only check, from the same checks
+    /// `ReportReverifier` runs (never a second validator). Absent or legacy
+    /// evidence (`.notVerifiable`) is not a contradiction and is ignored here.
+    private static func contradictionViolations(
+        _ report: RunReport, kind: QualityGateViolation.Kind, role: String
+    ) -> [QualityGateViolation] {
+        ReportReverifier.reportOnlyChecks(report)
+            .filter { $0.status == .fail }
+            .map { QualityGateViolation(kind: kind, detail: "The \(role) is inconsistent (\($0.name)): \($0.detail)") }
     }
 
     // MARK: Absolute thresholds
@@ -189,11 +254,14 @@ public enum QualityGate {
     /// the checks that depend on it.
     private static func baselineViolations(
         report: RunReport,
-        score: MutationScore,
         baseline: RunReport?,
         thresholds: QualityGateThresholds
     ) -> [QualityGateViolation] {
-        guard let baseline, baseline.integrity.passed, let baselineScore = baseline.score else {
+        if let baseline {
+            let contradictions = contradictionViolations(baseline, kind: .baselineInconsistent, role: "baseline report")
+            if !contradictions.isEmpty { return contradictions }
+        }
+        guard let baseline, baseline.integrity.passed, baseline.score != nil else {
             return [QualityGateViolation(
                 kind: .baselineUnavailable,
                 detail: "regression/newSurvivors thresholds are configured but no trustworthy baseline report was provided."
@@ -204,7 +272,7 @@ public enum QualityGate {
 
         if let maximumDrop = thresholds.regressionMaximumDrop {
             violations += regressionViolations(
-                score: score, baselineScore: baselineScore, maximumDrop: maximumDrop
+                report: report, baseline: baseline, maximumDrop: maximumDrop
             )
         }
 
@@ -215,37 +283,76 @@ public enum QualityGate {
         return violations
     }
 
-    /// Both scores compared against their own counterpart in the baseline.
-    /// Keyed by `KeyPath` rather than by pre-read pairs so the current and
-    /// prior value being compared are the same axis by construction, not by a
-    /// caller remembering to line them up.
+    /// How one configured regression axis relates the current run to the
+    /// baseline. (A baseline whose scope shares nothing with the current run
+    /// is `.baselineIncompatible` for every axis at once and is reported
+    /// before any axis is looked at.) Explicit so "could not compare" can never be spelled as
+    /// "no drop": every case either yields a number or a violation.
+    enum AxisComparison: Equatable {
+        case comparable(current: Double, prior: Double)
+        case unavailable(String)
+    }
+
+    /// Both scores compared against their own counterpart in the baseline,
+    /// with the baseline narrowed to the mutated files the two reports share (scope evidence taken
+    /// from the reports' own results, not from the caller or a shell
+    /// heuristic; plan IDs are deliberately not compared, so a baseline from
+    /// an earlier commit stays usable). Identical scopes — the normal case —
+    /// reduce to the whole-report score. A regression policy that cannot be
+    /// answered is a violation, never a pass.
     private static func regressionViolations(
-        score: MutationScore,
-        baselineScore: MutationScore,
+        report: RunReport,
+        baseline: RunReport,
         maximumDrop: Double
     ) -> [QualityGateViolation] {
+        let currentFiles = Set(report.results.map(\.point.file))
+        let baselineFiles = Set(baseline.results.map(\.point.file))
+        let common = currentFiles.intersection(baselineFiles)
+        // The current report counts in full, so a weak new file lowers the
+        // score instead of being ignored. As with any whole-report score, a
+        // strong new file can dilute a regression in an existing one; that
+        // limit predates this comparison. Only the baseline is narrowed, to
+        // the files the current run also mutated.
+        let currentScore = MutationScore.tally(report.results.map(\.outcome))
+        let baselineScore = MutationScore.tally(baseline.results.filter { common.contains($0.point.file) }.map(\.outcome))
+
         let axes: [(label: String, value: KeyPath<MutationScore, Double?>)] = [
             ("Tested", \.tested),
             ("Effective", \.effective)
         ]
 
-        return axes.compactMap { axis in
-            // A missing denominator on either side is "cannot compare", not a
-            // drop of zero — the absolute-threshold checks above already
-            // report an unusable current score, and inventing a regression
-            // verdict here from a number that does not exist is exactly the
-            // false-failure this gate must not manufacture.
-            guard let current = score[keyPath: axis.value],
-                  let prior = baselineScore[keyPath: axis.value] else { return nil }
-            let drop = prior - current
-            guard drop > maximumDrop else { return nil }
-            return QualityGateViolation(
-                kind: .scoreRegression,
-                detail: String(
-                    format: "%@ Mutation Score dropped %.2f%% versus baseline (%.2f%% -> %.2f%%); configured maximum drop is %.2f%%.",
-                    axis.label, drop * 100, prior * 100, current * 100, maximumDrop * 100
-                )
-            )
+        if !currentFiles.isEmpty, !baselineFiles.isEmpty, common.isEmpty {
+            return [QualityGateViolation(
+                kind: .baselineIncompatible,
+                detail: "Regression checks cannot be answered: current and baseline reports mutated no file in common."
+            )]
+        }
+
+        return axes.flatMap { axis -> [QualityGateViolation] in
+            let comparison: AxisComparison
+            if let current = currentScore[keyPath: axis.value],
+               let prior = baselineScore[keyPath: axis.value] {
+                comparison = .comparable(current: current, prior: prior)
+            } else {
+                comparison = .unavailable("no denominator in the current report, the baseline, or both")
+            }
+            switch comparison {
+            case let .unavailable(reason):
+                return [QualityGateViolation(
+                    kind: .regressionUnavailable,
+                    detail: "\(axis.label) regression check cannot be answered: \(reason)."
+                )]
+            case let .comparable(current, prior):
+                let drop = prior - current
+                guard drop > maximumDrop else { return [] }
+                return [QualityGateViolation(
+                    kind: .scoreRegression,
+                    detail: String(
+                        format: "%@ Mutation Score dropped %.2f%% versus baseline (%.2f%% -> %.2f%%); configured maximum drop is %.2f%%.",
+                        axis.label, drop * 100, prior * 100, current * 100, maximumDrop * 100
+                    )
+                )]
+            }
         }
     }
 

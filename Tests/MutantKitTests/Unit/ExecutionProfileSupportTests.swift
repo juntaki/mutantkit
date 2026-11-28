@@ -84,7 +84,11 @@ struct ExecutionProfileSupportTests {
     private func resolution(kind: ProjectKind, test: any TestAdapter = BareTestAdapter()) -> AppleAdapterFactory.Resolution {
         AppleAdapterFactory.Resolution(
             adapter: StubAdapter(kind: kind, test: test),
-            detection: ProjectDetection(kind: kind, reason: "test", projectFile: nil)
+            context: ResolvedInvocationContext(
+                projectRoot: URL(fileURLWithPath: "/"), projectPath: nil,
+                detection: ProjectDetection(kind: kind, reason: "test", projectFile: nil),
+                scheme: nil, resolvedDestination: nil
+            )
         )
     }
 
@@ -228,7 +232,11 @@ struct ExecutionProfileSupportTests {
         let bogusRoot = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString)/definitely/not/real")
         let bogusResolution = AppleAdapterFactory.Resolution(
             adapter: StubAdapter(kind: .xcodeProject, test: BareTestAdapter()),
-            detection: ProjectDetection(kind: .xcodeProject, reason: "test", projectFile: bogusRoot)
+            context: ResolvedInvocationContext(
+                projectRoot: URL(fileURLWithPath: "/"), projectPath: nil,
+                detection: ProjectDetection(kind: .xcodeProject, reason: "test", projectFile: bogusRoot),
+                scheme: nil, resolvedDestination: nil
+            )
         )
         let characteristics = await ExecutionProfileSupport.characteristics(plan: plan, resolution: bogusResolution)
         #expect(characteristics.sharedModuleCacheSupported == false)

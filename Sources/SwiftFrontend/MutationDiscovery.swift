@@ -42,8 +42,21 @@ public struct MutationDiscovery {
         return try discover(source: data, relativePath: relativePath)
     }
 
+    /// Everything one parse of one file yields: the mutation points and the
+    /// inline suppression comments, both from the same tree.
+    public struct FileAnalysis: Sendable {
+        public let points: [MutationPoint]
+        public let suppressions: InlineSuppressionScan
+    }
+
     /// Testable entry point that takes bytes directly.
     public func discover(source data: Data, relativePath: String) throws -> [MutationPoint] {
+        try analyze(source: data, relativePath: relativePath).points
+    }
+
+    /// Parses `data` once and returns its mutation points together with its
+    /// inline suppression directives (real line-comment trivia only).
+    public func analyze(source data: Data, relativePath: String) throws -> FileAnalysis {
         let bytes = [UInt8](data)
         let sourceFileHash = ContentHash.of(data)
         let sourceText = String(decoding: bytes, as: UTF8.self)
@@ -70,7 +83,10 @@ public struct MutationDiscovery {
             }
         }
 
-        return finalize(drafts, context: context)
+        return FileAnalysis(
+            points: finalize(drafts, context: context),
+            suppressions: InlineSuppressionScan.scan(sourceFile, converter: converter)
+        )
     }
 
     // MARK: - Draft
@@ -167,7 +183,7 @@ public struct MutationDiscovery {
             let occurrenceIndex = counters[key, default: 0]
             counters[key] = occurrenceIndex + 1
 
-            let id = MutationID.compute(
+            let id = MutationIdentityVersion.current.deriveID(
                 filePath: context.relativePath,
                 declaration: draft.declaration,
                 operatorID: draft.descriptor.id,

@@ -70,6 +70,24 @@ public struct ByteRange: Hashable, Codable, Sendable, CustomStringConvertible {
         self.init(start: range.lowerBound, end: range.upperBound)
     }
 
+    /// Decoding enforces the same invariant as `init(start:end:)`, but throws:
+    /// a malformed artifact must be rejected, not trap the tool.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let start = try container.decode(Int.self, forKey: .start)
+        let end = try container.decode(Int.self, forKey: .end)
+        guard start >= 0, end >= start else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "invalid byte range \(start)..<\(end)"
+            ))
+        }
+        self.start = start
+        self.end = end
+    }
+
+    private enum CodingKeys: String, CodingKey { case start, end }
+
     public var range: Range<Int> { start ..< end }
     public var length: Int { end - start }
     public var description: String { "\(start)..<\(end)" }

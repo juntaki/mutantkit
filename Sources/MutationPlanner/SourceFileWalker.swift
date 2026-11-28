@@ -1,241 +1,168 @@
 import Foundation
 import MutationModel
 
-/// Glob matching for source include/exclude patterns.
+/// Something the walk could not see. A gap means the discovered file list may
+/// be smaller than the real eligible set, so it is never silently dropped.
+public struct SourceDiscoveryGap: Equatable, Sendable, CustomStringConvertible {
+    public enum Kind: String, Equatable, Sendable {
+        /// A directory that policy says to descend into could not be listed.
+        case directoryUnreadable
+        /// An entry's file type could not be determined.
+        case metadataUnreadable
+    }
+
+    public let relativePath: String
+    public let kind: Kind
+    public let detail: String
+
+    public init(relativePath: String, kind: Kind, detail: String) {
+        self.relativePath = relativePath
+        self.kind = kind
+        self.detail = detail
+    }
+
+    public var description: String { "\(relativePath) (\(kind.rawValue)): \(detail)" }
+}
+
+/// The outcome of one source walk: eligible files plus an explicit statement of
+/// whether the walk saw everything it was supposed to.
 ///
-/// Deliberately not `fnmatch`: matching has to behave identically for a config
-/// written on a developer's Mac and replayed inside a Linux CI container, and it
-/// has to be testable without a filesystem.
-public enum Glob {
-    /// Matches `pattern` against a repository-relative, `/`-separated path.
-    ///
-    /// - `**` matches zero or more whole path segments, and only when it is the
-    ///   entire segment. `Sources/**` therefore matches `Sources/A.swift` and
-    ///   `Sources/A/B.swift`, and `**/*.swift` matches `A.swift` at the root.
-    /// - `*` matches any run of characters within one segment, never `/`.
-    /// - `?` matches exactly one character within one segment, never `/`.
-    ///
-    /// A `**` embedded in a larger segment (`a**b`) has no special meaning and
-    /// behaves as `*`.
-    public static func matches(pattern: String, path: String) -> Bool {
-        let patternSegments = segments(of: pattern)
-        let pathSegments = segments(of: path)
-        return match(patternSegments, 0, pathSegments, 0)
-    }
+/// Intentional pruning (build directories, symlinks, user excludes) is not a
+/// gap; only filesystem failures are.
+public struct SourceDiscovery: Equatable, Sendable {
+    /// Repository-relative, `/`-separated, sorted.
+    public let files: [String]
+    public let gaps: [SourceDiscoveryGap]
 
-    /// Every directory path containing `path`, outermost first.
-    ///
-    /// `a/b/c.swift` yields `["a", "a/b"]`.
-    public static func ancestors(of path: String) -> [String] {
-        let parts = segments(of: path)
-        guard parts.count > 1 else { return [] }
-        return (1 ..< parts.count).map { parts[0 ..< $0].joined(separator: "/") }
-    }
+    public var isComplete: Bool { gaps.isEmpty }
 
-    /// True if any pattern matches the path itself or any directory above it.
-    ///
-    /// The ancestor rule is what makes `exclude: ["Tests"]` and
-    /// `exclude: ["Sources/Generated"]` mean what everyone who has written a
-    /// `.gitignore` expects: naming a directory covers everything inside it,
-    /// without forcing a trailing `/**` onto every entry.
-    public static func matchesAny(patterns: [String], path: String) -> Bool {
-        for pattern in patterns {
-            if matches(pattern: pattern, path: path) { return true }
-            for ancestor in ancestors(of: path) where matches(pattern: pattern, path: ancestor) {
-                return true
-            }
+    /// The eligible files, or `PlannerError.incompleteSourceDiscovery` — a plan
+    /// built from a partial walk would be a green, smaller plan.
+    public func requireComplete() throws -> [String] {
+        guard isComplete else { throw PlannerError.incompleteSourceDiscovery(gaps) }
+        return files
+    }
+}
+
+/// The filesystem operations the walk needs, injectable so unreadable-path
+/// behaviour is testable without relying on permissions.
+public struct SourceWalkerFileSystem: Sendable {
+    public enum EntryKind: Equatable, Sendable { case directory, symbolicLink, file }
+
+    public struct Entry: Sendable {
+        public let name: String
+        public let kind: Result<EntryKind, any Error>
+
+        public init(name: String, kind: Result<EntryKind, any Error>) {
+            self.name = name
+            self.kind = kind
         }
-        return false
     }
 
-    private static func segments(of path: String) -> [String] {
-        path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+    public var list: @Sendable (URL) throws -> [Entry]
+
+    public init(list: @escaping @Sendable (URL) throws -> [Entry]) {
+        self.list = list
     }
 
-    private static func match(_ pattern: [String], _ pi: Int, _ path: [String], _ si: Int) -> Bool {
-        if pi == pattern.count { return si == path.count }
-
-        if pattern[pi] == "**" {
-            for consumed in si ... path.count where match(pattern, pi + 1, path, consumed) {
-                return true
+    public static let live = SourceWalkerFileSystem { directory in
+        let entries = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: []
+        )
+        return entries.map { entry in
+            let kind: Result<EntryKind, any Error> = Result {
+                let values = try entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values.isSymbolicLink == true { return .symbolicLink }
+                return values.isDirectory == true ? .directory : .file
             }
-            return false
+            return Entry(name: entry.lastPathComponent, kind: kind)
         }
-
-        guard si < path.count, matchSegment(pattern: pattern[pi], text: path[si]) else { return false }
-        return match(pattern, pi + 1, path, si + 1)
-    }
-
-    /// Wildcard match within one segment, backtracking on `*`.
-    private static func matchSegment(pattern: String, text: String) -> Bool {
-        let p = Array(pattern)
-        let t = Array(text)
-        var pi = 0
-        var ti = 0
-        var lastStar = -1
-        var resumeAt = 0
-
-        while ti < t.count {
-            if pi < p.count, p[pi] == "?" || p[pi] == t[ti] {
-                pi += 1
-                ti += 1
-            } else if pi < p.count, p[pi] == "*" {
-                lastStar = pi
-                resumeAt = ti
-                pi += 1
-            } else if lastStar >= 0 {
-                resumeAt += 1
-                ti = resumeAt
-                pi = lastStar + 1
-            } else {
-                return false
-            }
-        }
-
-        while pi < p.count, p[pi] == "*" { pi += 1 }
-        return pi == p.count
     }
 }
 
 /// Finds the `.swift` files a plan should consider.
 ///
-/// Returns repository-relative, `/`-separated paths, sorted — the same tree
-/// always produces the same list in the same order, which is the first link in
-/// the chain that makes a plan reproducible.
+/// Filesystem traversal only: every admission decision belongs to
+/// `SourceEligibilityPolicy`. Returns repository-relative, `/`-separated,
+/// sorted paths — the same tree always produces the same list in the same
+/// order, the first link in the chain that makes a plan reproducible.
 public struct SourceFileWalker: Sendable {
-    /// Directories never descended into, whatever the config says.
-    ///
-    /// These hold build products and vendored code. Mutating them is meaningless
-    /// at best; walking them is minutes of I/O on a large checkout. Both are
-    /// good enough reasons to make this decision unconfigurable.
-    public static let prunedDirectoryNames: Set<String> = [
-        ".build", ".git", "DerivedData", "Pods", "Carthage"
-    ]
-
-    /// Directory-name suffixes never descended into, whatever the config says.
-    ///
-    /// A `.docc` catalog's tutorial and code-sample `.swift` files are never
-    /// part of a compilation. This is a fixed rule rather than a default in
-    /// `sources.exclude` because every default there is part of the resolved
-    /// configuration and therefore of `configurationHash`.
-    public static let prunedDirectorySuffixes: [String] = [".docc"]
-
-    private static func isPrunedDirectory(_ name: String) -> Bool {
-        prunedDirectoryNames.contains(name) || prunedDirectorySuffixes.contains { name.hasSuffix($0) }
-    }
-
     private let root: URL
-    private let settings: SourceSettings
+    private let policy: SourceEligibilityPolicy
+    private let fileSystem: SourceWalkerFileSystem
 
-    public init(root: URL, settings: SourceSettings) {
+    public init(root: URL, settings: SourceSettings, fileSystem: SourceWalkerFileSystem = .live) {
         self.root = root.standardizedFileURL
-        self.settings = settings
+        policy = SourceEligibilityPolicy(settings: settings)
+        self.fileSystem = fileSystem
     }
 
-    /// Walks the tree. Sorted, relative, deterministic.
-    public func walk() throws -> [String] {
+    /// Walks the tree. An unreadable root throws; any other unreadable path is
+    /// reported as a gap in the result.
+    public func discover() throws -> SourceDiscovery {
         var found: [String] = []
+        var gaps: [SourceDiscoveryGap] = []
         var pending: [(url: URL, relativePath: String)] = [(root, "")]
 
         while let directory = pending.popLast() {
-            let entries: [URL]
+            let entries: [SourceWalkerFileSystem.Entry]
             do {
-                entries = try FileManager.default.contentsOfDirectory(
-                    at: directory.url,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                    options: []
-                )
+                entries = try fileSystem.list(directory.url)
             } catch {
-                // The root not existing is the user's problem to hear about; a
-                // directory that vanished mid-walk is not worth failing a run.
                 if directory.relativePath.isEmpty {
                     throw PlannerError.unreadableDirectory(
                         path: directory.url.path,
                         detail: error.localizedDescription
                     )
                 }
+                gaps.append(SourceDiscoveryGap(
+                    relativePath: directory.relativePath,
+                    kind: .directoryUnreadable,
+                    detail: error.localizedDescription
+                ))
                 continue
             }
 
             for entry in entries {
-                let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                let relativePath = directory.relativePath.isEmpty
+                    ? entry.name : directory.relativePath + "/" + entry.name
 
-                // Symlinks are skipped rather than resolved: a link pointing at
-                // an ancestor turns the walk into an infinite loop, and a link
-                // pointing outside the repo produces a path that no relative
-                // anchor can describe.
-                if values?.isSymbolicLink == true { continue }
-
-                let name = entry.lastPathComponent
-                let relativePath = directory.relativePath.isEmpty ? name : directory.relativePath + "/" + name
-
-                if values?.isDirectory == true {
-                    guard !Self.isPrunedDirectory(name) else { continue }
-                    // Pruning an excluded directory is safe because exclusion
-                    // covers everything beneath it, so nothing here could have
-                    // survived the per-file check anyway.
-                    guard !isExcluded(relativePath) else { continue }
-                    pending.append((entry, relativePath))
+                let kind: SourceWalkerFileSystem.EntryKind
+                switch entry.kind {
+                case let .success(resolved):
+                    kind = resolved
+                case let .failure(error):
+                    // An entry policy would reject by name alone (pruned,
+                    // excluded, unreachable by any include) cannot hide an
+                    // eligible file, so its unreadable metadata is no gap.
+                    guard policy.directoryVerdict(relativePath: relativePath).isAdmitted else { continue }
+                    gaps.append(SourceDiscoveryGap(
+                        relativePath: relativePath,
+                        kind: .metadataUnreadable,
+                        detail: error.localizedDescription
+                    ))
                     continue
                 }
 
-                guard name.hasSuffix(".swift") else { continue }
-                guard !Self.isPackageManifestName(name) else { continue }
-                guard isIncluded(relativePath), !isExcluded(relativePath) else { continue }
-                found.append(relativePath)
+                switch kind {
+                case .symbolicLink:
+                    // Skipped rather than resolved: a link pointing at an
+                    // ancestor turns the walk into an infinite loop, and a link
+                    // pointing outside the repo produces a path that no
+                    // relative anchor can describe.
+                    continue
+                case .directory:
+                    guard policy.directoryVerdict(relativePath: relativePath).isAdmitted else { continue }
+                    pending.append((directory.url.appendingPathComponent(entry.name), relativePath))
+                case .file:
+                    guard policy.fileVerdict(relativePath: relativePath).isAdmitted else { continue }
+                    found.append(relativePath)
+                }
             }
         }
 
-        return found.sorted()
-    }
-
-    /// Whether a relative path would be planned, without touching the disk.
-    public func admits(relativePath: String) -> Bool {
-        guard !Self.isPackageManifestName(Self.lastPathComponent(of: relativePath)) else { return false }
-        guard !relativePath.split(separator: "/").contains(where: { name in
-            Self.prunedDirectorySuffixes.contains { name.hasSuffix($0) }
-        }) else { return false }
-        return isIncluded(relativePath) && !isExcluded(relativePath)
-    }
-
-    private func isIncluded(_ path: String) -> Bool {
-        Glob.matchesAny(patterns: settings.include, path: path)
-    }
-
-    private func isExcluded(_ path: String) -> Bool {
-        Glob.matchesAny(patterns: settings.exclude, path: path)
-    }
-
-    private static func lastPathComponent(of relativePath: String) -> String {
-        relativePath.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? relativePath
-    }
-
-    /// Whether `name` (a bare file name, not a path) is a SwiftPM package
-    /// manifest — `Package.swift` itself, or one of its version-specific
-    /// variants (`Package@swift-<major>[.<minor>[.<patch>]].swift`, SwiftPM's
-    /// own documented "version-specific manifest selection" naming — e.g.
-    /// `Package@swift-5.9.swift`, confirmed against swift.org's own SwiftPM
-    /// documentation rather than assumed).
-    ///
-    /// Checked unconditionally, before `sources.include`/`exclude` are even
-    /// consulted, and regardless of what those patterns say — never merely
-    /// relying on the default `sources.include: ["Sources/**"]` happening
-    /// not to reach the project root. `PackageManifestConfirmationRetesting`
-    /// (`Sources/MutationExecution/Adapters.swift`) depends on `projectRoot`'s
-    /// `Package.swift` being invariant across every mutant of one run; a
-    /// user who broadens `sources.include` to cover the project root must
-    /// never be able to turn the manifest itself into a mutation candidate
-    /// and quietly break that invariant.
-    static func isPackageManifestName(_ name: String) -> Bool {
-        if name == "Package.swift" { return true }
-        let prefix = "Package@swift-"
-        let suffix = ".swift"
-        guard name.hasPrefix(prefix), name.hasSuffix(suffix), name.count > prefix.count + suffix.count else {
-            return false
-        }
-        let versionPart = name.dropFirst(prefix.count).dropLast(suffix.count)
-        let components = versionPart.split(separator: ".", omittingEmptySubsequences: false)
-        guard !components.isEmpty, components.count <= 3 else { return false }
-        return components.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+        return SourceDiscovery(files: found.sorted(), gaps: gaps.sorted { $0.relativePath < $1.relativePath })
     }
 }

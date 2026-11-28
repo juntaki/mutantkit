@@ -68,6 +68,7 @@ struct ProcessSupervisorBypassRegressionTests {
         // The raw `posix_spawn` implementation everything else in this
         // allow-list is supposed to route through instead of reimplementing.
         "MutationExecution/ProcessSupervisor.swift",
+        "MutationExecution/ProcessSupervisorLaunch.swift",
         // A tool target's own decoupled `posix_spawn` implementation for its
         // timed tool invocations. Listed explicitly (not just covered by the
         // whole-target exclusion) so it keeps showing up if that target is

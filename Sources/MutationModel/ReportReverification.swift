@@ -136,6 +136,73 @@ public enum ReportReverifier {
         return ReportReverification(checks: checks, tierB: tierB.summary, tierACheckCount: tierACount)
     }
 
+    /// The checks a single report can answer about itself with no plan and no
+    /// evidence archive, for consumers (the quality gate) that must not act on
+    /// a self-contradicting report. The score and ledger checks are the ones
+    /// `reverify` runs; the classified-count and duplicate-ID checks are
+    /// report-only and not part of `reverify`. `.notVerifiable` means the report cannot
+    /// say (legacy or absent evidence) and is not a contradiction; only
+    /// `.fail` is. Passing proves internal consistency, not that the raw
+    /// evidence exists or is authentic. Per-result identity/provenance checks
+    /// are deliberately not part of this set: they judge stored evidence, not
+    /// the aggregate the gate consumes.
+    public static func reportOnlyChecks(_ report: RunReport) -> [ReverificationCheck] {
+        var checks: [ReverificationCheck] = []
+        if case let .failure(failure) = buildLedger(report) {
+            checks.append(ReverificationCheck(
+                name: "report.ledger", status: .fail,
+                detail: "The report's results do not form a valid ledger: \(failure.error)", mutationIDs: [failure.mutationID]
+            ))
+        }
+        checks.append(duplicateMutationIDCheck(report))
+        checks.append(classifiedCountCheck(report))
+        checks.append(scoreCheck(report))
+        return checks
+    }
+
+    /// The same mutation may not be reported twice, whatever its work unit or
+    /// plan identity: `ResultLedger` keys on the whole `PlannedMutationRef`, so
+    /// it alone misses a second result for one `MutationID`.
+    private static func duplicateMutationIDCheck(_ report: RunReport) -> ReverificationCheck {
+        var seen = Set<MutationID>()
+        let repeated = report.results.map(\.id).filter { !seen.insert($0).inserted }
+        if repeated.isEmpty {
+            return ReverificationCheck(name: "report.duplicates", status: .pass, detail: "No mutation is reported twice.")
+        }
+        return ReverificationCheck(
+            name: "report.duplicates", status: .fail,
+            detail: "\(repeated.count) mutation(s) are reported more than once.", mutationIDs: repeated.map(\.rawValue).sorted()
+        )
+    }
+
+    /// `IntegrityChecker` sets `classified` to the ledger size, and a passing
+    /// integrity means every planned mutation has a result and no result is
+    /// unplanned (so `planned` equals it) and no `notApplied` result exists
+    /// (each one is a `phantomMutant` violation). A stored integrity that says
+    /// otherwise contradicts the stored results.
+    private static func classifiedCountCheck(_ report: RunReport) -> ReverificationCheck {
+        let integrity = report.integrity
+        var problems: [String] = []
+        if integrity.classified != report.results.count {
+            problems.append("classified \(integrity.classified) result(s) but the report holds \(report.results.count)")
+        }
+        if integrity.passed, integrity.planned != integrity.classified {
+            problems.append("passed with \(integrity.planned) planned but \(integrity.classified) classified")
+        }
+        if integrity.passed, report.results.contains(where: { $0.outcome == .notApplied }) {
+            problems.append("passed although a result was never applied")
+        }
+        if problems.isEmpty {
+            return ReverificationCheck(
+                name: "integrity.classified", status: .pass, detail: "Stored integrity counts agree with the stored results."
+            )
+        }
+        return ReverificationCheck(
+            name: "integrity.classified", status: .fail,
+            detail: "Stored integrity " + problems.joined(separator: "; ") + "."
+        )
+    }
+
     // MARK: - Whole-report checks
 
     private static func resultCountCheck(_ report: RunReport) -> ReverificationCheck {
@@ -200,16 +267,14 @@ public enum ReportReverifier {
             )
         }
 
-        var ledger = ResultLedger<MutationResult>()
-        for result in report.results {
-            do {
-                try ledger.insert(result)
-            } catch {
-                return ReverificationCheck(
-                    name: "integrity.recompute", status: .fail,
-                    detail: "The report's results do not form a valid ledger: \(error)", mutationIDs: [result.id.rawValue]
-                )
-            }
+        let ledger: ResultLedger<MutationResult>
+        switch buildLedger(report) {
+        case let .success(built): ledger = built
+        case let .failure(failure):
+            return ReverificationCheck(
+                name: "integrity.recompute", status: .fail,
+                detail: "The report's results do not form a valid ledger: \(failure.error)", mutationIDs: [failure.mutationID]
+            )
         }
 
         let recomputed = IntegrityChecker.check(plan: plan, ledger: ledger, baselinePassed: report.baseline.passed)
@@ -224,6 +289,27 @@ public enum ReportReverifier {
             name: "integrity.recompute", status: .fail,
             detail: "Stored integrity differs from the recomputed one: " + differences.joined(separator: "; ") + "."
         )
+    }
+
+    private struct LedgerFailure: Error {
+        let error: ResultLedger<MutationResult>.InsertError
+        let mutationID: String
+    }
+
+    /// The one place a report's stored results become a ledger; a duplicate
+    /// result is a contradiction wherever it is found.
+    private static func buildLedger(_ report: RunReport) -> Result<ResultLedger<MutationResult>, LedgerFailure> {
+        var ledger = ResultLedger<MutationResult>()
+        for result in report.results {
+            do {
+                try ledger.insert(result)
+            } catch let error as ResultLedger<MutationResult>.InsertError {
+                return .failure(LedgerFailure(error: error, mutationID: result.id.rawValue))
+            } catch {
+                preconditionFailure("ResultLedger.insert throws only InsertError")
+            }
+        }
+        return .success(ledger)
     }
 
     private static func integrityDifferences(stored: IntegrityReport, recomputed: IntegrityReport) -> [String] {
@@ -315,7 +401,7 @@ extension ReportReverifier {
     ) -> [Finding] {
         let id = result.id.rawValue
         let name = "result.identity"
-        if result.point.recomputedID != result.point.id {
+        if result.point.recomputedID(under: .current) != result.point.id {
             return [Finding(name: name, status: .fail, mutationID: id, reason: "its ID does not recompute from its own components")]
         }
         if result.mutationRef.mutationID != result.point.id {

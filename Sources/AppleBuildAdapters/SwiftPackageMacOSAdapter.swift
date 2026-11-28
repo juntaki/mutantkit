@@ -660,7 +660,17 @@ extension SwiftPackageMacOSAdapter: CoverageMeasuring {
         // `workspace` prefix (not `resolvedWorkspace(workspace)` or the
         // caller's `projectRoot`) keeps whatever `project.path` prefix the
         // plan itself expects.
-        await SwiftPMTestBundleCoverageExport.refresh(productsDirectory: buildDir, codecovDirectory: codecovDir)
+        // SwiftPM's own file covers only the bundle it chose. When the all-bundles export cannot be
+        // completed, what is left in the directory is partial (or stale) and is never read as
+        // evidence: no coverage, so callers fall back to the full suite and say why.
+        if case let .incomplete(reason) = await SwiftPMTestBundleCoverageExport.refresh(
+            productsDirectory: buildDir, codecovDirectory: codecovDir
+        ) {
+            FileHandle.standardError.write(Data(
+                "warning: coverage is incomplete (\(reason)); no test selection is narrowed from it.\n".utf8
+            ))
+            return nil
+        }
         return SourceCoverageReader.read(directory: codecovDir, projectRoot: projectRoot)
     }
 }
@@ -747,57 +757,58 @@ extension SwiftPackageMacOSAdapter: TestSelecting {
         }
     }
 
-    /// Restricts `swift test list`'s package-wide enumeration to the
-    /// configured target list — the same restriction every other `swift
-    /// test` invocation in this file already applies (see `runTests`'s own
-    /// `--filter` loop). Xcode's equivalent enumeration gets this scoping
-    /// for free, because its baseline bundle was already produced by an
-    /// `-only-testing:`-filtered run; SwiftPM's `swift test list` has no
-    /// such target restriction of its own, so it is applied here instead.
-    /// An empty `configuredTargets` means "no restriction configured", and
-    /// every enumerated test is kept, matching every other unrestricted
-    /// fallback in this file.
-    static func scope(_ tests: [TestIdentifier], toConfiguredTargets configuredTargets: [String]) -> [TestIdentifier] {
-        guard !configuredTargets.isEmpty else { return tests }
-        let allowed = Set(configuredTargets)
-        return tests.filter { allowed.contains($0.target) }
-    }
-
     /// Parses `swift test list`'s stdout: one `<Target>.<Class>/<method>`
     /// per line (confirmed against a real invocation — SwiftPM writes build
     /// progress to stderr, so stdout is test identifiers alone, nothing to
-    /// filter out). Exposed for tests so a captured sample can drive parsing
-    /// without a toolchain.
-    static func parseTestIdentifiers(_ output: String) -> [TestIdentifier] {
-        output.split(separator: "\n").compactMap { rawLine -> TestIdentifier? in
+    /// filter out). A non-blank line that is not that shape makes the whole
+    /// inventory `unknown` rather than being dropped: a dropped test is
+    /// neither covered nor unattributed downstream. Exposed for tests so a
+    /// captured sample can drive parsing without a toolchain.
+    static func parseTestIdentifiers(_ output: String) -> TestInventory {
+        var recognized: [TestIdentifier] = []
+        var unrecognized: [String] = []
+        for rawLine in output.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty, let dotIndex = line.firstIndex(of: ".") else { return nil }
-            let target = String(line[line.startIndex ..< dotIndex])
-            let qualifiedName = String(line[line.index(after: dotIndex)...])
-            guard !target.isEmpty, qualifiedName.contains("/") else { return nil }
-            return TestIdentifier(target: target, qualifiedName: qualifiedName)
+            if line.isEmpty { continue }
+            if let dotIndex = line.firstIndex(of: ".") {
+                let target = String(line[line.startIndex ..< dotIndex])
+                let qualifiedName = String(line[line.index(after: dotIndex)...])
+                // `<Class>/<method>`, or a Swift Testing function outside any suite: `<name>(...)`.
+                let isSuiteLess = qualifiedName.hasSuffix(")") && !qualifiedName.contains(" ")
+                if !target.isEmpty, qualifiedName.contains("/") || isSuiteLess {
+                    recognized.append(TestIdentifier(target: target, qualifiedName: qualifiedName))
+                    continue
+                }
+            }
+            unrecognized.append(line)
         }
+        return .make(recognized: recognized, unrecognized: unrecognized)
     }
 
-    /// Runs `swift test list --skip-build` and parses its output. `nil`/empty
-    /// results (a launch failure, a non-zero exit, an unparseable line) all
-    /// collapse to an empty list — `measurePerTestCoverage` already treats
-    /// that as "no attribution possible", the same safe fallback every other
-    /// failure path in this pass takes.
+    /// Runs `swift test list --skip-build` and parses its output. A launch
+    /// failure, a timeout, a non-zero exit or a truncated capture is
+    /// `unknown`, which `measurePerTestCoverage` treats as "no attribution
+    /// possible" — the safe whole-suite fallback every other failure path in
+    /// this pass takes.
     static func enumerateTestIdentifiers(
         in workspace: URL,
         timeoutSeconds: Double,
         terminationGracePeriodSeconds: Double
-    ) async -> [TestIdentifier] {
+    ) async -> TestInventory {
         let arguments = ["swift", "test", "list", "--skip-build"]
-        guard let result = try? await ProcessSupervisor.run(
-            executable: ToolPaths.xcrun,
-            arguments: arguments,
-            workingDirectory: workspace,
-            timeoutSeconds: timeoutSeconds,
-            terminationGracePeriodSeconds: terminationGracePeriodSeconds
-        ), result.succeeded else { return [] }
-
+        let result: ProcessResult
+        do {
+            result = try await ProcessSupervisor.run(
+                executable: ToolPaths.xcrun,
+                arguments: arguments,
+                workingDirectory: workspace,
+                timeoutSeconds: timeoutSeconds,
+                terminationGracePeriodSeconds: terminationGracePeriodSeconds
+            )
+        } catch {
+            return .unknown(.enumerationFailed("\(error)"))
+        }
+        if let reason = TestInventory.gate(result) { return .unknown(reason) }
         return parseTestIdentifiers(String(decoding: result.standardOutput, as: UTF8.self))
     }
 }

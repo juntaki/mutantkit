@@ -101,6 +101,21 @@ struct SourceAnchorVerifierTests {
         ))
     }
 
+    @Test("A decoded byte range that is negative or reversed is rejected, not trapped on")
+    func malformedDecodedRangesAreRejected() throws {
+        for json in [#"{"start":-1,"end":4}"#, #"{"start":9,"end":3}"#,
+                     #"{"start":0,"end":-5}"#, #"{"start":-9223372036854775808,"end":9223372036854775807}"#] {
+            #expect(throws: DecodingError.self) {
+                _ = try JSONDecoder().decode(ByteRange.self, from: Data(json.utf8))
+            }
+        }
+        let ok = try JSONDecoder().decode(ByteRange.self, from: Data(#"{"start":3,"end":3}"#.utf8))
+        #expect(ok == ByteRange(start: 3, end: 3))
+        let encoded = try JSONEncoder().encode(ByteRange(start: 1, end: 5))
+        let keys = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Int])
+        #expect(keys == ["start": 1, "end": 5])
+    }
+
     /// `.content` is documented as hash plus exact original text; `.full`
     /// additionally re-parses to re-check kind, fingerprints and declaration.
     /// Renaming the enclosing type to another name of the same length keeps the

@@ -42,7 +42,7 @@ enum Diagnostics {
             arguments: ["-version"],
             workingDirectory: workingDirectory,
             timeoutSeconds: 60
-        ), result.succeeded else {
+        ), result.succeededWithCompleteOutput else {
             return DiagnosisItem(
                 name: "Xcode",
                 status: .failure,
@@ -66,7 +66,7 @@ enum Diagnostics {
             arguments: ["swift", "--version"],
             workingDirectory: workingDirectory,
             timeoutSeconds: 60
-        ), result.succeeded else {
+        ), result.succeededWithCompleteOutput else {
             return DiagnosisItem(
                 name: "Swift toolchain",
                 status: .failure,
@@ -175,7 +175,7 @@ enum Diagnostics {
             timeoutSeconds: 180
         )
 
-        guard let result, result.succeeded else {
+        guard let result, result.succeededWithCompleteOutput else {
             return DiagnosisItem(
                 name: "Destinations",
                 status: .warning,

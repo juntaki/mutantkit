@@ -31,7 +31,10 @@ public struct RunIsolationLockMetadata: Codable, Sendable, Equatable {
 
 public enum RunIsolationLockError: Error, CustomStringConvertible {
     case alreadyRunning(RunIsolationLockMetadata)
-    case corruptLock(path: String)
+    /// Another process holds the lock but its diagnostic metadata could not be
+    /// read (it is mid-write, or was damaged). Ownership is still decided by
+    /// the OS lock, so this is a refusal to run, never a reclamation.
+    case heldByUnidentifiedOwner(path: String)
     case cannotCreate(path: String, detail: String)
 
     public var description: String {
@@ -46,31 +49,15 @@ public enum RunIsolationLockError: Error, CustomStringConvertible {
             Refusing to run concurrently because competing xcodebuild/test processes can turn
             resource contention and shared simulator state into incorrect mutation verdicts.
             """
-        case let .corruptLock(path):
+        case let .heldByUnidentifiedOwner(path):
             """
-            Found an unreadable MutantKit run lock at \(path). Refusing to delete it automatically:
-            without owner metadata MutantKit cannot prove that no active run owns the lock.
-
-            If you have confirmed no MutantKit run is currently active against this project,
-            remove the file yourself and retry:
-              rm \(Self.shellQuoted(path))
+            Another MutantKit run holds the lock at \(path), but its owner metadata is unreadable.
+            Refusing to run concurrently. The lock is released by the operating system when the
+            owning process exits, so retry once that run has finished; do not delete the file.
             """
         case let .cannotCreate(path, detail):
             "Could not create MutantKit run lock at \(path): \(detail)"
         }
-    }
-
-    /// Standard POSIX single-quote escaping (`codex review` flagged
-    /// `CommandRecord.displayString`'s own space/`"`-only heuristic as
-    /// insufficient here, since this is presented as a command to actually
-    /// copy-paste and run): always wraps in `'...'`, and every embedded `'`
-    /// becomes `'\''` — end the quoted string, an escaped literal quote,
-    /// resume quoting. Correct for any path, not just ones without a `'`,
-    /// `;`, `$`, `*`, or other shell metacharacter — the `rm` command above
-    /// must never itself be the thing that turns a stale-lock cleanup into
-    /// unintended shell execution.
-    private static func shellQuoted(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 
@@ -83,18 +70,22 @@ public enum RunIsolationLockError: Error, CustomStringConvertible {
 /// timeout under severe resource pressure, which in turn changes whether the
 /// mutant participates in the score.
 ///
-/// The lock is acquired with `O_CREAT | O_EXCL`, so ownership is decided by the
-/// filesystem rather than by a check-then-create race. A lock whose PID no
-/// longer exists is reclaimed automatically. A malformed lock fails closed.
+/// Ownership is an OS-held advisory `flock(2)` on a lock file with a stable
+/// inode, held through a close-on-exec descriptor for the life of this object.
+/// The kernel arbitrates contenders atomically and drops the lock when the
+/// holder dies for any reason (including `kill -9`), so there is no stale-file
+/// reclamation, no PID-liveness guess and no unlink of a lock that may be live.
+/// The JSON in the file is diagnostic only: it explains who holds the lock and
+/// is rewritten by every new owner, so truncated or stale content can never
+/// make a lock unsafe or permanently stuck. The file is never deleted.
 public final class RunIsolationLock: @unchecked Sendable {
     private let url: URL
-    private let token: String
-    private let fileManager = FileManager.default
-    private var released = false
+    private var fd: Int32
+    private let state = NSLock()
 
-    private init(url: URL, token: String) {
+    private init(url: URL, fd: Int32) {
         self.url = url
-        self.token = token
+        self.fd = fd
     }
 
     deinit {
@@ -111,8 +102,7 @@ public final class RunIsolationLock: @unchecked Sendable {
         lockRoot: URL,
         destination: String
     ) throws -> RunIsolationLock {
-        let fm = FileManager.default
-        try fm.createDirectory(at: lockRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: lockRoot, withIntermediateDirectories: true)
 
         let canonicalRoot = projectRoot.resolvingSymlinksInPath().standardizedFileURL
         let canonicalLockRoot = lockRoot.resolvingSymlinksInPath().standardizedFileURL
@@ -122,91 +112,87 @@ public final class RunIsolationLock: @unchecked Sendable {
             destination: destination
         )
 
-        for _ in 0 ..< 3 {
-            let token = UUID().uuidString
-            let metadata = RunIsolationLockMetadata(
-                pid: getpid(),
-                startedAt: Date(),
-                projectRoot: canonicalRoot.path,
-                destination: destination,
-                hostname: ProcessInfo.processInfo.hostName,
-                token: token
-            )
-
-            let data = try JSONEncoder.lockEncoder.encode(metadata)
-            let fd = url.path.withCString { path in
-                Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
-            }
-            if fd >= 0 {
-                defer { Darwin.close(fd) }
-                let written = data.withUnsafeBytes { bytes in
-                    Darwin.write(fd, bytes.baseAddress, bytes.count)
-                }
-                guard written == data.count else {
-                    try? fm.removeItem(at: url)
-                    throw RunIsolationLockError.cannotCreate(
-                        path: url.path,
-                        detail: "short write while persisting owner metadata"
-                    )
-                }
-                _ = fsync(fd)
-                return RunIsolationLock(url: url, token: token)
-            }
-
-            guard errno == EEXIST else {
-                throw RunIsolationLockError.cannotCreate(
-                    path: url.path,
-                    detail: String(cString: strerror(errno))
-                )
-            }
-
-            // The winning process writes metadata immediately after the atomic
-            // create. Give it a brief chance to finish before declaring the file
-            // corrupt. This avoids treating the tiny create→write window as a
-            // permanent failure while still refusing to guess after repeated
-            // unreadable reads.
-            var existing: RunIsolationLockMetadata?
-            for attempt in 0 ..< 3 {
-                if let data = try? Data(contentsOf: url),
-                   let decoded = try? JSONDecoder.lockDecoder.decode(RunIsolationLockMetadata.self, from: data) {
-                    existing = decoded
-                    break
-                }
-                if attempt < 2 { usleep(50000) }
-            }
-
-            guard let owner = existing else {
-                throw RunIsolationLockError.corruptLock(path: url.path)
-            }
-
-            if processIsAlive(owner.pid) {
-                throw RunIsolationLockError.alreadyRunning(owner)
-            }
-
-            // Stale owner: remove and retry the atomic acquisition. If another
-            // contender races us here, O_EXCL on the next loop still decides the
-            // winner safely.
-            try? fm.removeItem(at: url)
+        // O_CLOEXEC: spawned xcodebuild/simctl children must not inherit the
+        // descriptor, or they would keep the lock alive after this process dies.
+        let fd = url.path.withCString { path in
+            Darwin.open(path, O_RDWR | O_CREAT | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        }
+        guard fd >= 0 else {
+            throw RunIsolationLockError.cannotCreate(path: url.path, detail: String(cString: strerror(errno)))
         }
 
-        throw RunIsolationLockError.cannotCreate(
-            path: url.path,
-            detail: "could not acquire the lock after reclaiming stale owners"
+        // A few short attempts: the previous holder may still be writing its
+        // metadata, and a read-only `heldLockCount` probe briefly takes a shared
+        // lock. Neither is ownership, so retry before reporting contention.
+        var lastErrno: Int32 = 0
+        for attempt in 0 ..< 3 {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { lastErrno = 0; break }
+            lastErrno = errno
+            guard lastErrno == EWOULDBLOCK else { break }
+            if attempt < 2 { usleep(50000) }
+        }
+        if lastErrno != 0 {
+            defer { Darwin.close(fd) }
+            guard lastErrno == EWOULDBLOCK else {
+                throw RunIsolationLockError.cannotCreate(path: url.path, detail: String(cString: strerror(lastErrno)))
+            }
+            if let owner = readMetadata(at: url) {
+                throw RunIsolationLockError.alreadyRunning(owner)
+            }
+            throw RunIsolationLockError.heldByUnidentifiedOwner(path: url.path)
+        }
+
+        let metadata = RunIsolationLockMetadata(
+            pid: getpid(),
+            startedAt: Date(),
+            projectRoot: canonicalRoot.path,
+            destination: destination,
+            hostname: ProcessInfo.processInfo.hostName,
+            token: UUID().uuidString
         )
+        do {
+            let data = try JSONEncoder.lockEncoder.encode(metadata)
+            guard ftruncate(fd, 0) == 0 else {
+                throw RunIsolationLockError.cannotCreate(path: url.path, detail: String(cString: strerror(errno)))
+            }
+            let written = data.withUnsafeBytes { bytes in
+                Darwin.pwrite(fd, bytes.baseAddress, bytes.count, 0)
+            }
+            guard written == data.count else {
+                throw RunIsolationLockError.cannotCreate(
+                    path: url.path,
+                    detail: "short write while persisting owner metadata"
+                )
+            }
+        } catch {
+            Darwin.close(fd)
+            throw error
+        }
+        return RunIsolationLock(url: url, fd: fd)
     }
 
-    /// Releases only a lock still owned by this instance. The token check keeps
-    /// a delayed/deinitialized owner from deleting a newer process's lock.
+    /// Releases the lock. Metadata is cleared while the lock is still held so a
+    /// later reader never reports a departed owner; the file itself is kept.
     public func release() {
-        guard !released else { return }
-        released = true
+        state.lock()
+        defer { state.unlock() }
+        guard fd >= 0 else { return }
+        _ = ftruncate(fd, 0)
+        Darwin.close(fd) // closing the descriptor drops the flock
+        fd = -1
+    }
 
-        guard let data = try? Data(contentsOf: url),
-              let metadata = try? JSONDecoder.lockDecoder.decode(RunIsolationLockMetadata.self, from: data),
-              metadata.token == token
-        else { return }
-
-        try? fileManager.removeItem(at: url)
+    /// Number of lock files under `lockRoot` that some process currently holds.
+    /// Probes with a non-blocking shared lock on a fresh descriptor.
+    public static func heldLockCount(in lockRoot: URL) -> Int {
+        let files = (try? FileManager.default.contentsOfDirectory(at: lockRoot, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.pathExtension == "lock" }.count { file in
+            let probe = file.path.withCString { Darwin.open($0, O_RDONLY | O_CLOEXEC) }
+            guard probe >= 0 else { return false }
+            defer { Darwin.close(probe) }
+            if flock(probe, LOCK_SH | LOCK_NB) == 0 { return false }
+            return errno == EWOULDBLOCK
+        }
     }
 
     static func lockURL(projectRoot: URL, lockRoot: URL, destination: String) -> URL {
@@ -215,9 +201,9 @@ public final class RunIsolationLock: @unchecked Sendable {
         return lockRoot.appendingPathComponent("run-\(digest).lock")
     }
 
-    private static func processIsAlive(_ pid: Int32) -> Bool {
-        if kill(pid, 0) == 0 { return true }
-        return errno == EPERM
+    private static func readMetadata(at url: URL) -> RunIsolationLockMetadata? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder.lockDecoder.decode(RunIsolationLockMetadata.self, from: data)
     }
 }
 

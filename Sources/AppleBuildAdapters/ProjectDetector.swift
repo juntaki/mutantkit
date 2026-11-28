@@ -84,13 +84,8 @@ public enum ProjectDetector {
         manifestDumps: SwiftPMManifestDumps? = nil,
         processRunner: @escaping ProcessRunner
     ) async throws -> ProjectDetection {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        )) ?? []
-
         // A workspace subsumes the projects inside it, so it wins outright.
-        if let workspace = contents.first(where: { $0.pathExtension == "xcworkspace" }) {
+        if let workspace = try ProjectContainerLocator.workspace(in: directory) {
             return ProjectDetection(
                 kind: .xcodeWorkspace,
                 reason: "Found \(workspace.lastPathComponent), which takes precedence over any project or package beside it.",
@@ -98,7 +93,7 @@ public enum ProjectDetector {
             )
         }
 
-        if let project = contents.first(where: { $0.pathExtension == "xcodeproj" }) {
+        if let project = try ProjectContainerLocator.project(in: directory) {
             return ProjectDetection(
                 kind: .xcodeProject,
                 reason: "Found \(project.lastPathComponent) and no workspace.",

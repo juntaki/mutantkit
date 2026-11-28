@@ -240,7 +240,7 @@ enum HostResourcePreflight {
         } catch {
             return nil
         }
-        guard result.succeeded else { return nil }
+        guard result.succeededWithCompleteOutput else { return nil }
 
         struct Payload: Decodable {
             struct Device: Decodable { let state: String }

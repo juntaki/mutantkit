@@ -90,8 +90,8 @@ public struct MutationPoint: Codable, Sendable, Hashable, Identifiable {
     /// `verify` compares this against `id`; a mismatch means the plan was
     /// hand-edited or written by an incompatible version, and the run must stop
     /// rather than report a score against IDs that do not reproduce.
-    public var recomputedID: MutationID {
-        MutationID.compute(
+    public func recomputedID(under version: MutationIdentityVersion) -> MutationID {
+        version.deriveID(
             filePath: file,
             declaration: enclosingDeclaration,
             operatorID: operatorID,

@@ -115,7 +115,8 @@ public enum PlanSharding {
                 // an already-fixed selection, so it was planned under the
                 // parent's settings whatever this process's own
                 // configuration happens to say now.
-                planningHash: plan.planningHash
+                planningHash: plan.planningHash,
+                identityVersion: plan.identityVersion
             )
         }
     }
@@ -172,7 +173,8 @@ public enum PlanSharding {
             skipped: plan.skipped.filter { requested.contains($0.id) },
             operators: plan.operators,
             budgetInclusionReasons: plan.budgetInclusionReasons.filter { requested.contains($0.mutationID) },
-            planningHash: plan.planningHash
+            planningHash: plan.planningHash,
+            identityVersion: plan.identityVersion
         )
     }
 

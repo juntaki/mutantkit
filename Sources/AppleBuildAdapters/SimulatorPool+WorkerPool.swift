@@ -41,10 +41,10 @@ public extension SimulatorPool {
         return Int32(remainder[remainder.startIndex ..< dashIndex])
     }
 
-    /// Mirrors `RunIsolationLock`'s own private `processIsAlive(_:)` exactly
-    /// (`kill(pid, 0) == 0` means alive and signalable; `errno == EPERM`
-    /// means alive but owned by another user, e.g. root) — duplicated here
-    /// rather than shared because that method is private to its own file.
+    /// `kill(pid, 0) == 0` means alive and signalable; `errno == EPERM` means
+    /// alive but owned by another user, e.g. root. Used only for clone-owner
+    /// liveness; `RunIsolationLock` no longer guesses liveness from PIDs (the
+    /// kernel-held `flock` is its ownership).
     private static func processIsAlive(_ pid: Int32) -> Bool {
         if kill(pid, 0) == 0 { return true }
         return errno == EPERM
@@ -90,7 +90,7 @@ public extension SimulatorPool {
             throw SimulatorCloneError.cloneFailed(source: source.udid, detail: "\(error)")
         }
 
-        guard result.succeeded else {
+        guard result.succeededWithCompleteOutput else {
             throw SimulatorCloneError.cloneFailed(
                 source: source.udid,
                 detail: OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)

@@ -76,7 +76,7 @@ struct RunCommand: AsyncParsableCommand {
         var settings = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
         try overrides.apply(to: &settings)
 
-        try ConfigurationPreflight.run(settings)
+        try ConfigurationPreflight.run(settings, projectRoot: root)
 
         settings.reports = try Self.resolvedFinalReports(configured: settings.reports, report: report, alsoReport: alsoReport)
 
@@ -107,13 +107,9 @@ struct RunCommand: AsyncParsableCommand {
         let settingsAsConfigured = settings
 
         // Independent MutantKit processes are not allowed to compete for the same
-        // project/destination — see `Self.acquireRunLock`'s own doc comment for
-        // why, and for the exact locking rule (pulled out of this already-large
-        // function so it stays testable and under this project's own line-count
-        // limits, not because the reasoning belongs anywhere else).
-        let lockAcquisition = try Self.acquireRunLock(
-            root: root, resolution: resolution, configuredDestination: settings.project.destination, runDirectory: runDirectory
-        )
+        // project/destination — see `DestinationLock`'s doc comment. Taken
+        // before any simulator side effect.
+        let lockAcquisition = try DestinationLock.acquire(context: resolution.context, runDirectory: runDirectory)
         let runLock = lockAcquisition.lock
         defer { runLock.release() }
 
@@ -266,7 +262,7 @@ struct RunCommand: AsyncParsableCommand {
     /// ready, and the consequence of failing closed), not separate success
     /// output, so both move together. Pulled out of `run()` purely to keep
     /// that function under this project's `function_body_length` limit, the
-    /// same motive as `acquireRunLock`/`PostProvisioningInputs` nearby.
+    /// same motive as `PostProvisioningInputs` nearby.
     private static func failClosedForSimulatorPreparationFailure(_ preparation: SimulatorPreparationRecord) throws -> Never {
         FileHandle.standardError.write(Data(
             "Simulator \(preparation.name ?? "(unknown)") did not pass bootstatus: \(preparation.detail ?? "unknown failure").\n".utf8

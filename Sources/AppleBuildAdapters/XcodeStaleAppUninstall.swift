@@ -99,7 +99,7 @@ struct StaleAppUninstaller: Sendable {
         let captured = OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard captured.isEmpty else { return captured }
-        return "simctl exited \(result.exitCode) without writing any diagnostic output"
+        return "simctl exited \(result.exitStatusDescription) without writing any diagnostic output"
     }
 
     /// The exact text `uninstall` reports for a genuine failure — a pure

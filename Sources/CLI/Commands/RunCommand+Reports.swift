@@ -80,8 +80,7 @@ extension RunCommand {
     /// way `MutationRunner.finalize` surfaces a checkpoint write failure —
     /// `try?` alone would swallow it.
     ///
-    /// Pulled out of `run()`, on the same terms as `resolveTestAdapter`/
-    /// `lockIdentity` below, so the surfacing behavior itself is directly
+    /// Pulled out of `run()`, on the same terms as `resolveTestAdapter` below, so the surfacing behavior itself is directly
     /// testable without a real project or adapter. `stderr` is injectable for
     /// exactly that reason; production always uses the real
     /// `FileHandle.standardError`.
@@ -90,7 +89,7 @@ extension RunCommand {
     /// useful to a caller (a test) that wants to assert a failure was
     /// actually surfaced rather than just that some output happened.
     /// Pulled out of `run()` so this bad-input check is directly testable —
-    /// the same reason `recordHistory`/`resolveTestAdapter`/`lockIdentity`
+    /// the same reason `recordHistory`/`resolveTestAdapter`
     /// below are their own functions rather than inlined. Bad input, not a
     /// usage-syntax error: every other bad-input case in this command
     /// already throws `MutantKitExit.operationalError` explicitly rather
@@ -156,28 +155,6 @@ extension RunCommand {
             return (base, TestPriorityStore(url: priorityStoreURL))
         }
         return (PrioritizingTestAdapter(base: base, priorityStore: TestPriorityStore(url: priorityStoreURL)), nil)
-    }
-
-    /// The `RunIsolationLock`'s key: prefers the destination as actually
-    /// *resolved* (`ResolvedDestination.destinationArgument` — a device UDID
-    /// once one has been pinned) over the raw, as-configured destination
-    /// string, so two runs whose `mutantkit.yml`s spell the same simulator
-    /// differently still collide on the same lock key instead of sailing
-    /// past each other onto the same device.
-    ///
-    /// Falls back to the raw configured string (`settings.project.destination
-    /// ?? "auto"`) when there is genuinely nothing more specific to key on:
-    /// a non-Xcode adapter (a plain SwiftPM macOS package has no destination
-    /// concept at all), or an Xcode destination that never resolved to a
-    /// concrete device (`ResolvedDestination.device == nil` — a generic
-    /// placeholder like `generic/platform=iOS`, or a macOS/physical-device
-    /// destination `DestinationResolver` never touches `simctl` for).
-    static func lockIdentity(for adapter: any ProjectAdapter, configuredDestination: String?) -> String {
-        if let resolvedDestination = (adapter as? XcodeBuildProjectAdapter)?.resolvedDestination,
-           resolvedDestination.device != nil {
-            return resolvedDestination.destinationArgument
-        }
-        return configuredDestination ?? "auto"
     }
 
     /// `report` (if given) replaces the config's own `reports:` outright,

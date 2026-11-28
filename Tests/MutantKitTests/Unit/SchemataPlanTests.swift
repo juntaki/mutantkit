@@ -240,7 +240,7 @@ struct SchemataPlanTests {
             createdAt: Date(timeIntervalSince1970: 1_700_000_000),
             projectRoot: "/tmp/project",
             toolchain: makeToolchain(),
-            configurationHash: Configuration().configurationHash,
+            configurationHash: try Configuration().configurationHash,
             sourceFileHashes: [:],
             mutations: [Self.point(id: "mut_a")],
             skipped: [],

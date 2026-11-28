@@ -75,7 +75,7 @@ public struct XCResultAdapter: Sendable {
             return infrastructure(
                 """
                 xcresulttool could not read \(resultBundle.lastPathComponent) (exit \
-                \(result.exitCode)): \
+                \(result.exitStatusDescription)): \
                 \(OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400)
                     .trimmingCharacters(in: .whitespacesAndNewlines))
                 """
@@ -156,11 +156,18 @@ public struct XCResultAdapter: Sendable {
             )
         }
 
+        // The counts must be consistent before any of them is trusted: a result that
+        // contradicts itself cannot account for the selected tests.
+        if let outcome = inconsistentCountsOutcome(summary: summary, outcomeSummary: outcomeSummary) { return outcome }
+
         // See `systemFailureOutcome`'s own doc comment for what this catches
         // and why it is checked against `failures.count`, not `summary.totalTestCount`.
         if let outcome = systemFailureOutcome(failures: failures, outcomeSummary: outcomeSummary) {
             return outcome
         }
+
+        // Failure records next to a zero failed count contradict themselves, whatever kind they are.
+        if let outcome = contradictionOutcome(summary: summary, failures: failures, outcomeSummary: outcomeSummary) { return outcome }
 
         // A crash and an assertion failure both land here as "Failed" with a
         // non-zero count, so the counts cannot separate them. Apple classifies the
@@ -205,6 +212,8 @@ public struct XCResultAdapter: Sendable {
         if let outcome = shortfallOutcome(summary: summary, expectedTestCount: expectedTestCount, outcomeSummary: outcomeSummary) {
             return outcome
         }
+
+        if let outcome = allSkippedOutcome(summary: summary, outcomeSummary: outcomeSummary) { return outcome }
 
         switch summary.result {
         case "Passed":
@@ -379,7 +388,7 @@ extension XCResultAdapter {
         }
         guard result.succeeded else {
             return .failure(fail("""
-            xcresulttool could not read \(readDescription) (exit \(result.exitCode)): \
+            xcresulttool could not read \(readDescription) (exit \(result.exitStatusDescription)): \
             \(OutputRedactor.redactAndTruncate(result.combinedOutput, limit: 400).trimmingCharacters(in: .whitespacesAndNewlines))
             """))
         }
@@ -424,16 +433,28 @@ extension XCResultAdapter {
         tree: BatchTestNodesJSON,
         configurationTestIdentifiers: [String: [String]]
     ) -> [String: Outcome] {
-        let byConfiguration = Dictionary(
-            uniqueKeysWithValues: (batch.devicesAndConfigurations ?? []).map {
-                ($0.testPlanConfiguration.configurationName, $0)
-            }
+        // External result JSON: a configuration name listed twice is ambiguous, never a crash and
+        // never a pick-one pass.
+        let recordsByConfiguration = Dictionary(
+            grouping: batch.devicesAndConfigurations ?? [], by: { $0.testPlanConfiguration.configurationName }
         )
-        let (ownFailuresByConfiguration, configurationsInTree) = Self.ownFailures(in: tree.testNodes)
+        let observations = Self.ownFailures(in: tree.testNodes)
+        let ownFailuresByConfiguration = observations.byConfiguration
+        let configurationsInTree = observations.configurationNames
+        let observedByConfiguration = observations.observed
 
         var outcomes: [String: Outcome] = [:]
         for name in configurationTestIdentifiers.keys {
-            guard let device = byConfiguration[name] else {
+            if (recordsByConfiguration[name]?.count ?? 0) > 1 {
+                outcomes[name] = infrastructure(
+                    """
+                    The batch result bundle lists configuration \(name) more than once. Which record \
+                    belongs to this configuration is ambiguous, so its outcome is unknown, not a pass.
+                    """
+                )
+                continue
+            }
+            guard let device = recordsByConfiguration[name]?.first else {
                 outcomes[name] = infrastructure(
                     """
                     The batch result bundle has no record of configuration \(name) at all. \
@@ -450,6 +471,24 @@ extension XCResultAdapter {
                     The batch result bundle's per-test hierarchy has no record of configuration \
                     \(name) at all, even though its own aggregate counts exist. Its outcome cannot \
                     be attributed to any specific test, so it is unknown, not a pass.
+                    """
+                )
+                continue
+            }
+
+            // Every test this configuration was asked to run must appear in its own nodes before it
+            // can pass. A configuration that ran A of {A, B} and passed is incomplete evidence, not a
+            // pass. A configuration with failures is left to the failure path below: a run that
+            // terminated early on a genuine failure legitimately has unrun tests.
+            let missing = Self.missingTests(
+                expected: configurationTestIdentifiers[name] ?? [], observed: observedByConfiguration[name] ?? []
+            )
+            guard missing.isEmpty || device.failedTests > 0 else {
+                outcomes[name] = infrastructure(
+                    """
+                    The batch result bundle has no record of \(missing.count) test(s) this configuration \
+                    was selected to run (\(missing.prefix(3).joined(separator: ", "))). A configuration \
+                    that did not run its whole selection is unknown, not a pass.
                     """
                 )
                 continue
@@ -514,9 +553,10 @@ extension XCResultAdapter {
     /// unbatched enumeration path.
     private static func ownFailures(
         in nodes: [BatchTestNodesJSON.Node]
-    ) -> (byConfiguration: [String: [TestSummaryJSON.Failure]], configurationNames: Set<String>) {
+    ) -> ConfigurationObservations {
         var failures: [String: [TestSummaryJSON.Failure]] = [:]
         var configurationNames: Set<String> = []
+        var observed: [String: Set<String>] = [:]
 
         func walk(_ node: BatchTestNodesJSON.Node, target: String?) {
             // See `XcodeBuildAdapter.isTestBundleNode` — a UI test target's
@@ -530,6 +570,12 @@ extension XCResultAdapter {
             let currentTarget = XcodeBuildAdapter.isTestBundleNode(node.nodeType) ? node.name : target
 
             if node.nodeType == "Test Case" {
+                // A parameterized or repeated test may nest its configuration nodes under argument or
+                // repetition nodes: those still prove the test ran in that configuration.
+                if let key = Self.observedKey(target: currentTarget, nodeIdentifier: node.nodeIdentifier) {
+                    for name in Self.nestedConfigurationNames(in: node) { observed[name, default: []].insert(key) }
+                }
+                configurationNames.formUnion(Self.nestedConfigurationNames(in: node))
                 for configuration in node.children ?? [] where configuration.nodeType == "Test Plan Configuration" {
                     guard let configurationName = configuration.name else { continue }
                     configurationNames.insert(configurationName)
@@ -561,7 +607,42 @@ extension XCResultAdapter {
         }
 
         for node in nodes { walk(node, target: nil) }
-        return (failures, configurationNames)
+        return ConfigurationObservations(
+            byConfiguration: failures, configurationNames: configurationNames, observed: observed
+        )
+    }
+
+    /// `<target>/<identifier without a trailing "()">` — the shape both a node in the tree and an
+    /// `-only-testing:` argument (`<target>/<Class>/<method>()`) reduce to.
+    private static func nestedConfigurationNames(in node: BatchTestNodesJSON.Node) -> Set<String> {
+        var names: Set<String> = []
+        for child in node.children ?? [] {
+            if child.nodeType == "Test Plan Configuration", let name = child.name { names.insert(name) }
+            names.formUnion(nestedConfigurationNames(in: child))
+        }
+        return names
+    }
+
+    private static func observedKey(target: String?, nodeIdentifier: String?) -> String? {
+        guard let target, let nodeIdentifier, !nodeIdentifier.isEmpty else { return nil }
+        return "\(target)/\(normalized(nodeIdentifier))"
+    }
+
+    private static func normalized(_ identifier: String) -> String {
+        identifier.hasSuffix("()") ? String(identifier.dropLast(2)) : identifier
+    }
+
+    /// Expected `-only-testing:` arguments with no matching observed test, sorted.
+    static func missingTests(expected: [String], observed: Set<String>) -> [String] {
+        expected.map(normalized).filter { !observed.contains($0) }.sorted()
+    }
+
+    /// What one walk of the per-test hierarchy saw, per configuration.
+    private struct ConfigurationObservations {
+        var byConfiguration: [String: [TestSummaryJSON.Failure]]
+        var configurationNames: Set<String>
+        /// `<target>/<identifier>` of every test the configuration has a node for.
+        var observed: [String: Set<String>]
     }
 
     // MARK: - Support

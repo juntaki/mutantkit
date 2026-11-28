@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MutationExecution
 
 /// The machine's state at one moment, captured for evidence rather than for
 /// any decision this tool makes from it.
@@ -19,9 +20,9 @@ public struct ResourceSnapshot: Codable, Sendable {
     /// `nil` when the host statistics call failed — absence of the number,
     /// not a fabricated zero.
     public let freeMemoryBytes: UInt64?
-    /// The number of `RunIsolationLock` files present under `run-locks/`,
-    /// across every destination this project has ever locked — including
-    /// stale ones nothing has reclaimed yet. A coarse signal, not a proof:
+    /// The number of `RunIsolationLock` files under `run-locks/` currently held
+    /// by a live process, across every destination this project has locked.
+    /// Lock files themselves persist; only held ones are counted. A coarse signal, not a proof:
     /// what matters is not the exact count but whether it is ever anything
     /// other than the one this run itself just acquired.
     public let runLockFilesPresent: Int
@@ -62,7 +63,7 @@ public struct ResourceSnapshot: Codable, Sendable {
             loadAverage5Minute: loads[1],
             loadAverage15Minute: loads[2],
             freeMemoryBytes: Self.freeMemoryBytes(),
-            runLockFilesPresent: Self.lockFileCount(in: lockRoot)
+            runLockFilesPresent: RunIsolationLock.heldLockCount(in: lockRoot)
         )
     }
 
@@ -81,11 +82,5 @@ public struct ResourceSnapshot: Codable, Sendable {
         }
         guard result == KERN_SUCCESS else { return nil }
         return UInt64(stats.free_count) * UInt64(pageSize)
-    }
-
-    private static func lockFileCount(in lockRoot: URL) -> Int {
-        (try? FileManager.default.contentsOfDirectory(at: lockRoot, includingPropertiesForKeys: nil))?
-            .filter { $0.pathExtension == "lock" }
-            .count ?? 0
     }
 }

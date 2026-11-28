@@ -96,7 +96,7 @@ struct MutationIDTests {
             occurrenceIndex: 0
         )
 
-        let v1 = MutationID.compute(
+        let v1 = MutationIdentityVersion.current.deriveID(
             filePath: inputs.filePath,
             declaration: inputs.declaration,
             operatorID: inputs.operatorID,
@@ -104,7 +104,7 @@ struct MutationIDTests {
             originalTokenFingerprint: inputs.fingerprint,
             occurrenceIndex: inputs.occurrenceIndex
         )
-        let v2 = MutationID.compute(
+        let v2 = MutationIdentityVersion.current.deriveID(
             filePath: inputs.filePath,
             declaration: inputs.declaration,
             operatorID: inputs.operatorID,
@@ -118,6 +118,22 @@ struct MutationIDTests {
         #expect(v1 != v2)
     }
 
+    /// Historical IDs must not shift. This pins the v1 preimage: if the value
+    /// changes, an existing plan's IDs no longer reproduce, which needs a new
+    /// `MutationIdentityVersion` case rather than an edit to v1.
+    @Test("v1 identity is pinned")
+    func v1IdentityIsPinned() {
+        let id = MutationIdentityVersion.v1.deriveID(
+            filePath: "Sources/Cart.swift",
+            declaration: DeclarationIdentity(path: ["Cart", "isEmpty()"]),
+            operatorID: "swift.core.bool-literal-inversion",
+            operatorVersion: 1,
+            originalTokenFingerprint: ContentHash.shortDigest(of: "true"),
+            occurrenceIndex: 0
+        )
+        #expect(id.rawValue == "mut_f1f393e2e37a1790")
+    }
+
     @Test("Every ID input changes the ID when it changes", arguments: [
         "filePath", "declaration", "operatorID", "fingerprint", "occurrenceIndex"
     ])
@@ -129,7 +145,7 @@ struct MutationIDTests {
             fingerprint: String = ContentHash.shortDigest(of: "true"),
             occurrenceIndex: Int = 0
         ) -> MutationID {
-            MutationID.compute(
+            MutationIdentityVersion.current.deriveID(
                 filePath: filePath,
                 declaration: declaration,
                 operatorID: operatorID,
@@ -155,19 +171,19 @@ struct MutationIDTests {
     /// freshly-computed IDs against each other) and would pass unchanged
     /// through a silent change to the derivation scheme itself — a different
     /// field order, separator, hash algorithm, or truncation length in
-    /// `MutationID.compute`/`ContentHash.shortDigest` recomputes both sides
+    /// `MutationIdentityVersion.deriveID`/`ContentHash.shortDigest` recomputes both sides
     /// of every comparison above identically and stays green. This is the
     /// one test that pins the actual scheme: fixed literal inputs, a
     /// hardcoded expected ID computed independently (SHA-256 of the exact
     /// "v1"-tagged, U+001F-joined preimage, truncated to 16 hex chars,
     /// "mut_"-prefixed). A change to any of those choices must fail this
     /// test by name, not silently pass every relative comparison elsewhere.
-    @Test("MutationID.compute is a golden vector: fixed inputs produce this exact, hardcoded ID")
+    @Test("MutationIdentityVersion.deriveID is a golden vector: fixed inputs produce this exact, hardcoded ID")
     func computeIsAGoldenVector() {
         let fingerprint = ContentHash.shortDigest(of: "true")
         #expect(fingerprint == "b5bea41b6c623f7c", "fixture assumption: ContentHash.shortDigest(of: \"true\") itself changed")
 
-        let id = MutationID.compute(
+        let id = MutationIdentityVersion.current.deriveID(
             filePath: "Sources/Cart.swift",
             declaration: DeclarationIdentity(path: ["Cart", "isEmpty()"]),
             operatorID: "swift.core.bool-literal-inversion",
@@ -187,7 +203,7 @@ struct MutationIDTests {
             let points = try discover(try Fixture.text(name), path: "Sources/\(name).swift")
             #expect(!points.isEmpty)
             for point in points {
-                #expect(point.recomputedID == point.id, "\(point.displayLocation) does not reproduce its own ID")
+                #expect(point.recomputedID(under: .current) == point.id, "\(point.displayLocation) does not reproduce its own ID")
             }
         }
     }

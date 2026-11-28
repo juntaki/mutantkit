@@ -101,7 +101,7 @@ struct EscapedDescendantOwnershipBoundaryDiagnostic {
         // binary happens to be scheduled.
         process.waitUntilExit()
 
-        let discovered = ProcessTree.descendantIdentities(of: rootPID)
+        let discovered = try #require(ProcessTree.descendantIdentities(of: rootPID))
 
         let childPID = try waitForResultsFile(resultsPath)
         defer { if ProcessTree.isAlive(childPID) { kill(childPID, SIGKILL) } }

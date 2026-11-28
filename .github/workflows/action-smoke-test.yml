@@ -600,6 +600,12 @@ jobs:
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Exit contract of the CI orchestration against a fake `mutantkit`: a
+      # failing `run` is never turned into success by a passing gate.
+      - name: orchestrate-ci exit contract (fake mutantkit)
+        shell: bash
+        run: Scripts/action/orchestrate-ci-selftest.sh
+
       # Drives Scripts/action/summarize-gate.sh directly, against
       # hand-crafted gate-result.json fixtures — the operational-failure and
       # malformed-JSON shapes below are *not* reachable by running a real

@@ -200,15 +200,17 @@ struct WorkspaceManagerMultiRootTests {
         #expect(Self.exists(first.containerRoot, "Libraries/SwiftMapper/Sources/SwiftMapper/Old.swift"))
 
         try FileManager.default.removeItem(at: tree.url("Libraries/SwiftMapper/Sources/SwiftMapper/Old.swift"))
-        let second = try await workspaces.createSandbox(id: "baseline")
+        // The next run captures its own closure.
+        let next = try tree.workspaces(project: "Apps/Core", packages: ["Libraries/SwiftMapper"])
+        let second = try await next.createSandbox(id: "baseline")
 
         #expect(second == first)
         #expect(!Self.exists(second.containerRoot, "Libraries/SwiftMapper/Sources/SwiftMapper/Old.swift"))
         #expect(Self.exists(second.containerRoot, "Libraries/SwiftMapper/Sources/SwiftMapper/Mapper.swift"))
     }
 
-    @Test("A reused project-only sandbox is not pruned: it is the project copy itself")
-    func projectOnlySandboxIsNotPruned() async throws {
+    @Test("A reused project-only sandbox keeps excluded build state and drops entries the inputs do not contain")
+    func projectOnlySandboxKeepsBuildStateOnly() async throws {
         let tree = try MultiRootTree()
         defer { tree.remove() }
         try tree.write("Core/Package.swift")
@@ -216,11 +218,13 @@ struct WorkspaceManagerMultiRootTests {
         let workspaces = try tree.workspaces(packages: [])
         let first = try await workspaces.createSandbox(id: "baseline")
         #expect(first.workspaceRoot == first.containerRoot)
-        try tree.write(at: first.workspaceRoot, "Generated/output.swift")
+        try tree.write(at: first.workspaceRoot, ".build/debug/kept.o")
+        try tree.write(at: first.workspaceRoot, "Generated/stale.swift")
 
         let second = try await workspaces.createSandbox(id: "baseline")
 
-        #expect(Self.exists(second.workspaceRoot, "Generated/output.swift"))
+        #expect(Self.exists(second.workspaceRoot, ".build/debug/kept.o"))
+        #expect(!Self.exists(second.workspaceRoot, "Generated/stale.swift"))
     }
 
     // MARK: - Destruction

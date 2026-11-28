@@ -45,7 +45,7 @@ struct ExecutionProfileCommand: AsyncParsableCommand {
         let root = common.resolvedProjectRoot
         var settings = try ConfigurationLoader.load(explicitPath: common.configPath, projectRoot: root)
         try overrides.apply(to: &settings)
-        try ConfigurationPreflight.run(settings)
+        try ConfigurationPreflight.run(settings, projectRoot: root)
 
         let planURL = URL(fileURLWithPath: plan)
         guard FileManager.default.fileExists(atPath: planURL.path) else {
@@ -64,7 +64,7 @@ struct ExecutionProfileCommand: AsyncParsableCommand {
                 SchemataRunOrchestration.Inputs(
                     plan: loadedPlan, projectRoot: root, kind: resolution.adapter.kind,
                     scheme: settings.project.scheme, toolchainHash: "preview",
-                    buildArgumentsHash: settings.buildIdentityHash
+                    buildArgumentsHash: try settings.buildIdentityHash
                 )
             )
             : nil

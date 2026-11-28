@@ -436,6 +436,8 @@ if index < count { ... }
 if index < count { ... } // mutantkit:disable-line swift.core.relational-operator-replacement
 ```
 
+Only real `//` comments that start with `mutantkit:disable-…` count (not text inside strings or block comments). A malformed directive, trailing text after the operator list, or an unknown operator ID fails `plan` rather than being ignored. Suppressed mutations are removed before the `maxMutants` budget is applied.
+
 Or use a `.mutantkitignore` file:
 
 ```text

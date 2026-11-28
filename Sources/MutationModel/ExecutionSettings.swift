@@ -553,12 +553,9 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         profile = try container.decodeIfPresent(ExecutionProfile.self, forKey: .profile) ?? .reference
         strategy = try container.decodeIfPresent(ExecutionMode.self, forKey: .strategy) ?? .isolated
-        // `workers: auto` is friendlier YAML than omitting the key, so accept it.
-        if let count = try? container.decodeIfPresent(Int.self, forKey: .workers) {
-            workers = count
-        } else {
-            workers = nil
-        }
+        // Absent, null and the literal `auto` mean "choose for me"; any other
+        // value that is not an integer is a user error, not a request for auto.
+        workers = try Self.decodeWorkers(container)
         budget = try container.decodeIfPresent(BudgetSettings.self, forKey: .budget) ?? BudgetSettings()
         diffBase = try container.decodeIfPresent(String.self, forKey: .diffBase)
         measureCoverage = try container.decodeIfPresent(Bool.self, forKey: .measureCoverage) ?? false
@@ -607,6 +604,19 @@ public struct ExecutionSettings: Codable, Sendable, Hashable {
             try container.encode(coverageGranularity, forKey: .coverageGranularity)
         }
         try container.encodeIfPresent(coverageWorkers, forKey: .coverageWorkers)
+    }
+
+    private static func decodeWorkers(_ container: KeyedDecodingContainer<CodingKeys>) throws -> Int? {
+        guard container.contains(.workers), try !container.decodeNil(forKey: .workers) else { return nil }
+        if let count = try? container.decode(Int.self, forKey: .workers) { return count }
+        let text = try container.decode(String.self, forKey: .workers)
+        guard text == "auto" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .workers, in: container,
+                debugDescription: "workers must be an integer or \"auto\", found \"\(text)\""
+            )
+        }
+        return nil
     }
 
     enum CodingKeys: String, CodingKey {

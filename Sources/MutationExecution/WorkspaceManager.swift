@@ -76,9 +76,9 @@ public actor WorkspaceManager {
     }
 
     /// Canonical (symlink-resolved). Every deletion is checked against this.
-    private let scratchRoot: URL
-    private let excludes: [String]
-    private let fileManager = FileManager.default
+    let scratchRoot: URL
+    let excludes: [String]
+    let fileManager = FileManager.default
     private var cloneSupport: Bool?
     /// See `ExecutionSettings.cleanSubtreeCloning`'s doc comment for what
     /// this turns on and why it defaults off.
@@ -98,6 +98,22 @@ public actor WorkspaceManager {
     /// created while it runs and remembered, success or failure, after.
     private var containmentProofRun: Task<Void, any Error>?
     private var announcedWithoutProof = false
+    /// What every sandbox of this manager is built from. Given at init, or
+    /// captured once by the first sandbox; immutable afterwards.
+    private var inputClosure: SandboxInputClosure?
+    /// The verified, pristine copy of `inputClosure` under the scratch root,
+    /// built (and every byte proven) once by the first sandbox. Every later
+    /// sandbox and `restoreFile` clones from it, so the live tree is read and
+    /// hashed once per manager, not once per sandbox, and a source edited
+    /// afterwards cannot reach any sandbox.
+    var staged: StagedInputs?
+    /// Root-level resolution-state names the previous materialization of the
+    /// sandbox being reused took from its closure (see `retainedOnReuse`).
+    var previouslyFromClosure: Set<String> = []
+    /// This manager's own staging directory under the scratch root: unique per
+    /// manager, so no other manager (or run) ever builds over or deletes it.
+    /// Removed when the manager goes away.
+    nonisolated let stagingRoot: URL
 
     /// Directories that hold build output, VCS state or previous runs. Copying
     /// them is pure cost: the build regenerates them, and DerivedData alone can
@@ -151,9 +167,11 @@ public actor WorkspaceManager {
         excludes: [String] = WorkspaceManager.defaultExcludes,
         cleanSubtreeCloning: Bool = false,
         containmentProof: (any SandboxContainmentProving)? = nil,
-        onContainmentProven: (@Sendable () -> Void)? = nil
+        onContainmentProven: (@Sendable () -> Void)? = nil,
+        inputClosure: SandboxInputClosure? = nil
     ) throws {
         self.layout = layout
+        self.inputClosure = inputClosure
         self.containmentProof = containmentProof
         self.onContainmentProven = onContainmentProven
         self.excludes = excludes
@@ -165,6 +183,8 @@ public actor WorkspaceManager {
         // compare two spellings of the same directory and reject them.
         try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
         self.scratchRoot = scratchRoot.resolvingSymlinksInPath().standardizedFileURL
+        stagingRoot = self.scratchRoot
+            .appendingPathComponent("\(Self.stagingDirectoryPrefix)\(UUID().uuidString)", isDirectory: true)
 
         // Best-effort, and unconditional: this runs whether or not the
         // caller ends up using `Configuration.execution.sharedModuleCache`
@@ -197,6 +217,11 @@ public actor WorkspaceManager {
         try? FileManager.default.removeItem(
             at: self.scratchRoot.appendingPathComponent(Self.moduleCacheDirectoryName, isDirectory: true)
         )
+    }
+
+    /// The staged copy of the inputs belongs to this manager and goes with it.
+    deinit {
+        try? removeStaging(stagingRoot)
     }
 
     // MARK: - Lifecycle
@@ -290,9 +315,27 @@ public actor WorkspaceManager {
     /// on means one file is always enough; nothing else in the sandbox is
     /// ever written to.
     public func restoreFile(relativePath: String, in sandbox: Sandbox) async throws {
-        let source = try Self.resolveSourceURL(in: projectRoot, relativePath: relativePath)
+        let closure = try capturedClosure()
+        guard let entry = closure.project.entry(at: relativePath), entry.kind == .file else {
+            throw SandboxInputClosureError.notInClosure(path: relativePath)
+        }
+        let staged = try stagedRoot(for: closure.project, closure: closure)
+        let source = try Self.resolveSourceURL(in: staged, relativePath: relativePath)
         let destination = try resolveSourceURL(in: sandbox, relativePath: relativePath)
-        try materialize(source, at: destination)
+        // One file: cheap enough to prove against the closure, not just its stat.
+        try verifyStaged(source, against: entry)
+        try materialize(source, at: destination, entry: entry, proving: false)
+    }
+
+    /// The closure every sandbox of this manager is built from, captured on
+    /// first use when none was given.
+    private func capturedClosure() throws -> SandboxInputClosure {
+        if let inputClosure { return inputClosure }
+        let captured = try SandboxInputClosure.capture(
+            layout: layout, excludes: excludes, scratchRoots: [scratchRoot]
+        )
+        inputClosure = captured
+        return captured
     }
 
     /// Directory name for a cloned build-products landing spot: the same
@@ -581,54 +624,71 @@ public actor WorkspaceManager {
     /// comment. Every other entry — dirty directories, files, symlinks —
     /// takes exactly the path it always has. Only the project root may use
     /// the index (`usesCleanSubtreeIndex`), which is keyed on its paths.
-    private func populate(from source: URL, to destination: URL, usesCleanSubtreeIndex: Bool) throws {
-        try SandboxCopyWalk.walk(
-            root: source, excludes: excludes, skippingCanonicalPaths: [scratchRoot.path]
-        ) { entry in
+    /// Materializes `root` at `destination` from the closure's entries, not
+    /// from a fresh walk: every file is checked against the identity recorded
+    /// at capture, and anything below `destination` that the closure does not
+    /// contain (and no exclude protects) is removed.
+    func populate(
+        _ root: SandboxInputClosure.Root, from base: URL, to destination: URL,
+        usesCleanSubtreeIndex: Bool, proving: Bool
+    ) throws {
+        var clonedWhole: String?
+        var clonedDirs: [String] = []
+        var modes = DirectoryModes()
+        for entry in root.entries {
             let target = destination.appendingPathComponent(entry.relativePath)
+            if let prefix = clonedWhole {
+                if entry.relativePath.hasPrefix(prefix) {
+                    // Cloned with its directory: only the bytes need proving.
+                    if proving { try verifyClonedDescendant(entry, at: target) }
+                    continue
+                }
+                clonedWhole = nil
+            }
+            let source = base.appendingPathComponent(entry.relativePath)
             switch entry.kind {
             case .symbolicLink:
                 // Recreated, never followed: following one turns a link into
                 // a copy of whatever it points at, which is both wrong and
                 // unbounded when it points at a parent.
-                try recreateSymbolicLink(at: entry.url, to: target)
-                return false
+                try recreateSymbolicLink(to: target, target: entry.linkTarget ?? "")
             case .directory:
                 if usesCleanSubtreeIndex, cachedCleanSubtreeIndex().isClean(relativePath: entry.relativePath) {
-                    try materializeWholeSubtree(entry.url, at: target)
-                    return false
+                    try cloneWholeDirectory(entry, from: source, to: target)
+                    clonedDirs.append(entry.relativePath)
+                    clonedWhole = entry.relativePath + "/"
+                    continue
                 }
-                do {
-                    try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
-                } catch {
-                    throw WorkspaceError.unwritable(path: target.path, underlying: error.localizedDescription)
-                }
-                return true
+                try createEntryDirectory(at: target)
+                modes.record(source: source, target: target, enabled: proving)
             case .file:
-                try materialize(entry.url, at: target)
-                return false
+                try materialize(source, at: target, entry: entry, proving: proving)
             }
+        }
+        try modes.apply()
+        try pruneStale(destination, root: root, relativePath: "", strict: false)
+        // A whole clone carries whatever the live subtree holds now, excluded names included.
+        for dir in clonedDirs {
+            try pruneStale(destination.appendingPathComponent(dir), root: root, relativePath: dir, strict: true)
         }
     }
 
-    /// Builds (on first use) or returns the cached clean-subtree index for
-    /// this manager's `projectRoot`.
-    ///
-    /// One `WorkspaceManager` instance backs an entire run's worth of
-    /// `createSandbox` calls — often hundreds, all against the same,
-    /// unchanging `projectRoot` — and building this index costs roughly one
-    /// extra metadata-only walk of the tree (`contentsOfDirectory` plus a
-    /// `resourceValues` call per entry, no file data touched). Paying that
-    /// once and reusing the result is the entire point: recomputing it per
-    /// sandbox would make every sandbox pay a full extra walk on top of
-    /// whatever the walk or the whole-subtree clones themselves cost,
-    /// defeating the optimization before it starts.
-    ///
-    /// Actor-isolated, so "build once" needs no lock of its own: this type
-    /// has no `await` inside it, so two concurrent `createSandbox` calls on
-    /// the same instance simply run this method one after the other on the
-    /// actor's executor, and whichever runs second finds `cleanSubtreeIndex`
-    /// already set.
+    private func cloneWholeDirectory(_ entry: SandboxInputClosure.Entry, from source: URL, to target: URL) throws {
+        try materializeWholeSubtree(source, at: target)
+        guard try existingType(at: target) == .typeDirectory else {
+            throw SandboxInputClosureError.contentChanged(path: entry.relativePath)
+        }
+    }
+
+    private func createEntryDirectory(at target: URL) throws {
+        if let type = try existingType(at: target), type != .typeDirectory { try removeIfPresent(target) }
+        do {
+            try fileManager.createDirectory(at: target, withIntermediateDirectories: true)
+        } catch {
+            throw WorkspaceError.unwritable(path: target.path, underlying: error.localizedDescription)
+        }
+    }
+
     private func cachedCleanSubtreeIndex() -> CleanSubtreeIndex {
         if let existing = cleanSubtreeIndex { return existing }
         let index = CleanSubtreeIndex.build(
@@ -665,12 +725,8 @@ public actor WorkspaceManager {
     /// `materialize`'s unchanged-file reuse for content the index has
     /// already proven can be cloned in one call regardless.
     private func materializeWholeSubtree(_ source: URL, at destination: URL) throws {
-        if supportsAPFSClone() {
-            try? fileManager.removeItem(at: destination)
-            if Self.clone(source, to: destination) { return }
-        }
-
-        try? fileManager.removeItem(at: destination)
+        try removeIfPresent(destination)
+        if supportsAPFSClone(), Self.clone(source, to: destination) { return }
         do {
             try fileManager.copyItem(at: source, to: destination)
         } catch {
@@ -679,71 +735,18 @@ public actor WorkspaceManager {
     }
 
     /// Puts `source`'s contents at `destination` by the cheapest means available.
-    private func materialize(_ source: URL, at destination: URL) throws {
-        if supportsAPFSClone() {
-            // clonefile refuses a destination that already exists.
-            try? fileManager.removeItem(at: destination)
-            if Self.clone(source, to: destination) { return }
-        }
-
-        // Without cloning, the next best thing is not copying: an identical file
-        // already at the destination is one a re-populated sandbox can keep.
-        if isUnchanged(source, at: destination) { return }
-
-        try? fileManager.removeItem(at: destination)
-        do {
-            try fileManager.copyItem(at: source, to: destination)
-        } catch {
-            throw WorkspaceError.unwritable(path: destination.path, underlying: error.localizedDescription)
-        }
-    }
-
-    /// `nonisolated static`, not an instance method: it touches no actor
-    /// state at all (a pure `clonefile(2)` wrapper), which is what lets
-    /// `probeAPFSCloneSupport(at:fileManager:)` above call it without a
-    /// `WorkspaceManager` instance to be isolated to. Every existing
-    /// instance-method call site (`materialize`, `cloneProducts`) now
-    /// spells it `Self.clone(...)` -- an actor's instance methods cannot
-    /// resolve a `static` member of the same type by bare, unqualified
-    /// name the way a struct's or class's can (confirmed by the compiler,
-    /// not assumed), so both call sites needed that one-token change
-    /// alongside this method's own `private func` -> `private nonisolated
-    /// static func` widening.
-    private nonisolated static func clone(_ source: URL, to destination: URL) -> Bool {
+    nonisolated static func clone(_ source: URL, to destination: URL) -> Bool {
         // CLONE_NOFOLLOW keeps a symlink a symlink rather than cloning its target.
         clonefile(source.path, destination.path, UInt32(CLONE_NOFOLLOW)) == 0
     }
 
-    private func isUnchanged(_ source: URL, at destination: URL) -> Bool {
-        guard let sourceAttributes = try? fileManager.attributesOfItem(atPath: source.path),
-              let destinationAttributes = try? fileManager.attributesOfItem(atPath: destination.path),
-              let sourceSize = sourceAttributes[.size] as? Int,
-              let destinationSize = destinationAttributes[.size] as? Int,
-              sourceSize == destinationSize,
-              let sourceDate = sourceAttributes[.modificationDate] as? Date,
-              let destinationDate = destinationAttributes[.modificationDate] as? Date
-        else { return false }
-        return sourceDate == destinationDate
-    }
-
-    private func recreateSymbolicLink(at source: URL, to destination: URL) throws {
-        let target: String
-        do {
-            target = try fileManager.destinationOfSymbolicLink(atPath: source.path)
-        } catch {
-            throw WorkspaceError.unreadable(path: source.path, underlying: error.localizedDescription)
-        }
-
-        try? fileManager.removeItem(at: destination)
+    private func recreateSymbolicLink(to destination: URL, target: String) throws {
+        try removeIfPresent(destination)
         do {
             try fileManager.createSymbolicLink(atPath: destination.path, withDestinationPath: target)
         } catch {
             throw WorkspaceError.unwritable(path: destination.path, underlying: error.localizedDescription)
         }
-    }
-
-    private func isExcluded(name: String, relativePath: String) -> Bool {
-        Self.isExcluded(name: name, relativePath: relativePath, excludes: excludes)
     }
 
     /// The test `isExcluded(name:relativePath:)` applies against this
@@ -799,7 +802,14 @@ extension WorkspaceManager {
         }
 
         try createDirectory(sandbox.workspaceRoot)
-        try populate(from: projectRoot, to: sandbox.workspaceRoot, usesCleanSubtreeIndex: cleanSubtreeCloning)
+        let closure = try capturedClosure()
+        let retainedManifest = container.appendingPathExtension("retained")
+        previouslyFromClosure = Self.readRetainedManifest(retainedManifest)
+        try populate(
+            closure.project, from: stagedRoot(for: closure.project, closure: closure), to: sandbox.workspaceRoot,
+            usesCleanSubtreeIndex: cleanSubtreeCloning, proving: false
+        )
+        Self.writeRetainedManifest(retainedManifest, names: Self.retainedOnReuse.filter { closure.project.entry(at: $0) != nil })
         // The clean-subtree index is keyed on project-relative paths, so it
         // says nothing about an external root: those always take the walk.
         // Each root copy is rebuilt from nothing: `populate` only visits
@@ -807,11 +817,14 @@ extension WorkspaceManager {
         // reused container was filled would otherwise stay and be compiled.
         // A package's copy holds no build state (that lives in the
         // workspace's `.build`), so rebuilding costs only the clones.
-        for root in layout.externalRoots {
-            let destination = container.appendingPathComponent(root.relativePath, isDirectory: true)
+        for root in closure.roots.dropFirst() {
+            let destination = container.appendingPathComponent(root.containerRelativePath, isDirectory: true)
             try removeIfPresent(destination)
             try createDirectory(destination)
-            try populate(from: root.sourceRoot, to: destination, usesCleanSubtreeIndex: false)
+            try populate(
+                root, from: stagedRoot(for: root, closure: closure), to: destination,
+                usesCleanSubtreeIndex: false, proving: false
+            )
         }
         try await proveContainmentOnce(sandbox)
         return sandbox
@@ -872,6 +885,8 @@ extension WorkspaceManager {
             throw WorkspaceError.notASandboxContainer(path: canonical.path, scratchRoot: scratchRoot.path)
         }
         try removeIfPresent(canonical)
+        // The reuse manifest lives next to the container, not in it.
+        try removeIfPresent(canonical.appendingPathExtension("retained"))
     }
 
     /// Deletes whatever an earlier process left at `id`'s sandbox, external
@@ -901,8 +916,8 @@ extension WorkspaceManager {
         try removeIfPresent(canonical)
     }
 
-    private func removeIfPresent(_ directory: URL) throws {
-        guard fileManager.fileExists(atPath: directory.path) else { return }
+    func removeIfPresent(_ directory: URL) throws {
+        guard (try? fileManager.attributesOfItem(atPath: directory.path)) != nil else { return }
         do {
             try fileManager.removeItem(at: directory)
         } catch {
@@ -925,7 +940,7 @@ extension WorkspaceManager {
         }
     }
 
-    private func createDirectory(_ directory: URL) throws {
+    func createDirectory(_ directory: URL) throws {
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {

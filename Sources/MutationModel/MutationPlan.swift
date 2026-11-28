@@ -86,6 +86,9 @@ public struct SkippedMutation: Codable, Sendable, Hashable {
         case fileExcluded
         case outsideDiff
         case userRequested
+        /// Same file, range and replacement as another point; the detail names the
+        /// canonical mutation and every contributing operator.
+        case duplicateEdit
     }
 
     public let id: MutationID
@@ -185,6 +188,10 @@ public struct MutationPlan: Codable, Sendable {
     /// `configurationHash` while leaving this identical, which is exactly
     /// the case `PlanCompatibilityValidator` must not warn about.
     public let planningHash: String
+    /// The scheme every `MutationID` in this plan was derived under. Absent in
+    /// a serialized plan means `.v1`; a plan naming a version this build does
+    /// not know is rejected at decode, never reinterpreted.
+    public let identityVersion: MutationIdentityVersion
     /// Hashes of every source file considered, keyed by relative path.
     public let sourceFileHashes: [String: String]
     /// Sorted by `MutationID` — this is what makes execution order deterministic.
@@ -214,8 +221,10 @@ public struct MutationPlan: Codable, Sendable {
         skipped: [SkippedMutation],
         operators: [OperatorDescriptor],
         budgetInclusionReasons: [InclusionReason] = [],
-        planningHash: String? = nil
+        planningHash: String? = nil,
+        identityVersion: MutationIdentityVersion
     ) {
+        self.identityVersion = identityVersion
         schemaVersion = SchemaVersion.plan
         self.planID = planID
         self.createdAt = createdAt
@@ -239,7 +248,7 @@ public struct MutationPlan: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, planID, createdAt, projectRoot, toolchain, configurationHash
         case sourceFileHashes, mutations, skipped, operators, budgetInclusionReasons
-        case planningHash
+        case planningHash, identityVersion
     }
 
     /// Custom only for `budgetInclusionReasons`: a plan.json written before
@@ -268,6 +277,12 @@ public struct MutationPlan: Codable, Sendable {
         // was written under, rather than inventing a narrower identity for
         // it after the fact.
         planningHash = try container.decodeIfPresent(String.self, forKey: .planningHash) ?? configurationHash
+        let rawIdentityVersion = try container.decodeIfPresent(Int.self, forKey: .identityVersion)
+            ?? MutationIdentityVersion.v1.rawValue
+        guard let version = MutationIdentityVersion(rawValue: rawIdentityVersion) else {
+            throw PlanError.unsupportedIdentityVersion(found: rawIdentityVersion, newestKnown: .current)
+        }
+        identityVersion = version
     }
 
     /// Custom only for `budgetInclusionReasons`: omitted entirely when empty
@@ -299,6 +314,10 @@ public struct MutationPlan: Codable, Sendable {
         }
         if !budgetInclusionReasons.isEmpty {
             try container.encode(budgetInclusionReasons, forKey: .budgetInclusionReasons)
+        }
+        // Omitted for v1 so every existing plan keeps its bytes.
+        if identityVersion != .v1 {
+            try container.encode(identityVersion, forKey: .identityVersion)
         }
     }
 
@@ -370,6 +389,8 @@ public extension MutationPlan {
 
 public enum PlanError: Error, CustomStringConvertible {
     case unsupportedSchemaVersion(found: Int, expected: Int)
+    /// The plan's mutation IDs were derived under a scheme this build does not implement.
+    case unsupportedIdentityVersion(found: Int, newestKnown: MutationIdentityVersion)
     case idMismatch(declared: MutationID, recomputed: MutationID, file: String)
     /// Duplicate or unstable mutation IDs found while decoding — see
     /// `MutationPlan.decode`'s doc comment for why this is caught here
@@ -380,6 +401,12 @@ public enum PlanError: Error, CustomStringConvertible {
         switch self {
         case let .unsupportedSchemaVersion(found, expected):
             "Plan schema version \(found) is not supported by this tool (expects \(expected))."
+        case let .unsupportedIdentityVersion(found, newestKnown):
+            """
+            Plan mutation IDs use identity scheme \(found); this tool implements up to \
+            \(newestKnown.rawValue). Re-plan with a matching tool version — IDs are not \
+            translated between schemes.
+            """
         case let .idMismatch(declared, recomputed, file):
             """
             Mutation ID in \(file) does not reproduce from its own components: \

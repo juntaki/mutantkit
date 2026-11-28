@@ -138,7 +138,7 @@ struct SchemataChildProcessImageAcceptanceTests {
                 toolVersion: "0.0.0", toolCommitSHA: String(repeating: "0", count: 40), swiftVersion: "6.0", swiftSyntaxVersion: "600.0.0",
                 xcodeVersion: nil
             ),
-            configurationHash: configuration.configurationHash,
+            configurationHash: try configuration.configurationHash,
             sourceFileHashes: [Self.gatePath: ContentHash.of(Self.gateSource)],
             mutations: points, skipped: [], operators: [BoolLiteralInversionOperator.descriptor]
         )

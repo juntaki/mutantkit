@@ -133,7 +133,7 @@ enum SwiftPMDirectCoverageRunner {
         // trusting the stream alone there would be exactly the kind of gap
         // structured evidence exists to close, not reopen.
         guard result.succeeded else {
-            return .unavailable(reason: "swiftpm-testing-helper did not exit successfully (exit \(result.exitCode))")
+            return .unavailable(reason: "swiftpm-testing-helper did not exit successfully (exit \(result.exitStatusDescription))")
         }
         guard result.outputComplete else {
             return .unavailable(reason: "swiftpm-testing-helper's own output could not be fully captured")

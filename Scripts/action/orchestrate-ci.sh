@@ -36,9 +36,9 @@
 #                          — a cache miss is not an error, it just means
 #                          regression checks run without one, same as always.
 #
-# Exit code: gate's own, once gate has run at all (see the long comment
-# above the final `mutantkit gate` call below for why `run` failing does not
-# skip it). `doctor`/`plan` failing is fatal to this script directly, since
+# Exit code: `run`'s if it failed, else gate's, else 1 if gate's result could
+# not be persisted (see the contract at the bottom; `run` failing does not
+# skip gate, so its verdict stays available as a diagnostic). `doctor`/`plan` failing is fatal to this script directly, since
 # there is nothing for `run`/`gate` to do without them.
 set -euo pipefail
 
@@ -121,21 +121,21 @@ echo "::group::mutantkit run"
 # GitHubActionsReporter, never written to a file); `html`/`ci-summary` for
 # the browsable report and the job-summary step below.
 #
-# Not fatal on its own: `run` exits non-zero only on an integrity failure
-# (MutantKitExit.integrityFailure) or `--fail-on-survivors` (not passed here
-# — survivor counts are `gate`'s decision, not `run`'s). Critically,
+# Not immediately fatal, but never forgotten: `run` can exit non-zero on
+# integrity failure, interruption, qualification or an operational error
+# (some after the report was written); the final exit below honors it. Critically,
 # RunCommand still *writes* report.json before checking integrity (see
 # `emit(...)` ahead of the integrity guard in RunCommand.run()), so a
 # trustworthy `gate --json` verdict — "score unavailable, integrity did not
 # pass" — is still possible even here, and more informative than stopping
-# cold on `run`'s own exit code. `gate` below is what actually decides
-# whether that verdict fails the job.
+# cold on `run`'s own exit code. `gate` below supplies that diagnostic
+# verdict; it can fail the job but never rescue a failed `run`.
 run_exit=0
 mutantkit run "${common_args[@]}" --plan "$PLAN_PATH" --output "$REPORT_JSON_PATH" \
   --also-report json --also-report github-actions --also-report html --also-report ci-summary \
   || run_exit=$?
 if [ "$run_exit" -ne 0 ]; then
-  echo "::warning::mutantkit run exited $run_exit — continuing to \`mutantkit gate\` below, which will report a structured, fail-closed verdict against whatever report.json (if any) was actually produced."
+  echo "::warning::mutantkit run exited $run_exit — running \`mutantkit gate\` for diagnostics; the job will fail regardless of its verdict."
 fi
 echo "::endgroup::"
 
@@ -175,14 +175,41 @@ elif [ -f "${BASELINE_REPORT_PATH:-/nonexistent}" ]; then
   gate_args+=(--baseline "$BASELINE_REPORT_PATH")
   baseline_applied=true
 fi
-# `tee`, not plain redirection: the verdict stays visible in this step's own
-# live log, while also landing on disk at a fixed path the summary/artifact
-# steps read without invoking `gate` a second time. `pipefail` (set above)
-# means this pipeline's own exit status is `gate`'s, never `tee`'s.
-set +e
-mutantkit gate "${gate_args[@]}" | tee "$GATE_RESULT_PATH"
-gate_exit="${PIPESTATUS[0]}"
-set -e
+# gate's stdout goes to a file first, then is echoed to this step's log: a
+# pipe into `tee` would let a failure to persist gate-result.json (full disk,
+# unwritable path) pass unnoticed behind `PIPESTATUS[0]`, and the summary and
+# artifact steps would then read a missing/truncated verdict. A persistence
+# failure is an operational failure of this invocation (exit 1), never a pass.
+gate_exit=0
+persist_failed=0
+mutantkit gate "${gate_args[@]}" > "$GATE_RESULT_PATH" || gate_exit=$?
+if [ -s "$GATE_RESULT_PATH" ]; then
+  cat "$GATE_RESULT_PATH" || true
+else
+  persist_failed=1
+  echo "::error::gate result at $GATE_RESULT_PATH is missing or empty (it could not be persisted)."
+fi
 echo "::endgroup::"
 
-exit "$gate_exit"
+# One exit contract. `run`'s status is never discarded: a report that passes
+# gate does not prove the run itself completed (interruption, a failure after
+# the report was written, qualification). Precedence, most specific first:
+#   1. `run` failed (operational 1, integrity 2, survivors 3, qualification 6,
+#      interrupted 7)
+#      -> that exit code. gate still ran above, so its verdict and the
+#      report/artifacts stay available as diagnostics.
+#   2. gate's own non-zero status (a genuine quality failure, 4, keeps its code).
+#   3. gate-result.json is missing or empty (gate never produced/persisted a
+#      verdict) -> 1.
+#   4. otherwise 0.
+if [ "$run_exit" -ne 0 ]; then
+  echo "::error::mutantkit run exited $run_exit (mutantkit gate exited $gate_exit); the job fails on the run failure even if gate passed."
+  exit "$run_exit"
+fi
+if [ "$gate_exit" -ne 0 ]; then
+  exit "$gate_exit"
+fi
+if [ "$persist_failed" -ne 0 ]; then
+  exit 1
+fi
+exit 0

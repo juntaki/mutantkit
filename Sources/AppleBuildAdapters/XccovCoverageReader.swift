@@ -61,11 +61,11 @@ public enum XccovCoverageReader {
         // `measurePerTestCoverage`'s own `return nil` conversion (see this
         // adapter's `measurePerTestCoverage`) exists to close one layer up.
         guard result.succeeded, result.outputComplete,
-              let executed = parse(result.standardOutput, projectRoot: projectRoot)
+              let parsed = parse(result.standardOutput, projectRoot: projectRoot)
         else {
             return nil
         }
-        return CoverageMap(executedLines: executed, source: "xcodebuild-xccov")
+        return CoverageMap(executedLines: parsed.executed, source: "xcodebuild-xccov", mappedLines: parsed.mapped)
     }
 
     /// Parses a single `xccov --json` document. Exposed for tests so a
@@ -88,13 +88,22 @@ public enum XccovCoverageReader {
     /// back to the full suite either way. Safe (a fallback is never wrong,
     /// only slower), so left unchanged; distinguishing the two is a
     /// performance question for later, not a correctness gap now.
-    public static func parse(_ data: Data, projectRoot: URL) -> [String: Set<Int>]? {
+    ///
+    /// Returns the executed lines and the *mapped* ones — every line `xccov` marks executable, which
+    /// is a line it has a counter for, whatever the count. A line that is in neither set (not
+    /// executable: blank, a brace, the literal of a default argument the compiler emitted no counter
+    /// for) is unmeasured, which is not "no test reaches it"; `CoverageMap` and `PerTestCoverageMap`
+    /// make no claim about it.
+    public static func parse(
+        _ data: Data, projectRoot: URL
+    ) -> (executed: [String: Set<Int>], mapped: [String: Set<Int>])? {
         guard let document = try? JSONSerialization.jsonObject(with: data) as? [String: [[String: Any]]] else {
             return nil
         }
 
         let rootPath = projectRoot.standardizedFileURL.path
         var executed: [String: Set<Int>] = [:]
+        var mapped: [String: Set<Int>] = [:]
 
         for (absolutePath, entries) in document {
             guard let relativePath = SourceCoverageReader.relativePath(
@@ -102,6 +111,7 @@ public enum XccovCoverageReader {
             ) else { continue }
 
             var lines = Set<Int>()
+            var mappedInFile = Set<Int>()
             var hasExecutableLine = false
             for entry in entries {
                 guard let line = entry["line"] as? Int, line >= 1,
@@ -110,6 +120,7 @@ public enum XccovCoverageReader {
 
                 guard isExecutable else { continue }
                 hasExecutableLine = true
+                mappedInFile.insert(line)
 
                 guard let count = entry["executionCount"] as? Int, count >= 0 else { return nil }
 
@@ -119,8 +130,9 @@ public enum XccovCoverageReader {
             // `SourceCoverageReader.parseOutcome`.
             guard hasExecutableLine else { continue }
             executed[relativePath, default: []].formUnion(lines)
+            mapped[relativePath, default: []].formUnion(mappedInFile)
         }
 
-        return executed.values.contains(where: { !$0.isEmpty }) ? executed : nil
+        return executed.values.contains(where: { !$0.isEmpty }) ? (executed, mapped) : nil
     }
 }

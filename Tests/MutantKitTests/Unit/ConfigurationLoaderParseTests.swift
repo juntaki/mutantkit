@@ -105,40 +105,16 @@ struct ConfigurationLoaderParseTests {
         #expect(configuration.execution.workers == 3)
     }
 
-    /// v0.5 Stable Contracts: an unrecognized key, at any level, is
-    /// currently ignored rather than rejected by the decoder itself — the
-    /// JSON Schema's `additionalProperties: false` is only ever advertised
-    /// to a schema-aware editor (`ConfigurationSchemaParityTests
-    /// .typoNestedKeyIsRejectedByTheSchema` pins that half), never enforced
-    /// by `ConfigurationLoader`/`mutantkit config` at load time (see
-    /// `ConfigurationValidation.swift`'s own comment on this exact gap).
-    /// That behavior was previously correct-but-unpinned: nothing failed if
-    /// it silently changed (e.g. a Yams/Codable version bump adding strict
-    /// unknown-key rejection). This locks it in as an explicit, enforced
-    /// contract rather than an artifact of how `Codable` happens to behave
-    /// today.
-    @Test("An unrecognized key, top-level or nested, is silently ignored rather than rejected")
-    func unrecognizedKeysAreIgnored() throws {
-        let configuration = try ConfigurationLoader.parse("""
-        version: 1
-        bogusTopLevelKey: 1
-        project:
-          kind: xcodeProject
-          scheme: MyApp
-        execution:
-          workerz: 4
-        tests:
-          targets:
-            - MyAppTests
-        """, environment: [:])
-
-        #expect(configuration.project.kind == .xcodeProject)
-        #expect(configuration.project.scheme == "MyApp")
-        #expect(configuration.tests.targets == ["MyAppTests"])
-        #expect(
-            configuration.execution.workers == Configuration().execution.workers,
-            "the typo'd 'workerz' must not affect the real 'workers' default"
-        )
+    /// Unrecognized keys at any level are rejected at load, so a typo can never
+    /// silently fall back to a default; the allowed set is the published schema.
+    @Test("An unrecognized key, top-level or nested, is rejected rather than ignored")
+    func unrecognizedKeysAreRejected() {
+        #expect(throws: ConfigurationError.self) {
+            try ConfigurationLoader.parse("version: 1\nbogusTopLevelKey: 1\n", environment: [:])
+        }
+        #expect(throws: ConfigurationError.self) {
+            try ConfigurationLoader.parse("version: 1\nexecution:\n  workerz: 4\n", environment: [:])
+        }
     }
 
     @Test("ProjectDetectionPlan's own generated template always parses back cleanly")

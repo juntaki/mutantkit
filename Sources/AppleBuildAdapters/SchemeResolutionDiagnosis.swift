@@ -88,9 +88,9 @@ enum SchemeResolutionDiagnosis {
             \(seconds(result.durationSeconds)). \(unknown) Retry, or \(skip).
             """
         }
-        if result.exitCode != 0 {
+        if !result.exitStatusAvailable || result.exitCode != 0 {
             return """
-            `xcodebuild -list -json` exited with status \(result.exitCode) without producing a \
+            `xcodebuild -list -json` exited with status \(result.exitStatusDescription) without producing a \
             scheme list; its own output is below. \(unknown)
             """
         }

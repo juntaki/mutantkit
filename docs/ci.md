@@ -52,6 +52,19 @@ one — its score has a different denominator — so a diff-scoped run never
 applies a restored baseline, cached or not; if `regression`/`survived` are
 configured, `gate` fails closed on the missing baseline rather than
 comparing mismatched scopes (see [Quality gate](../README.md#quality-gate-turning-a-score-into-a-merge-decision)).
+When a baseline is supplied, `gate` compares each regression axis against the
+baseline narrowed to the files both reports mutated (plan IDs are not compared,
+so a baseline from an earlier commit works). An axis with no denominator on
+either side fails as `regressionUnavailable`; a baseline that shares no mutated
+file with the current report fails as `baselineIncompatible`.
+Before using either report, `gate` re-checks it against itself using only what
+the report stores: the stored score must equal the re-tally of the stored
+results (the check `trust` runs), the stored integrity must count as many
+classified results as the report holds, and no mutation may appear twice. A contradiction fails the gate
+as `reportInconsistent` (current report) or `baselineInconsistent` (`--baseline`,
+checked only when a regression threshold uses it), with exit code `4`. Evidence
+a report does not carry is not a contradiction, and passing does not prove the
+raw evidence; use `trust` with the plan and evidence archive for that.
 A `pull_request` run never writes a new baseline, so a PR cannot mutate the
 target branch's own baseline before merging. A same-commit workflow rerun
 reuses its own already-saved baseline rather than erroring on a cache-key
@@ -59,11 +72,17 @@ collision.
 
 ## Reading the result
 
-The action's own exit code is `mutantkit gate`'s — `0` (passed), `1`
-(operational error: doctor/plan/run could not proceed, or `gate` itself
-could not read a report), `2` (integrity failure: the run completed but its
-invariants did not reconcile, so no score exists to gate), or `4` (a trusted
-report missed a configured threshold). The job summary ($GITHUB_STEP_SUMMARY)
+The action's own exit code is `mutantkit run`'s if `run` failed, otherwise
+`mutantkit gate`'s. `gate` still runs after a failed `run` so its verdict and
+the report stay available as diagnostics, but a passing gate never turns a
+failed `run` into success. Codes: `0` (passed), `1` (operational error:
+doctor/plan/run could not proceed, `gate` could not read a report or resolve
+its quality policy, or its result could not be persisted), `2` (integrity
+failure: the run completed but its invariants did not reconcile, so no score
+exists to gate), `4` (a trusted report missed a configured threshold), `6`
+(`run` qualification failed), or `7` (`run` was interrupted; the report, if
+any, is partial). A failed run also never becomes the next baseline.
+The job summary ($GITHUB_STEP_SUMMARY)
 reports which case occurred without recomputing the verdict itself, and the
 artifact (`report.json`, `gate-result.json`, `report.html`, `summary.md`) is
 uploaded regardless of which one it was — a failing or inconclusive gate is

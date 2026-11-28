@@ -21,7 +21,7 @@ struct XcodeTestIdentifierEnumerationTests {
 
     @Test("Every test case is found, qualified by class, onlyTestingArgument restores the trailing ()")
     func findsEveryTestCase() {
-        let found = XcodeBuildAdapter.parseTestIdentifiers(Self.capturedDocument)
+        let found = XcodeBuildAdapter.parseTestIdentifiers(Self.capturedDocument).tests ?? []
 
         // Phase C13: `onlyTestingArgument` always appends `()` (required
         // for `xcodebuild` to match a Swift Testing `@Test` function via
@@ -40,20 +40,41 @@ struct XcodeTestIdentifierEnumerationTests {
 
     @Test("Every identifier is attributed to the Unit test bundle ancestor's name, not the test plan's")
     func attributesToTheTestBundleNotThePlan() {
-        let found = XcodeBuildAdapter.parseTestIdentifiers(Self.capturedDocument)
+        let found = XcodeBuildAdapter.parseTestIdentifiers(Self.capturedDocument).tests ?? []
 
         #expect(found.allSatisfy { $0.target == "CovProbeTests" })
         #expect(found.allSatisfy { $0.target != "CovProbe-Package" })
     }
 
-    @Test("Malformed JSON yields no identifiers rather than throwing")
-    func malformedJSONYieldsEmpty() {
-        #expect(XcodeBuildAdapter.parseTestIdentifiers(Data("not json".utf8)).isEmpty)
+    @Test("Malformed JSON is an unknown inventory rather than a throw or an empty list")
+    func malformedJSONIsUnknown() {
+        #expect(XcodeBuildAdapter.parseTestIdentifiers(Data("not json".utf8)) == .unknown(.malformedDocument))
     }
 
-    @Test("A document with no testNodes yields no identifiers")
-    func noTestNodesYieldsEmpty() {
-        #expect(XcodeBuildAdapter.parseTestIdentifiers(Data("{}".utf8)).isEmpty)
+    @Test("A document with no testNodes is an unknown inventory")
+    func noTestNodesIsUnknown() {
+        #expect(XcodeBuildAdapter.parseTestIdentifiers(Data("{}".utf8)) == .unknown(.malformedDocument))
+    }
+
+    @Test("A Test Case node that cannot be named makes the inventory unknown among valid nodes")
+    func malformedNodeAmongValidIsUnknown() {
+        let document = Data("""
+        {"testNodes":[{"nodeType":"Unit test bundle","name":"AppTests","children":[
+          {"nodeType":"Test Case","name":"testOk()","nodeIdentifier":"AddTests/testOk()"},
+          {"nodeType":"Test Case","name":"testNoIdentifier()"}]}]}
+        """.utf8)
+
+        #expect(XcodeBuildAdapter.parseTestIdentifiers(document)
+            == .unknown(.unrecognizedEntries(count: 1, sample: "testNoIdentifier()")))
+    }
+
+    @Test("A Test Case outside any test bundle makes the inventory unknown")
+    func testCaseWithoutBundleIsUnknown() {
+        let document = Data("""
+        {"testNodes":[{"nodeType":"Test Case","name":"orphan()","nodeIdentifier":"A/orphan()"}]}
+        """.utf8)
+
+        #expect(XcodeBuildAdapter.parseTestIdentifiers(document).tests == nil)
     }
 
     /// Captured verbatim from `xcrun xcresulttool get test-results tests
@@ -68,7 +89,7 @@ struct XcodeTestIdentifierEnumerationTests {
 
     @Test("A UI test bundle's own test cases are found and attributed to it, not silently dropped")
     func findsUITestBundleCases() {
-        let found = XcodeBuildAdapter.parseTestIdentifiers(Self.capturedUIBundleDocument)
+        let found = XcodeBuildAdapter.parseTestIdentifiers(Self.capturedUIBundleDocument).tests ?? []
 
         // Before the `isTestBundleNode` fix, `currentTarget` stayed `nil`
         // for every node under a `"UI test bundle"` ancestor (only

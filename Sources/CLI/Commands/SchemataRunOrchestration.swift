@@ -81,7 +81,7 @@ enum SchemataRunOrchestration {
                 plan: context.plan, projectRoot: context.projectRoot, kind: context.adapter.kind,
                 scheme: context.configuration.project.scheme,
                 toolchainHash: HybridExecutionEngine.toolchainHash(context.toolchain),
-                buildArgumentsHash: context.configuration.buildIdentityHash
+                buildArgumentsHash: try context.configuration.buildIdentityHash
             ),
             warn: { print($0) }
         )
@@ -105,7 +105,8 @@ enum SchemataRunOrchestration {
                     planID: plan.planID, createdAt: plan.createdAt, projectRoot: plan.projectRoot,
                     toolchain: plan.toolchain, configurationHash: plan.configurationHash,
                     sourceFileHashes: plan.sourceFileHashes, mutations: mutations, skipped: plan.skipped,
-                    operators: plan.operators, planningHash: plan.planningHash
+                    operators: plan.operators, planningHash: plan.planningHash,
+                    identityVersion: plan.identityVersion
                 ),
                 projectRoot: projectRoot, kind: kind, scheme: scheme,
                 toolchainHash: toolchainHash, buildArgumentsHash: buildArgumentsHash

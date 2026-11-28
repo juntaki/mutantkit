@@ -356,7 +356,7 @@ runs:
     # Scripts/action/orchestrate-ci.sh for the full script and its own
     # extensive doc comments — this step's only job is threading the
     # already-resolved absolute paths into it as env vars. This step's own
-    # exit code is `mutantkit gate`'s (see orchestrate-ci.sh's own tail) and
+    # exit code is `run`'s if it failed, else `mutantkit gate`'s (see orchestrate-ci.sh's own tail) and
     # is this job's authoritative pass/fail signal: nothing after this step
     # recomputes or overrides it.
     - name: Run mutantkit (doctor, plan, run, gate)

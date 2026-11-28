@@ -48,7 +48,10 @@ struct ConfigurationSchemaParityTests {
         let tests = TestSettings(targets: ["t"], extraArguments: ["--x"], parallel: true)
         #expect(try encodedKeys(tests) == section("tests", in: schema))
 
-        let operators = OperatorSettings(profile: .default, disable: ["x"], enable: ["y"])
+        let operators = OperatorSettings(
+            profile: .default, disable: ["x"], enable: ["y"],
+            sideEffectCallRemoval: SideEffectCallRemovalSettings(excludeCalls: ["z"])
+        )
         #expect(try encodedKeys(operators) == section("operators", in: schema))
     }
 
@@ -233,7 +236,7 @@ struct ConfigurationSchemaParityTests {
         #expect(try encodedKeys(plain).contains("evidence") == false)
         var withArchive = plain
         withArchive.evidence = EvidenceSettings(archive: true)
-        #expect(plain.configurationHash == withArchive.configurationHash)
+        #expect(try plain.configurationHash == withArchive.configurationHash)
         #expect(plain.evidence == nil)
         #expect(try JSONDecoder().decode(Configuration.self, from: Data("{}".utf8)).evidence == nil)
         #expect(try JSONDecoder().decode(Configuration.self, from: Data(#"{"evidence":{}}"#.utf8)).evidence?.archive == false)

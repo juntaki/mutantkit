@@ -104,8 +104,8 @@ struct OperatorProfileTiersTests {
         #expect(json.contains("\"profile\":\"\(raw)\""))
 
         let redecoded = try JSONDecoder().decode(Configuration.self, from: encoder.encode(configuration))
-        #expect(redecoded.configurationHash == configuration.configurationHash)
-        #expect(configuration.configurationHash == expectedHash)
+        #expect(try redecoded.configurationHash == configuration.configurationHash)
+        #expect(try configuration.configurationHash == expectedHash)
     }
 
     // MARK: - Canonical vs legacy presentation

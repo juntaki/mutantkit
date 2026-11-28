@@ -96,9 +96,9 @@ public enum XcodeCompilationUnitImageResolver {
         } catch {
             throw XcodeImageResolutionError.showBuildSettingsFailed(target: target, diagnosis: "\(error)")
         }
-        guard result.succeeded else {
+        guard result.succeededWithCompleteOutput else {
             throw XcodeImageResolutionError.showBuildSettingsFailed(
-                target: target, diagnosis: String(decoding: result.standardError, as: UTF8.self)
+                target: target, diagnosis: result.failureDiagnosis
             )
         }
         let entries: [BuildSettingsEntry]
@@ -164,9 +164,9 @@ public enum XcodeCompilationUnitImageResolver {
             throw XcodeImageResolutionError.showBuildSettingsFailed(target: target, diagnosis: "\(error)")
         }
         await GateTimingRecorder.shared.record("receipt.showBuildSettings", chunkID: target, start: showBuildSettingsStart)
-        guard result.succeeded else {
+        guard result.succeededWithCompleteOutput else {
             throw XcodeImageResolutionError.showBuildSettingsFailed(
-                target: target, diagnosis: String(decoding: result.standardError, as: UTF8.self)
+                target: target, diagnosis: result.failureDiagnosis
             )
         }
 

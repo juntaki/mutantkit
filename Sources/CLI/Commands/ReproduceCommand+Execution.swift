@@ -16,6 +16,14 @@ import SwiftFrontend
 /// exactly that reason — their only caller, `run()`, lives in
 /// `ReproduceCommand.swift`.
 extension ReproduceCommand {
+    /// The sandbox one reproduction works in, with the manager that owns its
+    /// path-containment guarantee.
+    struct ReproduceSandbox {
+        let sandbox: Sandbox
+        let layout: SandboxLayout
+        let workspaces: WorkspaceManager
+    }
+
     /// A fresh, deterministic sandbox for one reproduction, laid out like a
     /// run's: the project and every local package outside it.
     ///
@@ -23,7 +31,7 @@ extension ReproduceCommand {
     /// and the whole point of this command is a directory that survives.
     func prepareFreshSandbox(
         root: URL, settings: Configuration, mutationID: String
-    ) async throws -> (sandbox: Sandbox, layout: SandboxLayout) {
+    ) async throws -> ReproduceSandbox {
         let sandboxRoot = root.appendingPathComponent(".mutantkit/reproduce")
         let kind = try await AppleAdapterFactory.detection(configuration: settings, in: root).kind
         let layout = try await LocalPackageLayout.layout(
@@ -44,7 +52,21 @@ extension ReproduceCommand {
 
         let sandbox = try await LocalPackageLayout.createSandbox(id: mutationID, in: workspaces)
         print("Sandbox: \(sandbox.workspaceRoot.path) (fresh)")
-        return (sandbox, layout)
+        return ReproduceSandbox(sandbox: sandbox, layout: layout, workspaces: workspaces)
+    }
+
+    /// The plan's source file inside the sandbox, through the one resolver
+    /// `mutantkit run` uses. A plan path that leaves the sandbox — lexically or
+    /// through a symlink — fails here, before `MutationApplication` can write.
+    func resolveMutationTarget(
+        _ point: MutationPoint, in sandbox: Sandbox, workspaces: WorkspaceManager
+    ) throws -> URL {
+        do {
+            return try workspaces.resolveSourceURL(in: sandbox, relativePath: point.file)
+        } catch let error as WorkspaceError {
+            FileHandle.standardError.write(Data("Could not locate \(point.file) in the sandbox: \(error.description)\n".utf8))
+            throw ExitCode(MutantKitExit.integrityFailure)
+        }
     }
 
     /// Applies one mutation in place and prints the diff — moved with its

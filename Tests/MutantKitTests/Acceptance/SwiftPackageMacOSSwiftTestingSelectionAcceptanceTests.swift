@@ -31,7 +31,7 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
         let workspace: URL
         let adapter: SwiftPackageMacOSAdapter
         let artifact: BuildArtifact
-        let discovered: [TestIdentifier]
+        let discovered: Set<TestIdentifier>
         let perTestCoverage: PerTestCoverageMap?
     }
 
@@ -57,7 +57,7 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
         let artifact = try await adapter.buildBaseline(in: workspace)
         let discovered = await SwiftPackageMacOSAdapter.enumerateTestIdentifiers(
             in: workspace, timeoutSeconds: 60, terminationGracePeriodSeconds: 5
-        )
+        ).tests ?? []
         let perTestCoverage = await adapter.measurePerTestCoverage(
             artifact: artifact, in: workspace, timeoutSeconds: 60
         )
@@ -67,7 +67,7 @@ struct SwiftPackageMacOSSwiftTestingSelectionAcceptanceTests {
         )
     }
 
-    private func identifier(suffix: String, in discovered: [TestIdentifier]) throws -> TestIdentifier {
+    private func identifier(suffix: String, in discovered: Set<TestIdentifier>) throws -> TestIdentifier {
         try #require(
             discovered.first { $0.target == "PricingTests" && $0.qualifiedName == "PricingTests/\(suffix)" },
             "swift test list did not discover PricingTests/\(suffix)"

@@ -31,18 +31,28 @@ enum GitDiff {
     /// (`repo/Packages/MyPackage`) gets keys like `Packages/MyPackage/Sources/…`
     /// that match nothing, and the plan is silently empty. When `root` is the
     /// repository root it changes nothing.
-    static func changedLines(since base: String, in root: URL) async throws -> DiffScope {
-        let result = try await ProcessSupervisor.run(
-            executable: "/usr/bin/git",
-            arguments: ["diff", "--relative", "--unified=0", "--no-color", "--no-ext-diff", base, "--", "*.swift"],
-            workingDirectory: root,
-            timeoutSeconds: 120
+    static func changedLines(
+        since base: String,
+        in root: URL,
+        processRunner: RunContextProbe.ProcessRunner = RunContextProbe.defaultProcessRunner
+    ) async throws -> DiffScope {
+        let result = try await processRunner(
+            "/usr/bin/git",
+            ["diff", "--relative", "--unified=0", "--no-color", "--no-ext-diff", base, "--", "*.swift"],
+            root,
+            120
         )
 
-        guard result.succeeded else {
+        // A truncated diff would silently shrink the scope to the hunks that
+        // happened to be captured, so incomplete output is a failure too.
+        guard result.succeededWithCompleteOutput else {
             let message = String(decoding: result.standardError, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw GitDiffError.gitFailed(base: base, message: message.isEmpty ? "git exited \(result.exitCode)" : message)
+            throw GitDiffError.gitFailed(base: base, message: message.isEmpty
+                ? (result.outputComplete
+                    ? "git exited \(result.exitStatusDescription)"
+                    : "git's output could not be fully captured")
+                : message)
         }
 
         return DiffScope(changedLines: parse(String(decoding: result.standardOutput, as: UTF8.self)))

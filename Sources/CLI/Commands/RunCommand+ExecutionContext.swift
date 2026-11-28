@@ -32,49 +32,6 @@ extension RunCommand {
         let asConfigured: Configuration
     }
 
-    /// Acquires `RunIsolationLock` for this run and returns the lock root
-    /// `run()` also needs for `ResourceSnapshot.capture(lockRoot:)` right
-    /// afterward — pulled out of `run()` itself purely to keep that
-    /// already-large function's own body under this project's
-    /// `function_body_length` limit.
-    ///
-    /// Independent MutantKit processes are not allowed to compete for the
-    /// same project/destination. Real-project validation demonstrated that
-    /// severe resource contention and shared simulator pressure can change
-    /// a mutant's observable failure mode (crash vs timeout), which
-    /// changes scoring if the two processes are allowed to interfere.
-    /// Internal workers remain allowed: they share this one owning process
-    /// and therefore this one lock.
-    ///
-    /// Acquired before simulator preparation, not after: a codex review
-    /// found the original ordering booted/prepared the simulator *before*
-    /// this lock, so two independent processes racing for the same
-    /// destination could both boot/prepare it concurrently — CoreSimulator
-    /// contention, one process's environment changes bleeding into the
-    /// other's — before either noticed the collision. Lock first means a
-    /// losing process fails here, before it has touched the simulator at
-    /// all.
-    ///
-    /// Keyed on the *resolved* destination, not the raw config string: two
-    /// `mutantkit.yml`s that spell the same physical simulator differently
-    /// — destination unset (implicit "auto") in one, an explicit
-    /// `platform=iOS Simulator,name=iPhone 17 Pro` in the other, both
-    /// resolving to the same booted device — would otherwise take
-    /// different lock keys and race that one simulator concurrently,
-    /// exactly what this lock exists to prevent. `resolvedDestination`
-    /// already pins that answer once, before `run()` calls this (see
-    /// `AppleAdapterFactory.resolve`); reusing it here means "same device"
-    /// and "same lock key" are the same fact, not two facts that can drift
-    /// apart.
-    static func acquireRunLock(
-        root: URL, resolution: AppleAdapterFactory.Resolution, configuredDestination: String?, runDirectory: URL
-    ) throws -> (lock: RunIsolationLock, lockRoot: URL) {
-        let destinationIdentity = Self.lockIdentity(for: resolution.adapter, configuredDestination: configuredDestination)
-        let lockRoot = runDirectory.appendingPathComponent("run-locks")
-        let lock = try RunIsolationLock.acquire(projectRoot: root, lockRoot: lockRoot, destination: destinationIdentity)
-        return (lock, lockRoot)
-    }
-
     /// The outcome of `provisionSimulatorWorkerPoolIfNeeded`: a
     /// (possibly-unchanged) `Resolution` to use for the rest of the run,
     /// and the cleanup to run when it ends, whichever way it ends.
@@ -163,7 +120,7 @@ extension RunCommand {
 
         return SimulatorWorkerPoolProvision(
             resolution: AppleAdapterFactory.Resolution(
-                adapter: newAdapter, detection: resolution.detection, sandboxLayout: resolution.sandboxLayout
+                adapter: newAdapter, context: resolution.context, sandboxLayout: resolution.sandboxLayout
             ),
             cleanup: {
                 let failures = await provisioningPool.releaseWorkerPool(devices, base: baseDevice)
@@ -443,7 +400,7 @@ extension RunCommand {
             mutantTimeoutSeconds: context.settings.timeouts.mutant.resolve(baselineDuration: baselineDuration),
             baselineTimeoutSeconds: context.settings.timeouts.baselineSeconds,
             toolchain: context.toolchain,
-            configurationHash: context.settings.configurationHash,
+            configurationHash: try context.settings.configurationHash,
             resourceSnapshot: context.resourceSnapshot,
             simulatorPreparation: context.simulatorPreparation
         ).write(to: url)

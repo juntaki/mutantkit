@@ -94,7 +94,8 @@ enum SchemeDiscoveryObservationLog {
         ]
         if let result {
             fields.append("\"durationSeconds\":\(number(result.durationSeconds))")
-            fields.append("\"exitCode\":\(result.exitCode)")
+            fields.append("\"exitStatusAvailable\":\(result.exitStatusAvailable)")
+            if result.exitStatusAvailable { fields.append("\"exitCode\":\(result.exitCode)") }
             fields.append("\"timedOut\":\(result.timedOut)")
             fields.append("\"outputComplete\":\(result.outputComplete)")
             if let signal = result.terminatingSignal {

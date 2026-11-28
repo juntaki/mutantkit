@@ -295,23 +295,14 @@ public enum XcodeTargetResolver {
     }
 
     private static func locateXcworkspace(in projectRoot: URL) throws -> URL {
-        let contents = (try? FileManager.default.contentsOfDirectory(at: projectRoot, includingPropertiesForKeys: nil)) ?? []
-        guard let found = contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-            .first(where: { $0.pathExtension == "xcworkspace" })
-        else { throw ResolutionError.workspaceNotFound(directory: projectRoot.path) }
+        guard let found = try ProjectContainerLocator.workspace(in: projectRoot) else {
+            throw ResolutionError.workspaceNotFound(directory: projectRoot.path)
+        }
         return found
     }
 
-    /// The first (only, for the single-project-directory shape this
-    /// resolver supports) `.xcodeproj` directly inside `projectRoot` —
-    /// mirrors `AppleAdapterFactory.locateProjectFile`'s own non-recursive
-    /// directory scan, so detection and classification agree on which
-    /// project file a run means.
     private static func locateXcodeproj(in projectRoot: URL) throws -> URL {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: projectRoot, includingPropertiesForKeys: nil
-        )) ?? []
-        guard let found = contents.first(where: { $0.pathExtension == "xcodeproj" }) else {
+        guard let found = try ProjectContainerLocator.project(in: projectRoot) else {
             throw ResolutionError.projectNotFound(directory: projectRoot.path)
         }
         return found
@@ -346,9 +337,9 @@ public enum XcodeTargetResolver {
         } catch {
             throw ResolutionError.showBuildSettingsFailed(target: target, diagnosis: "\(error)")
         }
-        guard result.succeeded else {
+        guard result.succeededWithCompleteOutput else {
             throw ResolutionError.showBuildSettingsFailed(
-                target: target, diagnosis: String(decoding: result.standardError, as: UTF8.self)
+                target: target, diagnosis: result.failureDiagnosis
             )
         }
         return try Self.parseBuildSettings(result.standardOutput, target: target)

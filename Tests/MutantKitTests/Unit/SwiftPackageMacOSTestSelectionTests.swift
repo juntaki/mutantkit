@@ -24,7 +24,7 @@ struct SwiftPackageMacOSTestIdentifierEnumerationTests {
 
     @Test("Every line becomes a TestIdentifier split at the target/class dot")
     func findsEveryTestCase() {
-        let found = SwiftPackageMacOSAdapter.parseTestIdentifiers(Self.capturedOutput)
+        let found = Array(SwiftPackageMacOSAdapter.parseTestIdentifiers(Self.capturedOutput).tests ?? [])
 
         #expect(Set(found.map(\.target)) == ["AsyncAlgorithmsTests"])
         #expect(Set(found.map(\.qualifiedName)) == [
@@ -41,9 +41,9 @@ struct SwiftPackageMacOSTestIdentifierEnumerationTests {
             "AsyncAlgorithmsTests.TestZip2/test_zip_when_cancelled"
         )
 
-        #expect(found == [
+        #expect(found == .complete([
             TestIdentifier(target: "AsyncAlgorithmsTests", qualifiedName: "TestZip2/test_zip_when_cancelled")
-        ])
+        ]))
     }
 
     @Test("Blank lines are skipped")
@@ -54,22 +54,43 @@ struct SwiftPackageMacOSTestIdentifierEnumerationTests {
         AsyncAlgorithmsTests.TestZip3/test_zip_when_cancelled
         """)
 
-        #expect(found.count == 2)
+        #expect(found.tests?.count == 2)
     }
 
-    @Test("A line with no dot (no target separator) is skipped, not crashed on")
-    func lineWithNoDotIsSkipped() {
-        #expect(SwiftPackageMacOSAdapter.parseTestIdentifiers("garbage-line-with-no-dot").isEmpty)
+    @Test("A line with no dot (no target separator) makes the inventory unknown, not smaller")
+    func lineWithNoDotIsUnknown() {
+        #expect(SwiftPackageMacOSAdapter.parseTestIdentifiers("garbage-line-with-no-dot")
+            == .unknown(.unrecognizedEntries(count: 1, sample: "garbage-line-with-no-dot")))
     }
 
-    @Test("A line with a dot but no slash (no method) is skipped")
-    func lineWithNoSlashIsSkipped() {
-        #expect(SwiftPackageMacOSAdapter.parseTestIdentifiers("AsyncAlgorithmsTests.NoMethodHere").isEmpty)
+    @Test("A line with a dot but no slash (no method) makes the inventory unknown")
+    func lineWithNoSlashIsUnknown() {
+        #expect(SwiftPackageMacOSAdapter.parseTestIdentifiers("AsyncAlgorithmsTests.NoMethodHere").unknownReason
+            == .unrecognizedEntries(count: 1, sample: "AsyncAlgorithmsTests.NoMethodHere"))
     }
 
-    @Test("Empty input yields no identifiers")
-    func emptyInputYieldsEmpty() {
-        #expect(SwiftPackageMacOSAdapter.parseTestIdentifiers("").isEmpty)
+    @Test("One unparsed line among valid ones makes the whole inventory unknown")
+    func mixedValidAndUnparsedIsUnknown() {
+        let inventory = SwiftPackageMacOSAdapter.parseTestIdentifiers("""
+        AsyncAlgorithmsTests.TestZip2/test_zip_when_cancelled
+        warning: something SwiftPM printed
+        AsyncAlgorithmsTests.TestZip3/test_zip_when_cancelled
+        """)
+
+        #expect(inventory.tests == nil)
+        #expect(inventory.unknownReason == .unrecognizedEntries(count: 1, sample: "warning: something SwiftPM printed"))
+    }
+
+    @Test("A Swift Testing function outside any suite is a test, not an unrecognized line")
+    func suiteLessSwiftTestingFunctionIsRecognized() {
+        #expect(SwiftPackageMacOSAdapter.parseTestIdentifiers("CoreTests.topLevelCheck()").tests == [
+            TestIdentifier(target: "CoreTests", qualifiedName: "topLevelCheck()")
+        ])
+    }
+
+    @Test("Empty input is unknown (no tests), never an empty complete inventory")
+    func emptyInputIsUnknown() {
+        #expect(SwiftPackageMacOSAdapter.parseTestIdentifiers("") == .unknown(.noTests))
     }
 }
 
@@ -81,49 +102,46 @@ struct SwiftPackageMacOSTestIdentifierEnumerationTests {
 /// swift-numerics: `ComplexTests`, `IntegerUtilitiesTests`, `RealTests`)
 /// does not pay the one-time per-test coverage cost for targets nobody asked
 /// to run.
-@Suite("SwiftPM test enumeration target scoping")
+@Suite("Test inventory reconciliation with the configured targets")
 struct SwiftPackageMacOSTestEnumerationScopingTests {
     private let configuredTest = TestIdentifier(target: "IntegerUtilitiesTests", qualifiedName: "GCDTests/testGCD")
     private let otherTargetTest = TestIdentifier(target: "ComplexTests", qualifiedName: "ComplexTests/testAdd")
 
     @Test("An empty configured target list keeps every test, package-wide")
     func emptyConfiguredTargetsKeepsEverything() {
-        let scoped = SwiftPackageMacOSAdapter.scope(
-            [configuredTest, otherTargetTest],
-            toConfiguredTargets: []
-        )
+        let scoped = TestInventory.complete([configuredTest, otherTargetTest]).reconciled(withConfiguredTargets: [])
 
-        #expect(Set(scoped) == [configuredTest, otherTargetTest])
+        #expect(scoped == .complete([configuredTest, otherTargetTest]))
     }
 
     @Test("A configured target list drops every test outside it")
     func configuredTargetsDropsOutsideTests() {
-        let scoped = SwiftPackageMacOSAdapter.scope(
-            [configuredTest, otherTargetTest],
-            toConfiguredTargets: ["IntegerUtilitiesTests"]
-        )
+        let scoped = TestInventory.complete([configuredTest, otherTargetTest])
+            .reconciled(withConfiguredTargets: ["IntegerUtilitiesTests"])
 
-        #expect(scoped == [configuredTest])
+        #expect(scoped == .complete([configuredTest]))
     }
 
     @Test("Multiple configured targets keep tests from any of them")
     func multipleConfiguredTargetsUnionKept() {
-        let scoped = SwiftPackageMacOSAdapter.scope(
-            [configuredTest, otherTargetTest],
-            toConfiguredTargets: ["IntegerUtilitiesTests", "ComplexTests"]
-        )
+        let scoped = TestInventory.complete([configuredTest, otherTargetTest])
+            .reconciled(withConfiguredTargets: ["IntegerUtilitiesTests", "ComplexTests"])
 
-        #expect(Set(scoped) == [configuredTest, otherTargetTest])
+        #expect(scoped == .complete([configuredTest, otherTargetTest]))
     }
 
-    @Test("A configured target with no matching tests yields an empty result, not a crash")
-    func noMatchingTestsYieldsEmpty() {
-        let scoped = SwiftPackageMacOSAdapter.scope(
-            [configuredTest],
-            toConfiguredTargets: ["RealTests"]
-        )
+    @Test("A configured target with no enumerated test makes the inventory unknown, not narrower")
+    func missingConfiguredTargetIsUnknown() {
+        let scoped = TestInventory.complete([configuredTest])
+            .reconciled(withConfiguredTargets: ["IntegerUtilitiesTests", "RealTests"])
 
-        #expect(scoped.isEmpty)
+        #expect(scoped == .unknown(.configuredTargetsMissing(["RealTests"])))
+    }
+
+    @Test("An unknown inventory stays unknown through reconciliation")
+    func unknownStaysUnknown() {
+        #expect(TestInventory.unknown(.outputTruncated).reconciled(withConfiguredTargets: ["A"])
+            == .unknown(.outputTruncated))
     }
 }
 

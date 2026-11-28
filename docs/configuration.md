@@ -243,15 +243,13 @@ writes is stamped with `version: 1` explicitly, and its report says so —
 distinguishing a tool-authored file with a known, deliberate version from a
 hand-written one that reaches the same default implicitly.
 
-**An unrecognized *key*, at any level, is a different case from an
-unrecognized *version* — and is currently ignored, not rejected.** A typo
-(`workerz` instead of `workers`, say) or a leftover key from a hand-edited
-file decodes silently: the real field falls back to its default, with no
-error and no warning from `mutantkit` itself. The JSON Schema this project
-publishes (`mutantkit config --schema`) does mark every object
-`additionalProperties: false`, so an editor that honors the generated
-`# yaml-language-server: $schema=...` hint will flag the same typo — but
-that is editor-side linting, not enforcement by the CLI. Renaming or
+**An unrecognized *key*, at any level, is rejected.** A typo (`workerz`
+instead of `workers`, say) or a leftover key from a hand-edited file fails
+the load with an error naming the key and the section it appeared in, and
+listing the keys that section allows. A key written twice in one mapping is
+rejected as well. The allowed keys are exactly those in the JSON Schema this
+project publishes (`mutantkit config --schema`); the user-chosen keys of
+`execution.budget.weight` are the one open map. Renaming or
 removing a key *within* `version: 1` (the only precedent so far:
 `execution.budget`'s old `sampling`/`stratifyWithinOperatorBy` keys) is
 handled case by case with an explicit, named error pointing at the

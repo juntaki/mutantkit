@@ -17,17 +17,31 @@ enum SwiftPMTestBundleCoverageExport {
     private static let profileFileName = "default.profdata"
     private static let timeoutSeconds: Double = 300
 
-    /// The executable inside every `*.xctest` bundle directly under `productsDirectory`, sorted by path.
-    static func testBundleExecutables(in productsDirectory: URL, fileManager: FileManager = .default) -> [URL] {
-        let entries = (try? fileManager.contentsOfDirectory(at: productsDirectory, includingPropertiesForKeys: nil)) ?? []
-        return entries
-            .filter { $0.pathExtension == "xctest" }
-            .compactMap { bundle -> URL? in
-                let macOSDirectory = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
-                return (try? fileManager.contentsOfDirectory(at: macOSDirectory, includingPropertiesForKeys: nil))?
-                    .first { $0.lastPathComponent == bundle.deletingPathExtension().lastPathComponent }
+    /// Every `*.xctest` bundle directly under `productsDirectory`: the executables found, sorted by
+    /// path, and the bundles whose executable could not be found. An export that leaves a bundle out
+    /// names no covering test for the lines only that bundle links, so the two are kept apart rather
+    /// than the unreadable ones being dropped. `nil` when the directory itself cannot be listed.
+    struct BundleInventory: Equatable {
+        var executables: [URL]
+        var unreadableBundles: [URL]
+    }
+
+    static func testBundleInventory(in productsDirectory: URL, fileManager: FileManager = .default) -> BundleInventory? {
+        guard let entries = try? fileManager.contentsOfDirectory(at: productsDirectory, includingPropertiesForKeys: nil) else {
+            return nil
+        }
+        var inventory = BundleInventory(executables: [], unreadableBundles: [])
+        for bundle in entries.filter({ $0.pathExtension == "xctest" }).sorted(by: { $0.path < $1.path }) {
+            let macOSDirectory = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
+            let name = bundle.deletingPathExtension().lastPathComponent
+            if let executable = (try? fileManager.contentsOfDirectory(at: macOSDirectory, includingPropertiesForKeys: nil))?
+                .first(where: { $0.lastPathComponent == name }) {
+                inventory.executables.append(executable)
+            } else {
+                inventory.unreadableBundles.append(bundle)
             }
-            .sorted { $0.path < $1.path }
+        }
+        return inventory
     }
 
     /// `xcrun llvm-cov export` arguments with the first bundle as the positional binary and every other as `-object`.
@@ -40,23 +54,67 @@ enum SwiftPMTestBundleCoverageExport {
         return arguments
     }
 
-    /// Replaces the all-bundles export in `codecovDirectory`. Does nothing for fewer than two bundles,
-    /// where SwiftPM's own file already covers the only bundle. A previous export is removed first, so a
-    /// failed export can never leave an older run's coverage to be merged in.
-    static func refresh(productsDirectory: URL, codecovDirectory: URL, fileManager: FileManager = .default) async {
-        let output = codecovDirectory.appendingPathComponent(outputFileName)
-        try? fileManager.removeItem(at: output)
+    /// What `refresh` established about the all-bundles export.
+    enum Outcome: Equatable {
+        /// Fewer than two bundles: SwiftPM's own file covers the only bundle.
+        case notNeeded
+        /// A fresh export of every bundle was written next to SwiftPM's file.
+        case exported
+        /// The export could not be produced completely. SwiftPM's file alone covers only the bundle it
+        /// chose, so the coverage directory must not be read as evidence of what the suite executes.
+        case incomplete(reason: String)
+    }
 
-        let executables = testBundleExecutables(in: productsDirectory, fileManager: fileManager)
-        let profile = codecovDirectory.appendingPathComponent(profileFileName)
-        guard executables.count > 1, fileManager.fileExists(atPath: profile.path) else { return }
+    /// Runs the `llvm-cov export` and returns its result, or `nil` when it could not be run.
+    typealias ExportRunner = @Sendable (_ arguments: [String], _ workingDirectory: URL) async -> ProcessResult?
 
-        guard let result = try? await ProcessSupervisor.run(
+    static let defaultExportRunner: ExportRunner = { arguments, workingDirectory in
+        try? await ProcessSupervisor.run(
             executable: ToolPaths.xcrun,
-            arguments: exportArguments(profileData: profile, executables: executables),
-            workingDirectory: productsDirectory,
+            arguments: arguments,
+            workingDirectory: workingDirectory,
             timeoutSeconds: timeoutSeconds
-        ), result.exitCode == 0, !result.standardOutput.isEmpty else { return }
-        try? result.standardOutput.write(to: output)
+        )
+    }
+
+    /// Replaces the all-bundles export in `codecovDirectory`. A previous export is removed first, and a
+    /// removal that fails is `.incomplete`: an older run's coverage must never be merged in. Every
+    /// bundle must be found and exported, successfully and with complete output, and the result
+    /// written; any shortfall is `.incomplete` with its reason, never a best-effort partial file.
+    static func refresh(
+        productsDirectory: URL, codecovDirectory: URL, fileManager: FileManager = .default,
+        run: ExportRunner = defaultExportRunner
+    ) async -> Outcome {
+        let output = codecovDirectory.appendingPathComponent(outputFileName)
+        if fileManager.fileExists(atPath: output.path) {
+            do { try fileManager.removeItem(at: output) } catch {
+                return .incomplete(reason: "the previous all-bundles export could not be removed: \(error)")
+            }
+        }
+
+        guard let inventory = testBundleInventory(in: productsDirectory, fileManager: fileManager) else {
+            return .incomplete(reason: "the products directory could not be listed")
+        }
+        guard inventory.unreadableBundles.isEmpty else {
+            let names = inventory.unreadableBundles.map(\.lastPathComponent).joined(separator: ", ")
+            return .incomplete(reason: "test bundle executable not found for: \(names)")
+        }
+        guard inventory.executables.count > 1 else { return .notNeeded }
+
+        let profile = codecovDirectory.appendingPathComponent(profileFileName)
+        guard fileManager.fileExists(atPath: profile.path) else {
+            return .incomplete(reason: "\(profileFileName) is missing for a \(inventory.executables.count)-bundle export")
+        }
+
+        guard let result = await run(
+            exportArguments(profileData: profile, executables: inventory.executables), productsDirectory
+        ) else { return .incomplete(reason: "llvm-cov export could not be run") }
+        guard result.succeededWithCompleteOutput, !result.standardOutput.isEmpty else {
+            return .incomplete(reason: "llvm-cov export failed or its output was incomplete")
+        }
+        do { try result.standardOutput.write(to: output) } catch {
+            return .incomplete(reason: "the all-bundles export could not be written: \(error)")
+        }
+        return .exported
     }
 }

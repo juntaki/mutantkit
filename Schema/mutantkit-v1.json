@@ -40,7 +40,12 @@
       "properties": {
         "profile": { "enum": ["default", "stronger", "all", "conservative", "experimental"] },
         "disable": { "type": "array", "items": { "type": "string" } },
-        "enable": { "type": "array", "items": { "type": "string" } }
+        "enable": { "type": "array", "items": { "type": "string" } },
+        "sideEffectCallRemoval": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": { "excludeCalls": { "type": "array", "items": { "type": "string" } } }
+        }
       }
     },
     "execution": {
@@ -49,13 +54,13 @@
       "properties": {
         "profile": { "enum": ["reference", "optimized", "experimental"] },
         "strategy": { "enum": ["isolated", "schemata"] },
-        "workers": { "type": ["integer", "null"], "minimum": 1 },
+        "workers": { "anyOf": [{ "type": ["integer", "null"], "minimum": 1 }, { "const": "auto" }] },
         "budget": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "maxMutants": { "type": ["integer", "null"], "minimum": 1 },
-            "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+            "maxDurationSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 31622400 },
             "seed": { "type": ["integer", "null"] },
             "stratifyBy": { "enum": ["subtype", "operatorSubtype", null] },
             "minimumPerOperator": { "type": ["integer", "null"], "minimum": 1 },
@@ -89,19 +94,19 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "baseline": { "type": ["number", "string"] },
+        "baseline": { "type": ["number", "string"], "description": "Seconds or a duration such as 90s; greater than 0, at most 366 days." },
         "mutant": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "strategy": { "enum": ["fixed", "adaptive"] },
-            "multiplier": { "type": "number" },
+            "multiplier": { "type": "number", "exclusiveMinimum": 0 },
             "minimum": { "type": ["number", "string"] },
             "maximum": { "type": ["number", "string"] },
-            "overheadAllowance": { "type": ["number", "string"] }
+            "overheadAllowance": { "type": ["number", "string"], "description": "Seconds or a duration; 0 or more, at most 366 days." }
           }
         },
-        "terminationGracePeriod": { "type": ["number", "string"] }
+        "terminationGracePeriod": { "type": ["number", "string"], "description": "Seconds or a duration; 0 (SIGKILL immediately) or more, at most 366 days." }
       }
     },
     "reports": {
@@ -116,22 +121,22 @@
         "testedScore": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "minimum": { "type": ["number", "null"] } }
+          "properties": { "minimum": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }
         },
         "effectiveScore": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "minimum": { "type": ["number", "null"] } }
+          "properties": { "minimum": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }
         },
         "regression": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "maximumDrop": { "type": ["number", "null"] } }
+          "properties": { "maximumDrop": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }
         },
         "survived": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "newMaximum": { "type": ["integer", "null"] } }
+          "properties": { "newMaximum": { "type": ["integer", "null"], "minimum": 0 } }
         },
         "integrityViolations": {
           "type": "object",

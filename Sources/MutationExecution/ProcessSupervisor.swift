@@ -30,7 +30,7 @@ public struct ProcessResult: Sendable {
     /// a real `read()` error (`errno != EINTR`) breaks the same loop the
     /// same way EOF does, but proves nothing about whether the writer was
     /// actually done, so it must not be reported as `outputComplete == true`
-    /// either — see `drain`'s own `DataBox.reachedEOF`. This is a fact
+    /// either — see `PipeDrain.reachedEOF`. This is a fact
     /// about *evidence*, orthogonal to `exitCode`/`timedOut`/
     /// `terminatingSignal`: a process can exit
     /// cleanly (even successfully) while something other than the process
@@ -62,7 +62,23 @@ public struct ProcessResult: Sendable {
     /// Why `cleanupVerified` is `false`; `nil` when it is `true`.
     public let cleanupDiagnosis: String?
 
-    public var succeeded: Bool { exitCode == 0 && !timedOut && terminatingSignal == nil }
+    /// `false` when the root's exit status was never observed (the checked reap
+    /// failed, or was handed to a detached thread). `exitCode` is then `-1`, a
+    /// placeholder that must not be read as an exit; the reason is in
+    /// `cleanupDiagnosis` and `cleanupVerified` is `false`.
+    public let exitStatusAvailable: Bool
+
+    public var succeeded: Bool { exitStatusAvailable && exitCode == 0 && !timedOut && terminatingSignal == nil }
+
+    /// The one predicate for a caller that derives a fact from the captured
+    /// bytes: the process succeeded *and* both streams are known to be
+    /// complete. `succeeded` alone says nothing about truncated output.
+    public var succeededWithCompleteOutput: Bool { succeeded && outputComplete }
+
+    /// The exit status for a message or record: the real code, or the words
+    /// "unavailable" when it was never observed (`exitCode` is then a `-1`
+    /// placeholder that must not be shown or stored as an exit).
+    public var exitStatusDescription: String { exitStatusAvailable ? "\(exitCode)" : "unavailable" }
 
     /// `cleanupVerified` has no default on purpose: a new call site must
     /// state it, so a wrapper cannot silently report success.
@@ -76,8 +92,10 @@ public struct ProcessResult: Sendable {
         stalled: Bool = false,
         outputComplete: Bool,
         cleanupVerified: Bool,
-        cleanupDiagnosis: String? = nil
+        cleanupDiagnosis: String? = nil,
+        exitStatusAvailable: Bool = true
     ) {
+        self.exitStatusAvailable = exitStatusAvailable
         self.cleanupVerified = cleanupVerified
         self.cleanupDiagnosis = cleanupDiagnosis
         self.exitCode = exitCode
@@ -138,14 +156,16 @@ public struct StallDetection: Sendable {
 
 public enum ProcessSupervisorError: Error, CustomStringConvertible {
     case spawnFailed(executable: String, errno: Int32)
-    case pipeCreationFailed(errno: Int32)
+    /// A required launch-setup step (pipe, descriptor flag, file action,
+    /// spawn attribute) failed; no child was started.
+    case spawnSetupFailed(operation: String, errno: Int32)
 
     public var description: String {
         switch self {
         case let .spawnFailed(executable, code):
             "Could not launch \(executable): \(String(cString: strerror(code))) (errno \(code))"
-        case let .pipeCreationFailed(code):
-            "Could not create a pipe: \(String(cString: strerror(code))) (errno \(code))"
+        case let .spawnSetupFailed(operation, code):
+            "Launch setup failed in \(operation): \(String(cString: strerror(code))) (errno \(code))"
         }
     }
 }
@@ -360,7 +380,10 @@ public enum ProcessSupervisor {
         lifecycleEventHook: (@Sendable (LifecycleEvent) -> Void)?,
         drainGracePeriodSeconds: Double = defaultDrainGracePeriodSeconds,
         processTableReader: @escaping ProcessTree.TableReader = ProcessTree.readProcessTable,
-        rootExitProbe: @escaping @Sendable (pid_t) -> Bool = { ProcessSupervisor.hasExited($0) }
+        rootExitProbe: @escaping @Sendable (pid_t) -> Bool = { ProcessSupervisor.hasExited($0) },
+        waitpid: @escaping WaitPID = { Darwin.waitpid($0, $1, $2) },
+        launchFault: ProcessLaunch.Fault? = nil,
+        maxCapturedBytes: Int = PipeDrain.defaultMaxBytes
     ) async throws -> ProcessResult {
         // Once the run has aborted on an unverified cleanup, nothing new is
         // built or tested, whichever path reaches this launch.
@@ -397,7 +420,10 @@ public enum ProcessSupervisor {
                                     lifecycleEventHook: lifecycleEventHook,
                                     drainGracePeriodSeconds: drainGracePeriodSeconds,
                                     processTableReader: processTableReader,
-                                    rootExitProbe: rootExitProbe
+                                    rootExitProbe: rootExitProbe,
+                                    waitpid: waitpid,
+                                    launchFault: launchFault,
+                                    maxCapturedBytes: maxCapturedBytes
                                 )
                             )
                             // Recorded before the cancellation check: an
@@ -475,6 +501,13 @@ public enum ProcessSupervisor {
         /// Whether the root has exited, for close-out only. `hasExited` for
         /// every ordinary caller; a test injects a root that never exits.
         let rootExitProbe: @Sendable (pid_t) -> Bool
+        /// The consuming reap; a test injects `EINTR`/`ECHILD`.
+        let waitpid: WaitPID
+        /// Fails a named launch-setup step in tests; `nil` in production.
+        let launchFault: ProcessLaunch.Fault?
+        /// Per-stream capture ceiling; output beyond it is discarded and the
+        /// result reports `outputComplete == false`.
+        let maxCapturedBytes: Int
     }
 
     private static func runBlocking(
@@ -484,159 +517,19 @@ public enum ProcessSupervisor {
         environment: [String: String],
         policy: SupervisionPolicy
     ) throws -> ProcessResult {
-        var outPipe: [Int32] = [0, 0]
-        var errPipe: [Int32] = [0, 0]
-        guard pipe(&outPipe) == 0 else { throw ProcessSupervisorError.pipeCreationFailed(errno: errno) }
-        guard pipe(&errPipe) == 0 else {
-            close(outPipe[0]); close(outPipe[1])
-            throw ProcessSupervisorError.pipeCreationFailed(errno: errno)
-        }
-        // A real file-descriptor inheritance bug discovered while
-        // investigating a public-CI hang (a `swift test` run of nothing
-        // but fast unit tests stalling for 68+ minutes). A deterministic
-        // regression test — `ProcessSupervisorFileDescriptorLeakTests`,
-        // written before this fix specifically to pin down the boundary
-        // below — proves that unrelated, concurrently-spawned execs
-        // could inherit copies of this function's own raw pipe
-        // descriptors. Subsequent CI evidence (the same hang recurring
-        // on the exact commit containing this fix) showed this was not,
-        // by itself, the root cause of the full-suite stall — that
-        // investigation continued separately. The bug fixed here is
-        // real and worth fixing regardless: `pipe(2)` does not set
-        // close-on-exec, so *any*
-        // concurrently-running `posix_spawn` on another thread — not just
-        // this one's own — inherits copies of these fds into its own
-        // child by default. A long-lived, completely unrelated process
-        // spawned while this pipe is still open (the real window between
-        // this line and this same function's own post-spawn
-        // `close(outPipe[1])`/`close(errPipe[1])` below) can hold this
-        // pipe's write end open for its own entire lifetime, blocking
-        // `drain`'s own read loop long after the intended child has
-        // already exited.
-        //
-        // This does NOT affect the intended child's own `dup2`'d
-        // `STDOUT_FILENO`/`STDERR_FILENO` below: POSIX `dup2` always
-        // clears close-on-exec on the *new* descriptor it creates,
-        // regardless of the source descriptor's own flag, so the
-        // dup'd copies the intended child actually uses as its real
-        // stdout/stderr are never affected by marking the *original*
-        // fd numbers here close-on-exec —
-        // `ProcessSupervisorFileDescriptorLeakTests
-        // .directChildsOwnStandardOutputStillWorksNormally` locks this in
-        // explicitly. It also does not affect a supervised child's own
-        // legitimate escape (forking a background grandchild that leaves
-        // the process group): that grandchild inherits the child's own
-        // *already-dup'd* fd 1/2 via a real `fork()`, which is a
-        // completely different, unaffected descriptor from the ones
-        // marked here — `ProcessSupervisorResidueTests`'s own escape/reap
-        // tests continue to pass after this change.
-        for fd in [outPipe[0], outPipe[1], errPipe[0], errPipe[1]] {
-            let flags = fcntl(fd, F_GETFD)
-            _ = fcntl(fd, F_SETFD, flags | FD_CLOEXEC)
-        }
-
-        var fileActions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&fileActions)
-        defer { posix_spawn_file_actions_destroy(&fileActions) }
-
-        posix_spawn_file_actions_adddup2(&fileActions, outPipe[1], STDOUT_FILENO)
-        posix_spawn_file_actions_adddup2(&fileActions, errPipe[1], STDERR_FILENO)
-        // The child must not inherit the read ends: if it did, EOF would never
-        // arrive on our side and the drain threads would hang forever.
-        posix_spawn_file_actions_addclose(&fileActions, outPipe[0])
-        posix_spawn_file_actions_addclose(&fileActions, errPipe[0])
-        posix_spawn_file_actions_addchdir_np(&fileActions, workingDirectory.path)
-
-        var attributes: posix_spawnattr_t?
-        posix_spawnattr_init(&attributes)
-        defer { posix_spawnattr_destroy(&attributes) }
-
-        // POSIX_SPAWN_SETPGROUP with group 0 makes the child its own group
-        // leader, so its pgid equals its pid. This is the entire basis for
-        // being able to kill the whole subtree later.
-        //
-        // POSIX_SPAWN_SETSIGMASK / POSIX_SPAWN_SETSIGDEF, F3 zero-base
-        // review: `posix_spawn` otherwise inherits the *calling thread's*
-        // signal mask into the new process — and the dedicated `Thread`
-        // `run(...)` spawns this blocking work onto has `SIGTERM` blocked
-        // on *that thread* (confirmed directly: `pthread_sigmask` reports
-        // it blocked there — apparently held blocked by this test binary's
-        // own GCD/Swift-Testing signal-handling infrastructure on its own
-        // worker threads, not something this codebase set deliberately,
-        // and not necessarily true of every thread in the process). A
-        // blocked signal is queued pending, never delivered, until the
-        // receiving thread unblocks it — so every process this spawns, and
-        // everything it in turn forks (inheriting the same mask), silently
-        // never actually acted on a SIGTERM this code sent, no matter how
-        // many times: only SIGKILL (which cannot be blocked) ever took
-        // effect, which is exactly what made `closeOutOwnedGroup`'s
-        // TERM-first escalation measurably indistinguishable from "wait
-        // out the full grace period, then KILL" for *every* prompt-exit
-        // descendant that needed it — a real, confirmed root cause, not a
-        // hypothesis (a C-language reproduction outside Swift with an
-        // unblocked mask reliably kills such a descendant; the identical
-        // scenario run *inside* this test binary, mask uninspected, did
-        // not, and matched exactly once this fix's own mask/disposition
-        // reset was added — see
-        // `ProcessSupervisorSpawnedProcessSignalStateTests` for the
-        // regression this pins directly).
-        //
-        // Deliberately narrower than "start with an empty mask entirely":
-        // only `SIGTERM` — the one signal this codebase's own escalation
-        // contract (`TERM -> grace -> KILL`) depends on actually being
-        // deliverable — is forced into a known-good state; every other
-        // signal's mask bit is left exactly as the calling thread already
-        // had it, so this does not silently change behavior this fix was
-        // never asked to touch. `POSIX_SPAWN_SETSIGDEF` covers the other
-        // half of the same hazard `SETSIGMASK` alone cannot: an *ignored*
-        // (`SIG_IGN`, not merely blocked) `SIGTERM` disposition is also
-        // inherited across `exec`, and a masked-but-not-ignored signal
-        // becoming unmasked would still do nothing if its disposition was
-        // `SIG_IGN` — resetting it to `SIG_DFL` here guarantees the
-        // spawned process starts able to be terminated by `SIGTERM` the
-        // ordinary way, independent of whatever this test binary's own
-        // process-wide disposition happens to be for unrelated reasons.
-        // The spawned program remains completely free to install its own
-        // handler or re-block/re-ignore `SIGTERM` after it starts (Mode D,
-        // `runIgnoringSIGTERM`, exercises exactly that) — grace-then-KILL
-        // is what covers that case, unaffected by any of this.
-        var spawnSignalMask = sigset_t()
-        pthread_sigmask(0, nil, &spawnSignalMask)
-        sigdelset(&spawnSignalMask, SIGTERM)
-        var sigtermOnly = sigset_t()
-        sigemptyset(&sigtermOnly); sigaddset(&sigtermOnly, SIGTERM)
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
-        posix_spawnattr_setpgroup(&attributes, 0)
-        posix_spawnattr_setsigmask(&attributes, &spawnSignalMask)
-        posix_spawnattr_setsigdefault(&attributes, &sigtermOnly)
-
-        var pid: pid_t = 0
-        let argv = CStringArray([executable] + arguments)
-        let envp = CStringArray(environment.map { "\($0.key)=\($0.value)" })
-
-        let started = Date()
-        let spawnResult = withExtendedLifetime((argv, envp)) {
-            posix_spawn(&pid, executable, &fileActions, &attributes, argv.pointers, envp.pointers)
-        }
-
-        // Our copies of the write ends must go now, for the same EOF reason.
-        close(outPipe[1])
-        close(errPipe[1])
-
-        guard spawnResult == 0 else {
-            close(outPipe[0])
-            close(errPipe[0])
-            throw ProcessSupervisorError.spawnFailed(executable: executable, errno: spawnResult)
-        }
+        let launched = try ProcessLaunch.spawn(
+            executable: executable, arguments: arguments, workingDirectory: workingDirectory,
+            environment: environment, fault: policy.launchFault
+        )
+        let pid = launched.pid
+        let started = launched.started
 
         // Drain concurrently with waiting. A build easily exceeds the 64 KiB pipe
         // buffer, and a full pipe blocks the child — waiting first and reading
         // afterwards would deadlock on exactly the noisy builds we care about.
-        let outBox = DataBox()
-        let errBox = DataBox()
         let drainGroup = DispatchGroup()
-        drain(outPipe[0], into: outBox, group: drainGroup)
-        drain(errPipe[0], into: errBox, group: drainGroup)
+        let outBox = PipeDrain(fd: launched.outputReadFD, maxBytes: policy.maxCapturedBytes, group: drainGroup)
+        let errBox = PipeDrain(fd: launched.errorReadFD, maxBytes: policy.maxCapturedBytes, group: drainGroup)
 
         // F3 zero-base review, Findings 2 & 3: `detectRootExit` below only
         // ever *peeks* at whether `pid` has exited (`waitid(...,
@@ -697,7 +590,7 @@ public enum ProcessSupervisor {
 
         // Only now — strictly after every signal above — does root's pid
         // become reusable.
-        let status = reapRoot(pid: pid, cleanup: cleanup, policy: policy)
+        let exit = reapRoot(pid: pid, cleanup: cleanup, policy: policy)
 
         let timedOut = !detected.rootExitedOnItsOwn
         let stalled = detected.stalled
@@ -719,10 +612,35 @@ public enum ProcessSupervisor {
         if drainOutcome != .success {
             drainOutcome = drainGroup.wait(timeout: .now() + 2)
         }
+        // Reader ownership ends with this call: each reader stops within one
+        // poll slice and closes its own descriptor, so a writer an escaped
+        // process still holds cannot keep a descriptor, thread or buffer
+        // alive past the result. Bytes are read only after they have stopped.
+        outBox.stop()
+        errBox.stop()
+        let readersClosed = drainGroup.wait(timeout: .now() + 2) == .success
 
-        let terminatingSignal: Int32? = status & 0x7F == 0 ? nil : status & 0x7F
-        // Mirror the shell convention so a signalled process still reads as failure.
-        let exitCode: Int32 = status & 0x7F == 0 ? (status >> 8) & 0xFF : 128 + (status & 0x7F)
+        var terminatingSignal: Int32?
+        var exitCode: Int32 = -1
+        var cleanupVerified = cleanup.verified
+        var cleanupDiagnosis = cleanup.diagnosis
+        switch exit {
+        case let .exited(code):
+            exitCode = code
+        case let .signaled(signal):
+            terminatingSignal = signal
+            // Mirror the shell convention so a signalled process still reads as failure.
+            exitCode = 128 + signal
+        case let .unavailable(reason):
+            cleanupVerified = false
+            cleanupDiagnosis = [cleanupDiagnosis, "exit status of pid \(pid) unavailable: \(reason)"]
+                .compactMap { $0 }.joined(separator: "; ")
+        }
+        if !readersClosed {
+            cleanupVerified = false
+            cleanupDiagnosis = [cleanupDiagnosis, "output readers for pid \(pid) did not release their descriptors"]
+                .compactMap { $0 }.joined(separator: "; ")
+        }
 
         return ProcessResult(
             exitCode: exitCode,
@@ -731,8 +649,10 @@ public enum ProcessSupervisor {
             durationSeconds: Date().timeIntervalSince(started),
             timedOut: timedOut,
             terminatingSignal: terminatingSignal, stalled: stalled,
-            outputComplete: drainOutcome == .success && outBox.reachedEOF && errBox.reachedEOF,
-            cleanupVerified: cleanup.verified, cleanupDiagnosis: cleanup.diagnosis
+            outputComplete: drainOutcome == .success && outBox.reachedEOF && errBox.reachedEOF
+                && !outBox.truncated && !errBox.truncated,
+            cleanupVerified: cleanupVerified, cleanupDiagnosis: cleanupDiagnosis,
+            exitStatusAvailable: exit.shellExitCode != nil
         )
     }
 
@@ -768,31 +688,6 @@ public enum ProcessSupervisor {
         if count == 0 { return .eof }
         return currentErrno == EINTR ? .retry : .error
     }
-
-    private static func drain(_ fd: Int32, into box: DataBox, group: DispatchGroup) {
-        DispatchQueue.global(qos: .userInitiated).async(group: group) {
-            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-            readLoop: while true {
-                let count = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
-                switch classify(readResult: count, errno: errno) {
-                case .data:
-                    box.append(Data(buffer[0 ..< count]))
-                case .eof:
-                    // See `DrainReadOutcome.eof`'s own doc comment: the only
-                    // branch that proves the bytes above are the whole story.
-                    box.markEOF()
-                    break readLoop
-                case .retry:
-                    continue readLoop
-                case .error:
-                    // Not EOF — `reachedEOF` stays false and `outputComplete`
-                    // must reflect that.
-                    break readLoop
-                }
-            }
-            close(fd)
-        }
-    }
 }
 
-// Support types (`DataBox`, `CStringArray`) live in ProcessSupervisorSupport.swift.
+// Support types (`PipeDrain`, `CStringArray`) live in ProcessSupervisorSupport.swift.
