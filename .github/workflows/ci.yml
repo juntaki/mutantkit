@@ -22,20 +22,19 @@ jobs:
   #
   # `swiftlint lint --strict` has no baseline: every violation fails the build.
   #
-  # SwiftLint is pinned to an exact version rather than `brew install`'s
-  # floating latest, because rule behavior differs between versions and an
-  # unpinned upgrade could change what is reported. Bump SWIFTLINT_VERSION as
-  # one deliberate change.
+  # Tool versions come from Scripts/tool-versions.env and are installed by
+  # Scripts/install-tools.sh (exact sha256-verified release artifacts, the
+  # same procedure local preflight uses), because rule behavior differs
+  # between versions and an unpinned upgrade could change what is reported.
+  # Bump a version there as one deliberate change.
   lint:
     name: Lint & format check
     runs-on: xcode-27
     # Generous relative to observed reality (~20-25s on this exact job) —
-    # bounds a hang (a stuck `brew install`/download, say) rather than
+    # bounds a hang (a stuck download, say) rather than
     # tuning for the common case. See the `unit` job's own comment for
     # why every job here now has an explicit ceiling.
     timeout-minutes: 10
-    env:
-      SWIFTLINT_VERSION: "0.63.2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # v0.8: pins the exact CI reference toolchain (docs/apple-support-matrix.md
@@ -75,21 +74,8 @@ jobs:
             echo "::error::Swift 6+ required, found '${swift_major:-unknown}'. See docs/apple-support-matrix.md."
             exit 1
           fi
-      - name: Install SwiftFormat
-        run: brew install swiftformat
-      - name: Install pinned SwiftLint
-        run: |
-          curl -fsSL -o portable_swiftlint.zip \
-            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/portable_swiftlint.zip"
-          unzip -o portable_swiftlint.zip swiftlint
-          chmod +x swiftlint
-          sudo mv swiftlint /usr/local/bin/swiftlint
-          rm portable_swiftlint.zip
-          installed_version="$(swiftlint version)"
-          if [ "$installed_version" != "$SWIFTLINT_VERSION" ]; then
-            echo "::error::Installed SwiftLint $installed_version does not match pinned SWIFTLINT_VERSION $SWIFTLINT_VERSION"
-            exit 1
-          fi
+      - name: Install pinned SwiftLint and SwiftFormat
+        run: sudo Scripts/install-tools.sh --prefix /usr/local swiftlint swiftformat
       - name: SwiftLint
         run: swiftlint lint --strict --config .swiftlint.yml Sources Tests
       - name: SwiftFormat (check only)
@@ -125,18 +111,12 @@ jobs:
     name: Complexity gate (swift-complexity)
     runs-on: xcode-27
     # Generous relative to observed reality (a few seconds of analysis over
-    # the whole tree) — bounds a stuck `brew install`, not the analysis.
+    # the whole tree) — bounds a stuck download, not the analysis.
     timeout-minutes: 10
-    env:
-      # Pinned for the same reason this workflow pins SWIFTLINT_VERSION
-      # above: this tool decides what the gate *means*, and an unannounced
-      # upstream change to how cognitive complexity is counted would move
-      # the bar in either direction without a single line of this repo
-      # changing. `brew install` always fetches the tap's latest, so the
-      # version is asserted after installing rather than pinned at install
-      # time — an upstream release then surfaces as an explicit, reviewable
-      # CI failure instead of a quietly different verdict.
-      SWIFT_COMPLEXITY_VERSION: "1.6.0"
+    # The tool version is pinned in Scripts/tool-versions.env: this tool
+    # decides what the gate *means*, and an unannounced upstream change to
+    # how cognitive complexity is counted would move the bar in either
+    # direction without a single line of this repo changing.
     steps:
       - name: Select pinned Xcode (27.0)
         run: sudo xcode-select -s /Applications/Xcode_27.0.app
@@ -150,15 +130,7 @@ jobs:
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned swift-complexity
-        shell: bash
-        run: |
-          set -euo pipefail
-          brew install fummicc1/tap/swift-complexity
-          installed_version="$(swift-complexity --version)"
-          if [ "$installed_version" != "$SWIFT_COMPLEXITY_VERSION" ]; then
-            echo "::error::Installed swift-complexity $installed_version does not match pinned SWIFT_COMPLEXITY_VERSION $SWIFT_COMPLEXITY_VERSION. Re-run the gate locally against the new version, confirm the reported metrics did not move, then bump this pin."
-            exit 1
-          fi
+        run: sudo Scripts/install-tools.sh --prefix /usr/local swift-complexity
       - name: Complexity gate
         shell: bash
         run: swift-complexity Sources Tests --recursive --threshold 25 --report-suppressions
@@ -187,25 +159,12 @@ jobs:
     name: Unused imports (swiftlint analyze)
     runs-on: xcode-27
     timeout-minutes: 20
-    env:
-      SWIFTLINT_VERSION: "0.63.2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select pinned Xcode (27.0)
         run: sudo xcode-select -s /Applications/Xcode_27.0.app
       - name: Install pinned SwiftLint
-        run: |
-          curl -fsSL -o portable_swiftlint.zip \
-            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/portable_swiftlint.zip"
-          unzip -o portable_swiftlint.zip swiftlint
-          chmod +x swiftlint
-          sudo mv swiftlint /usr/local/bin/swiftlint
-          rm portable_swiftlint.zip
-          installed_version="$(swiftlint version)"
-          if [ "$installed_version" != "$SWIFTLINT_VERSION" ]; then
-            echo "::error::Installed SwiftLint $installed_version does not match pinned SWIFTLINT_VERSION $SWIFTLINT_VERSION"
-            exit 1
-          fi
+        run: sudo Scripts/install-tools.sh --prefix /usr/local swiftlint
       - name: Clean build for analyzer
         shell: bash
         run: |
@@ -756,7 +715,7 @@ jobs:
       # provenance/evidence tests need more than a plain build+test —
       # without both steps below they fail deterministically (not flakily):
       #
-      # - `brew install xcodegen`: `startupHitAndReceiptUUIDMatchOnIOSSimulator`
+      # - pinned xcodegen (Scripts/install-tools.sh): `startupHitAndReceiptUUIDMatchOnIOSSimulator`
       #   stages a throwaway .xcodeproj via `xcodegen generate`, which fails
       #   with `env: xcodegen: No such file or directory` (exit 127) when the
       #   tool is absent. Only this suite shells out to xcodegen, so only
@@ -775,7 +734,7 @@ jobs:
       #   runtime into the workspace's chunk build.
       - name: Install xcodegen (xcode-project-schemata only)
         if: matrix.fixture == 'xcode-project-schemata'
-        run: brew install xcodegen
+        run: sudo Scripts/install-tools.sh --prefix /usr/local xcodegen
       - name: Schemata runtime archives (xcode-project-schemata and xcode-workspace only)
         if: matrix.fixture == 'xcode-project-schemata' || matrix.fixture == 'xcode-workspace'
         shell: bash
